@@ -118,6 +118,7 @@ harness_agent_registry(
         "agents.toml",
     ],
     agents = [":DagBuilderAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
 )
 
 # Both agents' typed TypeScript clients, client_sdk/<Agent>.ts:

@@ -25,6 +25,7 @@ harness_pytest_test(
         "//python/temporal_agent_harness/harness:agent_schema",
         "//python/temporal_agent_harness/web:cli",
         "//python/temporal_agent_harness/web:client",
+        "//python/temporal_agent_harness/web:registry",
         "//python/temporal_agent_harness/web:session_manager",
         "//python/tests:conftest",
         "@pypi//pytest",
@@ -114,6 +115,31 @@ harness_pytest_test(
     deps = [
         "//python/temporal_agent_harness/web:serve",
         "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_registry",
+    srcs = ["test_registry.py"],
+    data = [
+        "//contract:registry_files",
+        "//python/examples/agent_dag:agents_files",
+        "//python/examples/auto_mode:agents_files",
+        "//python/examples/callback_tools/coding_agent:agents_files",
+        "//python/examples/callback_tools/wiki_agent:agents_files",
+        "//python/examples/code_mode_memory:agents_files",
+        "//python/examples/monty:agents_files",
+        "//python/examples/openai_hello:agents_files",
+        "//python/examples/pydantic_ai_hello:agents_files",
+        "//python/examples/react_agent:agents_files",
+        "//python/examples/tictactoe:agents_files",
+    ],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:registry",
+        "//python/tests:conftest",
+        "@pypi//jsonschema",
         "@pypi//pytest",
     ],
 )

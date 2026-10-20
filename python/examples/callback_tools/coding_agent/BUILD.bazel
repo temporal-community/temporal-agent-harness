@@ -66,4 +66,5 @@ harness_agent_registry(
         "agents.toml",
     ],
     agents = [":CodingAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
 )

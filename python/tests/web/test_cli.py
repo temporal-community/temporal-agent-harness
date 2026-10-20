@@ -313,10 +313,22 @@ def test_schema_protocol_prints_the_event_protocol(capsys: pytest.CaptureFixture
     assert capsys.readouterr().out == dump_protocol_schema()
 
 
+def test_schema_registry_prints_the_agents_toml_schema(capsys: pytest.CaptureFixture[str]) -> None:
+    from temporal_agent_harness.web.registry import dump_registry_schema
+
+    main(["schema", "--registry"])
+
+    assert capsys.readouterr().out == dump_registry_schema()
+
+
 @pytest.mark.parametrize(
     "argv",
-    [["schema"], ["schema", "--protocol", "examples.tictactoe.workflow:TicTacToeAgentWorkflow"]],
+    [
+        ["schema"],
+        ["schema", "--protocol", "examples.tictactoe.workflow:TicTacToeAgentWorkflow"],
+        ["schema", "--protocol", "--registry"],
+    ],
 )
-def test_schema_needs_exactly_one_of_an_agent_or_protocol(argv: list[str]) -> None:
-    with pytest.raises(SystemExit, match="give an agent class or --protocol"):
+def test_schema_needs_exactly_one_of_an_agent_protocol_or_registry(argv: list[str]) -> None:
+    with pytest.raises(SystemExit, match="give one of an agent class, --protocol or --registry"):
         main(argv)

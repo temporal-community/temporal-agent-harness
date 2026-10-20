@@ -1,5 +1,4 @@
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
-load("//bazel:agents.bzl", "harness_schema")
 load("//bazel:codegen.bzl", "harness_types")
 
 # One target per file, depending on the files it imports, so a change reruns only the tests that
@@ -149,19 +148,12 @@ ts_project(
     ],
 )
 
-harness_schema(
-    name = "protocol_schema",
-    args = [
-        "schema",
-        "--protocol",
-    ],
-)
-
-# The event protocol's types, protocol.ts, generated from the Python events:
+# The event protocol's types, protocol.ts, generated from the committed contract
+# (contract/protocol.schema.json), so building the client needs no Python:
 # `bazel run //typescript/packages/client/src:protocol_codegen_update` rewrites it.
 harness_types(
     name = "protocol_codegen",
     src = "protocol.ts",
     codegen_args = ["--protocol"],
-    schema = ":protocol_schema",
+    schema = "//contract:protocol_files",
 )

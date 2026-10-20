@@ -92,6 +92,7 @@ harness_agent_registry(
     agents = [":TicTacToeAgent"],
     visibility = [
         "//python/tests/harness:__pkg__",
+        "//python/tests/web:__pkg__",
         "//typescript/packages/codegen/test:__pkg__",
     ],
 )

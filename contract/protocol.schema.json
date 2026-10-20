@@ -1,0 +1,1514 @@
+{
+  "event": {
+    "$ref": "#/$defs/AgentEvent"
+  },
+  "stream_items": [
+    {
+      "$ref": "#/$defs/MessageAccepted"
+    },
+    {
+      "$ref": "#/$defs/MessageHandlerStart"
+    },
+    {
+      "$ref": "#/$defs/MessageHandlerEnd"
+    },
+    {
+      "$ref": "#/$defs/MessageHandlerError"
+    },
+    {
+      "$ref": "#/$defs/TurnStarted"
+    },
+    {
+      "$ref": "#/$defs/TurnEnded"
+    },
+    {
+      "$ref": "#/$defs/ModelInteractionStarted"
+    },
+    {
+      "$ref": "#/$defs/ModelInteractionEnded"
+    },
+    {
+      "$ref": "#/$defs/ToolRequested"
+    },
+    {
+      "$ref": "#/$defs/ToolApprovalRequested"
+    },
+    {
+      "$ref": "#/$defs/AutoApprovalEvaluationStarted"
+    },
+    {
+      "$ref": "#/$defs/AutoApprovalEvaluationEnded"
+    },
+    {
+      "$ref": "#/$defs/AutoApprovalEvaluationSuperseded"
+    },
+    {
+      "$ref": "#/$defs/AutoApprovalEvaluationError"
+    },
+    {
+      "$ref": "#/$defs/ToolApprovalResolved"
+    },
+    {
+      "$ref": "#/$defs/ToolStartEvent"
+    },
+    {
+      "$ref": "#/$defs/ToolEndEvent"
+    },
+    {
+      "$ref": "#/$defs/ToolProgressDelta"
+    },
+    {
+      "$ref": "#/$defs/ToolErrorEvent"
+    },
+    {
+      "$ref": "#/$defs/CallbackRequested"
+    },
+    {
+      "$ref": "#/$defs/CallbackResolved"
+    },
+    {
+      "$ref": "#/$defs/SubagentStarted"
+    },
+    {
+      "$ref": "#/$defs/SubagentStopped"
+    },
+    {
+      "$ref": "#/$defs/SubagentMessageSent"
+    },
+    {
+      "$ref": "#/$defs/SubagentReplyReceived"
+    },
+    {
+      "$ref": "#/$defs/SubagentStreamUnavailable"
+    },
+    {
+      "$ref": "#/$defs/ReplyDelta"
+    },
+    {
+      "$ref": "#/$defs/ThoughtSummaryDelta"
+    },
+    {
+      "$ref": "#/$defs/TextAnnotationDelta"
+    },
+    {
+      "$ref": "#/$defs/AgentStateSnapshot"
+    },
+    {
+      "$ref": "#/$defs/AgentStatePatch"
+    }
+  ],
+  "$defs": {
+    "AgentEvent": {
+      "description": "Transport envelope for one stream event.\n\nThe single concrete type published on — and subscribed to from — the\n``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload\n(``event``) and adds the routing metadata the harness stamps at publish time.\nProducers never build this — they construct a payload and the publisher wraps\nit — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp``\ncan only ever be set by the harness. Being a concrete type (not a bare union), it is\nalso a clean ``type`` for the workflow-stream topic and subscribe ``result_type``.",
+      "properties": {
+        "agent_id": {
+          "description": "The short, TREE-UNIQUE id of the agent that PUBLISHED this event (``AgentConfig.agent_id`` / ``AgentStatus.agent_id`` — see ``AgentId`` for the segment shape; NOT the full workflow_id) — stamped by the harness at publish time; producers never set it. Every event carries it so a merged multi-agent stream is self-describing: because the id is unique across the whole subagent tree, a consumer can filter to one agent's events, or group the merged stream by agent, with no risk of conflating two agents. For a subagent it equals the ``handle`` its parent references it by (the parent's own id plus a fresh segment, pushed down as the child's ``agent_id``), so a consumer can attribute child events to the subagent shown in the parent's status/events.",
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "description": "The id of the turn this event belongs to — stamped by the harness at publish time; producers never set it.",
+          "title": "Turn Id",
+          "type": "string"
+        },
+        "turn_number": {
+          "description": "The monotonic number of the turn this event belongs to — stamped by the harness at publish time; producers never set it.",
+          "title": "Turn Number",
+          "type": "integer"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The id of the ONE inbound message whose dispatch produced this event — minted at admission (also returned on ``AgentMessageReply.message_id``) and stamped by the harness; producers never set it. It lives on the envelope rather than in event bodies so EVERY event of a message's dispatch is attributable for free — deltas, tool lifecycle, approvals, subagent brackets — exactly the way ``turn_id`` is.\n\n``turn_id`` does NOT substitute for it: a turn is refcounted, so a ``MidTurn.ACCEPT`` message can join one already open and several messages then publish under one ``turn_id``. Pair a reply, or attribute a streamed delta, by THIS field.\n\n``None`` for events that genuinely are not about one message: ``turn_started`` and ``turn_end`` (pure turn lifecycle), and the approval/callback resolutions published from an update handler driving a policy cascade — which is no more bound to one message than it is to one turn.",
+          "title": "Message Id"
+        },
+        "timestamp": {
+          "description": "When the harness published this envelope (epoch seconds).",
+          "title": "Timestamp",
+          "type": "number"
+        },
+        "event": {
+          "description": "The wrapped stream-event payload — a discriminated union over ``type`` that Temporal's Pydantic converter reconstructs to the concrete payload subtype on read.",
+          "discriminator": {
+            "mapping": {
+              "auto_approval_evaluation_ended": "#/$defs/AutoApprovalEvaluationEnded",
+              "auto_approval_evaluation_error": "#/$defs/AutoApprovalEvaluationError",
+              "auto_approval_evaluation_started": "#/$defs/AutoApprovalEvaluationStarted",
+              "auto_approval_evaluation_superseded": "#/$defs/AutoApprovalEvaluationSuperseded",
+              "callback_requested": "#/$defs/CallbackRequested",
+              "callback_resolved": "#/$defs/CallbackResolved",
+              "message_accepted": "#/$defs/MessageAccepted",
+              "message_handler_end": "#/$defs/MessageHandlerEnd",
+              "message_handler_error": "#/$defs/MessageHandlerError",
+              "message_handler_start": "#/$defs/MessageHandlerStart",
+              "model_interaction_ended": "#/$defs/ModelInteractionEnded",
+              "model_interaction_started": "#/$defs/ModelInteractionStarted",
+              "reply_delta": "#/$defs/ReplyDelta",
+              "state_patch": "#/$defs/AgentStatePatch",
+              "state_snapshot": "#/$defs/AgentStateSnapshot",
+              "subagent_message_sent": "#/$defs/SubagentMessageSent",
+              "subagent_reply_received": "#/$defs/SubagentReplyReceived",
+              "subagent_started": "#/$defs/SubagentStarted",
+              "subagent_stopped": "#/$defs/SubagentStopped",
+              "subagent_stream_unavailable": "#/$defs/SubagentStreamUnavailable",
+              "text_annotation": "#/$defs/TextAnnotationDelta",
+              "thought_summary": "#/$defs/ThoughtSummaryDelta",
+              "tool_approval_requested": "#/$defs/ToolApprovalRequested",
+              "tool_approval_resolved": "#/$defs/ToolApprovalResolved",
+              "tool_end": "#/$defs/ToolEndEvent",
+              "tool_error": "#/$defs/ToolErrorEvent",
+              "tool_progress_delta": "#/$defs/ToolProgressDelta",
+              "tool_requested": "#/$defs/ToolRequested",
+              "tool_start": "#/$defs/ToolStartEvent",
+              "turn_end": "#/$defs/TurnEnded",
+              "turn_started": "#/$defs/TurnStarted"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/MessageAccepted"
+            },
+            {
+              "$ref": "#/$defs/MessageHandlerStart"
+            },
+            {
+              "$ref": "#/$defs/MessageHandlerEnd"
+            },
+            {
+              "$ref": "#/$defs/MessageHandlerError"
+            },
+            {
+              "$ref": "#/$defs/TurnStarted"
+            },
+            {
+              "$ref": "#/$defs/TurnEnded"
+            },
+            {
+              "$ref": "#/$defs/ModelInteractionStarted"
+            },
+            {
+              "$ref": "#/$defs/ModelInteractionEnded"
+            },
+            {
+              "$ref": "#/$defs/ToolRequested"
+            },
+            {
+              "$ref": "#/$defs/ToolApprovalRequested"
+            },
+            {
+              "$ref": "#/$defs/AutoApprovalEvaluationStarted"
+            },
+            {
+              "$ref": "#/$defs/AutoApprovalEvaluationEnded"
+            },
+            {
+              "$ref": "#/$defs/AutoApprovalEvaluationSuperseded"
+            },
+            {
+              "$ref": "#/$defs/AutoApprovalEvaluationError"
+            },
+            {
+              "$ref": "#/$defs/ToolApprovalResolved"
+            },
+            {
+              "$ref": "#/$defs/ToolStartEvent"
+            },
+            {
+              "$ref": "#/$defs/ToolEndEvent"
+            },
+            {
+              "$ref": "#/$defs/ToolProgressDelta"
+            },
+            {
+              "$ref": "#/$defs/ToolErrorEvent"
+            },
+            {
+              "$ref": "#/$defs/CallbackRequested"
+            },
+            {
+              "$ref": "#/$defs/CallbackResolved"
+            },
+            {
+              "$ref": "#/$defs/SubagentStarted"
+            },
+            {
+              "$ref": "#/$defs/SubagentStopped"
+            },
+            {
+              "$ref": "#/$defs/SubagentMessageSent"
+            },
+            {
+              "$ref": "#/$defs/SubagentReplyReceived"
+            },
+            {
+              "$ref": "#/$defs/SubagentStreamUnavailable"
+            },
+            {
+              "$ref": "#/$defs/ReplyDelta"
+            },
+            {
+              "$ref": "#/$defs/ThoughtSummaryDelta"
+            },
+            {
+              "$ref": "#/$defs/TextAnnotationDelta"
+            },
+            {
+              "$ref": "#/$defs/AgentStateSnapshot"
+            },
+            {
+              "$ref": "#/$defs/AgentStatePatch"
+            }
+          ],
+          "title": "Event"
+        }
+      },
+      "required": [
+        "agent_id",
+        "turn_id",
+        "turn_number",
+        "message_id",
+        "timestamp",
+        "event"
+      ],
+      "title": "AgentEvent",
+      "type": "object"
+    },
+    "AgentStatePatch": {
+      "description": "What one committed ``mutate()`` block changed, as RFC 6902 ops.\n\nThe harness derives these; nothing in the author's workflow code builds or sees\nthem. Ops are applied in order, and a version is produced only by a block that\nactually touched something — a no-op ``mutate()`` publishes nothing at all.",
+      "properties": {
+        "type": {
+          "const": "state_patch",
+          "default": "state_patch",
+          "title": "Type",
+          "type": "string"
+        },
+        "state_id": {
+          "description": "Which registered state these ops apply to.",
+          "title": "State Id",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version this patch produces.",
+          "title": "Version",
+          "type": "integer"
+        },
+        "ops": {
+          "description": "RFC 6902 operations, applied in order to the `version - 1` document. The harness only ever emits ``add`` / ``replace`` / ``remove``.",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Ops",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "state_id",
+        "version",
+        "ops"
+      ],
+      "title": "AgentStatePatch",
+      "type": "object"
+    },
+    "AgentStateSnapshot": {
+      "description": "The full value of one piece of observable agent state.\n\nPublished when the author registers the state, and again on nothing else — the\n``version`` here is the base every subsequent :class:`AgentStatePatch` for the\nsame ``state_id`` builds on.",
+      "properties": {
+        "type": {
+          "const": "state_snapshot",
+          "default": "state_snapshot",
+          "title": "Type",
+          "type": "string"
+        },
+        "state_id": {
+          "description": "The name the workflow author registered this state under. Unique per agent; a consumer keys its local copy by it.",
+          "title": "State Id",
+          "type": "string"
+        },
+        "version": {
+          "description": "The state's version at the moment of the snapshot. Patches carry strictly increasing versions from here.",
+          "title": "Version",
+          "type": "integer"
+        },
+        "value": {
+          "additionalProperties": true,
+          "description": "The whole state, as ``model_dump(mode='json')`` — the same serialization the patch ops' values use, so pointers line up.",
+          "title": "Value",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "state_id",
+        "version",
+        "value"
+      ],
+      "title": "AgentStateSnapshot",
+      "type": "object"
+    },
+    "AutoApprovalEvaluationEnded": {
+      "description": "An automatic approval evaluator returned a verdict, closing its bracket.",
+      "properties": {
+        "type": {
+          "const": "auto_approval_evaluation_ended",
+          "default": "auto_approval_evaluation_ended",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "evaluation_id": {
+          "description": "Correlates this evaluation's started event with its ended/error event. ``tool_id`` is NOT enough: an agent may chain several evaluators over one gated call (a cheap check, then an expensive one), and two evaluations of the same call would be indistinguishable without this.",
+          "title": "Evaluation Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "description": "What is doing the judging — ``jev_evaluator`` for the builtin AI approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE (its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so the started event and the error event can both name it — neither has a decision to read it from.",
+          "title": "Evaluator",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/AutoApprovalVerdict",
+          "description": "What the evaluator SAID — approve, deny, or escalate to a human. This is the evaluator's answer, not necessarily the call's outcome: see ``applied``."
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The evaluator's one-line summary. On an approve or deny this is also the reason published on the resulting ToolApprovalResolved (and, on a deny, the error the model receives); on an escalate this event is the ONLY place it appears, because an escalate resolves nothing.",
+          "title": "Reason"
+        },
+        "details": {
+          "additionalProperties": true,
+          "description": "The evaluator's own structured reasoning, free-form by design so an evaluator can record whatever makes its decision reviewable. The builtin Jev approver records the model id and request id, the verdict's confidence and full probability distribution, the irreversibility judgment, token usage, and the thresholds applied — the thresholds being what lets a stored decision be replayed against different ones without re-running inference. Empty when the evaluator recorded none.",
+          "title": "Details",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "evaluation_id",
+        "evaluator",
+        "verdict",
+        "reason",
+        "details"
+      ],
+      "title": "AutoApprovalEvaluationEnded",
+      "type": "object"
+    },
+    "AutoApprovalEvaluationError": {
+      "description": "An automatic approval evaluator raised instead of returning a verdict.",
+      "properties": {
+        "type": {
+          "const": "auto_approval_evaluation_error",
+          "default": "auto_approval_evaluation_error",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "evaluation_id": {
+          "description": "Correlates this evaluation's started event with its ended/error event. ``tool_id`` is NOT enough: an agent may chain several evaluators over one gated call (a cheap check, then an expensive one), and two evaluations of the same call would be indistinguishable without this.",
+          "title": "Evaluation Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "description": "What is doing the judging — ``jev_evaluator`` for the builtin AI approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE (its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so the started event and the error event can both name it — neither has a decision to read it from.",
+          "title": "Evaluator",
+          "type": "string"
+        },
+        "message": {
+          "description": "The failure, as text. The harness substitutes an escalate, so the call falls through to the human gate rather than being approved or failing the turn.",
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "evaluation_id",
+        "evaluator",
+        "message"
+      ],
+      "title": "AutoApprovalEvaluationError",
+      "type": "object"
+    },
+    "AutoApprovalEvaluationStarted": {
+      "description": "An automatic approval evaluator has begun judging a gated call.\n\nDeliberately carries no judgment: it is published before the evaluator is invoked, so\nthere is nothing for it to carry. Its value is the opening of the bracket — see\n:data:`AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED`.",
+      "properties": {
+        "type": {
+          "const": "auto_approval_evaluation_started",
+          "default": "auto_approval_evaluation_started",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "evaluation_id": {
+          "description": "Correlates this evaluation's started event with its ended/error event. ``tool_id`` is NOT enough: an agent may chain several evaluators over one gated call (a cheap check, then an expensive one), and two evaluations of the same call would be indistinguishable without this.",
+          "title": "Evaluation Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "description": "What is doing the judging — ``jev_evaluator`` for the builtin AI approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE (its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so the started event and the error event can both name it — neither has a decision to read it from.",
+          "title": "Evaluator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "evaluation_id",
+        "evaluator"
+      ],
+      "title": "AutoApprovalEvaluationStarted",
+      "type": "object"
+    },
+    "AutoApprovalEvaluationSuperseded": {
+      "description": "An automatic approval evaluator was cancelled because its gate was settled first.",
+      "properties": {
+        "type": {
+          "const": "auto_approval_evaluation_superseded",
+          "default": "auto_approval_evaluation_superseded",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "evaluation_id": {
+          "description": "Correlates this evaluation's started event with its ended/error event. ``tool_id`` is NOT enough: an agent may chain several evaluators over one gated call (a cheap check, then an expensive one), and two evaluations of the same call would be indistinguishable without this.",
+          "title": "Evaluation Id",
+          "type": "string"
+        },
+        "evaluator": {
+          "description": "What is doing the judging — ``jev_evaluator`` for the builtin AI approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE (its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so the started event and the error event can both name it — neither has a decision to read it from.",
+          "title": "Evaluator",
+          "type": "string"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AutoApprovalVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the evaluator had concluded before it was cut off, in the narrow race where its answer arrived in the same workflow activation as the decision that beat it. Normally None: a cancelled evaluator never reaches a verdict."
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "evaluation_id",
+        "evaluator",
+        "verdict"
+      ],
+      "title": "AutoApprovalEvaluationSuperseded",
+      "type": "object"
+    },
+    "AutoApprovalVerdict": {
+      "description": "What an auto mode evaluator decided about one gated tool call.\n\nThree-valued on purpose. An evaluator is not merely an \"extra yes\": it is a\n*decision-maker*, and the interesting case — an AI auto-approver judging a call it has\nnever seen before — needs to be able to say \"no\" as loudly as it says \"yes\", and to\nabstain when it is not sure enough to say either.\n\n  * ``APPROVE`` — dispatch the call now, with no human gate.\n  * ``DENY`` — the call ends here. It never executes; the tool raises\n    :class:`~temporal_agent_harness.harness.agent_workflow.ToolApprovalDenied`, which\n    the agent loop surfaces to the model as an error result, so the turn continues.\n  * ``ESCALATE`` — abstain. The call stays PENDING and waits for a human decision on\n    the ``tool_approval`` update, exactly as if auto mode were off.\n\n``ESCALATE`` — not ``DENY`` — is the safe answer to \"I don't know\": denying on\nuncertainty trains operators to disable the guardrail, while escalating puts the call\nin front of the person who can actually judge it.",
+      "enum": [
+        "approve",
+        "deny",
+        "escalate"
+      ],
+      "title": "AutoApprovalVerdict",
+      "type": "string"
+    },
+    "CallbackRequested": {
+      "description": "A callback tool call is awaiting a result from an external client.\n\nSits between :class:`ToolStartEvent` and :class:`ToolEndEvent` for the same call, sharing\ntheir ``tool_id`` + ``tool_name``. The tool has no worker-side body: an attached client\nfulfills it on its own machine and returns the result via a ``provide_callback_result``\nupdate keyed on ``tool_id``.",
+      "properties": {
+        "type": {
+          "const": "callback_requested",
+          "default": "callback_requested",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_input": {
+          "additionalProperties": true,
+          "description": "The model-facing arguments of the callback call (injected parameters excluded), so the fulfilling client sees exactly what the model asked for.",
+          "title": "Tool Input",
+          "type": "object"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "description": "JSON schema of the result the client must return — derived from the callback tool's declared output type. The client's result is validated against this before it resolves the call.",
+          "title": "Output Schema",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "tool_input",
+        "output_schema"
+      ],
+      "title": "CallbackRequested",
+      "type": "object"
+    },
+    "CallbackResolved": {
+      "description": "A pending callback tool call was resolved — result returned, error, or timeout.",
+      "properties": {
+        "type": {
+          "const": "callback_resolved",
+          "default": "callback_resolved",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "'ok' if the client returned a result (validated against the tool's output type) — TOOL_END follows; 'error' if the client reported a failure fulfilling the call; 'timeout' if the wait elapsed (or the agent closed) before any result arrived. On 'error'/'timeout' the call fails and TOOL_ERROR follows.",
+          "enum": [
+            "ok",
+            "error",
+            "timeout"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The client-reported failure message ('error'), the timeout/close note ('timeout'), or None on 'ok'.",
+          "title": "Error"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "outcome",
+        "error"
+      ],
+      "title": "CallbackResolved",
+      "type": "object"
+    },
+    "MessageAccepted": {
+      "description": "One inbound message passed admission — what was sent, and what it did to the turn.\n\nThe first event of a message's life, published from the synchronous admission prologue\nof ``send_agent_message``. It is the ONLY event carrying the message's content, which is\nwhy it is standalone rather than folded into :class:`TurnStarted`: a message that JOINS\nan open turn starts no turn of its own, so there would be nothing to fold it into.",
+      "properties": {
+        "type": {
+          "const": "message_accepted",
+          "default": "message_accepted",
+          "title": "Type",
+          "type": "string"
+        },
+        "handler": {
+          "description": "Which ``@agent.accepts`` handler the message is addressed to — the ``AgentMessage.type`` envelope field, named for what it actually is.",
+          "title": "Handler",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "description": "The message's payload as sent — the JSON of the handler's input model. Carried structurally rather than pre-rendered so a consumer can display it however it likes (and validate it against the handler's ``parameters`` schema).",
+          "title": "Payload",
+          "type": "object"
+        },
+        "disposition": {
+          "$ref": "#/$defs/MessageDisposition",
+          "description": "What this message did to the agent's turn: OPENED a new one, JOINED the turn already open, or QUEUED behind it. The envelope's ``turn_id`` / ``turn_number`` name the turn in question — already running for JOINED, still to start for the other two."
+        }
+      },
+      "required": [
+        "type",
+        "handler",
+        "payload",
+        "disposition"
+      ],
+      "title": "MessageAccepted",
+      "type": "object"
+    },
+    "MessageDisposition": {
+      "description": "What an admitted message actually did to the agent's turn — the OUTCOME half of\n:class:`MidTurn`'s declaration.\n\n``MidTurn`` is what the handler's author declared should happen mid-turn; this is what\nhappened to one particular message, which also depends on whether the agent was busy at\nall. An idle agent gives every mode the same answer (:attr:`OPENED`), so a handler\ndeclaring ``ENQUEUE`` yields ``OPENED`` or ``QUEUED``, one declaring ``ACCEPT`` yields\n``OPENED`` or ``JOINED``, and one declaring ``REJECT`` only ever yields ``OPENED`` (a\nmid-turn arrival never gets admitted, so it has no disposition at all).\n\nReported in two places for two audiences: on :attr:`AgentMessageReply.disposition`, so the\nSENDER learns what became of its own message, and on the ``message_accepted`` event, so\nevery OBSERVER of the stream learns the same thing.",
+      "enum": [
+        "opened",
+        "joined",
+        "queued"
+      ],
+      "title": "MessageDisposition",
+      "type": "string"
+    },
+    "MessageHandlerEnd": {
+      "description": "One message's handler returned — its reply. Terminal for the MESSAGE.\n\nNot necessarily terminal for the turn: with several participants sharing a turn there is\none of these per message, all under the same ``turn_id``, and :class:`TurnEnded` follows\nonly the last. A consumer pairing a reply with the message that produced it MUST use the\nenvelope's ``message_id``; ``turn_id`` no longer distinguishes them, and reply order is\nnot a workaround (nothing guarantees the turn's opening message replies last).",
+      "properties": {
+        "type": {
+          "const": "message_handler_end",
+          "default": "message_handler_end",
+          "title": "Type",
+          "type": "string"
+        },
+        "output": {
+          "additionalProperties": true,
+          "description": "The handler's return model serialized to JSON (the harness publishes ``result.model_dump(mode=\"json\")``). Carrying a plain dict keeps the reply trivially round-trippable on the stream regardless of the concrete output type; a consumer that knows the expected type (e.g. from ``agent_interface``) re-validates the dict into it.",
+          "title": "Output",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "output"
+      ],
+      "title": "MessageHandlerEnd",
+      "type": "object"
+    },
+    "MessageHandlerError": {
+      "description": "One message's handler raised. Terminal for the MESSAGE, never for the session.\n\nThe error half of the :class:`MessageHandlerEnd` pair (exactly as ``tool_error`` is to\n``tool_end``). It ends only this message: sibling participants of the same turn keep\nrunning, and :class:`TurnEnded` still follows once the last of them leaves. Attribute it\nby the envelope's ``message_id`` — treating it as \"the turn failed\" would blame work that\nis still in flight.",
+      "properties": {
+        "type": {
+          "const": "message_handler_error",
+          "default": "message_handler_error",
+          "title": "Type",
+          "type": "string"
+        },
+        "message": {
+          "description": "A description of the error the message's handler raised.",
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ],
+      "title": "MessageHandlerError",
+      "type": "object"
+    },
+    "MessageHandlerStart": {
+      "description": "This message's ``@agent.accepts`` handler has begun running.\n\nEmpty by design: everything about the message was already published on\n:class:`MessageAccepted`, and the envelope's ``message_id`` pairs the two. The gap\nbetween them is the message's queue latency.",
+      "properties": {
+        "type": {
+          "const": "message_handler_start",
+          "default": "message_handler_start",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "MessageHandlerStart",
+      "type": "object"
+    },
+    "ModelInteractionEnded": {
+      "description": "One streaming model call has ended, closing a MODEL_INTERACTION_STARTED.\n\nPublished exactly once for each :class:`ModelInteractionStarted`.",
+      "properties": {
+        "type": {
+          "const": "model_interaction_ended",
+          "default": "model_interaction_ended",
+          "title": "Type",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model the call was issued against (the same id as on the matching ModelInteractionStarted), or None if the producer didn't report it.",
+          "title": "Model"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The call's TokenUsage when the provider reported it, or None if unavailable — e.g. the stream errored before completing."
+        }
+      },
+      "required": [
+        "type",
+        "model",
+        "usage"
+      ],
+      "title": "ModelInteractionEnded",
+      "type": "object"
+    },
+    "ModelInteractionStarted": {
+      "description": "One streaming model call has begun — opening a span of MODEL work.\n\nThe envelope's ``turn_id`` / ``turn_number`` say which turn it belongs to; within a\nturn there may be many.",
+      "properties": {
+        "type": {
+          "const": "model_interaction_started",
+          "default": "model_interaction_started",
+          "title": "Type",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model the call was issued against (the requested id), when the producer knows it — None otherwise.",
+          "title": "Model"
+        }
+      },
+      "required": [
+        "type",
+        "model"
+      ],
+      "title": "ModelInteractionStarted",
+      "type": "object"
+    },
+    "ReplyDelta": {
+      "description": "An incremental text chunk of the agent's reply.",
+      "properties": {
+        "type": {
+          "const": "reply_delta",
+          "default": "reply_delta",
+          "title": "Type",
+          "type": "string"
+        },
+        "text": {
+          "description": "One incremental text chunk (word/token) of the agent's reply.",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "title": "ReplyDelta",
+      "type": "object"
+    },
+    "SubagentMessageSent": {
+      "description": "This agent dispatched one message (a turn) to a subagent it is driving.",
+      "properties": {
+        "type": {
+          "const": "subagent_message_sent",
+          "default": "subagent_message_sent",
+          "title": "Type",
+          "type": "string"
+        },
+        "subagent_id": {
+          "description": "The short id of the SUBAGENT being messaged (matches its SubagentStarted, and the ``agent_id`` on that subagent's own events). Distinct from the envelope's ``agent_id`` (this parent agent).",
+          "title": "Subagent Id",
+          "type": "string"
+        },
+        "agent_key": {
+          "description": "Which wired agent type the messaged subagent is.",
+          "title": "Agent Key",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The messaged subagent's real child workflow id — what a consumer uses to correlate this dispatch with the matching turn on the subagent's OWN event stream (mounted via SubagentStarted; subagent streams are never mirrored onto this one).",
+          "title": "Workflow Id",
+          "type": "string"
+        },
+        "handler": {
+          "description": "The ``@agent.accepts`` handler this message is addressed to on the subagent (the send_agent_message envelope 'type' — which of the subagent's accepted messages it is).",
+          "title": "Handler",
+          "type": "string"
+        },
+        "subagent_turn": {
+          "description": "The turn number ON THE SUBAGENT that this dispatch starts — distinct from the enclosing AgentEvent's `turn_number`, which is THIS agent's (the parent's) turn. Several dispatches in one parent turn share that envelope turn_number but get distinct subagent_turn values; pairs with the turn_number on the subagent's OWN stream events.",
+          "title": "Subagent Turn",
+          "type": "integer"
+        },
+        "from_offset": {
+          "default": 0,
+          "description": "The offset in the SUBAGENT's OWN stream at which this turn's events begin (the child stream position the parent resumes consumption from for this turn). A client merging the parent + subagent streams positions the child cursor here the first time it mounts the child — so a merge that starts mid-session (resuming at a parent turn that is not the child's first) skips the child's pre-resume history, whose own message_sent markers are not on the merged stream and could otherwise never be ordered. Unrelated address space from the parent stream's offsets.",
+          "title": "From Offset",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "subagent_id",
+        "agent_key",
+        "workflow_id",
+        "handler",
+        "subagent_turn",
+        "from_offset"
+      ],
+      "title": "SubagentMessageSent",
+      "type": "object"
+    },
+    "SubagentReplyReceived": {
+      "description": "This agent received a subagent's reply for one turn it dispatched.\n\nThe CLOSE marker of the ``[subagent_message_sent … subagent_reply_received]`` bracket\n(mirrors :class:`SubagentMessageSent`'s correlation fields), published in-workflow by the\nparent's ``run_subagent_turn`` once the activity returns and the agent (workflow) actually\nholds the reply — for EVERY accepted child turn (``outcome`` distinguishes success from an\naccepted-but-errored turn, which still emitted its own ``turn_end``), but never for a\npre-acceptance rejection. Carries no reply payload (that rides the child's own\n``message_handler_end`` event + the send-tool's ``tool_end``); it is a thin\nclose/correlation signal a stream-merge uses to order a subagent's whole turn ahead of\nthe parent observing its reply.",
+      "properties": {
+        "type": {
+          "const": "subagent_reply_received",
+          "default": "subagent_reply_received",
+          "title": "Type",
+          "type": "string"
+        },
+        "subagent_id": {
+          "description": "The short id of the SUBAGENT that replied (matches its SubagentMessageSent, and the ``agent_id`` on that subagent's own events). Distinct from the envelope's ``agent_id`` (this parent agent).",
+          "title": "Subagent Id",
+          "type": "string"
+        },
+        "agent_key": {
+          "description": "Which wired agent type the replying subagent is.",
+          "title": "Agent Key",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The replying subagent's real child workflow id (matches the opening SubagentMessageSent) — the close-gate key a stream-merge correlates against.",
+          "title": "Workflow Id",
+          "type": "string"
+        },
+        "handler": {
+          "description": "The handler this reply answers (the same send_agent_message envelope 'type' as the opening SubagentMessageSent).",
+          "title": "Handler",
+          "type": "string"
+        },
+        "subagent_turn": {
+          "description": "The turn number ON THE SUBAGENT this reply closes — pairs with the opening SubagentMessageSent's subagent_turn, NOT the enclosing envelope's (parent's) turn_number.",
+          "title": "Subagent Turn",
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "'ok' if the child turn produced a reply; 'error' if it was accepted but then errored / produced no reply (it still emitted its own turn_end, so the bracket closes either way). Never published for a pre-acceptance rejection.",
+          "enum": [
+            "ok",
+            "error"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subagent_id",
+        "agent_key",
+        "workflow_id",
+        "handler",
+        "subagent_turn",
+        "outcome"
+      ],
+      "title": "SubagentReplyReceived",
+      "type": "object"
+    },
+    "SubagentStarted": {
+      "description": "This agent started a subagent (a child agent it drives).",
+      "properties": {
+        "type": {
+          "const": "subagent_started",
+          "default": "subagent_started",
+          "title": "Type",
+          "type": "string"
+        },
+        "subagent_id": {
+          "description": "The short id of the SUBAGENT this event is about — the id the parent references it by AND the ``agent_id`` the subagent stamps on its own events (the parent pushes it down as the child's id). Distinct from the enclosing envelope's ``agent_id``, which is THIS (the parent) agent.",
+          "title": "Subagent Id",
+          "type": "string"
+        },
+        "agent_key": {
+          "description": "Which wired agent type this subagent is.",
+          "title": "Agent Key",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The subagent's real child workflow id — what a consumer uses to dynamically mount the subagent's OWN event stream for a consolidated view (subagent streams are never mirrored onto this one).",
+          "title": "Workflow Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subagent_id",
+        "agent_key",
+        "workflow_id"
+      ],
+      "title": "SubagentStarted",
+      "type": "object"
+    },
+    "SubagentStopped": {
+      "description": "This agent stopped a subagent it was driving (signalled ``close`` + dropped it).",
+      "properties": {
+        "type": {
+          "const": "subagent_stopped",
+          "default": "subagent_stopped",
+          "title": "Type",
+          "type": "string"
+        },
+        "subagent_id": {
+          "description": "The short id of the stopped SUBAGENT (matches the prior SubagentStarted). Distinct from the envelope's ``agent_id`` (this parent agent).",
+          "title": "Subagent Id",
+          "type": "string"
+        },
+        "agent_key": {
+          "description": "Which wired agent type the stopped subagent was.",
+          "title": "Agent Key",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The stopped subagent's real child workflow id — what a consumer uses to unmount the subagent's event stream (matches the prior SubagentStarted).",
+          "title": "Workflow Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subagent_id",
+        "agent_key",
+        "workflow_id"
+      ],
+      "title": "SubagentStopped",
+      "type": "object"
+    },
+    "SubagentStreamUnavailable": {
+      "description": "The stream merge gave up obtaining a subagent's events; its DETAIL is degraded (non-fatal).\n\nSYNTHESIZED CLIENT-SIDE by the merge (never workflow-published) and injected into the merged\nlogical stream when a mounted subagent stream is unreadable/stalled. The merge stamps the\nenclosing :class:`AgentEvent`'s ``agent_id`` with this same ``subagent_id`` — so a UI that\ngroups events by ``agent_id`` routes this straight to the affected subagent's view, and a\nroot-only consumer (which filters to the root ``agent_id``) ignores it. The parent stream is\nunaffected; only the subagent's own turn detail is missing. No retry — a fresh attach recovers.",
+      "properties": {
+        "type": {
+          "const": "subagent_stream_unavailable",
+          "default": "subagent_stream_unavailable",
+          "title": "Type",
+          "type": "string"
+        },
+        "subagent_id": {
+          "description": "The short id of the subagent whose events couldn't be obtained (matches the ``subagent_id`` on the parent's SubagentStarted/SubagentMessageSent, and the ``agent_id`` that subagent stamps on its own events).",
+          "title": "Subagent Id",
+          "type": "string"
+        },
+        "workflow_id": {
+          "description": "The subagent's real child workflow id (the stream the merge couldn't read).",
+          "title": "Workflow Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "description": "A short, human-facing note on why the subagent's events were unavailable (e.g. the child workflow has completed and its stream isn't yet replayable).",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subagent_id",
+        "workflow_id",
+        "reason"
+      ],
+      "title": "SubagentStreamUnavailable",
+      "type": "object"
+    },
+    "TextAnnotationDelta": {
+      "description": "A streamed annotation/citation delta interleaved with reply text.",
+      "properties": {
+        "type": {
+          "const": "text_annotation",
+          "default": "text_annotation",
+          "title": "Type",
+          "type": "string"
+        },
+        "delta": {
+          "additionalProperties": true,
+          "description": "The raw ``DeltaTextAnnotationDelta`` payload dumped to a dict so consumers can position citations next to the surrounding ``ReplyDelta`` chunks.",
+          "title": "Delta",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "delta"
+      ],
+      "title": "TextAnnotationDelta",
+      "type": "object"
+    },
+    "ThoughtSummaryDelta": {
+      "description": "A streamed thought-summary chunk from the model.",
+      "properties": {
+        "type": {
+          "const": "thought_summary",
+          "default": "thought_summary",
+          "title": "Type",
+          "type": "string"
+        },
+        "delta": {
+          "additionalProperties": true,
+          "description": "The raw ``DeltaThoughtSummary`` payload dumped to a dict.",
+          "title": "Delta",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "delta"
+      ],
+      "title": "ThoughtSummaryDelta",
+      "type": "object"
+    },
+    "TokenUsage": {
+      "description": "Provider-agnostic token accounting for one model interaction.\n\nA neutral summary the harness understands without knowing any model SDK — a\nproducer (e.g. the Gemini plugin) maps its own usage shape onto these fields. Every\nfield is optional: a provider that doesn't report a given count, or an interaction\nthat ends before usage is known, simply leaves it ``None``. ``total_tokens`` is the\nprovider's own grand total when given (not necessarily the sum of the parts, since\nproviders count cached/tool-use tokens differently).\n\nEvery field is optional: a provider that doesn't report a given count, or an\ninteraction that ends before usage is known, simply leaves it ``None``.",
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tokens in the prompt/input to the model, or None if unreported.",
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tokens the model generated as output, or None if unreported.",
+          "title": "Output Tokens"
+        },
+        "thought_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tokens spent on the model's reasoning/thinking, or None if unreported.",
+          "title": "Thought Tokens"
+        },
+        "cached_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Input tokens served from the provider's prompt cache, or None if unreported.",
+          "title": "Cached Tokens"
+        },
+        "tool_use_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tokens attributed to tool use, or None if unreported.",
+          "title": "Tool Use Tokens"
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provider's own grand total when given (not necessarily the sum of the parts, since providers count cached/tool-use tokens differently), or None if unreported.",
+          "title": "Total Tokens"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "thought_tokens",
+        "cached_tokens",
+        "tool_use_tokens",
+        "total_tokens"
+      ],
+      "title": "TokenUsage",
+      "type": "object"
+    },
+    "ToolApprovalRequested": {
+      "description": "A gated tool call is awaiting a human approval decision.\n\nSits between :class:`ToolRequested` and :class:`ToolStartEvent`, sharing their\n``tool_id`` + ``tool_name``.",
+      "properties": {
+        "type": {
+          "const": "tool_approval_requested",
+          "default": "tool_approval_requested",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_input": {
+          "additionalProperties": true,
+          "description": "The model-facing arguments of the gated call (injected parameters are excluded — they are not the model's choice) so an approver sees exactly what the model asked for.",
+          "title": "Tool Input",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "tool_input"
+      ],
+      "title": "ToolApprovalRequested",
+      "type": "object"
+    },
+    "ToolApprovalResolved": {
+      "description": "A pending tool approval was resolved — approved or denied.",
+      "properties": {
+        "type": {
+          "const": "tool_approval_resolved",
+          "default": "tool_approval_resolved",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "approved": {
+          "description": "True if the call is approved (it will now execute), False if denied (it ends here without ever executing and the model receives an error result).",
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "An optional human-supplied note, also set to the auto-denial reason when the agent closes while the approval is still pending.",
+          "title": "Reason"
+        },
+        "remember": {
+          "default": false,
+          "description": "Whether THIS decision asked to be remembered — i.e. an 'approve, and stop asking me about this tool' decision that allow-lists the tool on the live ToolApprovalPolicy. False for a one-off decision and for a call swept up by a policy change (e.g. the cascade that auto-approves other pending calls of a now-allow-listed tool, whose reason is the auto-approval note).",
+          "title": "Remember",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "approved",
+        "reason",
+        "remember"
+      ],
+      "title": "ToolApprovalResolved",
+      "type": "object"
+    },
+    "ToolEndEvent": {
+      "description": "A tool invocation has completed.",
+      "properties": {
+        "type": {
+          "const": "tool_end",
+          "default": "tool_end",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_output": {
+          "default": "",
+          "description": "The tool's final, single result payload.",
+          "title": "Tool Output",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "tool_output"
+      ],
+      "title": "ToolEndEvent",
+      "type": "object"
+    },
+    "ToolErrorEvent": {
+      "description": "A tool invocation has failed.\n\nTerminal for that specific tool call — the UI can resolve the card out of its\n\"running\" state. The turn itself may continue if the caller (e.g. Gemini AFC)\ndecides to retry or surface the failure back to the model.",
+      "properties": {
+        "type": {
+          "const": "tool_error",
+          "default": "tool_error",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "message": {
+          "description": "A description of why the tool invocation failed.",
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "message"
+      ],
+      "title": "ToolErrorEvent",
+      "type": "object"
+    },
+    "ToolProgressDelta": {
+      "description": "An intermediate progress chunk emitted by a tool mid-execution.\n\nDistinct from :class:`ToolEndEvent`'s final payload: this is for tools doing\ngenuine multi-step work (e.g. a custom tool that connects to a service,\nissues several requests, then returns) that want to report progress as they\ngo. Whether a tool streams these is a property of the tool's semantics, not\nof how a transport happens to chunk its output. No tool emits this yet; see\nthe producer note in ``google_genai_plugin/_interactions_activity.py``.",
+      "properties": {
+        "type": {
+          "const": "tool_progress_delta",
+          "default": "tool_progress_delta",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "progress_delta": {
+          "description": "One intermediate progress chunk emitted mid-execution, before the terminal TOOL_END payload.",
+          "title": "Progress Delta",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "progress_delta"
+      ],
+      "title": "ToolProgressDelta",
+      "type": "object"
+    },
+    "ToolRequested": {
+      "description": "The model has requested a tool call that has not begun executing yet.\n\nPrecedes :class:`ToolStartEvent` in the tool lifecycle (requested → start →\nend/error). Carries the same ``tool_id`` + ``tool_name`` as the eventual start,\nso a UI can render the pending call and a future approval policy can evaluate it\nbefore it runs.",
+      "properties": {
+        "type": {
+          "const": "tool_requested",
+          "default": "tool_requested",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_input": {
+          "additionalProperties": true,
+          "description": "The full arguments of the requested call, so a UI can render the pending call and a future approval policy can evaluate it before it runs.",
+          "title": "Tool Input",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "tool_input"
+      ],
+      "title": "ToolRequested",
+      "type": "object"
+    },
+    "ToolStartEvent": {
+      "description": "A tool invocation has begun executing.",
+      "properties": {
+        "type": {
+          "const": "tool_start",
+          "default": "tool_start",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "Stable correlation id chosen once when the call is requested and echoed by every later event of the SAME tool invocation (requested → start → progress → end/error).",
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "The name of the invoked tool. Cannot ALONE disambiguate two parallel calls to the same tool, hence the separate tool_id.",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_input": {
+          "additionalProperties": true,
+          "description": "The full arguments the tool began executing with.",
+          "title": "Tool Input",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "tool_id",
+        "tool_name",
+        "tool_input"
+      ],
+      "title": "ToolStartEvent",
+      "type": "object"
+    },
+    "TurnEnded": {
+      "description": "A turn has fully completed and the agent is idle, awaiting the next message.\n\nCloses the bracket opened by :class:`TurnStarted`. Published for EVERY turn, when its\nLAST participant leaves — after that participant's :class:`MessageHandlerEnd` or\n:class:`MessageHandlerError` — so it is the agent's true quiescence signal and the\nsingle reliable point a consumer can disconnect on. The envelope's ``turn_id`` /\n``turn_number`` identify which turn ended; its ``message_id`` is ``None``, since the\nturn belongs to no single message.",
+      "properties": {
+        "type": {
+          "const": "turn_end",
+          "default": "turn_end",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TurnEnded",
+      "type": "object"
+    },
+    "TurnStarted": {
+      "description": "A turn has begun — the agent went from idle to busy. A pure lifecycle bracket.\n\nCarries no message: a turn is the interval the agent is non-idle, not the span of one\nmessage, and several messages can share it. The message that opened this turn is the\n:class:`MessageAccepted` published just before it with the same ``turn_id``.",
+      "properties": {
+        "type": {
+          "const": "turn_started",
+          "default": "turn_started",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TurnStarted",
+      "type": "object"
+    }
+  }
+}

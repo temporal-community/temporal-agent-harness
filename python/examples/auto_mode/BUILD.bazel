@@ -60,4 +60,5 @@ harness_agent_registry(
         "agents.toml",
     ],
     agents = [":AutoModeTravelAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
 )

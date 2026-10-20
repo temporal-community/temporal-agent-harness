@@ -21,7 +21,8 @@ session creation have nothing to answer them, since both are workflow queries.
 
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
-``--protocol`` it prints the event stream's wire types instead.
+``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
+of an ``agents.toml`` registry.
 """
 
 from __future__ import annotations
@@ -89,11 +90,17 @@ def _schema(args: argparse.Namespace) -> None:
         load_agent_class,
     )
 
-    if (args.agent is None) == (not args.protocol):
-        raise SystemExit("temporal-agent-harness schema: give an agent class or --protocol")
+    if [args.agent is not None, args.protocol, args.registry].count(True) != 1:
+        raise SystemExit(
+            "temporal-agent-harness schema: give one of an agent class, --protocol or --registry"
+        )
     try:
         if args.protocol:
             text = dump_protocol_schema()
+        elif args.registry:
+            from temporal_agent_harness.web.registry import dump_registry_schema
+
+            text = dump_registry_schema()
         else:
             text = dump_agent_schema(load_agent_class(args.agent))
     except ValueError as e:
@@ -180,8 +187,8 @@ def main(argv: list[str] | None = None) -> None:
 
     schema = subparsers.add_parser(
         "schema",
-        help="Print an agent's handlers and declared state, or the event protocol, as "
-        "JSON Schema.",
+        help="Print an agent's handlers and declared state, the event protocol, or the "
+        "agents.toml format, as JSON Schema.",
         description="Import one agent class and print its @agent.accepts handlers (input "
         "and output models) and its agent.state(...) declarations as a single JSON Schema "
         "document with shared $defs — the input to client codegen. Starts no workflow and "
@@ -198,6 +205,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Print the event stream's wire types (every agent publishes the same ones) "
         "instead of one agent's schema.",
+    )
+    schema.add_argument(
+        "--registry",
+        action="store_true",
+        help="Print the schema of an agents.toml registry instead of one agent's schema.",
     )
     schema.add_argument(
         "-o", "--output", default=None, help="Write to this file instead of stdout."

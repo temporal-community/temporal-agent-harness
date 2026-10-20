@@ -91,4 +91,5 @@ harness_agent_registry(
         "agents.toml",
     ],
     agents = [":ReactAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
 )

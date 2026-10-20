@@ -51,6 +51,7 @@ harness_module_binary(
     visibility = ["//:__subpackages__"],
     deps = [
         ":client",
+        ":registry",
         ":serve",
         ":session_manager",
         ":session_manager_worker",
@@ -91,6 +92,7 @@ py_library(
     deps = [
         ":session_manager",
         "//python/temporal_agent_harness/harness:agent_schema",
+        "@pypi//pydantic",
     ],
 )
 
