@@ -1,0 +1,62 @@
+{
+  "description": "A run_accept message joins an open turn and finishes while the opener waits.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Working."
+            ]
+          },
+          {
+            "step": "tool",
+            "id": "call-hold",
+            "name": "ask_client",
+            "args": {
+              "question": "Continue?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Finished."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-hold"
+    },
+    {
+      "action": "send",
+      "handler": "run_accept",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Steering."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "message_handler_end",
+      "send": 2
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-hold",
+      "result": "Yes."
+    }
+  ]
+}

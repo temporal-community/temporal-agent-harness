@@ -1,0 +1,91 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "driver",
+    srcs = ["driver.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":script",
+        ":scripted_agent",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:subagent_activities",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "goldens",
+    srcs = ["goldens.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":driver",
+        ":script",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+    ],
+)
+
+# Reads conformance/scenarios/ and writes conformance/goldens/ in the workspace.
+harness_module_binary(
+    name = "goldens_update",
+    srcs = ["goldens_update.py"],
+    data = ["//bazel/temporal:cli"],
+    env = {"TEMPORAL_CLI_PATH": "$(rootpath //bazel/temporal:cli)"},
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":driver",
+        ":goldens",
+    ],
+)
+
+py_library(
+    name = "script",
+    srcs = ["script.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "scripted_agent",
+    srcs = ["scripted_agent.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":script",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_goldens",
+    srcs = ["test_goldens.py"],
+    data = [
+        "//conformance/goldens",
+        "//conformance/scenarios",
+        "//contract:protocol_files",
+    ],
+    imports = ["../.."],
+    deps = [
+        ":driver",
+        ":goldens",
+        "//python/tests:conftest",
+        "@pypi//jsonschema",
+        "@pypi//pytest",
+    ],
+)

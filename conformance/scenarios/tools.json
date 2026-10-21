@@ -1,0 +1,44 @@
+{
+  "description": "An activity tool, a workflow tool, and a tool that fails.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-add",
+            "name": "add",
+            "args": {
+              "a": 2,
+              "b": 3
+            }
+          },
+          {
+            "step": "tool",
+            "id": "call-echo",
+            "name": "echo",
+            "args": {
+              "text": "hi"
+            }
+          },
+          {
+            "step": "tool",
+            "id": "call-fail",
+            "name": "fail",
+            "args": {
+              "message": "broken"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Done."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

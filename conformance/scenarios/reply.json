@@ -1,0 +1,24 @@
+{
+  "description": "One message, one model interaction streaming a reply.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Hel",
+              "lo"
+            ],
+            "usage": {
+              "input_tokens": 3,
+              "output_tokens": 2
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

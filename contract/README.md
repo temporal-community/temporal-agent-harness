@@ -18,3 +18,6 @@ bazel run //contract:registry_update
 
 `bazel test //contract/...` fails while either is out of date. A change to `protocol.schema.json`
 also needs `bazel run //typescript/packages/client/src:protocol_codegen_update`.
+
+The streams an SDK's worker must publish for a fixed set of scenarios are in
+[`conformance/`](../conformance/README.md).

@@ -137,6 +137,7 @@ bazel run //python/examples/monty:worker  # an example's agent worker
 bazel run //python/examples/tictactoe:agents_update     # rewrite an example's agents.toml and schemas
 bazel run //python/examples/tictactoe:client_sdk_update   # rewrite a committed client SDK
 bazel run //contract:protocol_update      # rewrite contract/protocol.schema.json (contract/README.md)
+bazel run //python/tests/conformance:goldens_update  # re-record conformance/goldens/ (conformance/README.md)
 bazel run //typescript/packages/client/src:protocol_codegen_update  # rewrite its src/protocol.ts
 ```
 

@@ -18,7 +18,10 @@ committed_files(
     name = "protocol",
     srcs = ["protocol.schema.json"],
     generated = {"protocol.schema.json": ":protocol_schema"},
-    visibility = ["//typescript/packages/client/src:__pkg__"],
+    visibility = [
+        "//python/tests/conformance:__pkg__",
+        "//typescript/packages/client/src:__pkg__",
+    ],
 )
 
 # The agents.toml format, which every SDK's `serve` reads: `temporal-agent-harness schema

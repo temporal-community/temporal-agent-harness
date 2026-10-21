@@ -1,0 +1,55 @@
+{
+  "description": "One callback answered by the client, one failed by it.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-name",
+            "name": "ask_client",
+            "args": {
+              "question": "Name?"
+            }
+          },
+          {
+            "step": "tool",
+            "id": "call-age",
+            "name": "ask_client",
+            "args": {
+              "question": "Age?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Done."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-name"
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-name",
+      "result": "Ada"
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-age"
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-age",
+      "error": "Unavailable."
+    }
+  ]
+}

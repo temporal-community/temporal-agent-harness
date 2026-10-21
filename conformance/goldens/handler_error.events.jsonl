@@ -1,0 +1,17 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"model": "scripted", "reply": ["Thinking."], "step": "model", "usage": null}, {"message": "boom", "step": "raise"}, {"model": "scripted", "reply": ["Never."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Thinking.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"message": "boom", "type": "message_handler_error"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"model": "scripted", "reply": ["Recovered."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"text": "Recovered.", "type": "reply_delta"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"output": {"text": "Recovered."}, "type": "message_handler_end"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 2}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-2", "turn_number": 2}

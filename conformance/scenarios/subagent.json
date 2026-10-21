@@ -1,0 +1,79 @@
+{
+  "description": "A subagent started, sent two messages, and stopped; its own stream is recorded too.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "subagent_start",
+            "name": "child"
+          },
+          {
+            "step": "subagent_send",
+            "name": "child",
+            "script": {
+              "steps": [
+                {
+                  "step": "model",
+                  "reply": [
+                    "Hi from the child."
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "step": "subagent_send",
+            "name": "child",
+            "script": {
+              "steps": [
+                {
+                  "step": "model",
+                  "reply": [
+                    "Again."
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "step": "tool",
+            "id": "call-hold",
+            "name": "ask_client",
+            "args": {
+              "question": "Continue?"
+            }
+          },
+          {
+            "step": "subagent_stop",
+            "name": "child"
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Done."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "turn_end",
+      "subagent": 1,
+      "turn_number": 2
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-hold"
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-hold",
+      "result": "Yes."
+    }
+  ]
+}

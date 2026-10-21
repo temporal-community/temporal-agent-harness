@@ -1,0 +1,19 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"args": {"question": "Name?"}, "id": "call-name", "name": "ask_client", "step": "tool"}, {"args": {"question": "Age?"}, "id": "call-age", "name": "ask_client", "step": "tool"}, {"model": "scripted", "reply": ["Done."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-name", "tool_input": {"question": "Name?"}, "tool_name": "ask_client", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-name", "tool_input": {"question": "Name?"}, "tool_name": "ask_client", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output_schema": {"type": "string"}, "tool_id": "call-name", "tool_input": {"question": "Name?"}, "tool_name": "ask_client", "type": "callback_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"error": null, "outcome": "ok", "tool_id": "call-name", "tool_name": "ask_client", "type": "callback_resolved"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-name", "tool_name": "ask_client", "tool_output": "Ada", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-age", "tool_input": {"question": "Age?"}, "tool_name": "ask_client", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-age", "tool_input": {"question": "Age?"}, "tool_name": "ask_client", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output_schema": {"type": "string"}, "tool_id": "call-age", "tool_input": {"question": "Age?"}, "tool_name": "ask_client", "type": "callback_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"error": "Unavailable.", "outcome": "error", "tool_id": "call-age", "tool_name": "ask_client", "type": "callback_resolved"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"message": "callback tool 'ask_client' failed: Unavailable.", "tool_id": "call-age", "tool_name": "ask_client", "type": "tool_error"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Done.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": "Done."}, "type": "message_handler_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}

@@ -1,0 +1,48 @@
+{
+  "description": "A handler that raises, then a second turn that succeeds.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Thinking."
+            ]
+          },
+          {
+            "step": "raise",
+            "message": "boom"
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Never."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "turn_end",
+      "turn_number": 1
+    },
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Recovered."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
