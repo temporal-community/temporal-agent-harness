@@ -1,0 +1,14 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# Compile-time type checks (*.types.ts): `bazel build` fails if one stops holding.
+ts_project(
+    name = "protocol.types",
+    testonly = True,
+    srcs = ["protocol.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    deps = [
+        "//typescript/packages/core:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+    ],
+)

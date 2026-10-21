@@ -105,8 +105,10 @@ npm.npm_translate_lock(
         "//typescript/apps/ui:package.json",
         "//typescript/packages/client:package.json",
         "//typescript/packages/codegen:package.json",
+        "//typescript/packages/core:package.json",
         "//typescript/packages/react:package.json",
         "//typescript/packages/svelte:package.json",
+        "//typescript/packages/worker:package.json",
     ],
     pnpm_lock = "//typescript:pnpm-lock.yaml",
     # The update state is recorded under .aspect/rules/external_repository_action_cache.

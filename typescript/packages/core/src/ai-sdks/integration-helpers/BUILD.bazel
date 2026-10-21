@@ -1,0 +1,16 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+
+ts_project(
+    name = "raw-events",
+    srcs = ["raw-events.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core/src:sandbox",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+    ],
+)

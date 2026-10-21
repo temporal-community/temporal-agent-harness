@@ -1,4 +1,12 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:texts.bzl", "harness_texts")
+
+# Code Mode's model-facing text, from contract/code_mode/.
+harness_texts(
+    name = "texts",
+    srcs = ["//contract/code_mode:texts"],
+    out = "_texts.py",
+)
 
 py_library(
     name = "__init__",
@@ -115,6 +123,7 @@ py_library(
     imports = ["../../.."],
     visibility = ["//:__subpackages__"],
     deps = [
+        ":_texts",
         ":driver",
         ":stubs",
         ":vfs",
@@ -135,4 +144,11 @@ py_library(
         "@pypi//pydantic",
         "@pypi//temporalio",
     ],
+)
+
+py_library(
+    name = "_texts",
+    srcs = ["_texts.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
 )

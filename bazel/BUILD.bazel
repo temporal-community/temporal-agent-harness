@@ -55,3 +55,10 @@ py_binary(
     srcs = ["agents_toml.py"],
     main = "agents_toml.py",
 )
+
+# Writes harness_texts targets' modules (bazel/texts.bzl).
+py_binary(
+    name = "texts_module",
+    srcs = ["texts_module.py"],
+    main = "texts_module.py",
+)

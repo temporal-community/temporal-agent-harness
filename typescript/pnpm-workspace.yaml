@@ -11,6 +11,15 @@ packages:
 # version range.
 linkWorkspacePackages: true
 
+# Packages that load these without declaring them. pnpm's hoisting hides that in a checkout; Bazel's
+# strict node_modules does not: @temporalio/plugin's declarations import the Temporal packages.
+packageExtensions:
+  "@temporalio/plugin":
+    peerDependencies:
+      "@temporalio/client": "*"
+      "@temporalio/common": "*"
+      "@temporalio/worker": "*"
+
 # No dependency needs an install script. esbuild's only checks its platform binary, which it
 # also gets as an optional dependency.
 allowBuilds:

@@ -133,12 +133,14 @@ just gazelle                              # after adding, moving, or changing im
                                           # or changing uv.lock (gazelle_python.yaml, then BUILD files)
 just buildifier                           # format and lint-fix every Bazel file
 bazel run //python:venv_link             # link .venv-bazel here for an IDE interpreter
+bazel run //typescript:node_modules_link  # link each TypeScript package's node_modules for an IDE
 bazel run //python/examples/monty:worker  # an example's agent worker
 bazel run //python/examples/tictactoe:agents_update     # rewrite an example's agents.toml and schemas
 bazel run //python/examples/tictactoe:client_sdk_update   # rewrite a committed client SDK
 bazel run //contract:protocol_update      # rewrite contract/protocol.schema.json (contract/README.md)
 bazel run //python/tests/conformance:goldens_update  # re-record conformance/goldens/ (conformance/README.md)
 bazel run //typescript/packages/client/src:protocol_codegen_update  # rewrite its src/protocol.ts
+bazel run //typescript/packages/worker/test/harness/replay:histories_update  # re-record the TS replay histories
 ```
 
 - **Targets are generated.** Gazelle writes one `py_library` (or test, or binary) per `.py` file,

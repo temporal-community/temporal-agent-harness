@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": ["node"],
+    "declaration": true,
+
+    // Source imports carry `.ts` extensions and are rewritten to `.js` on emit, so the same
+    // files typecheck in place and run as compiled JavaScript under plain Node ESM. No outDir:
+    // Bazel emits beside the sources; the package scripts pass `--outDir dist`.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src", "test"]
+}

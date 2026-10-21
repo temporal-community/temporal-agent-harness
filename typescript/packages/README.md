@@ -16,7 +16,10 @@ open a PR from its prepared branch, and merge it to publish using npm trusted pu
 The packages are one pnpm workspace in `typescript/`, with one lockfile. The bindings'
 `^0.1.0` client dependency links the client in the working tree (`linkWorkspacePackages`), so
 they build and test against it in the same commit; the published range stays `^0.1.0`.
-`bazel test //typescript/...` builds the client first. Outside Bazel, build it before the
+`bazel test //typescript/...` builds the client first. For an IDE,
+`bazel run //typescript:node_modules_link` links each package's `node_modules` to the one Bazel
+builds, where workspace packages are already built; rerun it after a dependency or a workspace
+package changes. It leaves a `node_modules` from `pnpm install` in place. Outside Bazel, build it before the
 bindings, which resolve it through `packages/client/dist`, and again after editing it. Run these
 commands from `typescript/`. They need pnpm 12 (the version `package.json` pins); without it,
 run each `pnpm <args>` as `bazel run //typescript:pnpm -- --dir "$PWD" <args>`, which brings

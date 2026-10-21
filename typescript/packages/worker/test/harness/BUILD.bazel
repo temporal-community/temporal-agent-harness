@@ -1,0 +1,15 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per test file (and per compile-time type check, *.types.ts), depending on the files it
+# imports.
+ts_project(
+    name = "agent-client.types",
+    testonly = True,
+    srcs = ["agent-client.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)

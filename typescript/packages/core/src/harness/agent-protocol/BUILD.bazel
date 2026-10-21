@@ -1,0 +1,65 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+
+ts_project(
+    name = "agent-interface",
+    srcs = ["agent-interface.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "events",
+    srcs = ["events.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@temporalio/agent-harness-client",
+    ],
+)
+
+ts_project(
+    name = "index",
+    srcs = ["index.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":agent-interface",
+        ":events",
+        ":schema",
+        ":subagent-interface",
+        "//typescript/packages/core/src/harness:stream-context",
+    ],
+)
+
+ts_project(
+    name = "schema",
+    srcs = ["schema.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@standard-schema/spec",
+    ],
+)
+
+ts_project(
+    name = "subagent-interface",
+    srcs = ["subagent-interface.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":agent-interface",
+        "//typescript/packages/core:node_modules/zod",
+        "//typescript/packages/core/src/harness:stream-context",
+    ],
+)

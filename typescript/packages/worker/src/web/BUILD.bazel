@@ -1,0 +1,17 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+ts_project(
+    name = "client",
+    srcs = ["client.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/envconfig",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src/utils:large-payload",
+    ],
+)

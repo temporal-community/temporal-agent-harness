@@ -1,4 +1,4 @@
-load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 
 # The workspace root: rules_js keeps the package store for every workspace package here.
@@ -11,6 +11,28 @@ alias(
     name = "pnpm",
     actual = "@pnpm",
     visibility = ["//visibility:public"],
+)
+
+#   bazel run //typescript:node_modules_link
+# links every workspace package's node_modules to the one Bazel builds, for IDEs; rerun it after a
+# dependency or a workspace package changes.
+NODE_MODULES_DIRS = [
+    "typescript",
+    "typescript/apps/chat-server",
+    "typescript/apps/ui",
+    "typescript/packages/client",
+    "typescript/packages/codegen",
+    "typescript/packages/core",
+    "typescript/packages/react",
+    "typescript/packages/svelte",
+    "typescript/packages/worker",
+]
+
+js_binary(
+    name = "node_modules_link",
+    args = NODE_MODULES_DIRS,
+    data = ["//" + dir + ":node_modules" for dir in NODE_MODULES_DIRS],
+    entry_point = "node_modules_link.mjs",
 )
 
 exports_files([

@@ -1,0 +1,44 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:npm_package.bzl", "published_npm_package")
+
+npm_link_all_packages(name = "node_modules")
+
+# package.json's "type": "module" makes tsc emit ES modules (module: NodeNext) and Node load them.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+    visibility = ["//typescript/packages/core:__subpackages__"],
+)
+
+# Every ts_project in src/ and test/ compiles with this tsconfig, each rooted at its own directory.
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    visibility = ["//typescript/packages/core:__subpackages__"],
+    deps = [":package_json"],
+)
+
+# The package as npm publishes it; `pkg.tgz` (`:pkg_tgz`) is the tarball. Bazel emits src/ beside
+# the sources, and the published package keeps tsc's `--outDir dist` layout. Each entry point in
+# package.json's `exports` is listed; npm_package takes the files they import with them.
+published_npm_package(
+    name = "pkg",
+    srcs = [
+        "LICENSE",
+        "README.md",
+        "package.json",
+        "//typescript/packages/core/src:index",
+        "//typescript/packages/core/src/ai-sdks/integration-helpers:raw-events",
+        "//typescript/packages/core/src/ai-sdks/jev:evaluator",
+        "//typescript/packages/core/src/harness:agent-schema",
+        "//typescript/packages/core/src/harness:agent-workflow",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+        "//typescript/packages/core/src/harness/code-mode:index",
+        "//typescript/packages/core/src/harness/code-mode:okf",
+        "//typescript/packages/core/src/harness/code-mode:vfs",
+    ],
+    replace_prefixes = {"src/": "dist/src/"},
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,35 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+
+ts_project(
+    name = "index",
+    srcs = ["index.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core/src/ai-sdks/integration-helpers:raw-events",
+        "//typescript/packages/core/src/ai-sdks/jev:evaluator",
+        "//typescript/packages/core/src/harness:agent",
+        "//typescript/packages/core/src/harness:agent-workflow",
+        "//typescript/packages/core/src/harness:subagent-toolset",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+        "//typescript/packages/core/src/harness/code-mode:activity-fs",
+        "//typescript/packages/core/src/harness/code-mode:index",
+        "//typescript/packages/core/src/harness/code-mode:mount-decl",
+        "//typescript/packages/core/src/harness/code-mode:okf",
+        "//typescript/packages/core/src/harness/code-mode:okf-tool",
+        "//typescript/packages/core/src/harness/code-mode:vfs",
+        "//typescript/packages/core/src/harness/state:index",
+    ],
+)
+
+ts_project(
+    name = "sandbox",
+    srcs = ["sandbox.d.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+)

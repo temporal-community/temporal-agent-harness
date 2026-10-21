@@ -1,0 +1,113 @@
+{
+  "name": "@temporalio/agent-harness-worker",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Worker side of the Temporal agent harness: runAgentWorker, the harness plugin and activities, the agent client and the Code Mode sandbox.",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./harness/agent-client": {
+      "types": "./dist/src/harness/agent-client.d.ts",
+      "default": "./dist/src/harness/agent-client.js"
+    },
+    "./harness/code-mode/monty-stepper": {
+      "types": "./dist/src/harness/code-mode/monty-stepper.d.ts",
+      "default": "./dist/src/harness/code-mode/monty-stepper.js"
+    },
+    "./utils/s3": {
+      "types": "./dist/src/utils/s3.d.ts",
+      "default": "./dist/src/utils/s3.js"
+    },
+    "./web/client": {
+      "types": "./dist/src/web/client.d.ts",
+      "default": "./dist/src/web/client.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --outDir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json --outDir dist && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@temporalio/activity": "^1.24.0",
+    "@temporalio/agent-harness": "^0.1.0",
+    "@temporalio/agent-harness-client": "^0.1.0",
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/common": "^1.24.0",
+    "@temporalio/envconfig": "^1.24.0",
+    "@temporalio/plugin": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow-streams": "^1.24.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/core": "^2.11.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@pydantic/monty": "1.0.0",
+    "@temporalio/external-storage-s3": "^1.24.0",
+    "@temporalio/external-storage-s3-aws-sdk": "^1.24.0",
+    "@temporalio/interceptors-opentelemetry-v2": "^1.24.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@opentelemetry/core": {
+      "optional": true
+    },
+    "@opentelemetry/resources": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-trace-base": {
+      "optional": true
+    },
+    "@pydantic/monty": {
+      "optional": true
+    },
+    "@temporalio/external-storage-s3": {
+      "optional": true
+    },
+    "@temporalio/external-storage-s3-aws-sdk": {
+      "optional": true
+    },
+    "@temporalio/interceptors-opentelemetry-v2": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/core": "^2.11.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@pydantic/monty": "1.0.0",
+    "@temporalio/external-storage-s3": "^1.24.0",
+    "@temporalio/external-storage-s3-aws-sdk": "^1.24.0",
+    "@temporalio/interceptors-opentelemetry-v2": "^1.24.0",
+    "@temporalio/testing": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
+    "@types/node": "^22.20.4",
+    "fast-check": "^4.10.2",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
+    "directory": "typescript/packages/worker"
+  }
+}

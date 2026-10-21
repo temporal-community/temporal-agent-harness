@@ -21,7 +21,8 @@ htmlcov/
 temporal.toml
 
 # Node-generated files
-node_modules/
+# A directory, or a link from `bazel run //typescript:node_modules_link`.
+node_modules
 .pnpm-store/
 
 # Local configs for IDEs

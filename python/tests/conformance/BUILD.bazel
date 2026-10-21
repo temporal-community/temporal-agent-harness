@@ -89,3 +89,24 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+# test_goldens against TypeScript's scripted worker: the same scenarios, checks and goldens.
+harness_pytest_test(
+    name = "test_typescript_goldens",
+    srcs = ["test_goldens.py"],
+    data = [
+        "//conformance/goldens",
+        "//conformance/scenarios",
+        "//contract:protocol_files",
+        "//typescript/packages/worker/test/conformance:worker",
+    ],
+    env = {"CONFORMANCE_WORKER": "$(rootpath //typescript/packages/worker/test/conformance:worker)"},
+    imports = ["../.."],
+    deps = [
+        ":driver",
+        ":goldens",
+        "//python/tests:conftest",
+        "@pypi//jsonschema",
+        "@pypi//pytest",
+    ],
+)

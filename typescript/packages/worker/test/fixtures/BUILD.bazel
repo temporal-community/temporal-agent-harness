@@ -1,0 +1,17 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# The probe agents the workflow-level tests run. Workers bundle the compiled workflows.js at test
+# time, so it and the node_modules it imports are runfiles of every test that depends on it.
+ts_project(
+    name = "workflows",
+    testonly = True,
+    srcs = ["workflows.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//typescript/packages/worker/test:__subpackages__"],
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)

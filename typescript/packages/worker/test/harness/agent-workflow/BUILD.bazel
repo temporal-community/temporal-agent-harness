@@ -1,0 +1,214 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# Tests of the agent workflow (core's src/harness/agent-workflow.ts, agent.ts and
+# subagent-toolset.ts) run on a dev server, and of the run_subagent_turn activity. One target per
+# file.
+ts_project(
+    name = "approvals.test",
+    testonly = True,
+    srcs = ["approvals.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+ts_project(
+    name = "callbacks.test",
+    testonly = True,
+    srcs = ["callbacks.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "helpers",
+    testonly = True,
+    srcs = ["helpers.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "jev-evaluator.test",
+    testonly = True,
+    srcs = ["jev-evaluator.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+ts_project(
+    name = "mid-turn.test",
+    testonly = True,
+    srcs = ["mid-turn.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "raw-streams.test",
+    testonly = True,
+    srcs = ["raw-streams.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow-streams",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "subagent-activities.test",
+    testonly = True,
+    srcs = ["subagent-activities.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow-streams",
+        "//typescript/packages/worker/src/harness:subagent-activities",
+    ],
+)
+
+ts_project(
+    name = "subagent-toolset.test",
+    testonly = True,
+    srcs = ["subagent-toolset.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+ts_project(
+    name = "subagents.test",
+    testonly = True,
+    srcs = ["subagents.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "turn-loop.test",
+    testonly = True,
+    srcs = ["turn-loop.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":helpers",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+harness_js_test(
+    name = "approvals_test",
+    data = [":approvals.test"],
+    entry_point = "approvals.test.js",
+)
+
+harness_js_test(
+    name = "callbacks_test",
+    data = [":callbacks.test"],
+    entry_point = "callbacks.test.js",
+)
+
+harness_js_test(
+    name = "jev-evaluator_test",
+    data = [":jev-evaluator.test"],
+    entry_point = "jev-evaluator.test.js",
+)
+
+harness_js_test(
+    name = "mid-turn_test",
+    data = [":mid-turn.test"],
+    entry_point = "mid-turn.test.js",
+)
+
+harness_js_test(
+    name = "raw-streams_test",
+    data = [":raw-streams.test"],
+    entry_point = "raw-streams.test.js",
+)
+
+js_test(
+    name = "subagent-activities_test",
+    data = [":subagent-activities.test"],
+    entry_point = "subagent-activities.test.js",
+)
+
+js_test(
+    name = "subagent-toolset_test",
+    data = [":subagent-toolset.test"],
+    entry_point = "subagent-toolset.test.js",
+)
+
+harness_js_test(
+    name = "subagents_test",
+    data = [":subagents.test"],
+    entry_point = "subagents.test.js",
+)
+
+harness_js_test(
+    name = "turn-loop_test",
+    data = [":turn-loop.test"],
+    entry_point = "turn-loop.test.js",
+)

@@ -1,15 +1,17 @@
-# ABOUTME: The conformance driver: plays scenarios against a worker hosting the scripted agent,
-# as a client would (sending messages, approving tools, answering callbacks when given events
-# arrive), records each agent's turn_events stream, and normalizes the recording into the form
-# conformance/goldens/ holds.
+# ABOUTME: The conformance driver: plays scenarios against a worker hosting the scripted agent
+# (Python's, in this process, or another SDK's worker program), as a client would (sending
+# messages, approving tools, answering callbacks when given events arrive), records each agent's
+# turn_events stream, and normalizes the recording into the form conformance/goldens/ holds.
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -17,6 +19,9 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from temporalio.api.enums.v1 import TaskQueueType
+from temporalio.api.taskqueue.v1 import TaskQueue
+from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
@@ -134,6 +139,70 @@ async def scripted_worker() -> AsyncIterator[tuple[Client, str]]:
             yield env.client, task_queue
     finally:
         await env.shutdown()
+
+
+@asynccontextmanager
+async def external_worker(command: Sequence[str]) -> AsyncIterator[tuple[Client, str]]:
+    """A local Temporal server and another SDK's worker program hosting the scripted agent.
+
+    The program is run as ``command --address HOST:PORT --namespace NS --task-queue QUEUE`` and
+    must serve until it gets SIGTERM."""
+    env = await WorkflowEnvironment.start_local(
+        data_converter=pydantic_data_converter,
+        dev_server_existing_path=os.environ.get("TEMPORAL_CLI_PATH"),
+    )
+    try:
+        task_queue = f"conformance-{uuid.uuid4()}"
+        worker = subprocess.Popen(
+            [
+                *command,
+                "--address",
+                env.client.service_client.config.target_host,
+                "--namespace",
+                env.client.namespace,
+                "--task-queue",
+                task_queue,
+            ],
+            # Its own process group, so stopping it stops whatever its launcher started too.
+            start_new_session=True,
+        )
+        try:
+            await _wait_until_polled(env.client, task_queue, worker)
+            yield env.client, task_queue
+        finally:
+            _stop(worker)
+    finally:
+        await env.shutdown()
+
+
+async def _wait_until_polled(client: Client, task_queue: str, worker: subprocess.Popen[bytes]) -> None:
+    """Wait until ``worker`` polls ``task_queue`` for both workflow and activity tasks."""
+    async with asyncio.timeout(TIMEOUT.total_seconds()):
+        for kind in (TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY):
+            while True:
+                if worker.poll() is not None:
+                    raise RuntimeError(f"worker exited with status {worker.returncode} before it polled")
+                described = await client.workflow_service.describe_task_queue(
+                    DescribeTaskQueueRequest(
+                        namespace=client.namespace,
+                        task_queue=TaskQueue(name=task_queue),
+                        task_queue_type=kind,
+                    )
+                )
+                if described.pollers:
+                    break
+                await asyncio.sleep(0.1)
+
+
+def _stop(worker: subprocess.Popen[bytes]) -> None:
+    if worker.poll() is not None:
+        return
+    os.killpg(worker.pid, signal.SIGTERM)
+    try:
+        worker.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(worker.pid, signal.SIGKILL)
+        worker.wait()
 
 
 @dataclass

@@ -1,7 +1,8 @@
 # ABOUTME: Records every conformance scenario against the scripted agent on a local Temporal
 # server and checks the recording: the scripted integration published what its scripts state,
 # every envelope matches contract/protocol.schema.json, and the normalized streams and send
-# results equal the committed goldens.
+# results equal the committed goldens. Python's worker hosts the agent unless CONFORMANCE_WORKER
+# names another SDK's worker program, as :test_typescript_goldens does for TypeScript's.
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from tests.conformance.goldens import (
     GOLDENS,
     UPDATE_COMMAND,
     events_golden,
+    external_worker_command,
     integration_mismatches,
     record_all,
     scenario_names,
@@ -28,7 +30,7 @@ NAMES = scenario_names()
 
 @pytest.fixture(scope="module")
 def recordings() -> dict[str, Recording]:
-    return asyncio.run(record_all())
+    return asyncio.run(record_all(external_worker_command()))
 
 
 @pytest.fixture(scope="module")
@@ -73,7 +75,10 @@ def test_recording_matches_its_goldens(recordings: dict[str, Recording], name: s
         (sends_golden(name), normalized.sends_jsonl()),
     ]:
         committed = path.read_text() if path.exists() else ""
-        assert recorded == committed, f"{path} is out of date. To update it, run:\n\n    {UPDATE_COMMAND}\n"
+        if external_worker_command() is not None:
+            assert recorded == committed, f"the recording differs from Python's golden {path}"
+        else:
+            assert recorded == committed, f"{path} is out of date. To update it, run:\n\n    {UPDATE_COMMAND}\n"
 
 
 def test_every_golden_has_a_scenario() -> None:

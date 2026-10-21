@@ -1,0 +1,72 @@
+{
+  "name": "@temporalio/agent-harness",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Temporal-native agent harness for TypeScript: the workflow-safe authoring API for durable agents.",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./harness/agent-protocol": {
+      "types": "./dist/src/harness/agent-protocol/index.d.ts",
+      "default": "./dist/src/harness/agent-protocol/index.js"
+    },
+    "./harness/agent-schema": {
+      "types": "./dist/src/harness/agent-schema.d.ts",
+      "default": "./dist/src/harness/agent-schema.js"
+    },
+    "./harness/agent-workflow": {
+      "types": "./dist/src/harness/agent-workflow.d.ts",
+      "default": "./dist/src/harness/agent-workflow.js"
+    },
+    "./harness/code-mode": {
+      "types": "./dist/src/harness/code-mode/index.d.ts",
+      "default": "./dist/src/harness/code-mode/index.js"
+    },
+    "./harness/code-mode/vfs": {
+      "types": "./dist/src/harness/code-mode/vfs.d.ts",
+      "default": "./dist/src/harness/code-mode/vfs.js"
+    },
+    "./harness/code-mode/okf": {
+      "types": "./dist/src/harness/code-mode/okf.d.ts",
+      "default": "./dist/src/harness/code-mode/okf.js"
+    },
+    "./ai-sdks/integration-helpers/raw-events": {
+      "types": "./dist/src/ai-sdks/integration-helpers/raw-events.d.ts",
+      "default": "./dist/src/ai-sdks/integration-helpers/raw-events.js"
+    },
+    "./ai-sdks/jev/evaluator": {
+      "types": "./dist/src/ai-sdks/jev/evaluator.d.ts",
+      "default": "./dist/src/ai-sdks/jev/evaluator.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --outDir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@standard-schema/spec": "^1.1.0",
+    "@temporalio/agent-harness-client": "^0.1.0",
+    "@temporalio/common": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
+    "@temporalio/workflow-streams": "^1.24.0",
+    "immer": "^11.1.18",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
+    "directory": "typescript/packages/core"
+  }
+}

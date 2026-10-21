@@ -19,6 +19,7 @@ tool sets; each carries its own independent host-function surface.
 from __future__ import annotations
 
 import inspect
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -29,6 +30,12 @@ from temporalio import workflow
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import _current_runner, tool_defn
 
+    from temporal_agent_harness.harness.code_mode._texts import (
+        CONTRACT,
+        FILESYSTEM_STUB,
+        NO_FILESYSTEM,
+        WITH_FILESYSTEM,
+    )
     from temporal_agent_harness.harness.code_mode.driver import (
         CodeModeDriver,
         call_monty,
@@ -45,70 +52,14 @@ with workflow.unsafe.imports_passed_through():
         validate_mounts,
     )
 
-# The model-facing contract. ``{sandbox}`` says what the sandbox can reach, ``{interface}`` is the
+# The model-facing text (contract/code_mode/, generated into _texts.py). In CONTRACT, ``{sandbox}``
+# says what the sandbox can reach (NO_FILESYSTEM or WITH_FILESYSTEM), ``{interface}`` is the
 # generated host-function signatures (and their descriptions + result TypedDicts) for this tool's
 # specific tool set, ``{filesystem}`` lists its mounts, if it has any, and ``{guide}`` is any
-# further explanation a specialized Code Mode tool adds (see :mod:`.okf_tool`).
-_CONTRACT = """\
-Run a Python `script` in a sandbox and return its output. Accomplish tasks by WRITING CODE that \
-calls the host functions listed below — using variables, loops, conditionals, comprehensions and \
-arithmetic to combine many calls in one go — instead of calling tools one at a time.
-
-{sandbox} The host functions and the types below are ALREADY IN SCOPE — never import them \
-(there is no module to import them from). Calling a `TypedDict` type builds a plain dict, as in \
-Python. The host functions are ASYNC — you MUST `await` them — so structure every \
-script like this:
-
-    import asyncio
-    async def main():
-        ...                 # await host functions here
-        return <final value>
-    asyncio.run(main())
-
-The value of the script's LAST EXPRESSION becomes the result (along with anything you `print`). \
-Run INDEPENDENT host calls CONCURRENTLY with `asyncio.gather(...)`; only await sequentially when \
-a later call needs an earlier call's result. Host results come back as plain dicts/lists/scalars \
-— index into them with normal Python (e.g. `results[0]["field"]`). A host function that fails \
-RAISES at its `await`: catch it with `try`/`except Exception` to handle the failure, or let it \
-propagate to end the script with an error.
-
-Your script is STATICALLY TYPE-CHECKED against the host-function signatures below BEFORE it runs: \
-a wrong argument type, or reading a result key that doesn't exist, comes back as an error to fix \
-rather than a result. The signatures and result shapes below are exact — only the listed keys \
-exist.
-
-Host functions available:
-
-{interface}
-{filesystem}{guide}"""
-
-_NO_FILESYSTEM = (
-    "The sandbox has no filesystem, no network, and no imports except `asyncio` and the host "
-    "functions below."
-)
-
-_WITH_FILESYSTEM = (
-    "The sandbox has no network, and no imports except `asyncio`, `pathlib` and the host "
-    "functions below. It has the filesystem listed under Filesystem below: read and write it "
-    "with `open()` and `pathlib.Path`. File operations are synchronous (never `await` them) and "
-    "work on whole files; read lines with `f.read().splitlines()`, not `for line in f`. A failed "
-    "file operation raises an `OSError` subclass (`FileNotFoundError`, `FileExistsError`, "
-    "`IsADirectoryError`, `NotADirectoryError`, `PermissionError`) whose message names the "
-    "path; it has no `errno`."
-)
-
-# Declared for the type checker, which otherwise rejects these names as unknown. At run time
-# they are the sandbox's own `open` and exception types.
-_FILESYSTEM_STUB = """
-import os as _os
-import typing as _typing
-def open(file: str | _os.PathLike[str], mode: str = "r", encoding: str | None = None) -> _typing.IO[_typing.Any]: ...
-class FileNotFoundError(OSError): ...
-class FileExistsError(OSError): ...
-class IsADirectoryError(OSError): ...
-class NotADirectoryError(OSError): ...
-class PermissionError(OSError): ...
-"""
+# further explanation a specialized Code Mode tool adds (see :mod:`.okf_tool`). FILESYSTEM_STUB
+# declares the sandbox's own ``open`` and exception types for the type checker, which otherwise
+# rejects them as unknown.
+_PLACEHOLDER = re.compile(r"\{(sandbox|interface|filesystem|guide)\}")
 
 
 def _render_filesystem(mounts: Sequence[VFSMount]) -> str:
@@ -265,15 +216,17 @@ def _code_mode_tool(
     # Generated once at construction; raises now (not at script time) if a type is unrenderable.
     stubs = render_type_check_stubs(tools)
     if mount_list:
-        stubs = replace(stubs, source=stubs.source + _FILESYSTEM_STUB)
+        stubs = replace(stubs, source=f"{stubs.source}\n{FILESYSTEM_STUB}\n")
     host_interface = render_host_interface(tools)
     coercers = _build_coercers(tools)
-    docstring = _CONTRACT.format(
-        sandbox=_WITH_FILESYSTEM if mount_list else _NO_FILESYSTEM,
-        interface=host_interface if tools else "(none)",
-        filesystem=_render_filesystem(mount_list),
-        guide=guide,
-    )
+    fill = {
+        "sandbox": WITH_FILESYSTEM if mount_list else NO_FILESYSTEM,
+        "interface": host_interface if tools else "(none)",
+        "filesystem": _render_filesystem(mount_list),
+        "guide": guide,
+    }
+    # One pass, so a placeholder inside a filled-in value is left as it is.
+    docstring = _PLACEHOLDER.sub(lambda m: fill[m[1]], CONTRACT)
     injection_values = dict(injections or {})
 
     async def _run_code(script: str) -> str:

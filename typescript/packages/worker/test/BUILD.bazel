@@ -1,0 +1,80 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# One target per test file and support module, depending on the files it imports.
+ts_project(
+    name = "match",
+    testonly = True,
+    srcs = ["match.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//typescript/packages/worker/test:__subpackages__"],
+)
+
+ts_project(
+    name = "plugin.test",
+    testonly = True,
+    srcs = ["plugin.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":match",
+        ":support",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+    ],
+)
+
+ts_project(
+    name = "run-agent-worker.test",
+    testonly = True,
+    srcs = ["run-agent-worker.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/src/web:client",
+    ],
+)
+
+ts_project(
+    name = "support",
+    testonly = True,
+    srcs = ["support.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//typescript/packages/worker/test:__subpackages__"],
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/activity",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow-streams",
+        "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+        "//typescript/packages/worker/src/harness/stream-merge:index",
+        "//typescript/packages/worker/src/utils:large-payload",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+harness_js_test(
+    name = "plugin_test",
+    data = [":plugin.test"],
+    entry_point = "plugin.test.js",
+)
+
+harness_js_test(
+    name = "run-agent-worker_test",
+    data = [":run-agent-worker.test"],
+    entry_point = "run-agent-worker.test.js",
+)
