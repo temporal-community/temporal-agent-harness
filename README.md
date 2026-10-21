@@ -1058,6 +1058,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](python/examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
+| Tenuo Refunds | `OPENAI_API_KEY`; auto mode with a [Tenuo](https://tenuo.ai) warrant deciding each tool call ([readme](python/examples/tenuo_refunds/README.md)); `just demo` runs it in one terminal |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](python/examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client`** (wiki in `python/examples/callback_tools/wiki_agent/wiki`; `--wiki-dir` moves it) — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |

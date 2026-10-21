@@ -1,0 +1,133 @@
+# Scoped justfile for the Tenuo refunds example (examples/tenuo_refunds).
+# Run from this directory: `just <recipe>`.
+#
+# Try it in one terminal:
+#   just demo              # Temporal, the harness, this agent's worker, and a session for A-1001
+#
+# Or run each program in its own terminal, as for the other examples:
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker
+#   just session A-1001    # 5. issue a warrant for one order and start a session with it
+#
+# `just session` prints the session's link and what to try. Gated refunds are put to you in the
+# worker's output: type y and press Enter to approve as the support lead.
+# `just server` builds the Svelte UI first; `just ui-dev` runs it on Vite instead.
+#
+# The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
+# project's `examples` dependencies on first use. Without Bazel, run the same module with uv from
+# the repo root, e.g. `PYTHONPATH=python uv run --project python --group examples python -m
+# examples.tenuo_refunds.worker`. First-time setup: `cp .env.example .env.local` from the repo root
+# and fill it in (Temporal connection + OPENAI_API_KEY). See README.md.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../../scripts/untagged-notice.just'
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".." / ".."
+ui := root / "typescript" / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+# `bazel run` without Bazel's own progress and target lines, for `demo`'s shared terminal.
+quiet := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0"
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    bazel run //python/temporal_agent_harness/web:cli -- session-manager
+
+# Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
+# a downloaded release archive runs as-is. Rebuild with `just app-build` if you changed ui/.
+#
+# Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
+server:
+    bazel run //python/temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
+app-build: app-install
+    {{pnpm}} --dir "{{ui}}" run build
+
+# Install the shared Svelte UI dependencies (run once if the build complains about missing modules).
+app-install:
+    {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev: app-install
+    {{pnpm}} --dir "{{ui}}" run dev
+
+# Run the TenuoRefundsAgent worker.
+worker:
+    bazel run //python/examples/tenuo_refunds:worker
+
+# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
+# temporal`). Ctrl-C stops them all.
+#
+# Run this example's local stack.
+dev:
+    just --justfile "{{root}}/justfile" dev tenuo_refunds
+
+# Issue a warrant for one order (A-1001 or A-1002) and start a session with it. Waits for the
+# server and the worker, then prints the session's link and what to try.
+session order_id="A-1001":
+    @{{quiet}} //python/examples/tenuo_refunds:start_session -- {{order_id}}
+
+# Everything in one terminal: a local Temporal dev server (unless one is already on :7233), the
+# session manager, the server, this agent's worker, and a session for `order_id`. Ctrl-C stops
+# them all.
+#
+# Run the whole example in one terminal.
+demo order_id="A-1001":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    log="${TMPDIR:-/tmp}"; log="${log%/}/tenuo-refunds-temporal.log"
+    trap 'kill $(jobs -p) 2>/dev/null || true; rm -f "${starter:-}"' EXIT
+    if (echo > /dev/tcp/127.0.0.1/7233) 2>/dev/null; then
+        echo "Using the Temporal server already on localhost:7233."
+    else
+        command -v temporal >/dev/null || { echo "error: install the Temporal CLI (https://temporal.io/setup/install-temporal-cli)"; exit 1; }
+        echo "Starting a local Temporal dev server (Web UI: http://localhost:8233, log: $log)."
+        # In its own process group, so Ctrl-C stops the programs using it first; the EXIT trap
+        # stops it last.
+        set -m; temporal server start-dev --log-level error >"$log" 2>&1 & set +m
+    fi
+    # Issues the warrant (creating the example's keys on the first run), then waits for the
+    # worker and starts the session. In the background, so it doesn't read the terminal: the
+    # worker does, for the support lead's answers.
+    echo "Building with Bazel. The first run downloads dependencies and takes a few minutes."
+    # Built here and run from a script, so it doesn't hold Bazel while the stack below builds.
+    starter="$(mktemp)"
+    {{quiet}} --script_path="$starter" //python/examples/tenuo_refunds:start_session
+    "$starter" {{order_id}} &
+    session=$!
+    until [ -f .keys/holder.key ]; do
+        kill -0 "$session" 2>/dev/null || { wait "$session"; exit 1; }
+        sleep 1
+    done
+    # The harness's dev stack for this example (as `just dev`); Ctrl-C stops it, then the EXIT
+    # trap stops the rest.
+    {{quiet}} //python/examples:dev -- tenuo_refunds || true
+
+# As `demo`, but refunds over $50 are confirmed with a click in the chat instead of signed by
+# the support lead: the warrant sets the ceiling, and `tenuo_evaluator`'s `confirm` asks.
+#
+# Run the example with refunds confirmed in the chat.
+demo-confirm order_id="A-1001":
+    TENUO_REFUNDS_CONFIRM=1 just demo {{order_id}}

@@ -161,6 +161,8 @@ manifest:
     temporalio.worker: temporalio
     temporalio.workflow: temporalio
     tenacity: tenacity
+    tenuo: tenuo
+    tenuo_core: tenuo
     truststore: truststore
     typer: typer
     types_aiobotocore_s3: types_aiobotocore_s3
