@@ -16,8 +16,7 @@
    * the transport where in the run you are looking from.
    */
   import type { Snippet } from "svelte";
-  import { Check, Plus } from "@lucide/svelte";
-  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import { Check, PanelsLeftBottom } from "@lucide/svelte";
   import type { PaneDescription } from "$lib/panes/PaneRail.svelte";
   import { handleLauncherKey, launcherItems, toggleView } from "$lib/panes/launcher";
   import { PANE_META } from "$lib/panes/registry";
@@ -34,6 +33,8 @@
     stack: PaneStack;
     /** The bottom drawer. A view open there counts as open, and closes from here too. */
     drawer?: PaneStack;
+    /** Set only while the drawer is shut: brings it back at its last height. */
+    onOpenDrawer?: () => void;
     describe: (pane: Pane) => PaneDescription;
     /** Whatever anchors the row ahead of the map — in the app, the session menu. */
     lead?: Snippet;
@@ -41,7 +42,7 @@
     trail?: Snippet;
   }
 
-  let { stack, drawer, describe, lead, trail }: Props = $props();
+  let { stack, drawer, onOpenDrawer, describe, lead, trail }: Props = $props();
 
   /**
    * The only hues that reach a tick.
@@ -98,9 +99,10 @@
   /* A tick is a few pixels of colour, so everything it stands for has to be in
      the label the pointer and the screen reader get. */
   function tickLabel(pane: Pane, description: PaneDescription): string {
+    const kind = PANE_META[pane.kind].kindLabel;
     return [
-      PANE_META[pane.kind].kindLabel,
-      description.title,
+      kind,
+      description.title.trim().toLowerCase() === kind.toLowerCase() ? null : description.title,
       description.statusLabel,
       pane.collapsed ? "folded" : null
     ]
@@ -108,7 +110,7 @@
       .join(" · ");
   }
 
-  /* The `+` takes focus before the menu mounts, so it is what the shared
+  /* The launcher takes focus before the menu mounts, so it is what the shared
      attachment hands focus back to — Safari does not focus a clicked button,
      and would otherwise leave the keyboard on the body. */
   function toggleLauncher(event: MouseEvent): void {
@@ -124,31 +126,36 @@
     handleLauncherKey(event, activeView, items.length, {
       move: (index) => {
         activeView = index;
+        /* Focus without scrolling the page or rails, then bring the row into view
+           inside the menu, which scrolls once its height cap bites. */
         items[index]?.focus({ preventScroll: true });
+        items[index]?.scrollIntoView({ block: "nearest" });
       },
       toggle: toggleAt
     });
   }
 
   /* The menu stays open: adding four panes is four presses, not four round trips
-     through the `+`. */
+     through the launcher. */
   function toggleAt(index: number): void {
     activeView = index;
     const view = views[index];
-    if (view) toggleView(view.kind, stack, stacks);
+    if (!view) return;
+    const shut = drawer && onOpenDrawer ? { stack: drawer, reopen: onOpenDrawer } : undefined;
+    toggleView(view.kind, stack, stacks, shut);
   }
 
-  /* After `dismissable`, which has to see the `+` as the opener. */
+  /* After `dismissable`, which has to see the launcher as the opener. */
   function focusOnOpen(node: HTMLElement): void {
     node.querySelector<HTMLElement>('[tabindex="0"]')?.focus({ preventScroll: true });
   }
 
   /* Escape and press-outside are the shared attachment's, on the popover itself; `keep` is
-     the wrapper so the `+` that opened it can shut it again on one press rather than
+     the wrapper so the launcher that opened it can shut it again on one press rather than
    racing its own toggle. */
 </script>
 
-<nav class="minimap" aria-label="Session and open panes">
+<nav class="surface-head minimap" aria-label="Session and open panes">
   <div class="minimap-lead">
     {#if lead}
       {@render lead()}
@@ -225,24 +232,22 @@
          three times.
 
          Trail holds ticks then controls; flex-end on the trail keeps them on the
-         right edge. No gap: a pane header's controls are 20px boxes 4px apart, and
-         these are 28px boxes, so abutting them puts the same air between the glyphs.
-         The larger box is kept for the hit area — the strip below is the visual
-         reference, not the 20px target. -->
+         right edge. -->
     <div class="controls">
       <div class="launcher">
-        <IconButton
-          class="rail-icon"
-          label="Open a view"
-          tip="Open or close views"
+        <button
+          type="button"
+          class={["head-button", launcherOpen && "on"]}
+          aria-label="Views"
+          data-tip="Views"
           aria-haspopup="menu"
           aria-expanded={launcherOpen}
           data-tip-below
           data-tip-align="end"
           onclick={toggleLauncher}
         >
-          <Plus size={13} />
-        </IconButton>
+          <PanelsLeftBottom size={13} aria-hidden="true" />
+        </button>
 
         {#if launcherOpen}
           <!-- aria-disabled on a locked row rather than `disabled`, so it stays
@@ -257,6 +262,8 @@
             {@attach focusOnOpen}
           >
             {#each views as view, index (view.kind)}
+              <!-- Outside the arrow walk, which only visits the menuitemcheckbox rows. -->
+              {#if view.dividerBefore}<div class="launch-divider" role="separator"></div>{/if}
               <button
                 type="button"
                 role="menuitemcheckbox"
@@ -289,23 +296,24 @@
 </nav>
 
 <style>
-  /* One row of --control-height controls inset by --gutter-tight, which is what
-     the transport under the rail is, so the two strips frame the panes at the
-     same weight. Must not clip: the launcher popover hangs below it. */
+  /* The shared header row (`.surface-head`), so the strip, the Session Manager's
+     header and every pane header below it have one height and one hairline. Laid
+     out as a grid rather than its flex row, for the centred mark. Must not clip:
+     the launcher popover hangs below it. */
   .minimap {
-    flex: none;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    align-items: center;
     column-gap: var(--gutter);
-    padding: var(--gutter-tight) var(--gutter);
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-head);
   }
 
-  /* The lead holds more than one object now — the drawer's switch and the session
-     anchor beside it — so the air between them belongs here rather than inside
-     whichever of them happens to be first. */
+  /* A pane header's quiet buttons, at the 24px minimum target: this row is every
+     reader's way around the console, and a 20px box is below it. */
+  .minimap :global(.head-button) {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* The drawer's switch, the session anchor and the Web UI link, at one gap. */
   .minimap-lead {
     min-width: 0;
     max-width: 100%;
@@ -331,8 +339,8 @@
   }
 
   /* Solid fill outweighs a stroke glyph at the same size, so this sits under the
-     28px control boxes rather than filling them — large enough to hold the row,
-     quiet enough not to outrank the 13px rail icons. */
+     24px control boxes rather than filling them — large enough to hold the row,
+     quiet enough not to outrank the 13px icons. */
   .brand-mark {
     flex: none;
     width: 20px;
@@ -511,23 +519,7 @@
     flex: none;
     display: flex;
     align-items: center;
-  }
-
-  /* Bare at rest and boxed on hover, which is what a pane header's pin, collapse
-     and close do. The primitive still owns the size, the hover, the press, the
-     focus ring and the disabled dimming; the only thing taken off it is the
-     resting box, which is what makes one icon a control and three icons a row
-     of buttons. `:global` because the class rides across a component boundary —
-     the shortcuts button arrives through `trail`, from App. */
-  .minimap :global(.rail-icon) {
-    border-color: transparent;
-    background: transparent;
-  }
-
-  /* Same "this one is on" as a pane header's pinned button. */
-  .minimap :global(.rail-icon[aria-expanded="true"]) {
-    border-color: var(--border-strong);
-    color: var(--text-1);
+    gap: var(--gap-xs);
   }
 
   .launcher {
@@ -542,7 +534,9 @@
    * Sized to its longest label rather than to the 28px launcher it hangs from,
      which is what shrink-to-fit would otherwise measure against. Anchored by
      its right edge, so it grows leftward; the cap keeps the left edge a gutter
-     inside the window, allowing for the shortcuts button to the launcher's right. */
+     inside the window, allowing for the shortcuts button to the launcher's right.
+     The height cap is the room under the head row, so on a short or zoomed window
+     the last rows scroll into reach instead of hanging below the viewport. */
   .launch-menu {
     position: absolute;
     top: calc(100% + var(--gap-xs));
@@ -553,6 +547,9 @@
     width: max-content;
     min-width: 150px;
     max-width: calc(100vw - 2 * var(--gutter) - var(--control-height));
+    max-height: calc(100dvh - var(--head-height) - var(--gutter));
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: var(--gap-xs);
     border: 1px solid var(--border-strong);
     background: var(--surface-3);
@@ -571,7 +568,9 @@
     }
   }
 
+  /* `flex: none`: under the height cap a shrinking row would squash rather than scroll. */
   .launch-menu button {
+    flex: none;
     display: flex;
     align-items: center;
     gap: var(--gap-sm);
@@ -584,6 +583,15 @@
     cursor: pointer;
     font: inherit;
     text-align: left;
+  }
+
+  /* Every run's views above, the opt-in ones below. A fill rather than a border,
+     inset from the edges so it reads as a rule inside the list, not a box. */
+  .launch-divider {
+    flex: none;
+    height: 1px;
+    margin: var(--gap-xs) var(--gap-sm);
+    background: var(--border);
   }
 
   /* One line per row, always: a wrapped label made its row taller than the rest.
@@ -617,7 +625,7 @@
 
   .launch-menu button[aria-disabled="true"] .check,
   .launch-menu button[aria-disabled="true"] .kicker {
-    color: var(--text-4);
+    color: var(--text-disabled);
   }
 
   .launch-menu button:focus-visible {

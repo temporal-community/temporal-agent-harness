@@ -11,7 +11,7 @@
  * be scoped more than once.
  */
 import type { PaneStack } from "$lib/state/paneStack.svelte";
-import { PANE_KINDS, type PaneKind } from "./registry";
+import { PANE_KINDS, PANE_META, type PaneKind } from "./registry";
 
 export interface LauncherItem {
   kind: PaneKind;
@@ -19,29 +19,45 @@ export interface LauncherItem {
   open: boolean;
   /** Why it cannot be switched off right now, or null when it can. Only ever set on an open view. */
   locked: string | null;
+  /** The first opt-in view: the menu draws its divider above this row. */
+  dividerBefore: boolean;
 }
 
 export const PINNED_REASON = "Pinned — unpin it to close";
 
 /** Every kind, in registry order, so a row never moves under the pointer. */
 export function launcherItems(stacks: readonly PaneStack[]): LauncherItem[] {
-  return PANE_KINDS.map((kind) => {
+  return PANE_KINDS.map((kind, index) => {
     const holding = stacks.filter((stack) => stack.has(kind));
     /* Any pinned copy locks the row: closing only the others would leave it
        checked, which reads as a press that did nothing. */
     const locked = holding.some((stack) => !stack.canClose(kind)) ? PINNED_REASON : null;
-    return { kind, open: holding.length > 0, locked };
+    const dividerBefore = index > 0 && Boolean(PANE_META[kind].optIn) && !PANE_META[PANE_KINDS[index - 1]].optIn;
+    return { kind, open: holding.length > 0, locked, dividerBefore };
   });
 }
 
 /**
  * Open a closed view beside the focused pane on `rail`, or close an open one
  * everywhere it is. A locked view is left alone; the row says why.
+ *
+ * A shut drawer folds its panes rather than closing them, so a view held only
+ * there still reads open while nothing of it is on screen. Picking it then means
+ * "show me", so `shut` brings the drawer back instead of closing the pane.
  */
-export function toggleView(kind: PaneKind, rail: PaneStack, stacks: readonly PaneStack[]): void {
+export function toggleView(
+  kind: PaneKind,
+  rail: PaneStack,
+  stacks: readonly PaneStack[],
+  shut?: { stack: PaneStack; reopen(): void }
+): void {
   const holding = stacks.filter((stack) => stack.has(kind));
   if (holding.length === 0) {
     rail.openPane({ kind }, rail.focusedId);
+    return;
+  }
+  if (shut && holding.length === 1 && holding[0] === shut.stack) {
+    shut.reopen();
     return;
   }
   if (holding.some((stack) => !stack.canClose(kind))) return;

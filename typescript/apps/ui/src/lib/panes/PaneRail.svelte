@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
   import Chip from "$lib/components/primitives/Chip.svelte";
@@ -27,22 +27,34 @@
     statusLabel?: string | null;
   }
 
+  export interface PaneDragState {
+    id: string | null;
+    source: PaneStack | null;
+  }
+
   interface Props {
     stack: PaneStack;
+    dragState?: PaneDragState;
     describe: (pane: Pane) => PaneDescription;
     paneContent: Snippet<[Pane]>;
     /** The pane filling the screen on its own; the rest of the rail stands down. */
     bleedingId?: string | null;
   }
 
-  let { stack, describe, paneContent, bleedingId = null }: Props = $props();
+  const ownDragState = $state<PaneDragState>({ id: null, source: null });
+  let {
+    stack,
+    dragState = $bindable(ownDragState),
+    describe,
+    paneContent,
+    bleedingId = null
+  }: Props = $props();
 
   /* Long enough to read as one column overtaking another, short enough that a
      reader dropping three panes in a row is never waiting on it. */
   const SETTLE_MS = 220;
 
   let railElement = $state<HTMLElement | null>(null);
-  let draggingId = $state<string | null>(null);
   /* The column and the pane the pointer is over, plus where the drop would land.
      Null means this drop would do nothing, and nothing is drawn — the rail never
      shows a landing it will not honour. */
@@ -66,6 +78,18 @@
     void stack.groups;
     restoreScroll?.();
     restoreScroll = null;
+  });
+
+  /* The rail's own width, for the first visit's fill and the widest a drag can
+     go. The first observation is often 0, before layout; noteRailWidth ignores it. */
+  $effect(() => {
+    const rail = railElement;
+    if (!rail || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      stack.noteRailWidth(entry?.contentRect.width ?? 0);
+    });
+    observer.observe(rail);
+    return () => observer.disconnect();
   });
 
   function reducedMotion(): boolean {
@@ -97,6 +121,48 @@
   export function focusAdjacent(delta: number): void {
     stack.focusAdjacent(delta);
     focusCurrent();
+  }
+
+  /* Must match the media rule at the end of the stylesheet. */
+  const NARROW = "(max-width: 860px)";
+
+  function narrow(): boolean {
+    return typeof window !== "undefined" && window.matchMedia(NARROW).matches;
+  }
+
+  /* On a narrow screen the rail shows one column at a time (see the media rule), and the chat
+     is the pane a visitor came to use, so it opens there with focus on it. Written as
+     `scrollLeft` on the rail alone, for the reason given below: `scrollIntoView` would seat
+     the first Tab at the rail. Declared before the focus effect so that effect's skipped
+     first run is spent on this focus rather than scrolling to it a second time. Once, on
+     mount; after that the reader's swipes and the focus effect rule. */
+  $effect(() => {
+    if (!railElement || !narrow()) return;
+    const id = untrack(() => {
+      const chat = stack.panes.find((pane) => pane.kind === "chat");
+      if (chat) stack.focusPane(chat.id);
+      return stack.focusedId;
+    });
+    const slot = id ? paneElement(id)?.closest<HTMLElement>("[data-slot]") : null;
+    if (slot) {
+      railElement.scrollLeft +=
+        slot.getBoundingClientRect().left - railElement.getBoundingClientRect().left;
+    }
+  });
+
+  /* A swipe moves the column on screen, so focus follows it, or the minimap and the
+     keyboard walk would go on answering for a pane nobody can see. */
+  function focusSnappedColumn(): void {
+    if (!railElement || !narrow()) return;
+    const left = railElement.getBoundingClientRect().left;
+    const slot = [...railElement.querySelectorAll<HTMLElement>("[data-slot]")].find(
+      (element) => Math.abs(element.getBoundingClientRect().left - left) < 2
+    );
+    const group = slot ? groupFor(slot.dataset.slot ?? "") : null;
+    if (group && !groupCollapsed(group)) {
+      const front = activeIn(group);
+      if (front.id !== stack.focusedId) stack.focusPane(front.id);
+    }
   }
 
   /* Plain field, not `$state`: bookkeeping about whether the rail has scrolled
@@ -131,15 +197,6 @@
     return group.length > 0 && group.every((pane) => pane.collapsed);
   }
 
-  /* Tabs change what a column shows, not how much room it is owed: a column
-     holding the graph still absorbs the leftover width, or the rail ends in dead
-     space the moment anything is tabbed. */
-  function groupFlexible(group: Pane[]): boolean {
-    if (groupCollapsed(group)) return false;
-    if (group.some((pane) => pane.size != null)) return false;
-    return group.some((pane) => PANE_META[pane.kind].flexible);
-  }
-
   function slotStyle(group: Pane[]): string {
     /* Folded columns publish the spine size into the same vars the open column
        uses, so a leftover `--slot-min` from the open pane (graph is 420) cannot
@@ -159,7 +216,8 @@
   }
 
   function startDrag(event: DragEvent, pane: Pane): void {
-    draggingId = pane.id;
+    dragState.id = pane.id;
+    dragState.source = stack;
     clearDrop();
     /* Firefox refuses to start a drag without payload. */
     event.dataTransfer?.setData("text/plain", pane.id);
@@ -188,7 +246,7 @@
   function updateDrop(event: DragEvent): void {
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    if (!draggingId) return;
+    if (!dragState.id) return;
 
     const element = elementFromEvent(event);
     const paneBox = element?.closest<HTMLElement>("[data-pane]");
@@ -201,15 +259,18 @@
       return;
     }
 
-    const edge = dropEdgeAt(
-      event.clientX,
-      event.clientY,
-      column.getBoundingClientRect(),
-      paneBox.getBoundingClientRect()
-    );
+    /* A single-pane stack swaps whatever lands anywhere on it, so the whole column is the target. */
+    const edge = stack.single
+      ? "tab"
+      : dropEdgeAt(
+          event.clientX,
+          event.clientY,
+          column.getBoundingClientRect(),
+          paneBox.getBoundingClientRect()
+        );
     /* Alone in its column, a dragged pane is already everywhere this column could
        put it, and joining a column you are already a tab of is where you are. */
-    const holds = group.some((pane) => pane.id === draggingId);
+    const holds = group.some((pane) => pane.id === dragState.id);
     if (holds && (group.length === 1 || (edge === "tab" && !isSplit(group)))) {
       clearDrop();
       return;
@@ -221,8 +282,8 @@
 
   function handleDrop(event: DragEvent): void {
     event.preventDefault();
-    if (draggingId && dropPane && dropEdge) {
-      stack.placePane(draggingId, dropPane, dropEdge);
+    if (dragState.id && dragState.source && dropPane && dropEdge) {
+      dragState.source.transferPane(dragState.id, stack, dropPane, dropEdge);
     }
     endDrag();
   }
@@ -234,13 +295,14 @@
   }
 
   function endDrag(): void {
-    if (draggingId) {
+    if (dragState.id) {
       settling = true;
       requestAnimationFrame(() => {
         settling = false;
       });
     }
-    draggingId = null;
+    dragState.id = null;
+    dragState.source = null;
     clearDrop();
   }
 
@@ -249,23 +311,21 @@
     return edge === "before" || edge === "after" || edge === "tab";
   }
 
-  function resizeColumnFrom(event: PointerEvent, group: Pane[]): void {
-    const slot = (event.currentTarget as HTMLElement).parentElement;
-    const rect = slot?.getBoundingClientRect();
-    if (!rect) return;
-    stack.setGroupSize(group[0].id, Math.round(event.clientX - rect.left));
-  }
+  /* Measured from the press, as the pane shell's own gutter is. */
+  let columnGrab = { x: 0, width: 0 };
 
   function startColumnResize(event: PointerEvent, group: Pane[]): void {
     if (event.button !== 0 && event.pointerType !== "touch") return;
     event.preventDefault();
     resizingColumn = slotKey(group);
+    const slot = (event.currentTarget as HTMLElement).parentElement;
+    columnGrab = { x: event.clientX, width: slot?.getBoundingClientRect().width ?? 0 };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    resizeColumnFrom(event, group);
   }
 
   function moveColumnResize(event: PointerEvent, group: Pane[]): void {
-    if (resizingColumn === slotKey(group)) resizeColumnFrom(event, group);
+    if (resizingColumn !== slotKey(group)) return;
+    stack.setGroupSize(group[0].id, columnGrab.width + event.clientX - columnGrab.x);
   }
 
   function stopColumnResize(event: PointerEvent): void {
@@ -332,6 +392,7 @@
   ondragover={updateDrop}
   ondrop={handleDrop}
   ondragleave={handleDragLeave}
+  onscrollend={focusSnappedColumn}
 >
   {#if stack.groups.length === 0}
     <div class="rail-empty">
@@ -368,7 +429,6 @@
         class:collapsed
         class:tabbed
         class:split={split && !collapsed}
-        class:flexible={groupFlexible(group)}
         class:bleeding={group.some((pane) => pane.id === bleedingId)}
         class:dropping={dropSlot === slotKey(group)}
         style={slotStyle(group)}
@@ -422,7 +482,7 @@
               class="pane-slot"
               class:front={visible}
               class:bleeding={pane.id === bleedingId}
-              class:dragging={draggingId === pane.id}
+              class:dragging={dragState.id === pane.id}
               class:sized={split && pane.share != null}
               class:resizing={resizingShare === pane.id}
               style={split && pane.share != null ? `--share: ${pane.share}px` : undefined}
@@ -498,7 +558,7 @@
         {#if dropSlot === slotKey(group) && dropEdge && edgeInColumn(dropEdge)}
           <div class="drop-mark" data-edge={dropEdge} aria-hidden="true">
             {#if dropEdge === "tab"}
-              <span class="drop-label kicker">{dropEdgeLabel(dropEdge)}</span>
+              <span class="drop-label kicker">{stack.single ? "Swap" : dropEdgeLabel(dropEdge)}</span>
             {/if}
           </div>
         {/if}
@@ -520,9 +580,11 @@
     overflow-x: auto;
     overflow-y: hidden;
     background: var(--surface-0);
-    scrollbar-width: thin;
   }
 
+  /* Every column is exactly its own width, never grown or shrunk to fit the rail, so
+     resizing one column, the window or the desk moves no other. Spare room sits empty
+     at the end of the rail, and a desk wider than the window scrolls. */
   .rail-slot {
     position: relative;
     display: flex;
@@ -530,10 +592,6 @@
     flex: 0 0 var(--slot-size);
     min-width: var(--slot-min);
     min-height: 0;
-  }
-
-  .rail-slot.flexible {
-    flex: 1 1 var(--slot-size);
   }
 
   /* Full bleed: one column takes the rail and the others stand down. Display,
@@ -691,9 +749,9 @@
     align-items: stretch;
     gap: 1px;
     overflow-x: auto;
+    overflow-y: hidden;
     background: var(--surface-0);
     border-bottom: 1px solid var(--border);
-    scrollbar-width: none;
   }
 
   .tab {
@@ -886,6 +944,24 @@
     .share-gutter,
     .col-gutter {
       transition: none;
+    }
+  }
+
+  /* Narrower than two panes side by side (a phone, or a window at 200% zoom): each column
+     takes the rail, one at a time, and the rail snaps between them. At their own minimum
+     widths the graph filled the screen and the chat sat off-canvas behind a scrollbar with
+     nothing to say so; now every pane is a swipe, a minimap pip or Alt+Arrow away, and none
+     is clipped. Folded spines keep their width. The breakpoint is repeated as NARROW in
+     the script. */
+  @media (max-width: 860px) {
+    .rail {
+      scroll-snap-type: x mandatory;
+    }
+
+    .rail-slot:not(.collapsed) {
+      flex: 0 0 100%;
+      min-width: 0;
+      scroll-snap-align: start;
     }
   }
 </style>

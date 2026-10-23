@@ -174,7 +174,7 @@
   @keyframes rise {
     from {
       opacity: 0;
-      transform: translateY(4px) scale(0.98);
+      transform: translateY(var(--motion-rise)) scale(0.98);
     }
   }
 

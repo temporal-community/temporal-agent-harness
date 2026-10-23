@@ -101,6 +101,15 @@ describe("when a binding is allowed to fire", () => {
     assert.equal(resolveReplayAction(press({ key: "S" })), "toggleSessionManager", "caps lock is not Shift");
     assert.equal(resolveReplayAction(press({ key: "S", shiftKey: true })), null, "Shift+S is nobody's here");
     assert.equal(resolveReplayAction(press({ key: "s", modKey: true })), null, "Cmd+S is the browser's save-page");
+    assert.equal(
+      resolveReplayAction(press({ key: "d", modKey: true, shiftKey: true })),
+      "railToggleDock"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "D", modKey: true, shiftKey: true })),
+      "railToggleDock",
+      "the key folds case-insensitively, same as every other letter chord"
+    );
   });
 
   /* The sweep above sets `typing` by hand; this is the half that reads it off a real-shaped target,
@@ -526,12 +535,26 @@ const sessionManager = {
   }
 };
 
+/* `dockFocusedPane` moves a pane between two real `PaneStack`s and is checked against those in
+   paneStack.test.mjs; what this file owns is only that the chord reaches it and is told apart
+   from every other row, which a flip of one flag is enough to show. */
+const dock = {
+  docked: false,
+  reset() {
+    dock.docked = false;
+  },
+  toggle() {
+    dock.docked = !dock.docked;
+  }
+};
+
 const surface = {
   run,
   helpOpen: false,
   rail,
   toggleDrawer: () => drawer.toggle(),
-  toggleSessionManager: () => sessionManager.toggle()
+  toggleSessionManager: () => sessionManager.toggle(),
+  toggleDock: () => dock.toggle()
 };
 
 /* Positions a person can be standing at when they reach for a key, stated against the markers the
@@ -595,6 +618,7 @@ const probes = positions
            the previous 400-odd presses happened to leave behind. */
         drawer.reset();
         sessionManager.reset();
+        dock.reset();
       }
     ];
   });
@@ -608,7 +632,8 @@ const state = () => ({
   /* The rail is part of the state a key can change, so it is part of what tells two keys apart. */
   rail: { columns: rail.columns, column: rail.column, tab: rail.tab, bleeding: rail.bleeding },
   drawerOpen: drawer.open,
-  sessionManagerOpen: sessionManager.open
+  sessionManagerOpen: sessionManager.open,
+  docked: dock.docked
 });
 
 /* One press of `action` from `probe`, measured. Playback is stopped straight after so the 700ms
@@ -629,7 +654,7 @@ describe("what the keys actually do", () => {
     const [, setUp] = probes[0];
     setUp();
     applyReplayAction("last", surface);
-    const { rail: railAfter, drawerOpen, sessionManagerOpen, ...transport } = state();
+    const { rail: railAfter, drawerOpen, sessionManagerOpen, docked, ...transport } = state();
     assert.deepEqual(transport, {
       viewIndex: total,
       following: true,
@@ -640,6 +665,7 @@ describe("what the keys actually do", () => {
     assert.equal(railAfter.bleeding, null, "a transport key must not touch the desk");
     assert.equal(drawerOpen, false, "nor the drawer");
     assert.equal(sessionManagerOpen, false, "nor the Session Manager");
+    assert.equal(docked, false, "nor the dock");
   });
 });
 
@@ -761,7 +787,14 @@ describe("which keys are allowed to move the playhead at all", () => {
     run.goTo(markerMid);
     assert.equal(seek(() => applyReplayAction("toggleHelp", surface)), 0, "? moves no playhead");
     assert.equal(seek(() => applyReplayAction("escape", surface)), 0, "Esc moves no playhead");
-    for (const action of ["railFocusNext", "railMoveNext", "railToggleBleed", "toggleDrawer", "toggleSessionManager"]) {
+    for (const action of [
+      "railFocusNext",
+      "railMoveNext",
+      "railToggleBleed",
+      "toggleDrawer",
+      "toggleSessionManager",
+      "railToggleDock"
+    ]) {
       assert.equal(seek(() => applyReplayAction(action, surface)), 0, `${action} moves no playhead`);
     }
     assert.equal(

@@ -47,6 +47,7 @@ export type ReplayAction =
   | "railToggleBleed"
   | "toggleDrawer"
   | "toggleSessionManager"
+  | "railToggleDock"
   | `railFocusSlot${RailSlot}`;
 
 /**
@@ -182,6 +183,19 @@ export const REPLAY_BINDINGS: readonly ReplayBinding[] = [
   { action: "toggleDrawer", scope: "rail", key: "d", shift: false, chord: "D", label: "Open the bottom drawer, and back" },
   /* Bare for the same reason again: Cmd+S is the browser's save-page. */
   { action: "toggleSessionManager", scope: "rail", key: "s", shift: false, chord: "S", label: "Open the Session Manager, and back" },
+  /* The drawer's own letter again, escalated the way Alt+Arrow escalates to Cmd+Shift+Arrow: the
+     bare key shows the drawer, the modified one moves a pane into it — and back, when the pane it
+     moves is already the drawer's occupant, which is what makes this one key a toggle rather than
+     a one-way door. */
+  {
+    action: "railToggleDock",
+    scope: "rail",
+    key: "d",
+    shift: true,
+    mod: true,
+    chord: "Cmd Shift D",
+    label: "Send the focused pane to the drawer, and back"
+  },
 
   /* The digits, one row each because the table matches on the key and the dispatcher is
      handed the action alone. Written out rather than hand-listed nine times over: the
@@ -457,6 +471,15 @@ export interface ReplaySurface {
   toggleDrawer(): void;
   /** Show the Session Manager on the left edge, or put it away. Fixed for the same reason. */
   toggleSessionManager(): void;
+  /**
+   * Send the pane focused on whichever rail the reader last touched over to the other one, and
+   * back when that pane is already the drawer's occupant.
+   *
+   * Not on `RailSurface` for the reason `toggleDrawer` is not: the move is between the two
+   * concrete stacks, not an act on whichever one is active, so it needs both by name rather than
+   * the one `rail` stands in for.
+   */
+  toggleDock(): void;
 }
 
 /** Nine rows that differ only by a number, told apart from the rest before the switch. */
@@ -560,6 +583,9 @@ export function applyReplayAction(action: ReplayAction, surface: ReplaySurface):
       break;
     case "toggleSessionManager":
       surface.toggleSessionManager();
+      break;
+    case "railToggleDock":
+      surface.toggleDock();
       break;
     default: {
       const unhandled: never = action;

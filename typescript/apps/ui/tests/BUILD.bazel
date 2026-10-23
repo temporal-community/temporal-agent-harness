@@ -11,9 +11,29 @@ vitest_test(
 )
 
 vitest_test(
+    name = "drawer-default_test",
+    src = "drawer-default.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+        "//typescript/apps/ui/src/lib/panes:launcher",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
+)
+
+vitest_test(
     name = "drawer-fit_test",
     src = "drawer-fit.test.mjs",
     deps = ["//typescript/apps/ui/src:App"],
+)
+
+vitest_test(
+    name = "drawer-open_test",
+    src = "drawer-open.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+    ],
 )
 
 vitest_test(
@@ -36,6 +56,17 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
         "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "first-paint-motion_test",
+    src = "first-paint-motion.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:AutoFitView",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
     ],
 )
 
@@ -68,6 +99,12 @@ vitest_test(
         "//typescript/apps/ui:sources",
         "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
     ],
+)
+
+vitest_test(
+    name = "narrow-rail_test",
+    src = "narrow-rail.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/panes:PaneRail"],
 )
 
 vitest_test(
@@ -169,6 +206,18 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
         "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "surface-head_test",
+    src = "surface-head.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
     ],
 )
 

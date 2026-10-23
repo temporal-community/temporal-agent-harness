@@ -596,6 +596,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "paneWidth_test",
+    src = "paneWidth.test.mjs",
+    deps = [
+        ":paneStack.svelte",
+        "//typescript/apps/ui/src/lib/panes:PaneRail",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "pendingRequests_test",
     src = "pendingRequests.test.mjs",
     deps = [":pendingRequests"],

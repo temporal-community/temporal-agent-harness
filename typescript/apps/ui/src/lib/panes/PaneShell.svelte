@@ -64,25 +64,25 @@
   );
 
   function currentSize(): number {
-    return pane.size ?? meta.defaultSize;
+    return Math.round(element?.getBoundingClientRect().width ?? pane.size ?? meta.defaultSize);
   }
 
-  function resizeFromPointer(event: PointerEvent): void {
-    const rect = element?.getBoundingClientRect();
-    if (!rect) return;
-    onResize(Math.max(meta.minSize, Math.round(event.clientX - rect.left)));
-  }
+  /* Where the press landed and how wide the pane was then. Moves are measured
+     from it, so pressing the 12px handle off its centre does not jump the seam
+     to the pointer, and a press with no move changes nothing. */
+  let grab = { x: 0, width: 0 };
 
   function startResize(event: PointerEvent): void {
     if (event.button !== 0 && event.pointerType !== "touch") return;
     event.preventDefault();
     resizing = true;
+    grab = { x: event.clientX, width: element?.getBoundingClientRect().width ?? currentSize() };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    resizeFromPointer(event);
   }
 
   function moveResize(event: PointerEvent): void {
-    if (resizing) resizeFromPointer(event);
+    if (!resizing) return;
+    onResize(Math.max(meta.minSize, Math.round(grab.width + event.clientX - grab.x)));
   }
 
   function stopResize(event: PointerEvent): void {
@@ -128,7 +128,7 @@
     class:resizing
     bind:this={element}
     tabindex="-1"
-    aria-label={`${meta.kindLabel}: ${title}`}
+    aria-label={title.trim().toLowerCase() === meta.kindLabel.toLowerCase() ? meta.kindLabel : `${meta.kindLabel}: ${title}`}
     onfocusin={onFocus}
     onpointerdown={onFocus}
     ondragover={(event) => event.preventDefault()}
@@ -143,7 +143,7 @@
          handle by keyboard, say — and bare arrows die silently on a focused pane: no stepping,
          no turn jumps, no speed ladder. Spell the modifiers out of the claim first. -->
     <header
-      class="pane-head"
+      class="surface-head pane-head"
       role="group"
       aria-label={`${meta.kindLabel} controls`}
       aria-keyshortcuts="Meta+Shift+ArrowLeft Meta+Shift+ArrowRight Meta+Shift+ArrowUp Meta+Shift+ArrowDown"
@@ -157,7 +157,7 @@
            is in a screen reader's heading list under the name the badge gives
            it, whether or not the title beside it says anything further. -->
       <h2 class="head-name">
-        <span class="kicker pane-kind" style={`--pane-accent: var(${statusTone ?? meta.accent})`}>
+        <span class={["kicker head-kind", focused && "on"]} style={`--head-accent: var(${statusTone ?? meta.accent})`}>
           {meta.kindLabel}
         </span>
         {#if showTitle}
@@ -229,9 +229,7 @@
         class="resize-gutter"
         aria-label={shared ? `Resize the column holding ${title}` : `Resize ${title}`}
         aria-keyshortcuts="ArrowLeft ArrowRight Home"
-        title={meta.flexible
-          ? "Drag to set a width — double-click to let it fill the rail again"
-          : "Drag to resize — double-click to reset"}
+        title="Drag to resize — double-click to reset"
         onpointerdown={startResize}
         ondblclick={() => onResize(null)}
         onpointermove={moveResize}
@@ -278,11 +276,10 @@
     }
   }
 
-  /* The focused pane reads through its head fill and a brighter hairline — no
-     accent edge stripe, so the rail stays quiet when several panes are open. */
+  /* The focused pane reads through its head fill — the structural hairline stays
+     identical across panes, so focus does not make the seam look thicker. */
   .pane.focused .pane-head {
     background: var(--surface-2);
-    border-bottom-color: var(--border-strong);
   }
 
   /* Click focuses the section (`tabindex=-1`) and the UA paints a ring around
@@ -303,92 +300,12 @@
      whether or not it has a title to show, which is what lets a split column
      read as two panes rather than two differently-framed ones. */
   .pane-head {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: var(--gap-xs);
-    padding: var(--gap-md) var(--gutter);
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-head);
     cursor: grab;
     transition: background var(--duration-fast) var(--ease-out);
   }
 
   .pane-head:active {
     cursor: grabbing;
-  }
-
-  /* Takes the slack, so the controls hold the right edge with or without a
-     title beside the badge. */
-  .head-name {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: var(--gap-sm);
-    margin: 0;
-    font: inherit;
-  }
-
-  .pane-kind {
-    flex: none;
-    padding: 0 var(--gap-xs);
-    margin-left: -4px;
-    color: var(--pane-accent);
-    white-space: nowrap;
-  }
-
-  /* Inverting the kind label is how a TUI marks its active window — a filled
-     block, not an edge stripe. */
-  .pane.focused .pane-kind {
-    background: var(--pane-accent);
-    color: var(--surface-0);
-  }
-
-  .head-button {
-    display: grid;
-    place-items: center;
-    width: var(--icon-target);
-    height: var(--icon-target);
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xs);
-    background: transparent;
-    color: var(--text-3);
-    cursor: pointer;
-    transition:
-      color var(--duration-fast) var(--ease-out),
-      border-color var(--duration-fast) var(--ease-out),
-      transform var(--duration-press) var(--ease-out);
-  }
-
-  .head-button:active {
-    transform: scale(0.94);
-  }
-
-  .head-button.on {
-    border-color: var(--border-strong);
-    color: var(--text-1);
-  }
-
-  .head-button:focus-visible {
-    outline: 2px solid var(--focus-ring);
-    outline-offset: 1px;
-  }
-
-  /* The title yields before the badge does: a clipped kind badge costs the
-     reader the one word every pane of this kind shares, while a clipped
-     identifier still starts with the characters that tell it from its siblings.
-     The full text stays in the `title` attribute either way. */
-  .head-title {
-    min-width: 0;
-    color: var(--text-1);
-    font-size: var(--font-lg);
-    font-weight: 450;
-    letter-spacing: -0.01em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .pane-body {
@@ -502,15 +419,6 @@
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .head-button:hover {
-      color: var(--text-1);
-      border-color: var(--border);
-    }
-
-    .head-button.danger:hover {
-      color: var(--error);
-    }
-
     .spine:hover {
       background: var(--control-hover);
     }
@@ -523,13 +431,8 @@
   @media (prefers-reduced-motion: reduce) {
     .pane,
     .pane-head,
-    .head-button,
     .spine {
       transition: none;
-    }
-
-    .head-button:active {
-      transform: none;
     }
 
     @starting-style {

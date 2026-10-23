@@ -4,9 +4,11 @@ export type PaneKind =
   | "decisions"
   | "logs"
   | "latency"
+  | "timeline"
   | "usage"
   | "state"
-  | "files";
+  | "files"
+  | "script";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -19,15 +21,12 @@ export interface PaneMeta {
   /**
    * A viewport is a window onto data with no end — a transcript, a canvas, a
    * log — so it keeps a bounded size and scrolls itself whichever way the rail
-   * is stacked. A document is a stack of sections that finishes, so in rows
-   * mode it grows to its content and leaves the rail as the only scroller.
-   * Two scrollers in one axis is what makes a stacked pane swallow the wheel.
+   * is stacked. A document is a stack of sections that finishes. Nothing reads
+   * this now that columns are the only arrangement; it said which panes grew to
+   * their content in the rows mode that was removed.
    */
   content: "viewport" | "document";
-  /**
-   * Flexible panes absorb leftover rail space, so collapsing the chat gives the
-   * graph the full viewport instead of leaving a gap.
-   */
+  /** The column a first visit widens to fill the rail; nothing resizes it after that. */
   flexible?: boolean;
   /**
    * What the title this kind is described by actually names.
@@ -38,8 +37,20 @@ export interface PaneMeta {
    * pane is about, and is the only thing telling four NODE panes apart.
    */
   titleNames: "kind" | "subject";
+  /**
+   * Only an agent built with it has anything to show: an approval policy, file
+   * mounts, a script. The launcher lists these after the views every run has,
+   * below a divider, so the list reads from what you always need to what you
+   * might.
+   */
+  optIn?: boolean;
 }
 
+/*
+ * Key order is the launcher's order, and the empty rail's: what every run needs
+ * first, the opt-in kinds last. It is one fixed list rather than one per agent,
+ * so a row never moves when the agent changes. Layouts keep their own order.
+ */
 export const PANE_META: Record<PaneKind, PaneMeta> = {
   chat: {
     kindLabel: "Agent chat",
@@ -47,8 +58,16 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     defaultSize: 404,
     minSize: 320,
     content: "viewport",
-    /* Which agent is answering. The transcript below never says it. */
+    /* Which subagent the composer is addressing; see chatPaneTitle. */
     titleNames: "subject"
+  },
+  logs: {
+    kindLabel: "Logs",
+    accent: "--accent",
+    defaultSize: 440,
+    minSize: 320,
+    content: "viewport",
+    titleNames: "kind"
   },
   graph: {
     kindLabel: "State flow",
@@ -62,20 +81,10 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
        there naming it, which is the better place for it. */
     titleNames: "kind"
   },
-  decisions: {
-    kindLabel: "Approval decisions",
-    accent: "--accent",
-    /* The policy tree keeps its branch labels legible beside the evaluation
-       index, but still collapses into a stacked reading in a narrow column. */
-    defaultSize: 660,
-    minSize: 360,
-    content: "viewport",
-    titleNames: "kind"
-  },
-  logs: {
-    kindLabel: "Logs",
-    accent: "--accent",
-    defaultSize: 440,
+  timeline: {
+    kindLabel: "Timeline",
+    accent: "--reasoning",
+    defaultSize: 470,
     minSize: 320,
     content: "viewport",
     titleNames: "kind"
@@ -113,6 +122,17 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     content: "viewport",
     titleNames: "kind"
   },
+  decisions: {
+    kindLabel: "Approval decisions",
+    accent: "--accent",
+    /* Sized like the log. The panel stacks the evaluation index above the
+       policy tree until the reader widens it enough for both. */
+    defaultSize: 440,
+    minSize: 320,
+    content: "viewport",
+    titleNames: "kind",
+    optIn: true
+  },
   files: {
     kindLabel: "VFS File Mounts",
     /* --accent, like agent state: the mounts are state an author opted into, and --tool
@@ -122,7 +142,17 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     minSize: 320,
     /* A tree above a file's contents, each scrolling itself. */
     content: "viewport",
-    titleNames: "kind"
+    titleNames: "kind",
+    optIn: true
+  },
+  script: {
+    kindLabel: "Script",
+    accent: "--tool",
+    defaultSize: 420,
+    minSize: 320,
+    content: "viewport",
+    titleNames: "kind",
+    optIn: true
   }
 };
 
@@ -149,9 +179,11 @@ const SINGLETON_KINDS = new Set<PaneKind>([
   "chat",
   "graph",
   "decisions",
+  "timeline",
   "usage",
   "state",
-  "files"
+  "files",
+  "script"
 ]);
 
 export function isSingletonKind(kind: PaneKind): boolean {
@@ -190,6 +222,18 @@ export function titleBelongsInHead(id: string): boolean {
   /* A pane the registry cannot place has nothing but its title to go on. */
   if (!parsed) return true;
   return PANE_META[parsed.kind].titleNames === "subject" || parsed.key != null;
+}
+
+/**
+ * The chat pane's title: the subagent the composer is addressing, or the kind
+ * itself — which the header drops — because the top bar names the session's agent.
+ */
+export function chatPaneTitle(
+  targets: readonly { workflowId: string; role: string; label: string }[],
+  targetId: string | null
+): string {
+  const target = targets.find((item) => item.workflowId === targetId);
+  return target?.role === "subagent" ? target.label : PANE_META.chat.kindLabel;
 }
 
 export function paneIdFor(kind: PaneKind, key?: string | null): string {

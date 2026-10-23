@@ -1,8 +1,8 @@
 // ABOUTME: Asserts the pane launcher is a list of switches that stays open: each row says whether
 // its view is open anywhere (rail or bottom drawer), a press opens or closes it without shutting
 // the menu, a pinned view is marked aria-disabled rather than ignoring the press, the arrow/Home/
-// End/Enter/Space map follows the WAI-ARIA menu pattern, and Escape, an outside press and the `+`
-// shut it with focus back on the `+`. No DOM package: the decisions live in launcher.ts and are
+// End/Enter/Space map follows the WAI-ARIA menu pattern, and Escape, an outside press and the launcher
+// shut it with focus back on the launcher. No DOM package: the decisions live in launcher.ts and are
 // driven directly, the dismiss layer is driven through a stub DOM, and the wiring that needs a
 // browser is checked in PaneMinimap's source.
 
@@ -26,10 +26,19 @@ describe("launcher rows", () => {
     const items = launcherItems([rail, drawer]);
     assert.deepEqual(
       items.map((item) => item.kind),
-      ["chat", "graph", "decisions", "logs", "latency", "usage", "state", "files"],
+      ["chat", "logs", "graph", "timeline", "latency", "usage", "state", "decisions", "files", "script"],
       "an open view must stay in the list so it can be switched off"
     );
     assert.deepEqual(openKinds([rail, drawer]), ["chat", "graph"]);
+  });
+
+  it("put one divider between every run's views and the opt-in ones, wherever panes are open", () => {
+    const { rail, drawer } = desk();
+    const dividers = () => launcherItems([rail, drawer]).flatMap((item, index) => (item.dividerBefore ? [index] : []));
+    assert.deepEqual(dividers(), [7], "above Approval decisions, after Agent state");
+    for (const kind of ["chat", "graph"]) rail.closePane(kind);
+    rail.openPane({ kind: "script" });
+    assert.deepEqual(dividers(), [7], "the order is fixed: what is open never moves a row or the divider");
   });
 
   it("count a view held only by the drawer as open", () => {
@@ -134,13 +143,18 @@ describe("the menu in PaneMinimap", () => {
     assert.doesNotMatch(minimap, /role="menuitem"[\s>]/);
   });
 
-  it("stays open after a toggle: only the `+` and the dismiss layer shut it", () => {
+  it("draws the divider as a separator the arrow walk skips", () => {
+    assert.match(minimap, /\{#if view\.dividerBefore\}<div class="launch-divider" role="separator"><\/div>\{\/if\}/);
+    assert.match(minimap, /querySelectorAll<HTMLElement>\('\[role="menuitemcheckbox"\]'\)/, "arrows walk the rows only");
+  });
+
+  it("stays open after a toggle: only the launcher and the dismiss layer shut it", () => {
     const writes = [...minimap.matchAll(/\blauncherOpen = (!?[\w$]+)/g)].map((match) => match[1]);
     assert.deepEqual(writes, ["$state", "!launcherOpen", "false"]);
     assert.match(minimap, /ondismiss: \(\) => \(launcherOpen = false\), keep: "\.launcher"/);
   });
 
-  it("puts focus on the `+` before opening, so dismissing hands focus back to it", () => {
+  it("puts focus on the launcher before opening, so dismissing hands focus back to it", () => {
     assert.match(minimap, /if \(!launcherOpen\) \{\s*\(event\.currentTarget as HTMLElement\)\.focus/);
     /* Attachment order is mount order: the opener must be recorded before focus moves in. */
     assert.ok(minimap.indexOf("{@attach dismissable(") < minimap.indexOf("{@attach focusOnOpen}"));
@@ -162,6 +176,17 @@ describe("the menu in PaneMinimap", () => {
     assert.match(menuRule, /max-width: calc\(100vw/, "capped by the viewport");
     assert.doesNotMatch(menuRule, /(^|[^-])width: \d+px/, "a fixed width wraps APPROVAL DECISIONS");
     assert.match(minimap, /\.launch-menu \.kicker \{[^}]*white-space: nowrap;/);
+  });
+
+  it("caps its height to the room under the head row and scrolls the walked row into view", () => {
+    const menuRule = minimap.match(/\n  \.launch-menu \{([^}]*)\}/)[1];
+    assert.match(menuRule, /max-height: calc\(100dvh - var\(--head-height\)/, "a short window cut off the last rows");
+    assert.match(menuRule, /overflow-y: auto;/);
+    assert.match(minimap, /\.launch-menu button \{[^}]*flex: none;/, "rows scroll rather than squash");
+    assert.match(
+      minimap,
+      /items\[index\]\?\.focus\(\{ preventScroll: true \}\);\s*items\[index\]\?\.scrollIntoView\(\{ block: "nearest" \}\)/
+    );
   });
 
   it("uses roving focus: one row in the tab order", () => {
@@ -204,7 +229,7 @@ describe("closing the launcher", () => {
   const plus = new FakeNode(launcher);
   const elsewhere = new FakeNode(body);
 
-  /* Mirrors the component: focus the `+`, mount the menu with the launcher's options, move focus in. */
+  /* Mirrors the component: focus the launcher, mount the menu with its options, move focus in. */
   function open() {
     const state = { open: true };
     plus.focus();
@@ -216,7 +241,7 @@ describe("closing the launcher", () => {
   }
   const fire = (type, event) => listeners.get(`${type}:true`)?.(event);
 
-  it("Escape shuts it and focus returns to the `+`", () => {
+  it("Escape shuts it and focus returns to the launcher", () => {
     const { state, close } = open();
     fire("keydown", { key: "Escape", stopPropagation() {} });
     assert.equal(state.open, false);
@@ -224,7 +249,7 @@ describe("closing the launcher", () => {
     assert.equal(document.activeElement, plus);
   });
 
-  it("an outside press shuts it and focus returns to the `+`", () => {
+  it("an outside press shuts it and focus returns to the launcher", () => {
     const { state, close } = open();
     fire("pointerdown", { target: elsewhere });
     assert.equal(state.open, false);
@@ -232,7 +257,7 @@ describe("closing the launcher", () => {
     assert.equal(document.activeElement, plus);
   });
 
-  it("a press on the `+` is left to the `+`'s own toggle, and focus returns to it", () => {
+  it("a press on the launcher is left to its own toggle, and focus returns to it", () => {
     const { state, close } = open();
     fire("pointerdown", { target: plus });
     assert.equal(state.open, true, "dismissing here too would shut and reopen it on one press");

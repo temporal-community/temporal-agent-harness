@@ -1,3 +1,4 @@
+import { Throttler } from "@tanstack/pacer/throttler";
 import {
   nearestPaneKind,
   PANE_META,
@@ -132,6 +133,18 @@ function makePane(descriptor: PaneDescriptor): Pane {
 }
 
 /**
+ * A width worth remembering, or null for "use the kind's default".
+ *
+ * Stored desks are a trust boundary: a zero from an unmeasured rail, a
+ * NaN, or a string that survived a bad write is not a width the reader
+ * chose. Falling back to the minimum would make that garbage look like a
+ * drag to the floor.
+ */
+function rememberedSize(size: unknown): number | null {
+  return typeof size === "number" && Number.isFinite(size) && size > 0 ? size : null;
+}
+
+/**
  * Narration beside the thing it narrates.
  *
  * The desk used to open on the chat, which made the chat the way in: a newcomer
@@ -194,6 +207,10 @@ export interface PaneStackOptions {
   queryPrefix?: string;
   /** The arrangement this stack opens on, and falls back to. Empty for a drawer. */
   initial?: Pane[][];
+  /** Holds one pane: a pane dropped in trades places with the one already there. */
+  single?: boolean;
+  /** The other stack on the same desk. A pane id is open in one of the two, never both. */
+  peer?: PaneStack;
 }
 
 export function createPaneStack(options?: PaneStackOptions) {
@@ -219,8 +236,15 @@ export class PaneStack {
      conjuring the console's default desk out of the fallback path. */
   readonly #initial: Pane[][];
   readonly #keys: { panes: string; collapsed: string; cursor: string; bleed: string };
+  readonly single: boolean;
+  peer: PaneStack | null = null;
 
   constructor(options?: PaneStackOptions) {
+    this.single = options?.single ?? false;
+    if (options?.peer) {
+      this.peer = options.peer;
+      options.peer.peer = this;
+    }
     const suffix = options?.queryPrefix ?? "";
     this.#keys = {
       panes: QUERY_PANES + suffix,
@@ -261,14 +285,15 @@ export class PaneStack {
    */
   bleeding = $state<string | null>(null);
 
-  /* Plain fields, not `$state`: the throttle is bookkeeping about writes to the
-     address bar, and nothing on screen reads it. */
-  private urlWrittenAt = 0;
-  private urlTimer: number | null = null;
-  /* The cursor a held-back write is for, not the string it produced: two stacks
-     now share this query string, so a deferred write has to be rebuilt against
-     whatever the other one has since put in the address bar. */
-  private urlPending: number | null = null;
+  /* A plain field, not `$state`: the throttle is bookkeeping about writes to the
+     address bar, and nothing on screen reads it. It holds the cursor a held-back
+     write is for, not the string it produced: two stacks share this query
+     string, so a deferred write is rebuilt against whatever the other one has
+     since put in the address bar. */
+  private urlThrottle = new Throttler(
+    (cursor: number) => this.commitQuery(this.queryFor(cursor)),
+    { wait: URL_WRITE_MS, leading: true, trailing: true }
+  );
 
   panes = $derived(this.groups.flat());
   expandedPanes = $derived(this.panes.filter((pane) => !pane.collapsed));
@@ -286,6 +311,9 @@ export class PaneStack {
    * reader the panes they had built is a switch they will avoid making.
    */
   #desks = new Map<string, Pane[][]>();
+  /** Last measured rail width. Zero means not measured yet. */
+  #railWidth = 0;
+  #fillPending = true;
 
   locate(id: string): PaneLocation | null {
     return this.locateIn(this.groups, id);
@@ -304,19 +332,18 @@ export class PaneStack {
   }
 
   /**
-   * A column's width. Tabs share it, so a width set by dragging the gutter holds
-   * whichever tab is in front — the column is the thing being sized, not the
-   * pane. Failing an explicit width, a flexible tab makes the whole column
-   * flexible, and otherwise the frontmost tab's default decides. A split column
-   * has every pane in front, so the widest default decides there: following
-   * focus would reflow the column under a click on a pane's header, between the
-   * press that focuses it and the release that lands on its buttons.
+   * A column's width, and the width it is drawn at: nothing grows or shrinks
+   * it to fit the rail. Tabs share it, so a width set by dragging the gutter
+   * holds whichever tab is in front — the column is the thing being sized, not
+   * the pane. Failing an explicit width, the frontmost tab's default decides.
+   * A split column has every pane in front, so the widest default decides
+   * there: following focus would reflow the column under a click on a pane's
+   * header, between the press that focuses it and the release that lands on
+   * its buttons.
    */
   sizeOfGroup(group: Pane[]): number {
     const explicit = group.find((pane) => pane.size != null);
     if (explicit) return this.sizeOf(explicit);
-    const flexible = group.find((pane) => PANE_META[pane.kind].flexible);
-    if (flexible) return this.sizeOf(flexible);
     if (isSplit(group)) return Math.max(...group.map((pane) => this.sizeOf(pane)));
     return this.sizeOf(activeIn(group));
   }
@@ -336,14 +363,19 @@ export class PaneStack {
    * between arriving in a session and arriving in a session littered with another
    * one's leftovers.
    *
-   * The first session of a visit is not a switch. Whatever is on screen was built
-   * for it, by a shared link or by the defaults, so it is recorded and left alone.
+   * The first session of a visit is not a switch. The address bar already built
+   * the arrangement — a shared link, or the defaults — and that arrangement has
+   * no widths. The widths remembered for this session go back on before it is
+   * recorded, or the recording replaces them with empty sizes and the rail
+   * draws every column at its minimum.
    */
   enterSession(sessionId: string): void {
     if (this.activeSessionId === sessionId) return;
     if (this.activeSessionId == null) {
-      /* First session of a visit: URL / defaults already built the desk. Park it. */
+      /* The link wins the arrangement. Widths are not in the link. */
       this.activeSessionId = sessionId;
+      this.#adoptStoredSizes(sessionId);
+      this.#fillOnce();
       this.#desks.set(sessionId, this.groups);
       writeStoredDesk(sessionId, this.groups as StoredDesk);
       return;
@@ -351,9 +383,12 @@ export class PaneStack {
 
     this.#desks.set(this.activeSessionId, this.groups);
     writeStoredDesk(this.activeSessionId, this.groups as StoredDesk);
-    const restored =
-      this.#desks.get(sessionId) ?? this.#deskFromStorage(sessionId) ?? this.#carriedOver();
-    if (!this.#desks.has(sessionId)) this.#desks.set(sessionId, restored);
+    /* The drawer is not per session, so whatever it holds now wins over a parked
+       or stored copy of the same pane. */
+    const restored = this.#unique(
+      this.#desks.get(sessionId) ?? this.#deskFromStorage(sessionId) ?? this.#carriedOver()
+    );
+    this.#desks.set(sessionId, restored);
     this.groups = restored;
     this.activeSessionId = sessionId;
     /* The pane that had focus may have been one of the leftovers. */
@@ -369,6 +404,70 @@ export class PaneStack {
     writeStoredDesk(this.activeSessionId, this.groups as StoredDesk);
   }
 
+  /**
+   * Put this session's saved widths back on the panes the link opened.
+   *
+   * Matched by id, because the link decides which panes exist and the stored
+   * desk only remembers how wide they were. An invalid size stays the default.
+   */
+  #adoptStoredSizes(sessionId: string): void {
+    const stored = readStoredDesk(sessionId);
+    if (!stored) return;
+    const sizes = new Map<string, number>();
+    for (const group of stored) {
+      if (!Array.isArray(group)) continue;
+      for (const pane of group) {
+        if (!pane || typeof pane.id !== "string") continue;
+        const size = rememberedSize(pane.size);
+        if (size != null) sizes.set(pane.id, size);
+      }
+    }
+    for (const pane of this.panes) {
+      const size = sizes.get(pane.id);
+      if (size != null) pane.size = size;
+    }
+  }
+
+  /**
+   * The rail's measured width: the first visit's fill, and the widest a drag
+   * can make a column. It never changes a width already set.
+   *
+   * Zero is an unmeasured rail, reported before layout, and is ignored.
+   */
+  noteRailWidth(width: number): void {
+    if (!Number.isFinite(width) || width <= 0) return;
+    this.#railWidth = width;
+    this.#fillOnce();
+  }
+
+  /**
+   * A first visit has no saved widths, so the flexible column takes what the
+   * defaults leave of the rail, once, and keeps it as its own width. After that
+   * nothing fills the rail: a window resize changes no column, and room left
+   * over sits empty at the end of the rail.
+   *
+   * Waits for both a measured rail and the session's stored widths, so a
+   * reload never fills over a width the reader saved.
+   */
+  #fillOnce(): void {
+    if (!this.#fillPending || !(this.#railWidth > 0) || !this.activeSessionId) return;
+    this.#fillPending = false;
+    if (this.panes.some((pane) => pane.size != null)) return;
+    const group = this.groups.find(
+      (item) =>
+        !item.every((pane) => pane.collapsed) &&
+        item.some((pane) => PANE_META[pane.kind].flexible)
+    );
+    if (!group) return;
+    const used = this.groups.reduce(
+      (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.sizeOfGroup(item)),
+      0
+    );
+    if (used < this.#railWidth) {
+      this.setGroupSize(group[0].id, this.sizeOfGroup(group) + this.#railWidth - used);
+    }
+  }
+
   #deskFromStorage(sessionId: string): Pane[][] | null {
     const stored = readStoredDesk(sessionId);
     if (!stored) return null;
@@ -381,13 +480,28 @@ export class PaneStack {
       .filter((group) => group.length > 0);
   }
 
+  /**
+   * A desk with every pane id once, keeping the first, and none the peer already
+   * holds. Desks come back from storage and from before the drawer changed, and a
+   * repeated id is a repeated render key.
+   */
+  #unique(groups: Pane[][]): Pane[][] {
+    const seen = new Set(this.peer?.panes.map((pane) => pane.id));
+    const kept: Pane[][] = [];
+    for (const group of groups) {
+      const fresh = group.filter((pane) => !seen.has(pane.id) && seen.add(pane.id));
+      if (fresh.length > 0) kept.push(fresh);
+    }
+    return kept;
+  }
+
   #paneFromStored(stored: StoredPane): Pane | null {
     const parsed = parsePaneId(stored.id);
     if (!parsed) return null;
     const pane = makePane({ kind: parsed.kind, key: parsed.key });
     pane.collapsed = Boolean(stored.collapsed);
     pane.pinned = Boolean(stored.pinned);
-    pane.size = typeof stored.size === "number" ? stored.size : null;
+    pane.size = rememberedSize(stored.size);
     pane.touchedAt = typeof stored.touchedAt === "number" ? stored.touchedAt : pane.touchedAt;
     pane.joinedAt = typeof stored.joinedAt === "number" ? stored.joinedAt : pane.joinedAt;
     pane.split = Boolean(stored.split);
@@ -430,6 +544,13 @@ export class PaneStack {
    */
   openPane(descriptor: PaneDescriptor, originId?: string | null): string {
     const id = paneIdFor(descriptor.kind, descriptor.key);
+    /* Open on the other stack: it comes here, by the same rule as a drag, rather
+       than leaving one id in both. */
+    if (this.peer?.has(id)) {
+      this.peer.transferPane(id, this, originId ?? "", "after");
+      this.expand(id);
+      return id;
+    }
     const existing = this.locate(id);
     if (existing) {
       const pane = this.groups[existing.group][existing.index];
@@ -511,6 +632,16 @@ export class PaneStack {
     this.focusPane(id);
   }
 
+  /** Fold or unfold every column at once, which is how a shut drawer keeps its pane in the link. */
+  foldAll(folded: boolean): void {
+    for (const pane of this.panes) pane.collapsed = folded;
+  }
+
+  /** Holding panes with none of them unfolded: a drawer that was shut rather than emptied. */
+  get allFolded(): boolean {
+    return this.panes.length > 0 && this.expandedPanes.length === 0;
+  }
+
   togglePin(id: string): void {
     const pane = this.panes.find((item) => item.id === id);
     if (pane) pane.pinned = !pane.pinned;
@@ -549,16 +680,18 @@ export class PaneStack {
 
   /**
    * The column's width, written to every tab in it so that pulling one out keeps
-   * the width the reader set. A null returns it to automatic: the kind's default,
-   * or the leftover rail space if the kind is flexible, which is what dragging
-   * the gutter took it off in the first place.
+   * the width the reader set. Only this column changes. A null returns it to its
+   * kind's default. No wider than the rail measured now, since a column wider
+   * than the window cannot be read whole; a narrower window later does not
+   * shrink it, the rail scrolls instead.
    */
   setGroupSize(id: string, size: number | null): void {
     const loc = this.locate(id);
     if (!loc) return;
     const group = this.groups[loc.group];
     const min = this.minOfGroup(group);
-    const next = size == null ? null : Math.max(min, Math.round(size));
+    const max = this.#railWidth > 0 ? Math.max(min, this.#railWidth) : Infinity;
+    const next = size == null ? null : Math.max(min, Math.min(max, Math.round(size)));
     for (const pane of group) pane.size = next;
   }
 
@@ -619,10 +752,8 @@ export class PaneStack {
 
     if (edgeShares(edge)) {
       const host = next[target.group];
-      /* The column keeps its width and the arrival adopts it, including the
-         automatic width a flexible column has: a pane joining a column is not a
-         reason for that column to change size, and carrying its old width in
-         would quietly pin the state flow to the width of a log. */
+      /* The column keeps its width and the arrival adopts it: a pane joining a
+         column is not a reason for that column to change size. */
       if (host[0]) moving.size = host[0].size;
       /* A drop has to show you what you dropped, so landing on a folded column
          unfolds it rather than swallowing the pane into a spine. Folding is a
@@ -650,6 +781,55 @@ export class PaneStack {
     }
     this.groups = next;
     this.focusPane(id);
+  }
+
+  /** Move one pane between rails, preserving its pane state and using the same landing rules. */
+  transferPane(id: string, destination: PaneStack, targetId: string, edge: PaneDropEdge): void {
+    if (destination === this) {
+      this.placePane(id, targetId, edge);
+      return;
+    }
+    const from = this.locate(id);
+    if (!from || destination.has(id)) return;
+
+    const next = this.groups.map((group) => [...group]);
+    const [moving] = next[from.group].splice(from.index, 1);
+    const sibling = next[from.group][Math.min(from.index, next[from.group].length - 1)];
+    const emptied = next[from.group].length === 0;
+    if (emptied) next.splice(from.group, 1);
+    /* A single-pane stack trades places instead of stacking: what it held comes back
+       open, in a column of its own where the arrival just left, so it lands where the
+       reader was looking and never on top of another column. This rail scrolls, so
+       there is always room. */
+    const evicted = destination.single ? destination.#release() : [];
+    if (destination.single) moving.collapsed = false;
+    next.splice(emptied ? from.group : from.group + 1, 0, ...evicted);
+    this.groups = next;
+    if (this.focusedId === id) {
+      this.focusedId = evicted[0]
+        ? activeIn(evicted[0]).id
+        : (sibling?.id ?? this.groups[Math.min(from.group, this.groups.length - 1)]?.[0]?.id ?? null);
+    }
+    destination.insertPane(moving, targetId, edge);
+  }
+
+  /** Empty the stack, handing back what it held, unfolded and newly arrived wherever it goes next. */
+  #release(): Pane[][] {
+    const held = this.groups;
+    this.groups = [];
+    this.bleeding = null;
+    this.focusedId = null;
+    for (const pane of held.flat()) {
+      pane.collapsed = false;
+      pane.joinedAt = ++touchCounter;
+    }
+    return held;
+  }
+
+  private insertPane(moving: Pane, targetId: string, edge: PaneDropEdge): void {
+    this.groups = [...this.groups, [moving]];
+    if (this.has(targetId)) this.placePane(moving.id, targetId, edge);
+    else this.focusPane(moving.id);
   }
 
   /**
@@ -815,28 +995,11 @@ export class PaneStack {
     if (typeof window === "undefined") return;
     const next = this.queryFor(cursor);
     if (next === `${window.location.pathname}${window.location.search}`) return;
-
-    const wait = URL_WRITE_MS - (Date.now() - this.urlWrittenAt);
-    if (wait <= 0) {
-      this.commitQuery(next);
-      return;
-    }
-    this.urlPending = cursor;
-    this.urlTimer ??= window.setTimeout(() => {
-      this.urlTimer = null;
-      const pending = this.urlPending;
-      this.urlPending = null;
-      if (pending != null) this.commitQuery(this.queryFor(pending));
-    }, wait);
+    this.urlThrottle.maybeExecute(cursor);
   }
 
   private commitQuery(next: string): void {
-    if (this.urlTimer != null) {
-      clearTimeout(this.urlTimer);
-      this.urlTimer = null;
-    }
-    this.urlPending = null;
-    this.urlWrittenAt = Date.now();
+    this.urlThrottle.cancel();
     if (next !== `${window.location.pathname}${window.location.search}`) {
       window.history.replaceState(null, "", next);
     }
@@ -862,6 +1025,10 @@ export class PaneStack {
           })
           .join(",")
       );
+    } else if (this.#initial.length > 0) {
+      /* An explicitly empty non-empty-by-default stack must not reopen on its
+         defaults. Empty-by-default stacks still omit their key as before. */
+      params.set(this.#keys.panes, "");
     } else {
       params.delete(this.#keys.panes);
     }
@@ -887,11 +1054,17 @@ export class PaneStack {
     const params = new URLSearchParams(window.location.search);
 
     const raw = params.get(this.#keys.panes);
-    if (raw) {
+    if (raw != null) {
+      if (raw === "") {
+        this.groups = [];
+        this.focusedId = null;
+      }
       const collapsed = new Set(
         (params.get(this.#keys.collapsed) ?? "").split(",").filter(Boolean)
       );
-      const seen = new Set<string>();
+      /* Seeded with the peer's panes, so `?p=timeline&p2=timeline` opens it once,
+         where the link named it first. */
+      const seen = new Set(this.peer?.panes.map((pane) => pane.id));
       const restored: Pane[][] = [];
       const fronts: Pane[] = [];
       const unknown: string[] = [];
@@ -980,4 +1153,42 @@ export class PaneStack {
     }
     return null;
   }
+}
+
+/**
+ * Send whatever `from` has focused over to `to`, by the same rule a drop would: traded for
+ * `to`'s occupant when it is a single-pane stack already holding one, or else landed as a column
+ * of its own after `to`'s last one — the same place `openPane` puts a pane given no origin.
+ *
+ * DOM-free, like the rest of this module's placement rules, so the keyboard shortcut that calls
+ * it — Cmd/Ctrl+Shift+D, sending the focused pane to the drawer and back — is exercised the same
+ * way `transferPane` is: against two real stacks, no App.svelte required. Nothing focused is a
+ * no-op, the same as every other key here that asks a desk with nobody on it to act.
+ */
+export function dockFocusedPane(from: PaneStack, to: PaneStack): void {
+  const id = from.focusedId;
+  if (!id) return;
+  /* `""` and never `id`: an empty destination falls through `insertPane`'s own "no target"
+     branch, which is what focuses the arrival there. Falling back to the moving pane's own id
+     looks harmless until that id lands in `to.groups` a line above the check — at which point
+     `to.has(id)` is true of its own arrival, `insertPane` takes the placement branch instead of
+     focusing it, and `placePane` declines as a pane already alone in its column, leaving `to`
+     with a new pane and no `focusedId` to show for it. No real pane is ever named `""`. */
+  const target = to.panes.at(-1)?.id ?? "";
+  from.transferPane(id, to, target, to.single ? "tab" : "after");
+}
+
+/**
+ * Open the timeline when a visit names no desk.
+ *
+ * The rail already opens on the state flow and the chat. This is the other
+ * half: the pane the drawer exists for. A link that already spells `p` or
+ * `p2` — including an explicit empty value — is a desk someone arranged, and
+ * hydrate has already restored it, so it is left alone.
+ */
+export function openDefaultDrawer(drawer: PaneStack, search: string): void {
+  const params = new URLSearchParams(search);
+  if (params.has(QUERY_PANES) || params.has(`${QUERY_PANES}2`)) return;
+  if (drawer.groups.length > 0) return;
+  drawer.openPane({ kind: "timeline" });
 }

@@ -68,7 +68,7 @@ describe("the bottom drawer is fitted to the trace it holds", () => {
     assert.match(source, /onResizeEnd=\{keepDrawerHeight\}/, "the drawer's height is kept when a drag ends");
     assert.match(
       source,
-      /let drawerSized = chosenDrawerHeightNow\(\) != null;/,
+      /let drawerSized = drawerBootShut \|\| chosenDrawerHeightNow\(\) != null;/,
       "a saved height must count as sized on load, or the first fit writes over it"
     );
     const prefsAt = source.indexOf("writeOperatorPrefs({\n      transcriptFilter");
