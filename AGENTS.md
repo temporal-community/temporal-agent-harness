@@ -1,6 +1,6 @@
 # Working in this repository
 
-Temporal Agent Harness is a Python SDK for durable agents, with a web console and
+Temporal Agent Harness is a Python SDK (Typescript support coming soon) for building durable agents, with a development+observability web console and
 TypeScript clients for building products over the agents. This file covers contributing; [README.md](README.md) covers usage.
 Run commands below from the repository root unless stated otherwise.
 
