@@ -8,7 +8,11 @@ npm_link_all_packages(name = "node_modules")
 js_library(
     name = "package_json",
     srcs = ["package.json"],
-    visibility = ["//typescript/packages/react:__subpackages__"],
+    # client/test/coreDeps.test.ts checks that no core package depends on TanStack.
+    visibility = [
+        "//typescript/packages/client/test:__pkg__",
+        "//typescript/packages/react:__subpackages__",
+    ],
 )
 
 # What vitest reads from the package root. vitest_test (bazel/vitest.bzl) adds it to every test,

@@ -96,7 +96,7 @@ describe("a runtime boundary whose detail is missing", () => {
 });
 
 describe("a status is a word, not a control", () => {
-  // A hairline box means "press me" (typescript/AGENTS.md); the band already carries the tone.
+  // A hairline box means "press me" (typescript/apps/ui/AGENTS.md); the band already carries the tone.
   it("renders the status as a quiet, non-interactive chip", () => {
     const status = head(card({ tone: "neutral", title: "Input", state: "turn 4" }), "head");
     assert.match(status, /<span [^>]*class="chip\b[^"]*\bquiet\b/);

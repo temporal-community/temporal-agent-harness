@@ -4,6 +4,14 @@ load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
 # One target per test file (and per compile-time type check, *.types.ts), depending on the files it
 # imports.
 ts_project(
+    name = "coreDeps.test",
+    testonly = True,
+    srcs = ["coreDeps.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+)
+
+ts_project(
     name = "jsonPatch.test",
     testonly = True,
     srcs = ["jsonPatch.test.ts"],
@@ -165,6 +173,18 @@ ts_project(
         "//typescript/packages/client/src:plainState",
         "//typescript/packages/client/src:session",
     ],
+)
+
+js_test(
+    name = "coreDeps_test",
+    data = [
+        ":coreDeps.test",
+        "//typescript/packages/client:package_json",
+        "//typescript/packages/codegen:package_json",
+        "//typescript/packages/react:package_json",
+        "//typescript/packages/svelte:config",
+    ],
+    entry_point = "coreDeps.test.js",
 )
 
 js_test(

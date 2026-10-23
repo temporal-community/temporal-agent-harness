@@ -11,6 +11,54 @@ vitest_test(
 )
 
 vitest_test(
+    name = "contrast_test",
+    src = "contrast.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
+        "//typescript/apps/ui/src/lib/components/flow:usageChart",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+    ],
+)
+
+vitest_test(
+    name = "conventions_test",
+    src = "conventions.test.mjs",
+    deps = [
+        "//typescript/apps/ui:build_file",
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:PendingBannerStack",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:LongContent",
+        "//typescript/apps/ui/src/lib/components/primitives:SafeImage",
+        "//typescript/apps/ui/src/lib/components/primitives:Select",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:TraceRow",
+        "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "deep-nesting_test",
     src = "deep-nesting.test.mjs",
     deps = [
@@ -21,6 +69,14 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
         "//typescript/apps/ui/src/lib/components/primitives:nest",
     ],
+)
+
+# Checks the AGENTS.md files and the README against the justfile and files across the repo,
+# which a sandbox leaves out; `pnpm --dir typescript/apps/ui run check` runs it.
+vitest_test(
+    name = "docs-drift_test",
+    src = "docs-drift.test.mjs",
+    tags = ["manual"],
 )
 
 vitest_test(
@@ -56,6 +112,18 @@ vitest_test(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",
         "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "empty-states_test",
+    src = "empty-states.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
     ],
 )
 

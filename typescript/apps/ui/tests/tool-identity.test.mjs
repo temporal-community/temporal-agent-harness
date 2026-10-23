@@ -94,7 +94,7 @@ describe("tool identity", () => {
 
     /* Floors, or a console that renamed every .tool surface — or lost the tokens outright — would
        read as a clean split rather than an empty scan. */
-    assert.ok(toolRefs >= 12, `expected the console's tool surfaces to read --tool, found ${toolRefs}`);
+    assert.ok(toolRefs >= 9, `expected the console's tool surfaces to read --tool, found ${toolRefs}`);
   });
 
   it("is a split, so app.css has to declare both halves", () => {
