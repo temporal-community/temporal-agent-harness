@@ -34,8 +34,12 @@
  * the only way to be sure of that is to own no code that could.
  */
 export interface ScrollFollower {
-  /** Bring the element with this id into view, at most once per frame. */
-  to(elementId: string): void;
+  /**
+   * Bring the element with this id into view, at most once per frame. A windowed list
+   * passes `reveal` to render a row that is not in the DOM; it is only called while
+   * still following, and the row is looked for again on the next frame.
+   */
+  to(elementId: string, reveal?: () => void): void;
   /** The scroller's own `onscroll`: a scroll this did not write may hand over control. */
   handleScroll(): void;
 }
@@ -52,15 +56,17 @@ export function scrollFollower(scroller: () => HTMLElement | null): ScrollFollow
   let written = -1;
   let frame = 0;
   let target: string | null = null;
+  let reveal: (() => void) | undefined;
 
   function onScreen(row: HTMLElement, view: DOMRect): boolean {
     const rect = row.getBoundingClientRect();
     return rect.bottom > view.top && rect.top < view.bottom;
   }
 
-  return {
-    to(elementId: string): void {
+  const follower: ScrollFollower = {
+    to(elementId: string, revealRow?: () => void): void {
       target = elementId;
+      reveal = revealRow;
       /* Coalesced by keeping the first frame rather than rescheduling: `target` is
          read inside the callback, so the pending frame already means "scroll to
          wherever the playhead has got to by the time we paint". */
@@ -69,6 +75,13 @@ export function scrollFollower(scroller: () => HTMLElement | null): ScrollFollow
         frame = 0;
         const box = scroller();
         const row = target == null ? null : document.getElementById(target);
+        const show = reveal;
+        reveal = undefined;
+        if (box && target != null && !row && following && show) {
+          show();
+          follower.to(target);
+          return;
+        }
         if (!box || !row || !following) return;
 
         const view = box.getBoundingClientRect();
@@ -95,6 +108,7 @@ export function scrollFollower(scroller: () => HTMLElement | null): ScrollFollow
       following = row == null || onScreen(row, box.getBoundingClientRect());
     }
   };
+  return follower;
 }
 
 /**

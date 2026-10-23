@@ -6,3 +6,9 @@ js_library(
     srcs = ["controllerHarness.mjs"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
+
+js_library(
+    name = "fakeIndexedDb",
+    srcs = ["fakeIndexedDb.mjs"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)

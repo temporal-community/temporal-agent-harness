@@ -1,7 +1,7 @@
 /**
  * What a run remembers across a reload: which session was on screen
- * (localStorage + URL `s=`), per-session desks, operator prefs, and the frames
- * already seen for the active session (sessionStorage, one tab's worth).
+ * (localStorage + URL `s=`), per-session desks and operator prefs. The frames
+ * already seen are in IndexedDB (frameStore.ts).
  *
  * Every function here guards `typeof window`, for the server-render and
  * self-check paths where there is no storage at all, and swallows its own
@@ -9,10 +9,7 @@
  * and none of that is worth failing a session over. Each fallback means
  * "nothing stored", which every caller already has to handle.
  */
-import type { AgentSseFrame } from "$lib/api/types";
-
 const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
-const frameCacheStorageKeyPrefix = "temporal-agent-ui.frames.v1:";
 const desksStorageKey = "temporal-agent-ui.desks.v1";
 const prefsStorageKey = "temporal-agent-ui.prefs.v1";
 /** Cap how many session desks we keep so quota failures stay rare. */
@@ -39,10 +36,71 @@ export type OperatorPrefs = {
   followDefault?: boolean;
   /** Fold settled tool cards on the graph. Absent means yes; see agentRun. */
   graphFocus?: boolean;
+  /** Session Manager pins, most recently pinned first. Read through `readPinnedSessions`. */
+  pinnedSessions?: string[];
+  /** Hidden from the Session Manager's groups, most recently archived first. Nothing is deleted. */
+  archivedSessions?: string[];
+  /** The Archived group is open. Absent means closed. */
+  sessionArchiveOpen?: boolean;
 };
 
-function frameCacheStorageKey(sessionId: string): string {
-  return `${frameCacheStorageKeyPrefix}${sessionId}`;
+/** Enough for any list a person curates by hand; past it the oldest pin drops. */
+export const MAX_PINNED_SESSIONS = 100;
+/**
+ * Archiving clears out a restart's worth of gone sessions at a time, so it holds more: past the
+ * cap the oldest archive silently returns to the list. About 250 KB of ids at most, and pruning
+ * on write (`toggleArchivedSession`) keeps it to sessions that still exist.
+ */
+export const MAX_ARCHIVED_SESSIONS = 5_000;
+
+/* Stored ids come from any version of the app, or a hand-edited store: keep only ids. */
+function validSessionIds(value: unknown, cap: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.filter((id): id is string => typeof id === "string" && id.trim() !== "");
+  return [...new Set(ids)].slice(0, cap);
+}
+
+export function validPinnedSessions(value: unknown): string[] {
+  return validSessionIds(value, MAX_PINNED_SESSIONS);
+}
+
+export function validArchivedSessions(value: unknown): string[] {
+  return validSessionIds(value, MAX_ARCHIVED_SESSIONS);
+}
+
+export function readArchivedSessions(): string[] {
+  return validArchivedSessions(readOperatorPrefs().archivedSessions);
+}
+
+/**
+ * Archive `workflowId` first, or unarchive it. Like a pin, an unlisted id is kept, unless
+ * `listed` is every session there is: then an id missing from it has no session left to hide.
+ * Never pass a partial list, or archives behind a filter or a short page come back.
+ */
+export function toggleArchivedSession(workflowId: string, listed?: readonly string[]): string[] {
+  const archived = readArchivedSessions();
+  const toggled = archived.includes(workflowId) ? archived.filter((id) => id !== workflowId) : [workflowId, ...archived];
+  const known = listed && new Set(listed);
+  const next = validArchivedSessions(known ? toggled.filter((id) => known.has(id)) : toggled);
+  writeOperatorPrefs({ archivedSessions: next });
+  return next;
+}
+
+export function readPinnedSessions(): string[] {
+  return validPinnedSessions(readOperatorPrefs().pinnedSessions);
+}
+
+/**
+ * Pin `workflowId` first, or unpin it, and return the pins now stored. A pin whose session is
+ * not listed stays: a filter or a shorter page may only be hiding it.
+ */
+export function togglePinnedSession(workflowId: string): string[] {
+  const pins = readPinnedSessions();
+  const next = validPinnedSessions(
+    pins.includes(workflowId) ? pins.filter((id) => id !== workflowId) : [workflowId, ...pins]
+  );
+  writeOperatorPrefs({ pinnedSessions: next });
+  return next;
 }
 
 export function readUrlSessionId(): string | null {
@@ -86,34 +144,6 @@ export function writeStoredActiveSessionId(sessionId: string): void {
     window.localStorage.setItem(activeSessionStorageKey, sessionId);
   } catch {
     // Ignore storage failures; active session persistence is a UI convenience.
-  }
-}
-
-export function readCachedFrames(sessionId: string): AgentSseFrame[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.sessionStorage.getItem(frameCacheStorageKey(sessionId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as { frames?: unknown };
-    return Array.isArray(parsed.frames) ? (parsed.frames as AgentSseFrame[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(
-      frameCacheStorageKey(sessionId),
-      JSON.stringify({ frames, savedAt: Date.now() })
-    );
-  } catch {
-    try {
-      window.sessionStorage.removeItem(frameCacheStorageKey(sessionId));
-    } catch {
-      // Ignore storage failures.
-    }
   }
 }
 

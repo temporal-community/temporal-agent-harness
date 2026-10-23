@@ -154,6 +154,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:fileMounts",
         "//typescript/apps/ui/src/lib/state:flowProjection",
         "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:frameStore",
         "//typescript/apps/ui/src/lib/state:historyGap",
         "//typescript/apps/ui/src/lib/state:hydration",
         "//typescript/apps/ui/src/lib/state:inboundMessageText",

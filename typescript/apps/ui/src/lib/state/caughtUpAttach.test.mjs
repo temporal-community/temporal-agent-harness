@@ -106,13 +106,23 @@ const handlerEnd = (offset) => ({
   }
 });
 
-function boot({ sessions, streamFor, statusFor, listSessionsFor = async () => [] }) {
+function boot({
+  sessions,
+  streamFor,
+  statusFor,
+  listSessionsFor = async () => [],
+  agentStatusFor = () => ({ current_turn: 0, turn_active: false, pending_turns: [] })
+}) {
   freshStorage();
   const attachCalls = [];
   const statusCalls = [];
   const api = {
+    async agentStatus(workflowId) {
+      return agentStatusFor(workflowId);
+    },
+    /* No agents, so initialize() gives up cheaply; the cases that need one seed `agents`. */
     async listAgents() {
-      return [{ key: "qa", label: "QA", workflow_type: "X", task_queue: "q", description: "" }];
+      return { agents: [] };
     },
     async submitMessage() {
       return {
@@ -192,17 +202,35 @@ describe("a caught-up attach", () => {
       `a caught-up session must present as loaded promptly (took ${elapsed}ms)`
     );
 
-    /* The re-attach itself is left alone on purpose: it is the only thing that
-       carries a new event to a reader who is already caught up, because
-       /api/attach does not hold the connection open. Making it unnecessary is a
-       server-side fix, so what is asserted here is only that it stays silent. */
+    /* An empty answer is the server at quiescence, and every re-attach costs two
+       Queries and an Update to hear it again. A send re-opens the stream. */
     await sleep(1_200);
     assert.equal(
       controller.connecting,
       false,
       "background re-attaches must never put the console back into 'connecting'"
     );
-    assert.ok(statusCalls.length >= 1, "a stream that ended is still worth a status probe");
+    assert.equal(attachCalls.length, 1, "a caught-up session must not be re-attached on a timer");
+    assert.equal(statusCalls.length, 1, "nor probed for a drop it did not have");
+  });
+
+  // An empty attach can also beat a turn the agent has started but not yet
+  // published. The agent's status tells the two apart, for one Query.
+  it("caught up while the agent still runs a turn reads again", async () => {
+    let turnActive = true;
+    const { controller, attachCalls } = boot({
+      sessions: [session("wf-racing")],
+      streamFor: () => silent(),
+      statusFor: () => "RUNNING",
+      agentStatusFor: () => ({ current_turn: 1, turn_active: turnActive, pending_turns: [] })
+    });
+
+    void controller.selectSession("wf-racing");
+    await waitFor("a second read while the turn runs", () => attachCalls.length === 2, 3_000);
+    turnActive = false;
+    const reads = attachCalls.length;
+    await sleep(1_500);
+    assert.ok(attachCalls.length <= reads + 1, "once the turn is over, a caught-up read stops");
   });
 
   // The clear lives inside the retry loop, so an abandoned loop is still running

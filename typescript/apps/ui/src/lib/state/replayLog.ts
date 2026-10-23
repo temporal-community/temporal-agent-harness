@@ -1,16 +1,18 @@
 import {
   SYNTHESIZED,
   type AgentEventType,
+  type AgentInterfaceFunction,
   type AgentSseFrame,
   type FileCitationAnnotation,
   type JsonPatchOp,
   type JsonRecord,
   type ToolId
 } from "$lib/api/types";
-import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
+import { summarizeCost, tokenFigure, type CostSummary, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
-import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
-import { buildReplyRuns, type ReplyRun } from "$lib/state/replyRuns";
+import { handlerReply, outputSchemaTracker } from "$lib/state/handlerReply";
+import { HISTORY_GAP_NOTE, rootLogOffset } from "$lib/state/historyGap";
+import { replyRunKey } from "$lib/state/replyRuns";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
@@ -59,6 +61,8 @@ export interface ReplayLogRow {
   turnId: string;
   messageId?: string;
   evaluationId?: string;
+  /** What judged an automatic approval: `jev_evaluator`, or the evaluator callable's name. */
+  evaluator?: string;
   eventOffset?: number;
   timestamp: number;
   // An agent event's own type, or "stream_error" for the client-side frame /api/chat
@@ -77,6 +81,8 @@ export interface ReplayLogRow {
    *  unknown (arguments streamed but unparseable), which is not the same as `{}`. The two
    *  render differently — see formatLogValue in $lib/state/logValue. */
   input?: JsonRecord | null;
+  /** An admitted message's handler and payload, as sent. */
+  message?: { handler: string; payload: JsonRecord };
   output?: string;
   /** JSON schema of the result a `callback_requested` row is waiting on. */
   outputSchema?: JsonRecord;
@@ -140,17 +146,6 @@ export interface ReplayLogFrame {
   parentTurnNumber?: number;
 }
 
-function textFromReply(data: { text?: unknown; output?: unknown }): string {
-  if (typeof data.text === "string") return data.text;
-  const output = data.output;
-  if (typeof output === "string") return output;
-  if (typeof output === "object" && output != null) {
-    if ("text" in output && typeof output.text === "string") return output.text;
-    if ("message" in output && typeof output.message === "string") return output.message;
-  }
-  return "";
-}
-
 function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   if (frame.event !== "text_annotation" || !("type" in frame.data)) return [];
   return (frame.data.delta.annotations ?? []).filter(
@@ -188,8 +183,10 @@ function stateOpsBody(ops: JsonPatchOp[]): string {
   return rest > 0 ? `${shown.join(", ")}, +${rest} more` : shown.join(", ");
 }
 
-function modelUsageBody(usage: UsageTotals): string {
-  return `${formatTokens(usage.total)} tokens`;
+function modelUsageBody({ tokens, unreportedCalls }: CostSummary): string {
+  return unreportedCalls > 0 && tokens.total === 0
+    ? "Usage not reported"
+    : `${tokenFigure(tokens.total, unreportedCalls)} tokens`;
 }
 
 function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLogFrame {
@@ -198,7 +195,8 @@ function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLo
 
 function rowFromFrame(
   entry: ReplayLogFrame,
-  frameIndex: number
+  frameIndex: number,
+  outputSchema?: unknown
 ): ReplayLogRow | null {
   const { frame } = entry;
   const ordinal = frameIndex + 1;
@@ -244,6 +242,7 @@ function rowFromFrame(
     turnId: frame.data.turn_id,
     messageId: frame.data.message_id ?? undefined,
     evaluationId: "evaluation_id" in frame.data ? frame.data.evaluation_id : undefined,
+    evaluator: "evaluator" in frame.data ? frame.data.evaluator : undefined,
     eventOffset:
       frame.data.event_offset != null && frame.data.event_offset !== SYNTHESIZED
         ? frame.data.event_offset
@@ -269,6 +268,7 @@ function rowFromFrame(
             ? "Message queued"
             : "User message received",
       body: renderUserMessage(frame.data.handler, frame.data.payload),
+      message: { handler: frame.data.handler, payload: frame.data.payload },
       marker: queued ? "queue" : undefined,
       markerLabel: queued ? "queued turn" : undefined
     };
@@ -311,10 +311,11 @@ function rowFromFrame(
       actor: "model",
       tone: "done",
       label: "Model completed",
-      body: modelUsageBody(summary.tokens),
+      body: modelUsageBody(summary),
       model: frame.data.model,
       status: "completed",
-      usage: summary.tokens,
+      /* No usage object is no figure: a zero here would be summed into the turn's total. */
+      usage: summary.unreportedCalls > 0 ? undefined : summary.tokens,
       estimatedCostUsd: summary.estimatedCostUsd
     };
   }
@@ -625,7 +626,7 @@ function rowFromFrame(
       actor: "agent",
       tone: "done",
       label: "Handler reply",
-      body: textFromReply(frame.data),
+      body: handlerReply(frame.data, outputSchema).text,
       status: "complete"
     };
   }
@@ -682,8 +683,8 @@ function rowFromFrame(
 }
 
 function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary {
-  const startedAt = Math.min(...rows.map((row) => row.timestamp));
-  const endedAt = Math.max(...rows.map((row) => row.timestamp));
+  const startedAt = rows.reduce((least, row) => Math.min(least, row.timestamp), Infinity);
+  const endedAt = rows.reduce((most, row) => Math.max(most, row.timestamp), -Infinity);
   const toolIds = new Set(rows.map((row) => row.toolId).filter(Boolean));
   const estimatedCostUsd = rows.every((row) => row.estimatedCostUsd !== null)
     ? rows.reduce((sum, row) => sum + (row.estimatedCostUsd ?? 0), 0)
@@ -705,60 +706,146 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
   };
 }
 
-export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
-  const gapPositions = findHistoryGaps(input);
-  /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
-     is left exactly as it was — it is already one event, and a row that announced
-     itself as a collapsed run of one would only be noise. */
-  const runStarts = new Map<number, ReplyRun>();
-  const withinRun = new Set<number>();
-  for (const run of buildReplyRuns(input)) {
-    if (run.frameCount < 2) continue;
-    runStarts.set(run.startIndex, run);
-    for (let index = run.startIndex + 1; index <= run.endIndex; index += 1) {
-      withinRun.add(index);
-    }
-  }
+type ReplayLogInput = AgentSseFrame | ReplayLogFrame;
+
+const NO_INTERFACES: Record<string, AgentInterfaceFunction[]> = {};
+
+function turnGroup(turnNumber: number, rows: ReplayLogRow[]): TurnLogGroup {
+  const summary = buildSummary(turnNumber, rows);
+  return { turnNumber, startedAt: summary.startedAt, rows, summary };
+}
+
+/**
+ * The replay log, folded forward one frame at a time and kept between calls.
+ *
+ * Every commit used to rebuild the whole log, which cost ~30 ms per commit at 10,000
+ * frames. Everything the fold carries only moves forward (the highest root offset
+ * for history gaps, the handler each message opened, the open reply run), so while
+ * the last entry folded is still at its index, only the new frames are folded in.
+ * That one check is enough because replayTimelineBuilder only appends, and builds
+ * every entry anew when it starts over (an earlier entry relabeled once its
+ * subagent is seen). New interfaces or a shorter input also start over. Rows and
+ * groups nothing touched keep their identity.
+ */
+export function replayLogBuilder(): (
+  input: readonly ReplayLogInput[],
+  agentInterfaces?: Record<string, AgentInterfaceFunction[]>
+) => ReplayLog {
+  let seen = 0;
+  let last: ReplayLogInput | undefined;
+  let interfaces: Record<string, AgentInterfaceFunction[]> | null = null;
+  let highestOffset: number | null = null;
+  let schemaOf = outputSchemaTracker();
   /* Carried forward for the same reason the waterfall carries it: `rowFromFrame`
      answers null for an event kind this log does not render, and a seam attached to
      a frame that draws no row would never be seen. A chunk folded into the row above
      is the same case — the seam waits for the next row that can carry it. */
   let pendingGap = false;
-  const rows: ReplayLogRow[] = [];
-  input.forEach((item, index) => {
-    if (gapPositions.has(index)) pendingGap = true;
-    if (withinRun.has(index + 1)) return;
-    const row = rowFromFrame(normalizeReplayLogFrame(item), index);
-    if (!row) return;
-    const run = runStarts.get(row.index);
-    if (run) {
-      row.runStartIndex = run.startIndex;
-      row.index = run.endIndex;
-      row.body = run.text;
-    }
-    if (pendingGap) {
-      row.gapBefore = HISTORY_GAP_NOTE;
+  /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
+     is left exactly as it was — it is already one event, and a row that announced
+     itself as a collapsed run of one would only be noise. */
+  let open: { key: string; startIndex: number; text: string; row: number; groupRow: number } | null = null;
+  let rows: ReplayLogRow[] = [];
+  let turnRows = new Map<number, ReplayLogRow[]>();
+  let groups = new Map<number, TurnLogGroup>();
+
+  return (input, agentInterfaces = NO_INTERFACES) => {
+    let from = seen;
+    if (agentInterfaces !== interfaces || input.length < from || (from > 0 && input[from - 1] !== last)) {
+      from = 0;
+      interfaces = agentInterfaces;
+      highestOffset = null;
+      schemaOf = outputSchemaTracker();
       pendingGap = false;
+      open = null;
+      rows = [];
+      turnRows = new Map();
+      groups = new Map();
     }
-    rows.push(row);
-  });
+    const dirty = new Set<number>();
+    for (let index = from; index < input.length; index += 1) {
+      const item = input[index]!;
+      const offset = rootLogOffset(item);
+      if (offset != null) {
+        if (highestOffset != null && offset > highestOffset + 1) pendingGap = true;
+        highestOffset = highestOffset == null ? offset : Math.max(highestOffset, offset);
+      }
+      const entry = normalizeReplayLogFrame(item);
+      const scope = entry.workflowId ?? "";
+      const schema = schemaOf(entry.frame, agentInterfaces[scope], scope);
+      const { frame } = entry;
+      const chunk = frame.event === "reply_delta" && "type" in frame.data ? frame.data.text : null;
+      const key = chunk == null ? null : replyRunKey(entry);
+      if (open && key === open.key) {
+        open.text += chunk;
+        const row = { ...rows[open.row]!, runStartIndex: open.startIndex, index: index + 1, body: open.text };
+        rows[open.row] = row;
+        turnRows.get(row.turnNumber)![open.groupRow] = row;
+        dirty.add(row.turnNumber);
+        continue;
+      }
+      open = null;
+      const row = rowFromFrame(entry, index, schema);
+      if (!row) continue;
+      if (pendingGap) {
+        row.gapBefore = HISTORY_GAP_NOTE;
+        pendingGap = false;
+      }
+      const turn = turnRows.get(row.turnNumber) ?? [];
+      turnRows.set(row.turnNumber, turn);
+      if (key != null) open = { key, startIndex: index + 1, text: chunk!, row: rows.length, groupRow: turn.length };
+      rows.push(row);
+      turn.push(row);
+      dirty.add(row.turnNumber);
+    }
+    seen = input.length;
+    last = input[seen - 1];
+    for (const turnNumber of dirty) {
+      if (turnNumber > 0) groups.set(turnNumber, turnGroup(turnNumber, [...turnRows.get(turnNumber)!]));
+    }
+    return { rows: [...rows], groups: [...groups.values()] };
+  };
+}
 
-  const groupedRows = new Map<number, ReplayLogRow[]>();
-  for (const row of rows) {
-    const current = groupedRows.get(row.turnNumber) ?? [];
-    current.push(row);
-    groupedRows.set(row.turnNumber, current);
+/** `agentInterfaces` is keyed by workflow ID, so each agent's replies read their own handlers' schemas. */
+export function buildReplayLog(
+  input: readonly ReplayLogInput[],
+  agentInterfaces: Record<string, AgentInterfaceFunction[]> = {}
+): ReplayLog {
+  return replayLogBuilder()(input, agentInterfaces);
+}
+
+/**
+ * The log as it stood at a 1-based cursor, cut from the full log rather than rebuilt
+ * from frame one. Rows are in frame order, so the cut is a prefix, plus the reply run
+ * the cursor sits inside shortened to the chunks it has reached. `input` is what the
+ * full log was built from.
+ */
+export function replayLogAt(full: ReplayLog, input: readonly ReplayLogInput[], cursor: number): ReplayLog {
+  let kept = 0;
+  while (kept < full.rows.length && full.rows[kept]!.index <= cursor) kept += 1;
+  const rows = full.rows.slice(0, kept);
+  const cut = full.rows[kept];
+  if (cut?.runStartIndex != null && cut.runStartIndex <= cursor) {
+    let body = "";
+    for (let index = cut.runStartIndex; index <= cursor; index += 1) {
+      const { frame } = normalizeReplayLogFrame(input[index - 1]!);
+      if (frame.event === "reply_delta" && "type" in frame.data) body += frame.data.text;
+    }
+    const { runStartIndex, ...row } = cut;
+    rows.push(cursor === runStartIndex ? { ...row, index: cursor, body } : { ...cut, index: cursor, body });
   }
-
-  const groups = [...groupedRows.entries()]
-    .filter(([turnNumber]) => turnNumber > 0)
-    .map(([turnNumber, rows]) => ({
-      turnNumber,
-      startedAt: Math.min(...rows.map((row) => row.timestamp)),
-      rows,
-      summary: buildSummary(turnNumber, rows)
-    }));
-
+  const shortened = rows.length > kept ? rows[kept]! : null;
+  const groups: TurnLogGroup[] = [];
+  for (const group of full.groups) {
+    const groupRows = group.rows.filter((row) => row.index <= cursor);
+    if (shortened?.turnNumber === group.turnNumber) groupRows.push(shortened);
+    else if (groupRows.length === group.rows.length) {
+      groups.push(group);
+      continue;
+    }
+    if (groupRows.length > 0) groups.push(turnGroup(group.turnNumber, groupRows));
+  }
   return { rows, groups };
 }
 
@@ -864,6 +951,11 @@ export function formatTimestamp(
     timestampFormats.set(key, formatter);
   }
   return formatter.format(seconds * 1000);
+}
+
+/** A count and its noun, in the number the count takes: "1 approval", "4 approvals". */
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }
 
 export function formatDuration(seconds: number): string {

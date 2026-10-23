@@ -6,7 +6,7 @@
  * bounded tail of its stream log (`_truncate_stream_for_handover`, 512 KiB) and
  * carries `base_offset` with it, so offsets stay monotonic and a client polling
  * at the head resumes seamlessly. A client that was NOT at the head does not:
- * it hydrates its per-session `sessionStorage` cache, calls
+ * it restores its run's frames from IndexedDB, calls
  * `attach(lastResumeOffset)`, and `/api/attach` answers from the oldest offset
  * it still holds without saying that is what it did. Measured on a live
  * session: `from_offset=2000` returned a first event at `event_offset: 4906`,
@@ -85,7 +85,7 @@ type GapInput = AgentSseFrame | { frame: AgentSseFrame };
  * skipping them the way the display projections do would manufacture a gap at
  * every one of them.
  */
-function rootLogOffset(item: GapInput): number | null {
+export function rootLogOffset(item: GapInput): number | null {
   const { data } = "frame" in item ? item.frame : item;
   if (!("type" in data)) return null;
   if (!isRootAgentEvent(data)) return null;

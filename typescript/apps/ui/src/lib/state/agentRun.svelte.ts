@@ -1,7 +1,11 @@
+import { AsyncThrottler } from "@tanstack/pacer/async-throttler";
+import { prefersReducedMotion } from "svelte/motion";
 import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
   AgentSseFrame,
+  AgentStatusResponse,
+  SubmitMessageResponse,
   ToolId,
   WorkflowExecutionState
 } from "$lib/api/types";
@@ -16,17 +20,14 @@ import type {
   Session
 } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
-import { HttpAgentApi } from "$lib/api/httpClient";
-import { realisticQaScenario } from "$lib/mock/scenarios";
-import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
+import { HttpAgentApi, workflowGone } from "$lib/api/httpClient";
+import { contextWindowUsage, summarizeCost, usagePointAt, usageTimelineBuilder } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
 import { defaultBootAgent } from "./initData";
 import {
-  readCachedFrames,
   readOperatorPrefs,
   readStoredActiveSessionId,
   readUrlSessionId,
-  writeCachedFrames,
   writeOperatorPrefs,
   writeStoredActiveSessionId,
   writeUrlSessionId
@@ -49,11 +50,63 @@ import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
 import { buildMountViews, isFileStateDoc } from "./fileMounts";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
-import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
-import { buildReplayTimeline, type ReplayTimelineEntry } from "./replayTimeline";
-import { buildReplyRuns, replyRunAt } from "./replyRuns";
-import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
-import { buildTranscript } from "./transcript";
+import {
+  ClientToolCoordinator,
+  type ClientToolStatus
+} from "./clientToolProvider";
+import { buildReplayMarkers, replayLogAt, replayLogBuilder, rowCovers } from "./replayLog";
+import { replayTimelineBuilder } from "./replayTimeline";
+import { replyRunAt, replyRunsBuilder } from "./replyRuns";
+import { agentName } from "./sessionHistory";
+import { buildStepBoundaries, stepTimelineBuilder } from "./stepTimeline";
+import { buildTranscript, transcriptBuilder, type TranscriptItem } from "./transcript";
+import {
+  appendRunFrames,
+  claimRunWriter,
+  evictRuns,
+  readLatestRun,
+  readLatestView,
+  readRun,
+  runKeyOf,
+  type RunRecord,
+  touchRun,
+  writeView,
+  type StoredView
+} from "./frameStore";
+import type { ReplayLogRow } from "./replayLog";
+
+/** The chat as it last looked, enough to paint it again before any frame is folded. */
+export type ViewSnapshot = StoredView<{
+  session: Session;
+  items: TranscriptItem[];
+  logs: ReplayLogRow[];
+  sessions: Session[];
+  total: number;
+}>;
+
+/** The chat's last messages kept in a snapshot: a few screens of a windowed chat. */
+const snapshotItems = 30;
+/** The session picker's first page. */
+const snapshotSessions = 50;
+
+/* Nothing is retried against a purged workflow: no request here carries an idempotency key. */
+const GONE_MESSAGE = "This session's workflow no longer exists in Temporal.";
+
+/**
+ * A session row built from a stored run, enough to address its frames.
+ * The list's row replaces it once the catalog answers; until then the agent
+ * type is unknown. Sends still go to the server and are not applied locally.
+ */
+function sessionFromRun(record: RunRecord): Session {
+  const prefix = `${record.workflowId}|`;
+  const createdAt = Number(record.runKey.startsWith(prefix) ? record.runKey.slice(prefix.length) : "");
+  return {
+    workflow_id: record.workflowId,
+    created_at: Number.isFinite(createdAt) ? createdAt : 0,
+    label: record.workflowId,
+    agent_workflow_type: ""
+  };
+}
 
 /* The ladder, in rung order, and the only place it is written down: the chip cycles it,
    the arrow keys step it, and the type is read off it so a fifth rung is one edit. */
@@ -131,23 +184,6 @@ function now(): number {
 const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
 
 /**
- * Hand the main thread back so the browser can paint and answer input.
- *
- * A rAF rather than a bare timeout, because the point is to let a paint happen:
- * resuming before one has means the work was interleaved without the page ever
- * catching up.
- */
-function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => resolve());
-      return;
-    }
-    setTimeout(resolve, 0);
-  });
-}
-
-/**
  * The identity #ingestFrame dedupes on. A frame arriving twice is normal — a reconnect replays from
  * a root offset, and the cached frames overlap the live stream — so this has to say "same event"
  * exactly when it is the same event.
@@ -223,11 +259,27 @@ export class AgentRunController {
   #api: AgentApi;
   #initialized = false;
 
-  frames = $state<AgentSseFrame[]>([]);
+  /* Raw: frames are never mutated, only replaced by #publishFrames. A deep proxy made every
+     projection subscribe to every field it read on every frame, which was most of a commit. */
+  frames = $state.raw<AgentSseFrame[]>([]);
+  /** What the chat showed before the reload, on screen until the restored frames commit. */
+  snapshot = $state.raw<ViewSnapshot | null>(null);
+  /** The run this tab writes to IndexedDB, and how much of the buffer is already there. */
+  #persistedRun: {
+    runKey: string;
+    release: () => void;
+    upTo: number;
+    seq: number;
+    writes: Promise<void>;
+    partial: boolean;
+  } | null = null;
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
   failedInterfaceIds = $state<string[]>([]);
   closedWorkflowIds = $state<string[]>([]);
+  #closedIds = $derived(new Set(this.closedWorkflowIds));
+  /** Temporal's answer per workflow id, as last asked; a subagent has no session row to hold it. */
+  executionStatuses = $state<Record<string, string>>({});
   viewIndex = $state(0);
   playing = $state(false);
   /**
@@ -236,7 +288,9 @@ export class AgentRunController {
    * while frames streamed in behind it.
    */
   following = $state(true);
-  connecting = $state(false);
+  #connecting = $state(false);
+  /** When the connection under way started, epoch ms; null while connected. */
+  connectingSince = $state<number | null>(null);
   sending = $state(false);
   creatingSession = $state(false);
   refreshingSessions = $state(false);
@@ -245,6 +299,8 @@ export class AgentRunController {
   /** The agent-picker's own pair, so a worker re-check reports where it was asked for. */
   refreshingAgents = $state(false);
   agentsError = $state<string | null>(null);
+  /** Why the last create failed, for the setup dialog; never the open session's banner. */
+  createError = $state<string | null>(null);
   #connectionError = $state<string | null>(null);
   #connectionErrorCode = $state<string | null>(null);
   playbackSpeed = $state<PlaybackSpeed>(1);
@@ -255,13 +311,27 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
-  #syncingSessions = false;
   /** Single-flight promise for listAgents loads. */
   #agentsLoad: Promise<void> | null = null;
   /** Single-flight promise for listSessions loads. */
   #sessionsLoad: Promise<void> | null = null;
-  /** When the last listSessions finished (ms). */
-  #sessionsLoadedAt = 0;
+  #sessionsLoaded = $state(false);
+  /** A list came back from the server, so `sessions` is more than a row painted from cache. */
+  get sessionsLoaded(): boolean {
+    return this.#sessionsLoaded;
+  }
+  /**
+   * Every load nobody explicitly asked for (picker open, tab refocus) goes through
+   * here, so open/close spam and focus churn cost one listSessions per window.
+   * It wraps the single-flight load rather than replacing it: the throttler only
+   * waits ``wait`` ms for an in-flight call, and a slower list must still not be
+   * requested twice.
+   */
+  #sessionsThrottle = new AsyncThrottler(() => this.#loadSessions(), {
+    wait: 5_000,
+    leading: true,
+    trailing: false
+  });
   #streamAbort: AbortController | null = null;
   /**
    * Wakes the stream's backoff sleep early. Set only while `attach` is sleeping between
@@ -269,6 +339,17 @@ export class AgentRunController {
    * after the rest of the wait.
    */
   #streamWake: (() => void) | null = null;
+  #clientTools: ClientToolCoordinator;
+  clientToolStatuses = $state<Readonly<Record<string, ClientToolStatus>>>({});
+  editorScript = $state("");
+  editorChangedLines = $state<{ from: number; to: number } | null>(null);
+  /**
+   * How often a caught-up stream asks whether another client started a turn. Each ask is
+   * a billable Query on Temporal Cloud, so it is slow, and skipped while the page is hidden.
+   */
+  idlePollMs = 30_000;
+  /** Tells this browser's other tabs that a send gave a session new work. */
+  #tabs: BroadcastChannel | null = null;
   /**
    * message_ids submitted whose handler has not published a terminal yet. `sending` is
    * per-MESSAGE, not per-stream: with a refcounted turn the stream can stay open long after
@@ -279,6 +360,8 @@ export class AgentRunController {
   #awaitingMessages = new Set<string>();
   #interfaceRequests = new Set<string>();
   #workflowResumeOffsets = new Map<string, number>();
+  /** Subagent turns the open parent stream bracketed, by child: the merge has them mounted. */
+  #mergedTurns = new Map<string, number>();
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
@@ -333,6 +416,16 @@ export class AgentRunController {
     this.#connectionErrorCode = null;
   }
 
+  get connecting(): boolean {
+    return this.#connecting;
+  }
+
+  /* Only a connection starting sets it, so every true restarts the clock. */
+  set connecting(value: boolean) {
+    this.connectingSince = value ? Date.now() : null;
+    this.#connecting = value;
+  }
+
   get connectionErrorCode(): string | null {
     return this.#connectionErrorCode;
   }
@@ -352,12 +445,37 @@ export class AgentRunController {
 
   constructor(api: AgentApi = new HttpAgentApi()) {
     this.#api = api;
-    /* No teardown: one controller lives as long as the page (see
-       createAgentRunController), and the handler is inert without a session. */
+    this.#clientTools = new ClientToolCoordinator({
+      submit: (request, outcome) =>
+        this.provideCallbackResult(request.workflowId, request.toolId, outcome),
+      onChange: (statuses, script, changedLines) => {
+        this.clientToolStatuses = statuses;
+        this.editorScript = script;
+        this.editorChangedLines = changedLines;
+      }
+    });
+    /* No teardown: one controller lives as long as the page (App.svelte
+       makes it), and the handler is inert without a session. */
     if (typeof window !== "undefined") {
       window.addEventListener("online", this.#reattachWhenOnline);
+      window.addEventListener("pagehide", this.#persistBeforeLeaving);
+    }
+    if (typeof BroadcastChannel === "function") {
+      this.#tabs = new BroadcastChannel("agent-harness-console");
+      this.#tabs.onmessage = ({ data }: MessageEvent<{ wake?: string }>) => {
+        if (data.wake !== undefined && data.wake === this.session?.workflow_id) this.#ensureStreamLive();
+      };
     }
   }
+
+  /** The debounced write, now, with the view as it is: the next load paints it first. */
+  #persistBeforeLeaving = (): void => {
+    const session = this.session;
+    if (!session) return;
+    if (this.#frameCacheTimer != null) clearTimeout(this.#frameCacheTimer);
+    this.#frameCacheTimer = null;
+    void this.#persistRun(session, true);
+  };
 
   /**
    * Re-attach when connectivity comes back.
@@ -386,8 +504,9 @@ export class AgentRunController {
     });
   };
 
+  #foldReplayTimeline = replayTimelineBuilder();
   replayTimeline = $derived(
-    buildReplayTimeline(
+    this.#foldReplayTimeline(
       this.session,
       this.frames,
       this.observedSubagents,
@@ -395,10 +514,8 @@ export class AgentRunController {
     )
   );
   visibleReplayTimeline = $derived(this.replayTimeline.slice(0, this.viewIndex));
-  allReplayFrames = $derived(this.replayTimeline.map((entry) => entry.frame));
-  visibleReplayFrames = $derived(
-    this.visibleReplayTimeline.map((entry) => entry.frame)
-  );
+  /* The timeline is one entry per frame, in order, so its frames are `frames` itself. */
+  allReplayFrames = $derived(this.session ? this.frames : []);
   visibleFrames = $derived(
     this.visibleReplayTimeline
       .filter((entry) => entry.role === "parent")
@@ -429,20 +546,28 @@ export class AgentRunController {
   graph = $derived(
     buildAgentTreeGraph(this.graphAgents, {
       focus: this.graphFocus,
-      linger: this.graphLinger
+      linger: this.graphLinger,
+      reducedMotion: prefersReducedMotion.current
     })
   );
   messageTargets = $derived(this.#messageTargets());
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  /** Temporal no longer has this session's workflow: what is cached is all there is, read-only. */
+  sessionGone = $derived(this.session?.execution_status === "NOT_FOUND");
+  #foldReplayLog = replayLogBuilder();
+  fullReplayLog = $derived(this.#foldReplayLog(this.replayTimeline, this.agentInterfaces));
   replayLog = $derived(
     this.viewIndex === this.replayTimeline.length
       ? this.fullReplayLog
-      : buildReplayLog(this.visibleReplayTimeline)
+      : replayLogAt(this.fullReplayLog, this.replayTimeline, this.viewIndex)
   );
-  chatTranscript = $derived(buildTranscript(this.#parentFrames(this.replayTimeline)));
+  #parentInterface = $derived(
+    this.session ? this.agentInterfaces[this.session.workflow_id] : undefined
+  );
+  #foldTranscript = transcriptBuilder();
+  chatTranscript = $derived(this.#foldTranscript(this.replayTimeline, this.#parentInterface));
   /**
    * What the chat pane is handed: the conversation as of the cursor, plus the
    * whole run for the parts of it that are live state rather than history — a
@@ -451,11 +576,16 @@ export class AgentRunController {
    * chat there is exactly what it was before it could rewind.
    */
   chatView = $derived.by(() => {
+    const snapshot = this.snapshot;
+    if (snapshot && this.frames.length === 0) {
+      const { items, logs, total } = snapshot;
+      return { items, logs, liveItems: items, liveLogs: logs, live: true, viewIndex: total, total };
+    }
     const live = this.viewIndex >= this.replayTimeline.length;
     return {
       items: live
         ? this.chatTranscript
-        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline)),
+        : buildTranscript(this.visibleReplayTimeline, this.#parentInterface),
       logs: this.replayLog.rows,
       liveItems: this.chatTranscript,
       liveLogs: this.fullReplayLog.rows,
@@ -474,7 +604,8 @@ export class AgentRunController {
    * navigate by, and where the next stop is cannot depend on where the cursor
    * currently is.
    */
-  replyRuns = $derived(buildReplyRuns(this.replayTimeline));
+  #foldReplyRuns = replyRunsBuilder();
+  replyRuns = $derived(this.#foldReplyRuns(this.replayTimeline));
   /**
    * Observable agent state as of the playhead — every state the agents in this
    * run registered, folded out of their snapshot and patch events.
@@ -515,9 +646,13 @@ export class AgentRunController {
   approvalDecisionsAhead = $derived(
     this.completedApprovalDecisionCount - this.approvalDecisions.length
   );
-  usage = $derived(summarizeCost(this.visibleReplayFrames));
-  usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
-  stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
+  #foldUsageTimeline = usageTimelineBuilder();
+  usageTimeline = $derived(this.#foldUsageTimeline(this.allReplayFrames));
+  usage = $derived(usagePointAt(this.usageTimeline, this.viewIndex)?.usage ?? summarizeCost([]));
+  /* Live, not at the cursor: it sits on the composer, which only ever sends from now. */
+  contextUsage = $derived(contextWindowUsage(this.replayTimeline));
+  #foldStepTimeline = stepTimelineBuilder();
+  stepTimeline = $derived(this.#foldStepTimeline(this.replayTimeline));
   stepBoundaries = $derived(buildStepBoundaries(this.stepTimeline));
   anomalyMarkers = $derived(buildReplayMarkers(this.fullReplayLog));
   /**
@@ -557,15 +692,10 @@ export class AgentRunController {
    * why every other heavy projection on this class is one.
    */
   get runInfo(): RunInfo {
-    const session = this.session ?? realisticQaScenario.sessions[0];
-    const agent = this.agents.find(
-      (item) => item.workflow_type === session?.agent_workflow_type
-    ) ?? realisticQaScenario.agents.find(
-      (item) => item.workflow_type === session?.agent_workflow_type
-    );
+    const session = this.session;
     return {
       sessionId: session?.workflow_id ?? "unknown-session",
-      agentLabel: agent?.label || "Agent",
+      agentLabel: agentName(this.agents, session?.agent_workflow_type),
       startedAt: session?.created_at ?? 0
     };
   }
@@ -633,7 +763,8 @@ export class AgentRunController {
           frames: visibleSubagentFrames.get(agent.workflowId) ?? [],
           agentInterface:
             this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
-          stopped: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
+          stopped: agent.stopped || this.#isWorkflowClosed(agent.workflowId),
+          executionStatus: this.executionStatuses[agent.workflowId]
         }))
     ];
   }
@@ -703,7 +834,7 @@ export class AgentRunController {
         closed: true
       };
     }
-    if (this.closedWorkflowIds.includes(workflowId)) return;
+    if (this.#closedIds.has(workflowId)) return;
     this.closedWorkflowIds = [...this.closedWorkflowIds, workflowId];
     if (workflowId === this.session?.workflow_id) {
       this.#stopStream();
@@ -714,21 +845,16 @@ export class AgentRunController {
     }
   }
 
-  #markObservedSubagentStopped(workflowId: string): void {
-    this.observedSubagents = this.observedSubagents.map((agent) =>
-      agent.workflowId === workflowId ? { ...agent, stopped: true } : agent
-    );
-  }
-
   #isWorkflowClosed(workflowId: string): boolean {
     return (
-      this.closedWorkflowIds.includes(workflowId) ||
+      this.#closedIds.has(workflowId) ||
       this.session?.workflow_id === workflowId && Boolean(this.session.closed) ||
       this.sessions.some((session) => session.workflow_id === workflowId && session.closed)
     );
   }
 
   #applyWorkflowExecutionState(state: WorkflowExecutionState): void {
+    this.executionStatuses = { ...this.executionStatuses, [state.workflow_id]: state.execution_status };
     this.sessions = this.sessions.map((session) =>
       session.workflow_id === state.workflow_id
         ? {
@@ -748,12 +874,33 @@ export class AgentRunController {
     if (state.closed) this.#markWorkflowClosed(state.workflow_id);
   }
 
+  /* One pass over the list, not #markWorkflowClosed per id: each of those copies the whole
+     list and scans `closedWorkflowIds`, which froze the tab for 88 s at 10,000 sessions. */
   #applySessionExecutionStates(sessions: Session[]): void {
-    for (const session of sessions) {
-      if (session.closed) {
-        this.#markWorkflowClosed(session.workflow_id);
-      }
-    }
+    const closedIds = new Set(sessions.filter((session) => session.closed).map((session) => session.workflow_id));
+    if (closedIds.size === 0) return;
+    this.sessions = this.sessions.map((session) =>
+      closedIds.has(session.workflow_id) && session.execution_status == null
+        ? { ...session, execution_status: "COMPLETED", closed: true }
+        : session
+    );
+    const current = this.session?.workflow_id;
+    const known = this.#closedIds;
+    const fresh = [...closedIds].filter((id) => id !== current && !known.has(id));
+    if (fresh.length > 0) this.closedWorkflowIds = [...this.closedWorkflowIds, ...fresh];
+    for (const id of fresh) this.#stopWorkflowAttach(id);
+    if (current != null && closedIds.has(current)) this.#markWorkflowClosed(current);
+  }
+
+  /* What /api/workflow-status already answers for a purged id, so a row and the open session
+     read it the same way whichever request learned it, and the stored view carries it. */
+  #markWorkflowGone(workflowId: string): void {
+    this.#applyWorkflowExecutionState({ workflow_id: workflowId, execution_status: "NOT_FOUND", closed: true });
+  }
+
+  #isWorkflowGone(workflowId: string): boolean {
+    return this.executionStatuses[workflowId] === "NOT_FOUND" ||
+      (this.session?.workflow_id === workflowId && this.session.execution_status === "NOT_FOUND");
   }
 
   async #refreshWorkflowExecutionState(workflowId: string): Promise<void> {
@@ -797,7 +944,7 @@ export class AgentRunController {
 
   /** Ask an agent for its handler surface again, after a lookup that failed. */
   retryAgentInterface(workflowId: string): Promise<void> {
-    return this.#fetchAgentInterface(workflowId);
+    return this.#fetchAgentInterface(workflowId, true);
   }
 
   #subagentLabel(agentKey: string, subagentId: string): string {
@@ -820,7 +967,8 @@ export class AgentRunController {
     const next: ObservedSubagent = {
       workflowId: data.workflow_id,
       role: "subagent",
-      parentWorkflowId,
+      /* A child has one parent, and the first frame that names it is the parent's own. */
+      parentWorkflowId: existing?.parentWorkflowId ?? parentWorkflowId,
       subagentId: data.subagent_id,
       agentKey,
       label: this.#subagentLabel(agentKey, data.subagent_id),
@@ -838,13 +986,23 @@ export class AgentRunController {
     ];
   }
 
-  async #fetchAgentInterface(workflowId: string): Promise<void> {
+  /**
+   * One Query per workflow id, kept for the page. A lookup that failed is asked
+   * again only by `retry` (the composer's retry control), not by every frame
+   * that names the child.
+   */
+  async #fetchAgentInterface(workflowId: string, retry = false): Promise<void> {
     if (this.agentInterfaces[workflowId] || this.#interfaceRequests.has(workflowId)) {
       return;
     }
+    if (!retry && this.failedInterfaceIds.includes(workflowId)) return;
     this.#interfaceRequests.add(workflowId);
-    this.failedInterfaceIds = this.failedInterfaceIds.filter((id) => id !== workflowId);
     try {
+      /* Frames fold in synchronous batches, and a restore is one: a child that a
+         later frame of the batch stopped is closed by now, with no composer to fill. */
+      await Promise.resolve();
+      if (this.#isWorkflowClosed(workflowId)) return;
+      this.failedInterfaceIds = this.failedInterfaceIds.filter((id) => id !== workflowId);
       const agentInterface = await this.#api.agentInterface(workflowId);
       this.agentInterfaces = {
         ...this.agentInterfaces,
@@ -855,7 +1013,8 @@ export class AgentRunController {
           agent.workflowId === workflowId ? { ...agent, agentInterface } : agent
         );
       }
-    } catch {
+    } catch (error) {
+      if (workflowGone(error)) this.#markWorkflowGone(workflowId);
       /* Streaming does not depend on this, but the composer does: an empty surface would
          otherwise read as an agent that accepts nothing. A query needs a live worker. */
       this.failedInterfaceIds = [...this.failedInterfaceIds, workflowId];
@@ -871,55 +1030,108 @@ export class AgentRunController {
     this.connecting = true;
     this.connectionError = null;
 
+    let streaming = false;
     try {
-      const agents = await this.#loadAgents();
-      if (agents.length === 0) throw new Error("No agent is registered.");
-      /* Boot has nobody to ask for init data, so it never picks an agent that requires it. */
-      const defaultAgent = defaultBootAgent(agents);
-
-      await this.#loadSessions();
-      const wantedSessionId = readUrlSessionId() ?? readStoredActiveSessionId();
-      let openable = chooseBootSession(
-        this.sessions,
-        wantedSessionId,
-        defaultAgent?.workflow_type ?? agents[0]!.workflow_type
-      );
-
-      if (!openable && wantedSessionId) {
-        openable = await this.#resolveSessionById(wantedSessionId);
-      }
-
-      if (openable) {
-        this.session = openable;
-      } else {
-        if (!defaultAgent) {
-          throw new Error(
-            "Every registered agent needs init data to start. Start one from New session."
-          );
+      await this.#paintSnapshot();
+      const painted = this.session;
+      if (painted) {
+        /* Opened before the lists load: its frames are in IndexedDB and its stream is its own
+           workflow's, while the lists are Session Manager queries that hang for as long as
+           that worker does. The lists load even if opening it fails. */
+        try {
+          streaming = await this.#openSession(painted, connectionVersion, "Failed to initialize agent session.");
+        } finally {
+          void this.#confirmBootSession(painted, connectionVersion);
         }
-        this.session = await this.#api.createSession({
-          agent_workflow_type: defaultAgent.workflow_type
-        });
-        this.sessions = [...this.sessions, this.session];
+        return;
       }
-      this.#rememberActiveSession(this.session.workflow_id);
-      void this.#fetchAgentInterface(this.session.workflow_id);
-      /* Awaited so the cache lands before the live stream opens: interleaving
-         the two would order the buffer by arrival rather than by event. */
-      await this.#hydrateCachedFrames(this.session.workflow_id);
-      await this.#refreshWorkflowExecutionState(this.session.workflow_id);
-
-      if (!this.#isCurrentConnection(connectionVersion)) return;
-      if (this.#isWorkflowClosed(this.session.workflow_id)) return;
-      await this.attach(this.lastResumeOffset);
+      this.session = await this.#bootSession();
+      streaming = await this.#openSession(this.session, connectionVersion, "Failed to initialize agent session.");
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
           error instanceof Error ? error.message : "Failed to initialize agent session.";
       }
     } finally {
-      if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
+      if (!streaming && this.#isCurrentConnection(connectionVersion)) this.connecting = false;
     }
+  }
+
+  /** The session boot opens: the address bar's, else the remembered one, else a new one. */
+  async #bootSession(): Promise<Session> {
+    const agents = await this.#loadAgents();
+    if (agents.length === 0) throw new Error("No agent is registered.");
+    /* Boot has nobody to ask for init data, so it never picks an agent that requires it. */
+    const defaultAgent = defaultBootAgent(agents);
+
+    await this.#loadSessions();
+    /* An address-bar id is a request, so it skips chooseBootSession's rule for leaving an
+       empty remembered session behind. */
+    const linkedSessionId = readUrlSessionId();
+    const storedSessionId = readStoredActiveSessionId();
+    let openable = linkedSessionId ? await this.#resolveSessionById(linkedSessionId) : null;
+    openable ??= chooseBootSession(
+      this.sessions,
+      storedSessionId,
+      defaultAgent?.workflow_type ?? agents[0]!.workflow_type
+    );
+
+    if (!openable && storedSessionId) {
+      openable = await this.#resolveSessionById(storedSessionId);
+    }
+    if (openable) return openable;
+    if (!defaultAgent) {
+      throw new Error(
+        "Every registered agent needs init data to start. Start one from New session."
+      );
+    }
+    const created = await this.#api.createSession({
+      agent_workflow_type: defaultAgent.workflow_type
+    });
+    this.sessions = [...this.sessions, created];
+    return created;
+  }
+
+  /**
+   * Check the painted session against what boot would have opened, once the lists answer.
+   * It stays open unless that is another run (purged, or its id reused); a list that fails
+   * is the picker's error, not the open session's.
+   */
+  async #confirmBootSession(painted: Session, connectionVersion: number): Promise<void> {
+    try {
+      const session = await this.#bootSession();
+      if (!this.#isCurrentConnection(connectionVersion)) return;
+      if (runKeyOf(session) === runKeyOf(painted)) {
+        /* Same run. A row synthesized from the frame store has no agent type yet;
+           take the list's copy and leave the frames that are already projected. */
+        if (this.session && runKeyOf(this.session) === runKeyOf(session) && !this.session.agent_workflow_type) {
+          this.session = session;
+        }
+        return;
+      }
+      await this.#switchSession(session);
+    } catch (error) {
+      if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
+        this.sessionsError = error instanceof Error ? error.message : "Failed to load sessions.";
+      }
+    }
+  }
+
+  /**
+   * Restore the session's run from IndexedDB, then stream it from where that left off.
+   * False when no stream was started: the workflow is closed or the session was switched.
+   */
+  async #openSession(session: Session, connectionVersion: number, message: string): Promise<boolean> {
+    this.#rememberActiveSession(session.workflow_id);
+    void this.#fetchAgentInterface(session.workflow_id);
+    /* Awaited so the cache lands before the live stream opens: interleaving
+       the two would order the buffer by arrival rather than by event. */
+    await this.#restoreRun();
+    await this.#refreshWorkflowExecutionState(session.workflow_id);
+    if (!this.#isCurrentConnection(connectionVersion)) return false;
+    if (this.#isWorkflowClosed(session.workflow_id)) return false;
+    this.#streamInBackground(this.attach(this.lastResumeOffset), connectionVersion, message);
+    return true;
   }
 
   #rememberActiveSession(sessionId: string): void {
@@ -960,7 +1172,7 @@ export class AgentRunController {
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
-      this.#sessionsLoadedAt = Date.now();
+      this.#sessionsLoaded = true;
     })().finally(() => {
       this.#sessionsLoad = null;
     });
@@ -981,22 +1193,15 @@ export class AgentRunController {
     }
   }
 
-  /**
-   * Refresh for the picker without a global connection error. Skips if a fresh
-   * list already landed within ``maxAgeMs`` so open/close spam is cheap.
-   */
-  async ensureSessionsEnriched(maxAgeMs = 5_000): Promise<void> {
-    if (this.refreshingSessions || this.#sessionsLoad) return;
-    if (this.#sessionsLoadedAt > 0 && Date.now() - this.#sessionsLoadedAt < maxAgeMs) {
-      return;
-    }
+  /** Refresh for the picker without a global connection error; throttled. */
+  async ensureSessionsEnriched(): Promise<void> {
     try {
-      await this.#loadSessions();
-      this.sessionsError = null;
+      await this.#sessionsThrottle.maybeExecute();
+      if (this.#sessionsLoaded) this.sessionsError = null;
     } catch (error) {
       // Quiet while an earlier list is still on screen. With none, an empty list would read
       // as "no sessions", so the failure is the thing to show.
-      if (this.#sessionsLoadedAt === 0) {
+      if (!this.#sessionsLoaded) {
         this.sessionsError =
           error instanceof Error ? error.message : "Failed to load sessions.";
       }
@@ -1012,14 +1217,10 @@ export class AgentRunController {
    * or raise the connection banner.
    */
   async syncSessions(): Promise<void> {
-    if (this.refreshingSessions || this.#syncingSessions) return;
-    this.#syncingSessions = true;
     try {
-      await this.#loadSessions();
+      await this.#sessionsThrottle.maybeExecute();
     } catch {
       // The list stays as it was until a later tick answers.
-    } finally {
-      this.#syncingSessions = false;
     }
   }
 
@@ -1055,18 +1256,18 @@ export class AgentRunController {
 
   /** `data` is the agent's init data, when it takes some; the server checks it. */
   async startNewSession(workflowType?: string, data?: JsonRecord): Promise<void> {
-    const connectionVersion = this.#beginConnection();
-    this.#sendVersion += 1;
-    this.#stopStream();
-    this.sending = false;
+    /* Not a new connection yet, only a check that nobody starts one meanwhile: the open
+       session's stream and its error state stay current until the create comes back. */
+    let connectionVersion = this.#connectionVersion;
     this.creatingSession = true;
-    this.connecting = true;
-    this.connectionError = null;
+    this.createError = null;
 
     /* Tells the `finally` which of two things happened: the stream was handed
        off and owns these flags now, or this method gave up before there was one
        and still owes the caller a release. */
     let streaming = false;
+    /* Whether the open session has been let go for the new one yet. */
+    let switched = false;
     try {
       const agents = await this.#loadAgents();
       const currentWorkflowType = this.session?.agent_workflow_type;
@@ -1087,6 +1288,13 @@ export class AgentRunController {
       this.sessions = [...this.sessions.filter((item) => item.workflow_id !== session.workflow_id), session];
       if (!this.#isCurrentConnection(connectionVersion)) return;
 
+      connectionVersion = this.#beginConnection();
+      switched = true;
+      this.#sendVersion += 1;
+      this.#stopStream();
+      this.sending = false;
+      this.connecting = true;
+      this.connectionError = null;
       this.#initialized = true;
       this.#resetSessionView();
       this.session = session;
@@ -1103,13 +1311,14 @@ export class AgentRunController {
       );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
-        this.connectionError =
-          error instanceof Error ? error.message : "Failed to create agent session.";
+        const message = error instanceof Error ? error.message : "Failed to create agent session.";
+        if (switched) this.connectionError = message;
+        else this.createError = message;
       }
     } finally {
       if (!streaming && this.#isCurrentConnection(connectionVersion)) {
         this.creatingSession = false;
-        this.connecting = false;
+        if (switched) this.connecting = false;
       }
     }
   }
@@ -1127,7 +1336,10 @@ export class AgentRunController {
       this.sessionsError = `No session ${sessionId} in the session manager.`;
       return;
     }
+    await this.#switchSession(session);
+  }
 
+  async #switchSession(session: Session): Promise<void> {
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
     this.creatingSession = false;
@@ -1137,21 +1349,10 @@ export class AgentRunController {
     this.sessionsError = null;
     this.#resetSessionView();
     this.session = session;
-    this.#rememberActiveSession(session.workflow_id);
-    void this.#fetchAgentInterface(session.workflow_id);
-    await this.#hydrateCachedFrames(session.workflow_id);
 
     let streaming = false;
     try {
-      await this.#refreshWorkflowExecutionState(session.workflow_id);
-      if (!this.#isCurrentConnection(connectionVersion)) return;
-      if (this.#isWorkflowClosed(session.workflow_id)) return;
-      streaming = true;
-      this.#streamInBackground(
-        this.attach(this.lastResumeOffset),
-        connectionVersion,
-        "Failed to load selected session."
-      );
+      streaming = await this.#openSession(session, connectionVersion, "Failed to load selected session.");
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -1183,13 +1384,80 @@ export class AgentRunController {
    */
   async #streamDroppedMidRun(workflowId: string): Promise<boolean> {
     if (this.#isWorkflowClosed(workflowId)) return false;
-    if (this.#connectionErrorCode === "workflow_not_found") return false;
+    if (this.#connectionErrorCode === "workflow_not_found") {
+      this.#markWorkflowGone(workflowId);
+      return false;
+    }
     try {
       await this.#refreshWorkflowExecutionState(workflowId);
     } catch {
       return true;
     }
     return !this.#isWorkflowClosed(workflowId);
+  }
+
+  /**
+   * The agent's status, or null when asking failed.
+   *
+   * A failed Query is usually a stopped worker or a blip, which a later poll rides out. A
+   * workflow Temporal no longer has is the one failure no poll fixes, and polling it forever
+   * was a 500 every 30 s. So a failure asks Temporal, which answers without a worker; learning
+   * the workflow is gone or closed stops the stream, and with it the poll.
+   */
+  async #agentStatus(workflowId: string): Promise<AgentStatusResponse | null> {
+    try {
+      return await this.#api.agentStatus(workflowId);
+    } catch (error) {
+      if (workflowGone(error)) this.#markWorkflowGone(workflowId);
+      else await this.#refreshWorkflowExecutionState(workflowId).catch(() => {});
+      return null;
+    }
+  }
+
+  /**
+   * Hold a caught-up stream until there may be something new to read: a send from
+   * this tab or another one wakes it (#streamWake), and a poll notices a turn
+   * another client started — one running, queued, or numbered past `seenTurn`,
+   * the latest the stream had when it went quiet. Hidden pages skip the polls
+   * and ask once as soon as they are shown.
+   */
+  #waitForNewTurn(workflowId: string, seenTurn: number | undefined, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      const page = typeof document === "undefined" ? undefined : document;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let parked = false;
+      const settle = (): void => {
+        clearTimeout(timer);
+        page?.removeEventListener("visibilitychange", shown);
+        signal.removeEventListener("abort", settle);
+        if (this.#streamWake === settle) this.#streamWake = null;
+        resolve();
+      };
+      const poll = async (): Promise<void> => {
+        if (signal.aborted || this.#streamWake !== settle) return;
+        if (page?.hidden) {
+          parked = true;
+          return;
+        }
+        const status = await this.#agentStatus(workflowId);
+        if (status) {
+          seenTurn ??= status.current_turn;
+          if (status.turn_active || status.pending_turns.length > 0 || status.current_turn > seenTurn) {
+            return settle();
+          }
+        }
+        if (!signal.aborted && this.#streamWake === settle) timer = setTimeout(poll, this.idlePollMs);
+      };
+      const shown = (): void => {
+        if (!parked || page?.hidden) return;
+        parked = false;
+        void poll();
+      };
+      this.#streamWake = settle;
+      signal.addEventListener("abort", settle, { once: true });
+      page?.addEventListener("visibilitychange", shown);
+      if (this.idlePollMs > 0) timer = setTimeout(poll, this.idlePollMs);
+    });
   }
 
   async attach(fromOffset = this.lastResumeOffset): Promise<void> {
@@ -1209,8 +1477,10 @@ export class AgentRunController {
     try {
       while (isCurrentStream()) {
         let delivered = false;
+        let caughtUp = true;
         try {
           for await (const frame of this.#api.attach(session.workflow_id, offset, signal)) {
+            caughtUp = false;
             if (!isCurrentStream()) break;
             /* An in-band error frame is a fact about the CONNECTION, not about
                the run, so it must not count as the stream having carried
@@ -1224,13 +1494,22 @@ export class AgentRunController {
                other direction: `stream_unavailable` genuinely is worth
                retrying, so the budget has to be allowed to run out. */
             if (!isClientSideStreamError(frame.data)) delivered = true;
+            this.#noteMergedTurn(frame);
             this.#appendFrame(frame);
           }
         } catch (error) {
+          caughtUp = false;
           if (isAbortError(error) || !isCurrentStream()) break;
+          if (workflowGone(error)) {
+            this.#markWorkflowGone(session.workflow_id);
+            break;
+          }
           /* Out of retries: surface the transport error the way an un-retried
              attach always did, rather than ending quietly. */
           if (attempt >= reattachBackoffMs.length) throw error;
+        } finally {
+          /* The next attempt resumes past these brackets, and so mounts none of them. */
+          this.#mergedTurns.clear();
         }
         /* Publish before asking why the stream stopped. Finding out costs a
            status call, and learning the workflow closed stops the stream
@@ -1280,10 +1559,31 @@ export class AgentRunController {
         if (isCurrentStream()) {
           this.connecting = false;
           this.creatingSession = false;
+          /* Dev-only: the reload benchmarks time "caught up and streaming" from this mark. */
+          if (import.meta.env.DEV) performance.mark("tah:live", { detail: this.#frameBuffer.length });
         }
         /* A stream that carried something earned a fresh budget, so hours of
            occasional blips do not add up to an exhausted one. */
         if (delivered) attempt = 0;
+        /* A read that ended cleanly with nothing past our offset is the server at
+           quiescence, with us caught up: asking again repeats the answer, at two
+           Queries and an Update each. So wait for new work instead — a send from
+           any tab, or a turn another client started — and read again then. A
+           message still awaited, or a turn the agent is still running or has
+           queued, is a race worth another read now. */
+        if (caughtUp && this.#awaitingMessages.size === 0) {
+          const status = await this.#agentStatus(session.workflow_id);
+          /* A failed status call can learn the workflow is gone or closed, which aborts this
+             stream; an already-aborted signal never fires the wait's abort listener. */
+          if (signal.aborted) break;
+          if (!status?.turn_active && !status?.pending_turns.length) {
+            await this.#waitForNewTurn(session.workflow_id, status?.current_turn, signal);
+            if (signal.aborted) break;
+            attempt = 0;
+            offset = Math.max(offset, this.lastResumeOffset);
+            continue;
+          }
+        }
         if (attempt >= reattachBackoffMs.length) break;
         if (!(await this.#streamDroppedMidRun(session.workflow_id))) break;
         await this.#sleepUnlessWoken(reattachBackoffMs[attempt], signal);
@@ -1373,8 +1673,9 @@ export class AgentRunController {
    * stream never re-mounts anything, so that loss stays confined to genuine
    * reconnects.
    *
-   * A stream between attempts in its backoff counts as live — it will re-open by
-   * itself — but it is woken so the wait does not add to the round trip.
+   * A stream between attempts in its backoff, or caught up and waiting for new
+   * work, counts as live — it will re-open by itself — but it is woken so the
+   * wait does not add to the round trip.
    */
   #ensureStreamLive(): void {
     const session = this.session;
@@ -1410,6 +1711,15 @@ export class AgentRunController {
        array already on screen. */
     if (this.#frameBuffer.length === this.frames.length) return;
     this.#publishFrames();
+  }
+
+  #noteMergedTurn(frame: AgentSseFrame): void {
+    if (!("type" in frame.data)) return;
+    if (frame.event === "subagent_message_sent") {
+      this.#mergedTurns.set(frame.data.workflow_id, frame.data.subagent_turn);
+    } else if (frame.event === "subagent_stream_unavailable") {
+      this.#mergedTurns.delete(frame.data.workflow_id);
+    }
   }
 
   async #attachWorkflow(
@@ -1453,15 +1763,16 @@ export class AgentRunController {
     }
   }
 
+  /** Resolves false when the message was not sent, so the composer can give the text back. */
   async sendMessage(
     message: AgentInboundMessage,
     workflowId?: string | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     const displayText = displayTextForMessage(message);
-    if (!displayText) return;
+    if (!displayText) return false;
     await this.initialize();
     const session = this.session;
-    if (!session) return;
+    if (!session) return false;
 
     // A message can target the parent OR one of its live subagents — a subagent is addressed
     // at its own workflow_id (which the parent advertises on `subagent_started`). There is no
@@ -1477,7 +1788,7 @@ export class AgentRunController {
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to check workflow status.";
-      return;
+      return false;
     }
     if (this.#isWorkflowClosed(targetWorkflowId)) {
       this.connectionError = null;
@@ -1485,13 +1796,10 @@ export class AgentRunController {
         this.#settleOutstandingMessages();
         this.sending = false;
       }
-      return;
+      return false;
     }
 
-    if (!targetsParent) {
-      await this.#sendToSubagent(targetWorkflowId, message);
-      return;
-    }
+    if (!targetsParent) return await this.#sendToSubagent(targetWorkflowId, message);
 
     this.pause();
     ++this.#sendVersion;
@@ -1515,7 +1823,7 @@ export class AgentRunController {
 
     try {
       const reply = await submitted;
-      if (this.session?.workflow_id !== session.workflow_id) return;
+      if (this.session?.workflow_id !== session.workflow_id) return true;
       // The reply's `message_id` is the only bookkeeping a send needs: it pairs the message
       // with its own terminal on the stream (see #ingestFrame), whether the message opened a
       // turn, queued behind one, or joined one.
@@ -1533,9 +1841,13 @@ export class AgentRunController {
       // the submit returns it is durably admitted and visible to agent_status, so no later
       // stop decision can conclude "idle".
       this.#ensureStreamLive();
+      // Other tabs on this session are waiting on their own caught-up streams.
+      this.#tabs?.postMessage({ wake: session.workflow_id });
+      return true;
     } catch (error) {
+      // Another session is on screen now, so there is no composer to hand the text back to.
       if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
-        return;
+        return true;
       }
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
@@ -1543,24 +1855,32 @@ export class AgentRunController {
       // for it. Anything else still in flight keeps its own entry.
       this.sending = this.#awaitingMessages.size > 0;
       this.#ensureStreamLive();
+      return false;
     }
   }
 
   /**
    * Send to a live subagent at its own workflow_id, then re-attach that child's stream so
    * its resulting turn events actually surface (the parent attach does not carry them).
+   *
+   * Except when it does: a message that joined a turn the open parent stream bracketed
+   * runs inside that turn, and the merge has the child mounted for it.
    */
   async #sendToSubagent(
     workflowId: string,
     message: AgentInboundMessage
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.connectionError = null;
+    let reply: SubmitMessageResponse;
     try {
-      await this.#api.submitMessage({ session_id: workflowId, message });
+      reply = await this.#api.submitMessage({ session_id: workflowId, message });
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message to subagent.";
-      return;
+      return false;
+    }
+    if (reply.disposition === "joined" && this.#mergedTurns.get(workflowId) === reply.turn_number) {
+      return true;
     }
     void this.#attachWorkflow(
       workflowId,
@@ -1573,38 +1893,29 @@ export class AgentRunController {
             : "Failed to stream subagent events.";
       }
     });
+    return true;
   }
 
   /**
-   * Stop an agent (the parent, or a named subagent) via the harness `close` signal.
-   *
-   * A first-class control-plane action, not a message: it works on any agent whatever it
-   * accepts, and it is what a human uses instead of hoping the agent happens to declare a
-   * stop handler.
+   * End a session's workflow via the harness `close` signal — the one on screen or any other
+   * in the list. A control-plane action, not a message, so it works whatever the agent accepts.
+   * Rejects with the reason it failed, for the confirmation that asked to show.
    */
-  async stopAgent(workflowId?: string | null): Promise<void> {
-    await this.initialize();
-    const session = this.session;
-    if (!session) return;
-    const targetWorkflowId =
-      workflowId && this.#isKnownWorkflowId(workflowId)
-        ? workflowId
-        : session.workflow_id;
-    this.connectionError = null;
-    try {
-      await this.#api.closeSession(targetWorkflowId);
-    } catch (error) {
-      this.connectionError =
-        error instanceof Error ? error.message : "Failed to stop the agent.";
-      return;
-    }
-    this.#markWorkflowClosed(targetWorkflowId);
-    if (targetWorkflowId === session.workflow_id) {
-      this.#settleOutstandingMessages();
-      this.sending = false;
-    } else {
-      this.#markObservedSubagentStopped(targetWorkflowId);
-    }
+  async endSession(sessionId: string): Promise<void> {
+    if (this.#isWorkflowGone(sessionId)) throw new Error(GONE_MESSAGE);
+    await this.#api.closeSession(sessionId);
+    this.#markWorkflowClosed(sessionId);
+    if (sessionId === this.session?.workflow_id) this.sending = false;
+  }
+
+  /**
+   * Stop streaming and polling `workflowId`, for a session archived out of the list. Its frames
+   * stay cached and on screen; opening it again or sending to it attaches as usual.
+   */
+  quiesce(workflowId: string): void {
+    if (workflowId !== this.session?.workflow_id) return this.#stopWorkflowAttach(workflowId);
+    this.#stopStream();
+    this.#stopWorkflowAttachStreams();
   }
 
   /** One page of a file in an activity-backed mount, read from its store as it is now. */
@@ -1622,10 +1933,12 @@ export class AgentRunController {
     workflowId: string,
     toolId: string,
     approved: boolean,
-    remember = false
+    remember = false,
+    reason?: string
   ): Promise<void> {
     const session = this.session;
     if (!session) throw new Error("No active session.");
+    if (this.sessionGone) throw new Error(GONE_MESSAGE);
     if (!this.#isKnownWorkflowId(workflowId)) {
       throw new Error("Cannot resolve approval for an unknown agent workflow.");
     }
@@ -1634,7 +1947,7 @@ export class AgentRunController {
       session_id: workflowId,
       tool_id: toolId,
       approved,
-      reason: approved ? null : "Rejected in chat.",
+      reason: approved ? null : reason?.trim() || "Rejected in chat.",
       remember: approved && remember
     });
   }
@@ -1647,10 +1960,15 @@ export class AgentRunController {
     outcome: { result: unknown } | { error: string }
   ): Promise<void> {
     if (!this.session) throw new Error("No active session.");
+    if (this.sessionGone) throw new Error(GONE_MESSAGE);
     if (!this.#isKnownWorkflowId(workflowId)) {
       throw new Error("Cannot answer a callback for an unknown agent workflow.");
     }
     await this.#api.provideCallbackResult({ session_id: workflowId, tool_id: toolId, ...outcome });
+  }
+
+  retryClientTool(toolId: string): void {
+    this.#clientTools.retry(toolId);
   }
 
   async #loadAgents(): Promise<AgentDescriptor[]> {
@@ -1720,11 +2038,6 @@ export class AgentRunController {
     }
   }
 
-  /** The root agent's frames — the conversation the chat pane reads. */
-  #parentFrames(timeline: readonly ReplayTimelineEntry[]): AgentSseFrame[] {
-    return timeline.filter((entry) => entry.role === "parent").map((entry) => entry.frame);
-  }
-
   #recordInitialUserMessage(message: string): void {
     const session = this.session;
     if (!session) return;
@@ -1739,36 +2052,141 @@ export class AgentRunController {
   }
 
   /**
-   * Replay the cached frames for a session back into the buffer.
-   *
-   * The one place the pipeline does its own chunking. Everywhere else frames
-   * arrive from an await, so the event loop breathes between them by itself;
-   * here the whole cache is already in hand and a tight loop over it would hold
-   * the main thread for the length of the session.
+   * Open the session the URL or storage asks for from what this browser already
+   * stored, before `/api/agents` or the session list. A view paints the chat at
+   * once; the run's frames are enough on their own to project the graph, chat
+   * and timeline. Names and worker status fill in when the catalog answers.
+   * The run the view belonged to is checked once the session list says which
+   * run that is.
    */
-  async #hydrateCachedFrames(sessionId: string): Promise<void> {
-    const cachedFrames = readCachedFrames(sessionId);
-    if (cachedFrames.length === 0) return;
-    this.#catchingUp = true;
-    this.#catchUpStartedAt = now();
-    try {
-      for (let index = 0; index < cachedFrames.length; index += 1) {
-        if (this.session?.workflow_id !== sessionId) return;
-        this.#ingestFrame(cachedFrames[index], { persist: false });
-        if ((index + 1) % framePublishChunkSize !== 0) continue;
-        if (publishAtChunkBoundary(this.#catchingUp, now() - this.#catchUpStartedAt)) {
-          this.#publishFrames();
-          /* Restarting the clock is what makes the ceiling a rate limit rather
-             than just a delay: without it, every chunk past the first second
-             commits, and chunks can pass far faster than the page can paint. */
-          this.#catchUpStartedAt = now();
-        }
-        await yieldToMain();
-      }
-    } finally {
-      this.#catchingUp = false;
-      this.#publishFrames();
+  async #paintSnapshot(): Promise<void> {
+    const sessionId = readUrlSessionId() ?? readStoredActiveSessionId();
+    if (!sessionId || this.session) return;
+    const view = await readLatestView<ViewSnapshot>(sessionId);
+    if (this.session) return;
+    if (view?.session) {
+      this.snapshot = view;
+      this.session = view.session;
+      if (this.sessions.length === 0) this.sessions = view.sessions;
+      return;
     }
+    const run = await readLatestRun(sessionId);
+    if (!run || this.session) return;
+    this.session = sessionFromRun(run);
+  }
+
+  /**
+   * Restore every frame IndexedDB holds for the session's run in one read and
+   * one commit, then hand over to the stream from the run's resume offset.
+   *
+   * No chunking or yielding: the folds are incremental, so one commit of the
+   * whole run is one pass, and a yield that waits for a paint is what stalls a
+   * hidden tab. The snapshot covers the wait.
+   */
+  async #restoreRun(): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    const runKey = runKeyOf(session);
+    if (this.snapshot?.runKey !== runKey) this.snapshot = null;
+    const [run] = await Promise.all([readRun(runKey), this.#claimRun(session)]);
+    if (this.session?.workflow_id !== session.workflow_id) return;
+    const frames = run?.frames ?? [];
+    for (const frame of frames) this.#ingestFrame(frame, { persist: false });
+    /* A subagent's own attach tags its frames with the stream they came from, and
+       the store does not keep the tag, so its offset comes back from the record. */
+    for (const [workflowId, offset] of Object.entries(run?.record.offsets ?? {})) {
+      this.#workflowResumeOffsets.set(
+        workflowId,
+        Math.max(this.#workflowResumeOffsets.get(workflowId) ?? 0, offset)
+      );
+    }
+    if (this.#persistedRun?.runKey === runKey) {
+      this.#persistedRun.upTo = this.#frameBuffer.length;
+      this.#persistedRun.seq = frames.length;
+      if (run) void touchRun(runKey);
+    }
+    this.#publishFrames();
+    this.snapshot = null;
+  }
+
+  async #claimRun(session: Session): Promise<void> {
+    const runKey = runKeyOf(session);
+    if (this.#persistedRun?.runKey === runKey) return;
+    this.#releaseRun();
+    const release = await claimRunWriter(runKey);
+    if (!release) return;
+    if (this.session?.workflow_id !== session.workflow_id) return release();
+    this.#persistedRun = {
+      runKey,
+      release,
+      upTo: 0,
+      seq: 0,
+      writes: Promise.resolve(),
+      partial: false
+    };
+    void evictRuns(runKey);
+  }
+
+  #releaseRun(): void {
+    this.#persistedRun?.release();
+    this.#persistedRun = null;
+  }
+
+  /**
+   * Write the frames staged since the last write, and the view, as one batch.
+   * `final` writes the view even with no new frames: the page is going away.
+   *
+   * Batches are chained, so they land in order, and a batch that is not stored
+   * marks the run partial: anything written after it would leave a gap.
+   */
+  async #persistRun(session: Session, final = false): Promise<void> {
+    await this.#claimRun(session);
+    const run = this.#persistedRun;
+    if (!run || run.partial || this.session?.workflow_id !== session.workflow_id) return;
+    const fresh = this.#frameBuffer.slice(run.upTo);
+    if (fresh.length === 0 && !(final && run.seq > 0)) return;
+    const view = this.#viewSnapshot(run.runKey, session);
+    const seq = run.seq;
+    run.upTo = this.#frameBuffer.length;
+    run.seq += fresh.length;
+    const record = {
+      runKey: run.runKey,
+      workflowId: session.workflow_id,
+      lastResumeOffset: this.lastResumeOffset,
+      offsets: Object.fromEntries(this.#workflowResumeOffsets),
+      count: run.seq,
+      lastAccess: Date.now()
+    };
+    run.writes = run.writes.then(async () => {
+      if (run.partial) return;
+      if (fresh.length > 0 && !(await appendRunFrames(record, seq, fresh))) {
+        run.partial = true;
+        return;
+      }
+      await writeView(view);
+    });
+  }
+
+  #viewSnapshot(runKey: string, session: Session): ViewSnapshot {
+    const items = this.chatTranscript.slice(-snapshotItems);
+    const turns = new Set(items.map((item) => item.turnNumber));
+    return {
+      runKey,
+      workflowId: session.workflow_id,
+      savedAt: Date.now(),
+      session: $state.snapshot(session),
+      items,
+      /* The window's turns for their summaries, and every approval so the
+         pending-approvals banner reads the same before and after the handoff. */
+      logs: this.fullReplayLog.rows.filter(
+        (row) =>
+          turns.has(row.turnNumber) ||
+          row.event.startsWith("tool_approval") ||
+          row.event.startsWith("callback")
+      ),
+      sessions: $state.snapshot(this.sessions.slice(0, snapshotSessions)),
+      total: this.total
+    };
   }
 
   #scheduleFrameCacheWrite(): void {
@@ -1778,7 +2196,7 @@ export class AgentRunController {
     this.#frameCacheTimer = window.setTimeout(() => {
       this.#frameCacheTimer = null;
       if (this.session?.workflow_id !== sessionId) return;
-      writeCachedFrames(sessionId, this.frames);
+      void this.#persistRun(this.session);
     }, 750);
   }
 
@@ -1788,6 +2206,8 @@ export class AgentRunController {
     this.#awaitingMessages.clear();
     this.#stopWorkflowAttachStreams();
     this.frames = [];
+    this.snapshot = null;
+    this.#releaseRun();
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
     this.#frameBuffer = [];
@@ -1802,6 +2222,7 @@ export class AgentRunController {
     this.#liveFrameSeen = false;
     this.#sinceCatchUpPublish = 0;
     this.#workflowResumeOffsets = new Map<string, number>();
+    this.#clientTools.reset();
     this.viewIndex = 0;
     this.following = true;
     this.lastResumeOffset = 0;
@@ -1879,19 +2300,14 @@ export class AgentRunController {
   /**
    * Commit everything staged so far, in one reactive write.
    *
-   * A commit is O(frames) and stays that way — batching bounded how MANY commits
-   * happen, not what one costs. The copy below is not the cost (0.01% of a
-   * commit, measured); the derived projections rebuilding from scratch are, at
-   * ~5us per frame across all of them, so one commit is ~27ms at 5,000 events
-   * and ~107ms at 20,000. Total work is therefore still (commits x frames), so a
-   * long LIVE session — one commit per paint — is quadratic, and past a few
-   * thousand events every arriving event costs a visible hitch. Upgrading that
-   * means making the projections incremental (append one entry, don't rebuild
-   * the timeline), which is a state-layer change, not a cheaper copy here.
+   * The derived projections fold forward from `frames`, so a commit must only
+   * append to what the last one published: changing or dropping an earlier
+   * frame makes every fold start over from the first frame.
    */
   #publishFrames(): void {
     this.#clearCatchUpFlush();
     this.frames = this.#frameBuffer.slice();
+    if (this.session) this.#clientTools.sync(this.frames, this.session.workflow_id);
     this.viewIndex = cursorAfterPublish(this.following, this.viewIndex, this.total);
   }
 
@@ -1942,9 +2358,9 @@ export class AgentRunController {
    * thousand events, each commit re-running every projection over a longer
    * timeline than the last.
    *
-   * #hydrateCachedFrames drives its own loop and never reaches here, so this is
-   * the catch-up path for history arriving over the stream — where there is no
-   * loop to hang the schedule on, only frames landing one at a time.
+   * #restoreRun commits its whole read at once and never reaches here, so this
+   * is the catch-up path for history arriving over the stream — where there is
+   * no loop to hang the schedule on, only frames landing one at a time.
    */
   #schedulePublish(): void {
     if (this.#catchingUp) {
@@ -2106,7 +2522,10 @@ export class AgentRunController {
     }
 
     if (frame.event === "subagent_stream_unavailable") {
-      this.#upsertSubagent(frame.data, parentWorkflowId);
+      /* The merge stamps the marker with the child's own agent_id, so its publisher is the
+         child, never its parent. Upserting under it made the child its own parent, and a
+         child that is nobody's child is never drawn. */
+      this.#upsertSubagent(frame.data);
       void this.#resolveUnreadableSubagent(frame.data.workflow_id);
     }
   }
@@ -2267,8 +2686,4 @@ export class AgentRunController {
     this.pause();
     this.goTo(0);
   }
-}
-
-export function createAgentRunController(): AgentRunController {
-  return new AgentRunController();
 }

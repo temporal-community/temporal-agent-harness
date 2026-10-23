@@ -261,6 +261,20 @@ describe("initialize() honours the rule chooseBootSession states", () => {
     );
   });
 
+  /* The address-bar id used to ride the remembered id's argument, so the skip for an empty,
+     superseded session threw away one the operator had just opened by URL. */
+  it("opens an empty, superseded session the address bar names", async () => {
+    window.location.search = "?s=empty-old";
+    try {
+      const sessions = [at("empty-old", { created_at: 100 }), at("busy-new", { created_at: 200, ...spokenTo })];
+      const { controller, created } = await bootWith(sessions, "busy-new");
+      assert.equal(controller.session?.workflow_id, "empty-old", "a linked id must open, empty or not");
+      assert.equal(created.length, 0);
+    } finally {
+      window.location.search = "";
+    }
+  });
+
   it("does not park on a purged session, and starts a fresh one instead", async () => {
     const { controller, created } = await bootWith([at("wf-gone", gone)], "wf-gone");
     assert.notEqual(
@@ -269,5 +283,18 @@ describe("initialize() honours the rule chooseBootSession states", () => {
       "initialize() must not park on a purged session that chooseBootSession already declined"
     );
     assert.equal(created.length, 1, "with nothing openable left, boot must start a fresh session");
+  });
+
+  /* Marking closed sessions one at a time copied the whole list per id: 10,000 sessions
+     froze the tab for 88 s. At 20,000 here, quadratic work takes ~2.8 s and linear ~6 ms. */
+  it("marks every closed session of a 20,000-session list in linear time", async () => {
+    /* Reopening a closed stored session skips attach, so the time is the list handling alone. */
+    const sessions = Array.from({ length: 20_000 }, (_, i) => at(`wf-${i}`, done));
+    const started = performance.now();
+    const { controller } = await bootWith(sessions, "wf-0");
+    const elapsed = performance.now() - started;
+    assert.equal(controller.session?.workflow_id, "wf-0", "the stored closed session should reopen");
+    assert.equal(controller.closedWorkflowIds.length, 20_000, "every closed session should be marked closed");
+    assert.ok(elapsed < 1_000, `booting 20,000 sessions took ${Math.round(elapsed)} ms`);
   });
 });

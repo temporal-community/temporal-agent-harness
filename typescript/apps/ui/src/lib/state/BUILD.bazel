@@ -19,6 +19,7 @@ js_library(
         ":bootSession",
         ":fileMounts",
         ":flowProjection",
+        ":frameStore",
         ":hydration",
         ":inboundMessageText",
         ":initData",
@@ -110,6 +111,12 @@ js_library(
 js_library(
     name = "followScroll",
     srcs = ["followScroll.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "frameStore",
+    srcs = ["frameStore.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
@@ -430,6 +437,15 @@ vitest_test(
 )
 
 vitest_test(
+    name = "frameStore_test",
+    src = "frameStore.test.mjs",
+    deps = [
+        ":frameStore",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
+)
+
+vitest_test(
     name = "historyGap_test",
     src = "historyGap.test.mjs",
     deps = [
@@ -441,9 +457,29 @@ vitest_test(
 )
 
 vitest_test(
+    name = "hydrateCache_test",
+    src = "hydrateCache.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":frameStore",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
+)
+
+vitest_test(
     name = "hydration_test",
     src = "hydration.test.mjs",
     deps = [":hydration"],
+)
+
+vitest_test(
+    name = "idleFollow_test",
+    src = "idleFollow.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
 )
 
 vitest_test(
@@ -455,6 +491,19 @@ vitest_test(
         ":replayLog",
         ":stepTimeline",
         ":transcript",
+    ],
+)
+
+vitest_test(
+    name = "incrementalProjections_test",
+    src = "incrementalProjections.test.mjs",
+    deps = [
+        ":replayTimeline",
+        ":replyRuns",
+        ":stepTimeline",
+        ":transcript",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
     ],
 )
 
@@ -485,6 +534,17 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+    ],
+)
+
+vitest_test(
+    name = "multiTabResume_test",
+    src = "multiTabResume.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":frameStore",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
     ],
 )
 
@@ -530,6 +590,18 @@ vitest_test(
 )
 
 vitest_test(
+    name = "reloadSnapshot_test",
+    src = "reloadSnapshot.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":agentRunStorage",
+        ":frameStore",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
+)
+
+vitest_test(
     name = "replayHotkeys_test",
     src = "replayHotkeys.test.mjs",
     deps = [
@@ -539,6 +611,15 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/flow:StepController",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "replayLogFold_test",
+    src = "replayLogFold.test.mjs",
+    deps = [
+        ":replayLog",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
     ],
 )
 

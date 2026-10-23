@@ -152,6 +152,28 @@ describe("scrollFollower", () => {
     );
   });
 
+  /* --- a windowed list draws the row first ---------------------------------- */
+  it("asks a windowed list to draw a missing row once, and only while following", () => {
+    const { scroller, target } = makeScroller();
+    const follower = scrollFollower(() => scroller);
+    let reveals = 0;
+
+    follower.to("not-drawn", () => (reveals += 1));
+    flushFrames();
+    assert.equal(reveals, 1, "a row not in the DOM is revealed");
+    assert.equal(flushFrames(), 1, "and looked for again on the next frame");
+    flushFrames();
+    assert.equal(reveals, 1, "revealed once, not on every frame it stays missing");
+
+    follower.to("row-50");
+    flushFrames();
+    target.scrollTop = 0;
+    follower.handleScroll();
+    follower.to("not-drawn", () => (reveals += 1));
+    flushFrames();
+    assert.equal(reveals, 1, "a reader who scrolled away is not pulled back to draw it");
+  });
+
   /* --- manual action wins, and hands control back --------------------------- */
   it("lets manual action win, and hands control back", () => {
     const { scroller, target } = makeScroller();

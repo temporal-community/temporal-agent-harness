@@ -61,6 +61,7 @@ import { describe, it } from "vitest";
 
 import { installBrowserSurface, sleep } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
+import { buildAgentTreeGraph } from "./flowProjection.ts";
 import { framePublishChunkSize } from "./hydration.ts";
 
 /**
@@ -625,6 +626,42 @@ describe("frame arrival", () => {
 
     closedIds.add("wf-parent-live");
     finish("wf-parent-live");
+    stream.end();
+  });
+
+  // The marker is stamped with the child's own agent_id, so its publisher is the
+  // child. Upserted under that, the child became its own parent and vanished from
+  // the graph until the parent's reply re-parented it.
+  it("an unreadable child the parent has not replied for stays under its parent", async () => {
+    const stream = controllableStream();
+    const { controller, statusCalls, finish } = boot({
+      sessions: [session("wf-parent-waiting")],
+      streamFor: () => stream
+    });
+
+    void controller.selectSession("wf-parent-waiting");
+    await waitFor("the parent stream to be attached", () => statusCalls.length > 0);
+    stream.push(
+      subagentStarted("child-waiting", "wf-waiting-child", 0),
+      subagentStreamUnavailable("child-waiting", "wf-waiting-child")
+    );
+    await waitFor("the marker to reach the view", () => controller.frames.length === 2);
+    await waitFor(
+      "Temporal's answer to reach the graph",
+      () => controller.graphAgents.find((agent) => agent.workflowId === "wf-waiting-child")
+        ?.executionStatus === "RUNNING"
+    );
+
+    const child = controller.graphAgents.find((agent) => agent.workflowId === "wf-waiting-child");
+    assert.equal(child?.parentWorkflowId, "wf-parent-waiting");
+    assert.ok(
+      buildAgentTreeGraph(controller.graphAgents).nodes.some(
+        (node) => node.id === "wf-waiting-child::agent-runtime"
+      ),
+      "the child should be drawn inside its parent"
+    );
+
+    finish("wf-parent-waiting");
     stream.end();
   });
 
