@@ -17,6 +17,7 @@ js_library(
         ":agentState",
         ":approvalDecisionTree",
         ":bootSession",
+        ":clientToolProvider",
         ":fileMounts",
         ":flowProjection",
         ":frameStore",
@@ -63,6 +64,16 @@ js_library(
 )
 
 js_library(
+    name = "clientToolProvider",
+    srcs = ["clientToolProvider.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":editorWorkspace",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+    ],
+)
+
+js_library(
     name = "codeModeNesting",
     srcs = ["codeModeNesting.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -71,6 +82,12 @@ js_library(
 js_library(
     name = "dismissable.svelte",
     srcs = ["dismissable.svelte.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "editorWorkspace",
+    srcs = ["editorWorkspace.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
@@ -405,6 +422,12 @@ vitest_test(
 )
 
 vitest_test(
+    name = "clientToolProvider_test",
+    src = "clientToolProvider.test.mjs",
+    deps = [":clientToolProvider"],
+)
+
+vitest_test(
     name = "codeModeNesting_test",
     src = "codeModeNesting.test.mjs",
     deps = [
@@ -417,6 +440,12 @@ vitest_test(
     name = "dismissable_test",
     src = "dismissable.test.mjs",
     deps = [":dismissable.svelte"],
+)
+
+vitest_test(
+    name = "editorWorkspace_test",
+    src = "editorWorkspace.test.mjs",
+    deps = [":editorWorkspace"],
 )
 
 vitest_test(
