@@ -279,6 +279,21 @@ js_library(
     ],
 )
 
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "agentNames_test",
+    src = "agentNames.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":agentRunStorage",
+        ":frameStore",
+        ":sessionHistory",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
+)
+
 vitest_test(
     name = "agentState_test",
     src = "agentState.test.mjs",
@@ -368,6 +383,15 @@ vitest_test(
     name = "eventVelocity_test",
     src = "eventVelocity.test.mjs",
     deps = [":eventVelocity"],
+)
+
+vitest_test(
+    name = "failedCreate_test",
+    src = "failedCreate.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
 )
 
 vitest_test(
@@ -670,9 +694,30 @@ vitest_test(
 )
 
 vitest_test(
+    name = "sessionLoadThrottle_test",
+    src = "sessionLoadThrottle.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "statusNote_test",
     src = "statusNote.test.mjs",
     deps = [":replayLog"],
+)
+
+vitest_test(
+    name = "temporalActions_test",
+    src = "temporalActions.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":agentRunStorage",
+        ":frameStore",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
 )
 
 vitest_test(

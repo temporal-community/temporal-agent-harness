@@ -1,6 +1,14 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("//bazel:vitest.bzl", "vitest_test")
 
+# One target per file, depending on the files it imports.
+js_library(
+    name = "EndSessionDialog",
+    srcs = ["EndSessionDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/components/primitives:Chip"],
+)
+
 js_library(
     name = "MarkdownMessage",
     srcs = ["MarkdownMessage.svelte"],
@@ -31,6 +39,7 @@ js_library(
     srcs = ["SessionControls.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":EndSessionDialog",
         ":MarkdownMessage",
         ":StartSessionDialog",
         "//typescript/apps/ui:node_modules/@lucide/svelte",

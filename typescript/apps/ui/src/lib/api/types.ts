@@ -85,6 +85,21 @@ export interface AgentDescriptor {
   init_data?: AgentInitData | null;
   /** Absent from older servers, and from fixtures that predate worker readiness. */
   worker?: AgentWorker;
+  /** The message handlers its schema document declares, in name order. Not yet served by
+   *  `/api/agents`, which reads only the init data from that document; absent until it does,
+   *  and `null` when the registry entry names no schema. */
+  handlers?: AgentHandler[] | null;
+  /** The ids of the states its schema document declares (`agent.state(...)`). Same caveat. */
+  states?: string[] | null;
+}
+
+/** One handler an agent accepts messages on, from its schema document. */
+export interface AgentHandler {
+  name: string;
+  /** Markdown, from the handler's docstring. */
+  description: string;
+  /** What a message does while a turn is running: queued, taken at once, or refused. */
+  mid_turn?: "enqueue" | "accept" | "reject" | null;
 }
 
 export interface AgentRegistryResponse {
@@ -100,6 +115,10 @@ export interface Session {
   initial_user_message?: string | null;
   execution_status?: string | null;
   closed?: boolean;
+  /** The Temporal Web UI's workflows page for the session's namespace, e.g.
+   *  `http://localhost:8233/namespaces/default/workflows`; absent from servers that do not
+   *  report it. */
+  temporal_workflows_url?: string | null;
 }
 
 export type SessionsResponse = Session[];
@@ -372,7 +391,19 @@ type Payload<TType extends AgentEventType> = Extract<Protocol.AgentStreamItem, {
 interface Narrowed {
   text_annotation: { delta: TextAnnotationDelta };
   state_patch: { ops: JsonPatchOp[] };
+  subagent_stream_unavailable: { reason_code?: SubagentUnavailableCode };
 }
+
+/**
+ * Why the merge gave up on a subagent's stream, as a code a client can branch on. Not on the
+ * wire yet: `reason` is one free-text sentence for every cause, so this is optional and read
+ * only when present.
+ */
+export type SubagentUnavailableCode =
+  | "closed_not_replayable"
+  | "read_failed"
+  | "ended_mid_turn"
+  | "stalled";
 
 /** The flattened SSE `data` of one event type. */
 export type AgentEventData<TType extends AgentEventType> = (TType extends keyof Narrowed

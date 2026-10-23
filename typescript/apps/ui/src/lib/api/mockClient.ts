@@ -21,7 +21,7 @@ import type {
   WorkflowId
 } from "./types";
 import type { AgentApi } from "./client";
-import { realisticQaScenario } from "$lib/mock/scenarios";
+import { frame, meta, realisticQaScenario, type MockScenario } from "$lib/mock/scenarios";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -120,10 +120,16 @@ const montyInterface: AgentInterfaceFunction[] = [
 ];
 
 export class MockAgentApi implements AgentApi {
-  #sessions: Session[] = [...realisticQaScenario.sessions];
+  #scenario: MockScenario;
+  #sessions: Session[];
+
+  constructor(scenario: MockScenario = realisticQaScenario) {
+    this.#scenario = scenario;
+    this.#sessions = [...scenario.sessions];
+  }
 
   async listAgents(): Promise<AgentRegistryResponse> {
-    return { agents: realisticQaScenario.agents };
+    return { agents: this.#scenario.agents };
   }
 
   async listSessions(): Promise<Session[]> {
@@ -157,6 +163,7 @@ export class MockAgentApi implements AgentApi {
   }
 
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
+    if (this.#scenario.agentInterface) return this.#scenario.agentInterface;
     return sessionId.toLowerCase().includes("monty") ? montyInterface : qaInterface;
   }
 
@@ -189,23 +196,55 @@ export class MockAgentApi implements AgentApi {
   }
 
   async *attach(
-    _sessionId: WorkflowId,
+    sessionId: WorkflowId,
     fromOffset = 0,
     signal?: AbortSignal
   ): AsyncIterable<AgentSseFrame> {
-    for (const item of realisticQaScenario.frames) {
+    const stream = this.#scenario.streams?.[sessionId] ?? this.#scenario.frames;
+    if (stream === "silent") {
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      return;
+    }
+    const instant = this.#scenario.instantFrames ?? 0;
+    /* A real server has already made durable everything it streamed before a reload, so it
+       replays that at once, flagged, instead of pacing the tail out a second time. */
+    const durableKey = `temporal-agent-ui.mock-durable:${sessionId}`;
+    const durable = Number(globalThis.sessionStorage?.getItem(durableKey)) || 0;
+    for (const [index, item] of stream.entries()) {
       if (signal?.aborted) return;
       if (item.data.resume_offset <= fromOffset) continue;
-      await sleep(40);
+      const replay = index < instant || item.data.resume_offset <= durable;
+      /* A backfill lands in network-sized chunks, not one macrotask per frame. */
+      if (!replay) await sleep(this.#scenario.liveIntervalMs ?? 40);
+      else if (index % 100 === 0) await sleep(0);
       if (signal?.aborted) return;
-      yield item;
+      if (!replay) globalThis.sessionStorage?.setItem(durableKey, String(item.data.resume_offset));
+      yield replay ? ({ ...item, data: { ...item.data, replay: true } } as AgentSseFrame) : item;
+    }
+    if (!this.#scenario.answersApprovals) return;
+    for (let next = 0; !signal?.aborted; ) {
+      const item = this.#answers[next];
+      if (!item) {
+        await new Promise<void>((wake) => {
+          this.#wake = wake;
+          signal?.addEventListener("abort", () => wake(), { once: true });
+        });
+        continue;
+      }
+      next += 1;
+      if (item.data.resume_offset > fromOffset) yield item;
     }
   }
+
+  #answers: AgentSseFrame[] = [];
+  #wake: (() => void) | null = null;
 
   #submitted = 0;
 
   async submitMessage(_request: ChatRequest): Promise<SubmitMessageResponse> {
-    await sleep(80);
+    // A mark per submit, so a browser check can count sends the transcript doesn't echo.
+    performance.mark("mock-submit");
+    await sleep(this.#scenario.submitDelayMs ?? 80);
     // Every submit gets a fresh turn; the UI correlates its outstanding messages by
     // `message_id` alone, so that is all the mock needs to keep distinct.
     const turn = ++this.#submitted;
@@ -224,6 +263,20 @@ export class MockAgentApi implements AgentApi {
 
   async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
     await sleep(120);
+    if (this.#scenario.answersApprovals) {
+      this.#answers.push(
+        frame("tool_approval_resolved", {
+          type: "tool_approval_resolved",
+          ...meta(2, 60),
+          tool_id: request.tool_id,
+          tool_name: "",
+          approved: request.approved,
+          reason: request.reason ?? null,
+          remember: request.remember ?? false
+        })
+      );
+      this.#wake?.();
+    }
     return { tool_id: request.tool_id, accepted: true };
   }
 
@@ -231,6 +284,11 @@ export class MockAgentApi implements AgentApi {
     request: CallbackResultRequest
   ): Promise<CallbackResultResponse> {
     await sleep(120);
+    if (this.#scenario.answersApprovals) {
+      const error = request.error ?? null;
+      this.#answers.push(frame("callback_resolved", { type: "callback_resolved", ...meta(1, 60), tool_id: request.tool_id, tool_name: "", outcome: error ? "error" : "ok", error }));
+      this.#wake?.();
+    }
     return { tool_id: request.tool_id, accepted: true };
   }
 
@@ -242,6 +300,7 @@ export class MockAgentApi implements AgentApi {
 
   async okfGraph(_request: OKFGraphRequest): Promise<OKFGraph> {
     await sleep(120);
+    if (this.#scenario.okfGraph) return this.#scenario.okfGraph;
     const concept = (id: string, type: string, title: string, extra: Partial<OKFConcept> = {}) => ({
       id,
       path: `${id}.md`,

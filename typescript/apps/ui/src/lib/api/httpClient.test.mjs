@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "vitest";
 
-import { ApiError, HttpAgentApi, approvalAlreadyResolved, errorFromBody } from "./httpClient.ts";
+import { ApiError, HttpAgentApi, approvalAlreadyResolved, errorFromBody, workflowGone } from "./httpClient.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -121,5 +121,40 @@ describe("viewing a mounted file", () => {
       .catch((caught) => caught);
     assert.ok(error instanceof ApiError);
     assert.equal(error.code, "file_view_unavailable");
+  });
+});
+
+/* A session whose workflow Temporal no longer has is read-only for good, so only a definitive
+   NotFound may say so: a stopped worker or an API hiccup must leave the session as it was. */
+describe("a workflow Temporal no longer has", () => {
+  const statusFailure = () => new HttpAgentApi().agentStatus("wf").catch((caught) => caught);
+
+  it("is a 404 the harness names, or a 500 that carries Temporal's NotFound", async () => {
+    respondWith(404, { error: "workflow_not_found", message: "No workflow 'wf'." });
+    const notFound = await statusFailure();
+    assert.equal(notFound.status, 404);
+    assert.ok(workflowGone(notFound));
+
+    respondWith(404, { detail: "workflow not found for ID: wf" });
+    assert.ok(workflowGone(await statusFailure()));
+
+    respondWith(500, "RPCError: (5, 'workflow not found for ID: wf') NotFoundFailure");
+    assert.ok(workflowGone(await statusFailure()), "the narrow fallback until the API answers 404");
+  });
+
+  it("is not a generic 500, a bare 404, a proxy page or a network error", async () => {
+    respondWith(500, "Internal Server Error");
+    assert.equal(workflowGone(await statusFailure()), false);
+    respondWith(502, "workflow not found upstream");
+    assert.equal(workflowGone(await statusFailure()), false, "only a 404 or a 500 says it");
+    respondWith(404, "<html><body>workflow not found</body></html>");
+    assert.equal(workflowGone(await statusFailure()), false, "a proxy's page is not the harness");
+    respondWith(404, "Not Found");
+    assert.equal(workflowGone(await statusFailure()), false);
+    globalThis.fetch = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    assert.equal(workflowGone(await statusFailure()), false);
+    assert.equal(workflowGone(new Error("workflow not found")), false);
   });
 });

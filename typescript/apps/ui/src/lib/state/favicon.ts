@@ -9,7 +9,7 @@ const TONE_TOKEN = {
   agent: "--accent",
   model: "--model",
   tool: "--tool",
-  approval: "--queue",
+  approval: "--live",
   done: "--success",
   error: "--error",
   queue: "--queue"
@@ -41,6 +41,20 @@ export function faviconDataUrl(stepColor: string, markColor: string): string {
   return `data:image/svg+xml,${encodeURIComponent(faviconSvg(stepColor, markColor))}`;
 }
 
+/* This runs on every replay step, and on a long session's DOM each computed-style read forces
+   a full style recalc. The theme is dark-only, so a token resolves to one color for the life of
+   the page; a theme switch would need to clear this. Empty reads (token sheet not loaded yet)
+   are not cached. */
+const tokenColors = new Map<string, string>();
+
+function tokenColor(token: string): string {
+  const cached = tokenColors.get(token);
+  if (cached) return cached;
+  const color = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  if (color) tokenColors.set(token, color);
+  return color;
+}
+
 /**
  * Paint the tab from the same semantic tone as the replay controller's current
  * event. The static SVG in index.html remains the fallback when scripts or the
@@ -52,9 +66,8 @@ export function setFaviconTone(tone: ReplayTone | null): void {
   const icon = document.querySelector<HTMLLinkElement>("#app-favicon");
   if (!icon) return;
 
-  const styles = getComputedStyle(document.documentElement);
-  const stepColor = styles.getPropertyValue(faviconToken(tone)).trim();
-  const markColor = styles.getPropertyValue("--surface-0").trim();
+  const stepColor = tokenColor(faviconToken(tone));
+  const markColor = tokenColor("--surface-0");
   if (!stepColor || !markColor) return;
 
   const colors = `${stepColor}|${markColor}`;

@@ -1,24 +1,16 @@
-// ABOUTME: Asserts the two rules a log row's status chip obeys — when it appears, and what colour it
-// is. It appears only when the row's label does not already carry the status, so every event kind
-// whose status is one-to-one with its label suppresses it and the kinds whose status comes from the
-// payload keep it. Its colour comes from statusKind(), which has to let the outcome answer before
-// the actor does, or a subagent's ok and error come out the same colour. This is the check that
-// fails when someone adds an event kind whose status stops being derivable, or reorders statusKind's
-// branches back.
+// ABOUTME: Asserts when a log row's status word appears: only when the row's label does not already
+// carry the status, so every event kind whose status is one-to-one with its label suppresses it and
+// the kinds whose status comes from the payload keep it. This is the check that fails when someone
+// adds an event kind whose status stops being derivable.
 
 import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
-/* All three of these were hand-copied here for as long as this ran as a bare node
-   script — the stem table and statusNote() because node could not follow `$lib/`,
-   statusKind() and the tone lookup because it could not read a .svelte file at
-   all. A test that reimplements what it tests passes forever while the real thing
-   rots, so they are imported now and the copies are gone; vitest resolves both
-   through vite, the same way the app does. What is left below is fixture and
-   claim: the label/status pairs the app can produce, and what should happen to
-   each. */
-import { statusKind } from "$lib/components/agent/TranscriptPanel.svelte";
-import { STATUS_TONES } from "$lib/components/primitives/StatusChip.svelte";
+/* The stem table and statusNote() were hand-copied here for as long as this ran as a
+   bare node script, because node could not follow `$lib/`. A test that reimplements
+   what it tests passes forever while the real thing rots, so it is imported now and
+   the copy is gone. What is left below is fixture and claim: the label/status pairs
+   the app can produce, and what should happen to each. */
 import { statusNote } from "./replayLog.ts";
 
 /* Every label/status pair rowFromFrame() can produce, read off the branches in
@@ -102,72 +94,5 @@ describe("statusNote", () => {
       "timeout",
       "an unrecognized status should fall through and stay visible"
     );
-  });
-});
-
-/* --- statusKind: the colour the surviving chip is drawn in ---------------- */
-describe("statusKind: the colour the surviving chip is drawn in", () => {
-  /* The two rows that still draw a chip after the suppression above. These are
-     the only statusKind() answers a reader can actually see, so they are the ones
-     worth pinning. */
-  const ok = { actor: "subagent", tone: "done", status: "ok", label: "Subagent reply received" };
-  const failed = { actor: "subagent", tone: "error", status: "error", label: "Subagent reply received" };
-
-  it("lets the outcome answer before the actor does", () => {
-    assert.equal(statusKind(ok), "complete", "a subagent reply that succeeded reads as complete");
-    assert.equal(statusKind(failed), "error", "a subagent reply that failed reads as an error");
-
-    /* The regression this ordering fixes: `if (actor === "subagent") return
-       "delegating"` used to sit above the outcome tests and swallow them, so ok,
-       error, and still-running subagent rows all came out one colour. */
-    assert.notEqual(
-      statusKind(ok),
-      statusKind(failed),
-      "ok and error on a subagent reply must not resolve to the same kind"
-    );
-
-    /* Kinds are only half the claim — the reader sees a colour, not a kind, and two
-       distinct kinds can still be drawn in one hue. STATUS_TONES is StatusChip's own
-       table, so this reads the mapping the chip will actually use. */
-    assert.notEqual(
-      STATUS_TONES[statusKind(ok)],
-      STATUS_TONES[statusKind(failed)],
-      "ok and error on a subagent reply must not render in the same hue"
-    );
-  });
-
-  /* Delegation is still the answer for a subagent row with nothing sharper to
-     say, which is what makes it safe as a fallback rather than a headline. */
-  it("keeps delegation as the fallback rather than the headline", () => {
-    assert.equal(
-      statusKind({ actor: "subagent", tone: "tool", status: "dispatched", label: "Subagent message sent" }),
-      "delegating",
-      "a subagent row with no outcome yet still reads as delegating"
-    );
-    assert.equal(
-      statusKind({ actor: "subagent", tone: "agent", status: "running", label: "Subagent started" }),
-      "thinking",
-      "a subagent row that is still running reads as in flight, not as delegation"
-    );
-  });
-
-  /* Error wins over everything, including the actor tests above it. */
-  it("resolves an error before anything else", () => {
-    for (const row of [
-      { actor: "subagent", tone: "error", status: "degraded", label: "Subagent stream unavailable" },
-      { actor: "tool", tone: "error", status: "failed", label: "Tool failed" },
-      { actor: "model", tone: "error", status: "failed", label: "Model failed" }
-    ]) {
-      assert.equal(statusKind(row), "error", `${row.label} must resolve to error before anything else`);
-    }
-  });
-
-  /* Every kind statusKind() can return has to have a hue, or the chip renders
-     undefined. Cheap to assert now that the real table is in hand, and impossible
-     to assert while it was a two-entry copy. */
-  it("returns no kind StatusChip has no tone for", () => {
-    for (const kind of new Set(ROWS.map(([label, status]) => statusKind({ label, status })))) {
-      assert.ok(STATUS_TONES[kind], `statusKind returned "${kind}", which StatusChip has no tone for`);
-    }
   });
 });

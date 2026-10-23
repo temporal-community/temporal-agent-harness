@@ -168,7 +168,8 @@ describe("agent worker readiness", () => {
     const { body } = render(StartSessionDialog, {
       props: { agents: [agent(noWorker)], onStart() {}, onClose() {} }
     });
-    assert.match(body, /type="radio"/);
+    assert.match(body, /role="option"[^>]*aria-selected="true"/);
+    assert.match(body, /No worker/);
     assert.match(body, /Start a worker on/);
     assert.match(body, /monty-dynamic-agent/);
     assert.match(body, /aria-label="Copy task queue name"/);
@@ -214,7 +215,7 @@ describe("agent worker readiness", () => {
   });
 
   it("states readiness from the worker block rather than hardcoding Ready", () => {
-    assert.doesNotMatch(dialogSource, /<StatusChip\s+label="Ready"/);
-    assert.match(dialogSource, /option\.worker\?\.status === "ready"/);
+    assert.doesNotMatch(dialogSource, /label="Ready"/);
+    assert.match(dialogSource, /if \(option\.worker\?\.status === "ready"\) return null;/);
   });
 });

@@ -25,14 +25,30 @@ function apiPath(path: string): string {
   return `api/${path.replace(/^\/+/, "")}`;
 }
 
-/** A failed request, carrying the server's `error` code alongside its message. */
+/** A failed request, carrying the server's `error` code and HTTP status alongside its message. */
 export class ApiError extends Error {
   constructor(
     message: string,
-    readonly code: string | null
+    readonly code: string | null,
+    readonly status: number | null = null
   ) {
     super(message);
   }
+}
+
+const WORKFLOW_NOT_FOUND = /workflow not found|NotFoundFailure/i;
+
+/**
+ * Temporal has no workflow by this id: the dev server restarted, retention expired, or it was
+ * deleted. Only a definitive answer counts. A generic 500, a network failure or a Query that
+ * timed out on a stopped worker is not one, and must not end a session that is still there.
+ */
+export function workflowGone(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  if (error.status === 404) return error.code === "workflow_not_found" || WORKFLOW_NOT_FOUND.test(error.message);
+  /* The server maps Temporal's NOT_FOUND to a 500 today. This matches only a 500 that names it,
+     and is a known ceiling: remove it once the API answers 404 for a missing workflow. */
+  return error.status === 500 && WORKFLOW_NOT_FOUND.test(error.message);
 }
 
 /**
@@ -76,7 +92,7 @@ function detailText(detail: unknown): string | null {
  * plain-text body, cut to a length a card can hold. A proxy's HTML error page is markup, not
  * a message, so it falls back to the status line.
  */
-export function errorFromBody(body: string, fallback: string): ApiError {
+export function errorFromBody(body: string, fallback: string, status: number | null = null): ApiError {
   let message: string | null = null;
   let code: string | null = null;
   try {
@@ -92,11 +108,11 @@ export function errorFromBody(body: string, fallback: string): ApiError {
   message = message?.trim() || fallback;
   const chars = Array.from(message);
   if (chars.length > MAX_ERROR_LENGTH) message = `${chars.slice(0, MAX_ERROR_LENGTH).join("")}…`;
-  return new ApiError(message, code);
+  return new ApiError(message, code, status);
 }
 
 async function responseError(response: Response, fallback: string): Promise<ApiError> {
-  return errorFromBody(await response.text(), fallback);
+  return errorFromBody(await response.text(), fallback, response.status);
 }
 
 async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {

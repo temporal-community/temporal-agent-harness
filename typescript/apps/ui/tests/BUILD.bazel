@@ -27,6 +27,19 @@ vitest_test(
 )
 
 vitest_test(
+    name = "end-session_test",
+    src = "end-session.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/chat:EndSessionDialog",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "graph-focus-toggle_test",
     src = "graph-focus-toggle.test.mjs",
     deps = ["//typescript/apps/ui/src/lib/components/flow:AgentStateFlow"],
@@ -134,6 +147,17 @@ vitest_test(
     deps = [
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "session-status-headline_test",
+    src = "session-status-headline.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

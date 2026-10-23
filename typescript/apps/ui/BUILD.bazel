@@ -93,6 +93,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/agent:OKFGraphView",
         "//typescript/apps/ui/src/lib/components/agent:PendingCallbackCard",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:EndSessionDialog",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",

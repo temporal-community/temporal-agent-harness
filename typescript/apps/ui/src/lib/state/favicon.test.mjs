@@ -45,7 +45,7 @@ describe("the step favicon", () => {
         agent: "--accent",
         model: "--model",
         tool: "--tool",
-        approval: "--queue",
+        approval: "--live",
         done: "--success",
         error: "--error",
         queue: "--queue"
@@ -94,7 +94,7 @@ describe("the step favicon", () => {
     };
     const colors = {
       "--model": "#a9aef5",
-      "--queue": "#ff6bff",
+      "--live": "#fad000",
       "--surface-0": "#0b0b10"
     };
 
@@ -105,11 +105,15 @@ describe("the step favicon", () => {
         return icon;
       }
     };
-    globalThis.getComputedStyle = () => ({
-      getPropertyValue(token) {
-        return colors[token] ?? "";
-      }
-    });
+    let styleReads = 0;
+    globalThis.getComputedStyle = () => {
+      styleReads += 1;
+      return {
+        getPropertyValue(token) {
+          return colors[token] ?? "";
+        }
+      };
+    };
 
     try {
       setFaviconTone("model");
@@ -118,10 +122,15 @@ describe("the step favicon", () => {
 
       setFaviconTone("model");
       assert.equal(writes, 1, "an unchanged color should not repaint the browser tab");
-
       setFaviconTone("approval");
       assert.equal(writes, 2);
-      assert.match(decodeURIComponent(href), /fill="#ff6bff"/);
+      assert.match(decodeURIComponent(href), /fill="#fad000"/);
+
+      const reads = styleReads;
+      setFaviconTone("model");
+      setFaviconTone("approval");
+      assert.equal(writes, 4);
+      assert.equal(styleReads, reads, "a token already resolved should not force another style recalc");
     } finally {
       if (originalDocument === undefined) delete globalThis.document;
       else globalThis.document = originalDocument;
