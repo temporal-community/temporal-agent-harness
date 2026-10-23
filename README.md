@@ -1014,6 +1014,7 @@ Each example runs on its own from its directory — [`python/examples/monty`](py
 conversational Code Mode travel agent + a subagent variant) is the best starting point:
 
 ```bash
+cd python/examples/monty
 just temporal          # local Temporal dev server; skip if you bring your own
 just session-manager   # worker hosting the packaged SessionManagerWorkflow
 just server            # serves the Svelte UI + /api on :8000 (this example's agents only)
