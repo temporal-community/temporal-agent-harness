@@ -121,6 +121,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",
         "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
         "//typescript/apps/ui/src/lib/components/flow:timelineMark",
+        "//typescript/apps/ui/src/lib/components/flow:usageChart",
         "//typescript/apps/ui/src/lib/components/primitives:Badge",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",

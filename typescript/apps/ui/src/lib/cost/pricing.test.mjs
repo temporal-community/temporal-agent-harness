@@ -11,6 +11,7 @@ import { describe, it } from "vitest";
 
 import {
   buildUsageTimeline,
+  usageTimelineBuilder,
   formatCost,
   summarizeCost,
   unpricedModels,
@@ -191,6 +192,41 @@ describe("tokens.total", () => {
   });
 });
 
+/* --- a call that reported no usage ----------------------------------------- */
+describe("a model call with no usage", () => {
+  it("is counted as unknown, not as a zero", () => {
+    const summary = summarizeCost([ended(PRICED, gemini), ended(UNPRICED, null)]);
+    assert.equal(summary.unreportedCalls, 1, "the call that sent no usage is counted");
+    assert.equal(summary.tokens.total, 2090, "the known calls still sum, as a lower bound");
+    const row = summary.modelBreakdown.find((item) => item.model === UNPRICED);
+    assert.ok(row, "a model whose only call sent no usage still gets a row");
+    assert.equal(row.unreportedCalls, 1);
+    assert.equal(
+      summary.modelBreakdown.find((item) => item.model === PRICED).unreportedCalls,
+      0,
+      "and the other model stays measured"
+    );
+  });
+
+  it("leaves an all-zero usage object as a measurement", () => {
+    const summary = summarizeCost([ended(PRICED, { input_tokens: 0, output_tokens: 0 })]);
+    assert.equal(summary.unreportedCalls, 0, "zero is a reading; null is the absence of one");
+    assert.equal(summary.tokens.total, 0);
+  });
+});
+
+describe("cache-read reporting", () => {
+  it("distinguishes a reported zero from a missing cache field", () => {
+    const summary = summarizeCost([
+      ended(PRICED, { input_tokens: 100, output_tokens: 20, cached_tokens: 0 }),
+      ended(PRICED, { input_tokens: 100, output_tokens: 20 }),
+      ended(PRICED, null)
+    ]);
+    assert.equal(summary.cacheReadReportedCalls, 1);
+    assert.equal(summary.cacheReadUnreportedCalls, 1, "only a wholly unreported call makes the rate a lower bound");
+  });
+});
+
 /* --- the cumulative cost series -------------------------------------------- */
 describe("the cumulative cost series", () => {
   const costs = (frames) => buildUsageTimeline(frames).map((point) => point.estimatedCostUsd);
@@ -199,17 +235,17 @@ describe("the cumulative cost series", () => {
      sum, and every later point is a lower bound rather than a value. Blanking from
      there on is the honest answer and is NOT the bug: the alternative is printing a
      number that quietly omits the unpriced model, which reads as complete.
-     The number of points is frames + 1 — index 0 is the synthetic "start". */
+     One point per model call. */
   it("goes unknown from the first unpriced interaction that spent tokens", () => {
     const latched = costs([
       ended(PRICED, gemini),
       ended(UNPRICED, openai),
       ended(PRICED, gemini)
     ]);
-    assert.equal(latched.length, 4, "one point per frame, plus the synthetic start");
-    assert.ok(latched[0] === 0 && latched[1] > 0, "points before the hole keep their real number");
+    assert.equal(latched.length, 3, "one point per model call");
+    assert.ok(latched[0] > 0, "points before the hole keep their real number");
     assert.deepEqual(
-      latched.slice(2),
+      latched.slice(1),
       [null, null],
       "once a priced-unknown interaction has spent tokens, every later cumulative sum is unknown"
     );
@@ -221,9 +257,9 @@ describe("the cumulative cost series", () => {
       approvalEnded(PRICED, { input_tokens: 300, output_tokens: 40 })
     ]);
 
-    assert.equal(points[1].tokens.total, 120);
-    assert.equal(points[2].event, "auto_approval_evaluation_ended");
-    assert.equal(points[2].tokens.total, 460, "the cumulative chart includes Jev's 340 tokens");
+    assert.equal(points[0].tokens.total, 120);
+    assert.equal(points[1].call.total, 340, "Jev's evaluation is a call of its own");
+    assert.equal(points[1].tokens.total, 460, "the cumulative chart includes Jev's 340 tokens");
   });
 
   /* The actual defect: an interaction that spent NOTHING cost nothing at any price,
@@ -237,12 +273,12 @@ describe("the cumulative cost series", () => {
     ]) {
       const survived = costs([ended(UNPRICED, usage), ended(PRICED, gemini), ended(PRICED, openai)]);
       assert.equal(
-        survived[1],
+        survived[0],
         0,
         `an ${label} usage from an unpriced model contributes no cost and no uncertainty`
       );
       assert.ok(
-        survived[2] > 0 && survived[3] > survived[2],
+        survived[1] > 0 && survived[2] > survived[1],
         `a fully priced interaction after an ${label} unpriced one still reports its cost`
       );
     }
@@ -305,5 +341,45 @@ describe("the figures nothing currently renders", () => {
     assert.deepEqual(unpricedModels(usage), ["some-unpriced-model"]);
     assert.equal(unpricedNote([]), null, "a fully priced run has nothing to disclose");
     assert.match(unpricedNote(["some-unpriced-model"]), /some-unpriced-model/);
+  });
+});
+
+/* --- the per-call series the chart draws ----------------------------------- */
+describe("the per-call usage series", () => {
+  it("holds one point per model call, with that call's own counts beside the running sum", () => {
+    const points = buildUsageTimeline([
+      other(),
+      ended(PRICED, { input_tokens: 100, output_tokens: 20, total_tokens: 120 }),
+      other(),
+      ended(UNPRICED, { input_tokens: 300, output_tokens: 40, total_tokens: 340 })
+    ]);
+    assert.deepEqual(points.map((point) => point.index), [2, 4], "frame positions, 1-based like viewIndex");
+    assert.deepEqual(points.map((point) => point.call.total), [120, 340]);
+    assert.deepEqual(points.map((point) => point.tokens.total), [120, 460]);
+    assert.deepEqual(points.map((point) => point.model), [PRICED, UNPRICED]);
+  });
+
+  it("keeps a call with no usage as unknown, never as a zero", () => {
+    const points = buildUsageTimeline([ended(PRICED, gemini), ended("relay", null), ended(PRICED, gemini)]);
+    assert.equal(points.length, 3, "the silent call is still a call on the chart");
+    assert.equal(points[1].call, null, "its own counts are unknown, not zero");
+    assert.equal(points[1].model, "relay");
+    assert.equal(points[1].estimatedCostUsd, null, "and so is the cost from there on");
+    assert.equal(points[2].tokens.total, 4180, "the running sum carries only what was reported");
+  });
+
+  /* The chart is derived from this array, so a new array on every frame would redraw it
+     for each of the hundred thousand frames between calls. */
+  it("hands back the same array until a call is added", () => {
+    const fold = usageTimelineBuilder();
+    const frames = [ended(PRICED, gemini)];
+    const first = fold(frames);
+    frames.push(other(), other());
+    assert.equal(fold(frames), first, "frames with no call leave the series untouched");
+    frames.push(ended(PRICED, gemini));
+    const grown = fold(frames);
+    assert.notEqual(grown, first);
+    assert.equal(grown.length, 2);
+    assert.equal(first.length, 1, "an array already handed out is never mutated");
   });
 });

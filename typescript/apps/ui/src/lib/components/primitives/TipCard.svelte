@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import type { Snippet } from "svelte";
+  import type { Component, Snippet } from "svelte";
 
   /** One fact in a rich tip. One with no value is left out, never drawn as a placeholder. */
   export interface TipField {
@@ -9,6 +9,8 @@
     mono?: boolean;
     /** Drawn instead of the key, which is then not shown or read: the value must say what it is. */
     icon?: Snippet;
+    /** A Lucide icon drawn the way `icon` is, for fields built outside a component. */
+    glyph?: Component<{ size?: number | string }>;
   }
 
   /** Past this many characters (two lines of a full-width tip) an identifier keeps its two
@@ -56,6 +58,8 @@
   {#each shown as field (field.key)}
     {#if field.icon}
       <span class="tip-card-icon" aria-hidden="true">{@render field.icon()}</span>
+    {:else if field.glyph}
+      <span class="tip-card-icon" aria-hidden="true"><field.glyph size={12} /></span>
     {:else}
       <span class="tip-card-key">{field.key}</span>
     {/if}
@@ -112,6 +116,10 @@
     align-items: center;
     justify-content: center;
     color: var(--text-3);
+  }
+
+  .tip-card-icon > :global(*) {
+    flex-shrink: 0;
   }
 
   .tip-card-value {

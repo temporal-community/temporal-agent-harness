@@ -14,3 +14,15 @@ vitest_test(
     src = "pricing.test.mjs",
     deps = [":pricing"],
 )
+
+vitest_test(
+    name = "unreportedUsage_test",
+    src = "unreportedUsage.test.mjs",
+    deps = [
+        ":pricing",
+        "//typescript/apps/ui/src/lib/components/flow:ModelBreakdown",
+        "//typescript/apps/ui/src/lib/components/flow:UsageReading",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)

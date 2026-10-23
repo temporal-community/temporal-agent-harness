@@ -1,173 +1,97 @@
 <script lang="ts">
-  /* Narrowest subpath per symbol, not the barrel: every mark has its own entry and
-     that is the only lever on what the d3 dependency tree drags in. */
-  import { areaY } from "@tanstack/charts/area";
-  import { lineY } from "@tanstack/charts/line";
-  import { ruleX } from "@tanstack/charts/rule";
-  import { scaleLinear } from "@tanstack/charts/scales/linear";
-  import { defineChart } from "@tanstack/charts/scene";
   import { Chart } from "@tanstack/charts/svelte";
-  import { tooltip } from "@tanstack/charts/tooltip";
-  import { formatTokens, type UsageTimelinePoint } from "$lib/cost/pricing";
-  import { formatDuration } from "$lib/state/replayLog";
-  import { niceTimeTicks } from "$lib/state/timeTicks";
+  import { SvelteSet } from "svelte/reactivity";
+  import TipCard, { type TipField } from "$lib/components/primitives/TipCard.svelte";
+  import { formatTokens, usagePointAt, type UsageTimelinePoint } from "$lib/cost/pricing";
+  import { formatDuration, formatElapsedDuration } from "$lib/state/replayLog";
+  import { buildStepTimeline, timestampAtIndex, type StepTimeline } from "$lib/state/stepTimeline";
+  import {
+    categoryTotals,
+    drawsTotal,
+    hoveredActivity,
+    hoveredSlot,
+    LEFT_AXIS_MIN,
+    lineStyle,
+    lineSwatch,
+    metricIcon,
+    modelKey,
+    presentCategories,
+    slotBudget,
+    slotTipFields,
+    slotXAt,
+    TOKEN_CATEGORY_STYLES,
+    TOTAL_LINE_STYLE,
+    usageActivity,
+    usageChart,
+    usageGaps,
+    usageSlots,
+    waitedSeconds,
+    type SeriesKey,
+    type UsageActivity,
+    type UsageMetric,
+    type UsageSlot
+  } from "./usageChart";
 
   interface Props {
+    /** One point per model call, from the run's incremental usage fold. */
     points: UsageTimelinePoint[];
+    timeline?: StepTimeline;
     viewIndex: number;
   }
 
-  let { points, viewIndex }: Props = $props();
+  let { points, timeline = buildStepTimeline([]), viewIndex }: Props = $props();
 
-  /* One sample per timeline point, carrying elapsed seconds rather than absolute
-     timestamps so the x axis reads as run duration. */
-  interface Sample {
-    index: number;
-    elapsed: number;
-    tokens: number;
-    event: string;
-  }
+  /* The plot's height range. It follows the pane's width between the two, never its
+     height: a plot stretched to a tall pane draws four calls as cliffs. */
+  const PLOT_MIN = 140;
+  const PLOT_MAX = 260;
+  const compactTokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+  const compactRate = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
-  const PLOT_HEIGHT = 132;
-
-  /* The renderer sizes its own SVG from this number and writes the result inline,
-     which outranks any height the stylesheet asks for. Inside the popover this
-     never showed, because that card was only ever about as tall as the fixed
-     figure. A pane is resizable, so the card stretches and a fixed plot would sit
-     in the top 132px of a 500px box under a lake of empty. Measure the box and
-     hand the renderer the height it actually has; the fixed figure stays as the
-     floor for the stacked form, where the card is auto-height and takes its size
-     from the plot rather than the other way round. */
+  /* The renderer sizes its own SVG from the number it is handed, so the box is
+     measured and the number passed down. The box is sized by CSS, never by the SVG
+     (which sits absolutely inside it), so the two cannot feed each other. The width
+     sets how many bars fit. */
   let plotBox = $state(0);
-  const plotHeight = $derived(Math.max(PLOT_HEIGHT, Math.round(plotBox)));
+  let plotWidth = $state(0);
+  const plotHeight = $derived(Math.min(PLOT_MAX, Math.max(PLOT_MIN, Math.round(plotBox))));
 
-  const chartPoints = $derived(tokenWindow(points));
-  const originTimestamp = $derived(
-    chartPoints.length ? Math.min(...chartPoints.map((point) => point.timestamp)) : 0
+  /* The whole run sizes the axis and names the legend, and it is rebinned only
+     when a call lands or the plot changes width. Scrubbing re-cuts the series
+     at the cursor — the same slots, without the calls it has not reached — and
+     leaves the axis where it is. At the live edge the cut is the run itself. */
+  const budget = $derived(slotBudget(plotWidth));
+  const run = $derived(usageSlots(points, budget));
+  const atEnd = $derived(points.at(-1) != null && viewIndex >= points.at(-1)!.index);
+  const layout = $derived(run.slots.length === 0 || atEnd ? run : usageSlots(points, budget, viewIndex));
+  const origin = $derived(points.reduce((first, point) => Math.min(first, point.timestamp), Infinity));
+  const cursorCall = $derived(usagePointAt(points, viewIndex));
+  const cursor = $derived(cursorCall ? { x: slotXAt(layout.slots, Math.max(0, cursorCall.timestamp - origin)) } : undefined);
+  /* Seconds from the first call. Absent at the live edge, so a finished wait is
+     not trimmed by a clock that has moved on past the run. */
+  const playheadTs = $derived(timestampAtIndex(timeline.workflow.points, viewIndex));
+  const cursorSeconds = $derived(
+    atEnd || playheadTs == null || !Number.isFinite(origin) ? undefined : Math.max(0, playheadTs - origin)
   );
-  const samples = $derived(
-    collapseSameInstant(
-      chartPoints
-        .map((point) => ({
-          index: point.index,
-          elapsed: Math.max(0, point.timestamp - originTimestamp),
-          tokens: point.tokens.total,
-          event: point.event
-        }))
-        /* Timestamps can arrive out of order across agents; an unsorted series draws a
-           path that doubles back on itself. */
-        .sort((a, b) => a.elapsed - b.elapsed || a.index - b.index)
-    )
-  );
-
-  const currentSample = $derived(latestSampleAtOrBefore(samples, viewIndex));
-  const peakTokens = $derived(samples.reduce((max, s) => Math.max(max, s.tokens), 0));
-  const lastElapsed = $derived(samples.length ? samples[samples.length - 1].elapsed : 0);
-
-  /* Both domains are floored away from zero width. A flat or all-zero series would
-     otherwise collapse the range and divide by zero when the scale interpolates.
-     Token counts are zero-based on purpose: the series is cumulative, so a clipped
-     baseline would overstate growth. The headroom keeps a flat series off the frame
-     edge, and the all-zero floor of 4 keeps its two ticks on whole tokens. */
-  const yDomain = $derived<[number, number]>([
-    0,
-    peakTokens > 0 ? peakTokens * 1.08 : 4
-  ]);
-  const xDomain = $derived<[number, number]>([0, lastElapsed > 0 ? lastElapsed : 1]);
-
+  const activity = $derived(usageActivity(timeline, origin, run.span));
+  const gaps = $derived(usageGaps(timeline, origin));
   const reducedMotion = prefersReducedMotion();
-
+  /* Per chart, for as long as the pane is open: a legend entry switches its series. */
+  const hidden = new SvelteSet<SeriesKey>();
+  const toggle = (key: SeriesKey) => (hidden.has(key) ? hidden.delete(key) : hidden.add(key));
+  /* A copy, so the chart re-derives on any key; `has` alone tracks only the keys it read. */
   const definition = $derived(
-    defineChart({
-      /* Responsive form: the tick budget is recomputed from the measured width, which
-         is what keeps labels from colliding when the pane rail narrows. */
-      chart: ({ width }) => ({
-        marks: [
-          areaY(samples, {
-            x: "elapsed",
-            y: "tokens",
-            fill: "var(--usage-fill)",
-            fillOpacity: 1
-          }),
-          lineY(samples, {
-            x: "elapsed",
-            y: "tokens",
-            stroke: "var(--usage-line)",
-            strokeWidth: 2,
-            /* Point dots stay legible up to a few dozen samples; past that they merge
-               into a band and the line alone reads better. A lone sample has no line,
-               so its dot is the only thing that would render. */
-            points: samples.length <= 40
-          }),
-          ...(currentSample
-            ? [
-                ruleX([currentSample.elapsed], {
-                  stroke: "var(--usage-marker)",
-                  strokeWidth: 1,
-                  strokeDasharray: "3 4"
-                })
-              ]
-            : [])
-        ],
-        scales: {
-          /* Configured instances, not factories: a factory would let the engine infer
-             the domain from the channels, which is exactly what collapses on a flat or
-             all-zero series. These domains are already floored. */
-          x: {
-            scale: scaleLinear().domain(xDomain),
-            /* Not niced: nicing rounds a SECONDS domain to a power of ten, so a 12,005s
-               run grew a 20,000s axis and left the series stopping at 60% of the width
-               under a tick reading "5h 33m 20s". The domain is already floored, and the
-               ticks below are chosen on time steps instead. */
-            nice: false,
-            axis: {
-              ticks: {
-                /* A run with no measurable duration gets a single origin tick; any
-                   more would all format to the same second and read as duplicates. */
-                ...(lastElapsed > 0
-                  ? { values: niceTimeTicks(lastElapsed, Math.max(4, Math.min(8, Math.round(width / 60)))) }
-                  : { values: [0] }),
-                /* Axis ticks land on whole steps, so the shared formatter's trailing
-                   zero fields are dead weight there: "1h 00m 00s" is eleven characters
-                   on a 240px axis, wide enough that the thinner drops a neighbour to
-                   fit it. The header keeps the full form, where the seconds matter. */
-                format: (seconds: number) =>
-                  formatDuration(seconds).replace(/( 00m)? 00s$/, "")
-              },
-              tickLabels: { thin: { minGap: 12, priority: "ends" } }
-            }
-          },
-          y: {
-            scale: scaleLinear().domain(yDomain),
-            /* Not niced, for the reason the x axis is not: nicing rounds the TOP of
-               the domain out to a whole tick, so a run peaking at 430k grew a
-               600,000 axis and drew the series in the bottom 70% of the box. The
-               domain is already floored and has its own headroom; the ticks below
-               land on round tokens inside it instead. */
-            nice: false,
-            grid: true,
-            axis: {
-              ticks: {
-                values: niceTokenTicks(peakTokens),
-                format: (value: number) => formatTokens(value)
-              },
-              tickLabels: { thin: { minGap: 8 } }
-            }
-          }
-        }
-      }),
-      /* 'auto' happily parks the tooltip over the x axis, hiding the very tick labels
-         the hover is being read against. Preferring the sides and top keeps it clear of
-         them, with 'bottom' still available when there is nowhere else to go. */
-      tooltip: {
-        ...tooltip,
-        placement: ["top", "top-right", "top-left", "right", "left", "bottom"],
-        offset: 12
-      },
-      /* The library gates its own transitions on the media query; the flag keeps the
-         initial draw static too when motion is not wanted. */
-      svgAnimation: reducedMotion ? false : { respectReducedMotion: true },
-      keyboard: true
+    usageChart({
+      layout,
+      domain: run,
+      cursor,
+      viewIndex,
+      cursorSeconds,
+      activity,
+      gaps,
+      plotHeight,
+      reducedMotion,
+      hidden: new Set(hidden)
     })
   );
 
@@ -177,220 +101,369 @@
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
-  function hasTokens(point: UsageTimelinePoint): boolean {
-    return point.tokens.total > 0;
-  }
-
-  /* Trim the dead head of the run: everything before the first billed event, less one
-     point so the first spike still rises from a baseline. */
-  function tokenWindow(source: UsageTimelinePoint[]): UsageTimelinePoint[] {
-    const firstTokenIndex = source.findIndex(hasTokens);
-    if (firstTokenIndex === -1) return source;
-    return source.slice(Math.max(0, firstTokenIndex - 1));
-  }
-
-  /* Several frames commonly land inside the same sampled instant, and a run of points
-     sharing one x is ambiguous for a line: the series is cumulative, so the last of the
-     run is the only total that was true at that instant. Collapsing here also keeps the
-     area mark well formed, since a stacked area rejects a repeated position outright.
-     Expects `source` sorted by (elapsed, index). */
-  function collapseSameInstant(source: Sample[]): Sample[] {
-    const collapsed: Sample[] = [];
-    for (const sample of source) {
-      const previous = collapsed[collapsed.length - 1];
-      if (previous && previous.elapsed === sample.elapsed) collapsed[collapsed.length - 1] = sample;
-      else collapsed.push(sample);
-    }
-    return collapsed;
-  }
-
-  /* Round token counts from 0 up to the peak, on the 1/2/5 steps a reader
-     recognises — the linear twin of niceTimeTicks, and the reason the y domain
-     can stop asking the library to nice it. Every tick sits AT OR BELOW the
-     peak, so the axis never grows to reach its own last label. */
-  function niceTokenTicks(peak: number, targetCount = 3): number[] {
-    /* A run that billed nothing has no peak to step towards; the ends of the
-       all-zero domain floor above are the only two labels available. */
-    if (!Number.isFinite(peak) || peak <= 0) return [0, 4];
-    const rough = peak / Math.max(2, targetCount);
-    const magnitude = 10 ** Math.floor(Math.log10(rough));
-    const step =
-      [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= rough) ??
-      magnitude * 10;
-
-    const ticks: number[] = [];
-    /* Re-derived from the index rather than accumulated, so float drift cannot
-       shift a late tick off a round number. */
-    while (ticks.length * step <= peak + 1e-9 && ticks.length <= 64) {
-      ticks.push(Number((ticks.length * step).toPrecision(12)));
-    }
-    return ticks.length >= 2 ? ticks : [0, peak];
-  }
-
-  function latestSampleAtOrBefore(source: Sample[], index: number): Sample | undefined {
-    let found: Sample | undefined;
-    for (const sample of source) {
-      if (sample.index <= index) found = sample;
-    }
-    return found ?? source[0];
-  }
-
-  const currentLabel = $derived(
-    currentSample
-      ? `${formatTokens(currentSample.tokens)} · +${formatDuration(currentSample.elapsed)}`
-      : "0"
+  const calls = $derived(points.length);
+  const categories = $derived(presentCategories(points));
+  const cursorParts = $derived(categoryTotals(points, viewIndex));
+  /* The bars' own colors, bottom to top, so the switch shows what it hides. */
+  const callsSwatch = $derived(
+    categories.length === 0
+      ? undefined
+      : `linear-gradient(0deg, ${categories
+          .map((category, k) => `${TOKEN_CATEGORY_STYLES[category].color} ${(k / categories.length) * 100}% ${((k + 1) / categories.length) * 100}%`)
+          .join(", ")})`
   );
+  const cursorOrdinal = $derived(cursorCall ? points.indexOf(cursorCall) + 1 : 0);
+  /* Past one call per few pixels a bar is the calls in its stretch of time, and the
+     legend has to stop calling it one call. */
+  const grouped = $derived(run.downsampled);
+  const unknownCalls = $derived(run.slots.at(-1)?.unknownSoFar ?? 0);
+  const finalTotal = $derived(run.slots.at(-1)?.running ?? 0);
+  const showActivity = $derived(plotWidth >= LEFT_AXIS_MIN);
+  const showTotal = $derived(drawsTotal(run));
+  const hasTools = $derived(showActivity && activity.some((item) => item.kind === "tool"));
+  const waited = $derived(showActivity ? waitedSeconds(activity) : 0);
+  const hasWaits = $derived(showActivity && activity.some((item) => item.kind === "wait"));
+  const legendKeys = $derived<SeriesKey[]>([
+    ...(calls > 0 ? ["calls" as const] : []),
+    ...(showTotal ? ["total" as const] : []),
+    ...run.lines.map(modelKey),
+    ...(hasTools ? ["tools" as const] : []),
+    ...(hasWaits ? ["waits" as const] : [])
+  ]);
+  const allHidden = $derived(legendKeys.length > 0 && legendKeys.every((key) => hidden.has(key)));
 
-  /* The chart is an image to assistive tech, so the numbers it encodes have to be
-     stated somewhere. This is that statement, and it also feeds the aria label. */
+  function visibleModel(model: string): string {
+    return model.replaceAll("\n", "↵").replaceAll("\t", "→") || "(empty model id)";
+  }
+
+  function shortModel(model: string): string {
+    const visible = visibleModel(model);
+    return visible.length > 36 ? `${visible.slice(0, 36)}…` : visible;
+  }
+
+  /* A tick of several tool starts sharing a pixel column names how many, the first and last. */
+  function activityTip(event: UsageActivity): { heading: string; fields: TipField[] } {
+    if (event.count && event.last) {
+      return {
+        heading: `${formatTokens(event.count)} tool calls`,
+        fields: [
+          { key: "First", value: event.label, mono: true },
+          { key: "Last", value: event.last.label, mono: true },
+          { key: "At", value: `+${formatDuration(event.x1)} – +${formatDuration(event.last.x1)}` }
+        ]
+      };
+    }
+    return {
+      heading: event.kind === "tool" ? "Tool call" : "Wait",
+      fields: [
+        { key: event.kind === "tool" ? "Tool" : "For", value: event.label, mono: event.kind === "tool" },
+        { key: "At", value: `+${formatDuration(event.x1)}` },
+        { key: "Took", value: formatElapsedDuration(event.durationSeconds * 1000) }
+      ]
+    };
+  }
+
+  /* Each drawn line's total after this slot, a lower bound once one of its calls went
+     silent. The card's body rather than its fields: a key is an uppercased label that
+     never wraps, and a model id is neither. */
+  function lineTotals(slot: UsageSlot): string | null {
+    if (layout.lines.length < 2) return null;
+    const at = layout.slots.findIndex((candidate) => candidate.index === slot.index);
+    return layout.lines
+      .filter((line) => line.from <= at)
+      .map((line) => `${shortModel(line.label)}: ${line.unknownFrom >= 0 && line.unknownFrom <= at ? "≥ " : ""}${formatTokens(line.running[at] ?? 0)}`)
+      .join("\n");
+  }
+
+  /* The chart is an image to assistive tech, so the numbers it encodes are stated here. */
   const summary = $derived(
-    samples.length === 0
-      ? "No token usage recorded yet."
-      : `Cumulative token usage across ${samples.length} sampled ${
-          samples.length === 1 ? "event" : "events"
-        }, peaking at ${formatTokens(peakTokens)} tokens over ${formatDuration(
-          lastElapsed
-        )}. Replay is at ${currentLabel}.`
+    `${calls} model ${calls === 1 ? "call" : "calls"} over ${formatDuration(layout.span)}, ` +
+      `${unknownCalls > 0 ? "at least " : ""}${formatTokens(finalTotal)} tokens in all` +
+      (unknownCalls > 0 ? `; ${unknownCalls} reported no usage` : "") +
+      (categories.length > 0
+        ? `. Each bar stacks ${categories.map((category) => TOKEN_CATEGORY_STYLES[category].label).join(", ")}, bottom to top; at the cursor ` +
+          categories.map((category) => `${TOKEN_CATEGORY_STYLES[category].label} ${formatTokens(cursorParts[category])}`).join(", ")
+        : "") +
+      `. On log scales, ${showTotal ? "a heavier line shows the run's total and " : ""}lines show the running total of ${run.lines.map((line) => shortModel(line.label)).join(", ")}` +
+      (waited >= 1 ? `; approval and callback waits took ${formatDuration(waited)}` : "") +
+      `. Replay is at +${formatDuration(cursor?.x ?? 0)}.`
   );
 </script>
 
-<section class="usage-chart" aria-label="Replay token usage timeline">
-  <div class="chart-head">
-    <span>Token total</span>
-    <span class="current-value">{currentLabel}</span>
-  </div>
+<section class="usage-chart" aria-label="Tokens over time">
+  {#snippet entry(key: SeriesKey, swatch: string, name: string, full: string, background?: string)}
+    <li>
+      <button
+        type="button"
+        class="entry"
+        aria-pressed={!hidden.has(key)}
+        aria-label={full === name ? undefined : full}
+        data-tip={full === name ? undefined : full}
+        onclick={() => toggle(key)}
+      ><span class="swatch {swatch}" style:background={background}></span><span class="line-name" dir="auto">{name}</span></button>
+    </li>
+  {/snippet}
 
-  {#if samples.length === 0}
-    <p class="chart-empty">Step through the stream to chart token usage.</p>
-  {:else}
-    <div
-      class="plot"
-      style={`--plot-height: ${PLOT_HEIGHT}px`}
-      bind:clientHeight={null, (value) => (plotBox = value ?? 0)}
-    >
-      <Chart
-        {definition}
-        height={plotHeight}
-        class="usage-plot"
-        ariaLabel="Cumulative token usage over run time"
-        ariaDescription={summary}
-      >
-        {#snippet tooltipBody({ points: hovered })}
-          <div class="usage-tip">
-            {#each hovered as hoveredPoint (hoveredPoint.key)}
-              {@const sample = hoveredPoint.datum as Sample}
-              <strong>{formatTokens(sample.tokens)} tok</strong>
-              <span>{sample.event} · +{formatDuration(sample.elapsed)}</span>
-            {/each}
-          </div>
-        {/snippet}
-      </Chart>
-    </div>
+  <!-- One wrapping row of switches, so none is clipped out of reach. Left to right
+       in any page because the plot's axes do not mirror. Time and the log grid are
+       the axes; this row only names the series, and it is absent when there is
+       nothing to name so the plot starts at the top. -->
+  {#if calls > 0 || hasTools || hasWaits}
+    <ul class="legend" dir="ltr" aria-label="Series shown">
+      {#if calls > 0}
+        {@const label = grouped ? "Calls by time" : "Each call"}
+        {@render entry("calls", "bar", label, label, callsSwatch)}
+      {/if}
+      {#if unknownCalls > 0}<li class="key"><span class="swatch unknown"></span>No usage</li>{/if}
+      {#if showTotal}{@render entry("total", "line total", "Total", "Total", TOTAL_LINE_STYLE.color)}{/if}
+      {#each run.lines as line (line.label)}
+        {@const name = line.line == null ? line.label : shortModel(line.label)}
+        {@render entry(modelKey(line), "line", name, line.label, lineSwatch(lineStyle(line.line)))}
+      {/each}
+      {#if hasTools}{@render entry("tools", "tool", "Tools", "Tools")}{/if}
+      {#if hasWaits}
+        {@const label = `Approval / callback waits${waited >= 1 ? ` · ${formatDuration(waited)}` : ""}`}
+        {@render entry("waits", "wait", label, label)}
+      {/if}
+    </ul>
   {/if}
 
-  <p class="visually-hidden" aria-live="off">{summary}</p>
+  <div class="plot" style={`--plot-min: ${PLOT_MIN}px; --plot-max: ${PLOT_MAX}px`} bind:clientHeight={plotBox} bind:clientWidth={plotWidth}>
+    {#if allHidden}<p class="all-hidden">Every series is hidden. Pick one in the legend to show it.</p>{/if}
+    <Chart {definition} height={plotHeight} class="usage-plot" ariaLabel="Tokens per model call and running total over run time" ariaDescription={summary}>
+      {#snippet tooltipBody({ points: hovered })}
+        {@const event = hoveredActivity(hovered)}
+        {@const slot = hoveredSlot(hovered)}
+        {#if event}
+          <TipCard {...activityTip(event)} />
+        {:else if slot}
+          <TipCard
+            heading={slot.tokens > 0
+              ? `${formatTokens(slot.tokens)} tok${slot.unknown > 0 ? ` + ${slot.unknown} unreported` : ""}`
+              : "No usage reported"}
+            fields={slotTipFields(slot, categories)}
+            body={lineTotals(slot)}
+          />
+        {/if}
+      {/snippet}
+    </Chart>
+  </div>
+
+  <!-- Each figure behind the tooltip's icon for it, worded the same way, so the two read as one. -->
+  {#snippet reading(metric: UsageMetric, text: string)}
+    {@const Icon = metricIcon(metric)}
+    <span class="reading"><Icon size={12} />{text}</span>
+  {/snippet}
+
+  {#if cursorCall}
+    {@const seconds = cursorCall.durationSeconds}
+    {@const ModelIcon = metricIcon("model")}
+    <p class="cursor-call" dir="ltr">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <span class="reading cursor-model" tabindex="0" data-tip={cursorCall.model} data-tip-align="start">
+        <ModelIcon size={12} /><span class="fade-end" dir="auto">{visibleModel(cursorCall.model)}</span>
+      </span>
+      {@render reading("at", `+${formatDuration(Math.max(0, cursorCall.timestamp - origin))}`)}
+      {@render reading("call", `call ${formatTokens(cursorOrdinal)}`)}
+      {#if cursorCall.call}
+        {@render reading("input", `${compactTokens.format(cursorCall.call.input)} in`)}
+        {@render reading("output", `${compactTokens.format(cursorCall.call.output)} out`)}
+        {@render reading("cached", `${compactTokens.format(cursorCall.call.cached)} cache`)}
+      {:else}
+        <span>Usage not reported</span>
+      {/if}
+      {#if seconds != null}{@render reading("duration", formatElapsedDuration(seconds * 1000))}{/if}
+      <!-- A call that took no measurable time has no rate; dividing by a floor invents one. -->
+      {#if cursorCall.call && seconds != null && seconds > 0 && Number.isFinite(cursorCall.call.total)}
+        {@render reading("rate", `${compactRate.format(Math.round(cursorCall.call.total / seconds))} tok/s`)}
+      {/if}
+    </p>
+  {/if}
+
+  <p class="visually-hidden">{summary}</p>
 </section>
 
 <style>
   .usage-chart {
-    /* The amber identity comes off the token layer rather than a local hex. */
-    --usage-line: var(--warning);
-    --usage-fill: color-mix(in srgb, var(--warning) 14%, transparent);
+    /* Behind the model lines and lighter than them: the calls are the detail, the
+       totals the reading. Mixed with the pane's surface rather than made translucent,
+       so a bar is one color whatever is behind it. */
+    --usage-bar: color-mix(in srgb, var(--model) 45%, var(--surface-1));
+    --usage-unknown: color-mix(in srgb, var(--text-3) 32%, transparent);
     --usage-marker: color-mix(in srgb, var(--text-1) 55%, transparent);
-    --usage-grid: var(--border);
-    --usage-axis-text: var(--text-3);
+    --usage-tool: color-mix(in srgb, var(--tool) 65%, transparent);
+    --usage-wait: color-mix(in srgb, var(--live) 65%, transparent);
+    --usage-wait-fill: color-mix(in srgb, var(--live) 18%, transparent);
 
-    min-width: 0;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 6px;
-    /* Same inset as the cards beside and below it, so the three headings share
-       one baseline. */
-    padding: var(--gutter);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-2);
-  }
-
-  .chart-head {
+    /* As tall as its legend and plot, never the pane: what a tall pane has left
+       goes to the model list under it. */
+    flex: none;
     min-width: 0;
     display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    align-items: center;
-    color: var(--text-2);
-    font-size: var(--font-sm);
+    flex-direction: column;
+    gap: var(--gutter-tight);
   }
 
-  .current-value {
-    color: var(--text-3);
-    font-size: var(--font-sm);
-    font-variant-numeric: tabular-nums;
+  /* Wraps onto more rows rather than clipping an entry and the switch with it. */
+  .legend {
+    flex: none;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-2);
+    font-size: var(--font-xs);
+  }
+
+  .legend li {
+    min-width: 0;
+    max-width: 100%;
+    display: inline-flex;
+  }
+
+  .key,
+  .entry {
+    min-width: 0;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     white-space: nowrap;
   }
 
-  /* Grows into whatever height the card is stretched to, with the fixed height as
-     a floor. The renderer does not measure this box, so the script reads it and
-     passes the height down; these two rules only make the box itself stretch. */
+  .entry {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .entry:hover {
+    color: var(--text-1);
+  }
+
+  /* Off: the name struck through and dimmed, its sample faded, in the same box. */
+  .entry[aria-pressed="false"] {
+    color: var(--text-3);
+  }
+
+  .entry[aria-pressed="false"] .line-name {
+    text-decoration: line-through;
+  }
+
+  .entry[aria-pressed="false"] .swatch {
+    opacity: 0.35;
+  }
+
+  .swatch {
+    flex: none;
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+  }
+
+  .line-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .swatch.bar { background: var(--usage-bar); }
+  .swatch.line { width: 16px; height: 2px; }
+  .swatch.line.total { height: 3px; }
+  .swatch.unknown { background: var(--usage-unknown); }
+  .swatch.tool { width: 2px; background: var(--usage-tool); }
+  .swatch.wait { height: 4px; box-sizing: border-box; border: 1px solid var(--usage-wait); background: var(--usage-wait-fill); }
+
+  /* About 2.5:1 on a mid-width pane. `cqi` is the reading's own width
+     (UsageReading is an inline-size container). */
   .plot {
     position: relative;
+    flex: none;
     min-width: 0;
-    height: 100%;
-    min-height: var(--plot-height);
+    height: clamp(var(--plot-min), 40cqi, var(--plot-max));
+  }
+
+  .all-hidden {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    padding: var(--gutter);
+    color: var(--text-3);
+    font-size: var(--font-xs);
+    text-align: center;
+    pointer-events: none;
   }
 
   /* The adapter renders its own SVG, so the token layer reaches it through
      descendant selectors rather than through props. */
+  /* Out of flow, so the SVG's own height never props the box open: a pane that
+     shrinks shrinks the box, and the measured height follows it down. */
   .plot :global(.usage-plot) {
-    display: block;
-    width: 100%;
-    height: 100%;
+    position: absolute !important;
+    inset: 0;
     overflow: visible;
   }
 
   .plot :global(.usage-plot text) {
-    fill: var(--usage-axis-text);
+    fill: var(--text-3);
     font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
   }
 
-  /* Renderer-owned groups, named as the adapter emits them: ts-chart__grid and
-     ts-chart__axes. Without these the lines keep the library's own defaults, which are
-     not on the token layer. */
   .plot :global(.usage-plot .ts-chart__grid line),
   .plot :global(.usage-plot .ts-chart__axes line),
+  .plot :global(.usage-plot .ts-chart__axes line),
   .plot :global(.usage-plot .ts-chart__axes path) {
-    stroke: var(--usage-grid);
+    stroke: var(--border);
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
   }
 
-  .chart-empty {
-    margin: 0;
-    align-self: center;
-    color: var(--text-3);
-    font-size: var(--font-sm);
+  .plot :global(.tip-card) {
+    max-width: 280px;
   }
 
-  .usage-tip {
-    display: grid;
-    gap: 1px;
-    padding: 5px 8px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    background: var(--surface-3);
-    color: var(--text-1);
-    font-size: var(--font-sm);
+  .cursor-call {
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px var(--gutter);
+    margin: 0;
+    color: var(--text-2);
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
-  .usage-tip strong {
-    font-variant-numeric: tabular-nums;
+  /* The icons part the figures, so a wrapped line never starts with a separator. */
+  .reading {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
 
-  .usage-tip span {
+  .reading > :global(svg) {
+    flex-shrink: 0;
     color: var(--text-3);
-    font-size: var(--font-xs);
+  }
+
+  .cursor-model {
+    min-width: 6ch;
+    max-width: 24ch;
+    color: var(--text-1);
   }
 
   .visually-hidden {

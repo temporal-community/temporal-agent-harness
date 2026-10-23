@@ -20,20 +20,54 @@ export interface UsageTotals {
 export interface CostSummary {
   tokens: UsageTotals;
   estimatedCostUsd: number | null;
+  /** Calls that explicitly reported a prompt-cache count, including zero. */
+  cacheReadReportedCalls: number;
+  /** Calls that reported no usage object at all. */
+  cacheReadUnreportedCalls: number;
   modelBreakdown: Array<{
     model: string;
     tokens: UsageTotals;
     estimatedCostUsd: number | null;
+    /** Calls by this model that ended without usage, so its `tokens` are a lower bound. */
+    unreportedCalls: number;
   }>;
+  /**
+   * Model calls that ended with no usage object. Any at all and the totals are
+   * not a measurement: a later call cannot fill in a number the provider never
+   * sent.
+   */
+  unreportedCalls: number;
 }
 
+/** One closed model call: its own counts, and the reported running sum after it. */
 export interface UsageTimelinePoint {
+  /** 1-based frame position, aligned with AgentRunController.viewIndex. */
   index: number;
-  event: AgentSseFrame["event"] | "start";
   timestamp: number;
+  turnNumber: number;
+  model: string;
+  /** This call's own counts; null when the call reported no usage. */
+  call: UsageTotals | null;
+  /** An auto-approval evaluation's call rather than the agent's own. */
+  decision?: boolean;
+  /** Optional counts this call's usage left null, which is not the same as zero. */
+  missing?: readonly OptionalUsageField[];
+  /** Wall time from this operation's matching start frame, when both were observed. */
+  durationSeconds: number | null;
+  /** Every reported call so far, so a lower bound once any call reported nothing. */
   tokens: UsageTotals;
   estimatedCostUsd: number | null;
+  /** The complete usage reading at this call, reused while the replay cursor moves. */
+  usage: CostSummary;
 }
+
+export type OptionalUsageField = "cached" | "thought" | "toolUse";
+
+const OPTIONAL_FIELDS: readonly [OptionalUsageField, keyof TokenUsage][] = [
+  ["cached", "cached_tokens"],
+  ["thought", "thought_tokens"],
+  ["toolUse", "tool_use_tokens"]
+];
 
 const pricing: Record<string, ModelPricing> = {
   "gemini-3.5-flash": {
@@ -159,23 +193,44 @@ function meteredUsage(frame: AgentSseFrame): MeteredUsage | null {
   return { model, usage };
 }
 
+/** A closed model call that sent no usage object, which is not a call that spent zero. */
+function unreportedModel(frame: AgentSseFrame): string | null {
+  if (frame.event !== "model_interaction_ended" || !("type" in frame.data)) return null;
+  return frame.data.usage == null ? (frame.data.model ?? "unknown") : null;
+}
+
 export function summarizeCost(frames: AgentSseFrame[]): CostSummary {
-  const byModel = new Map<string, UsageTotals>();
+  const byModel = new Map<string, { tokens: UsageTotals; unreportedCalls: number }>();
   const aggregate = emptyTotals();
+  let unreportedCalls = 0;
+  let cacheReadReportedCalls = 0;
+  let cacheReadUnreportedCalls = 0;
+  const entry = (model: string) => {
+    let found = byModel.get(model);
+    if (!found) byModel.set(model, (found = { tokens: emptyTotals(), unreportedCalls: 0 }));
+    return found;
+  };
 
   for (const frame of frames) {
+    const unreported = unreportedModel(frame);
+    if (unreported != null) {
+      unreportedCalls += 1;
+      cacheReadUnreportedCalls += 1;
+      entry(unreported).unreportedCalls += 1;
+      continue;
+    }
     const metered = meteredUsage(frame);
     if (!metered) continue;
-    const totals = byModel.get(metered.model) ?? emptyTotals();
-    addUsage(totals, metered.usage);
+    if (metered.usage.cached_tokens != null) cacheReadReportedCalls += 1;
+    addUsage(entry(metered.model).tokens, metered.usage);
     addUsage(aggregate, metered.usage);
-    byModel.set(metered.model, totals);
   }
 
-  const modelBreakdown = [...byModel.entries()].map(([model, tokens]) => ({
+  const modelBreakdown = [...byModel.entries()].map(([model, { tokens, unreportedCalls }]) => ({
     model,
     tokens,
-    estimatedCostUsd: estimate(model, tokens)
+    estimatedCostUsd: unreportedCalls > 0 ? null : estimate(model, tokens),
+    unreportedCalls
   }));
 
   const knownCost = modelBreakdown.every((item) => item.estimatedCostUsd != null);
@@ -187,34 +242,107 @@ export function summarizeCost(frames: AgentSseFrame[]): CostSummary {
           0
         )
       : null,
-    modelBreakdown
+    modelBreakdown,
+    unreportedCalls,
+    cacheReadReportedCalls,
+    cacheReadUnreportedCalls
   };
 }
 
-export function buildUsageTimeline(frames: AgentSseFrame[]): UsageTimelinePoint[] {
-  const firstTimestamp =
-    frames
-      .map((frame) => timestampOf(frame))
-      .find((timestamp): timestamp is number => timestamp != null) ?? 0;
-  const cumulative = emptyTotals();
+export function buildUsageTimeline(frames: readonly AgentSseFrame[]): UsageTimelinePoint[] {
+  return usageTimelineBuilder()(frames);
+}
+
+/** The last cumulative usage point reached by a 1-based replay cursor. */
+export function usagePointAt(
+  points: readonly UsageTimelinePoint[],
+  viewIndex: number
+): UsageTimelinePoint | undefined {
+  let lo = 0;
+  let hi = points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (points[mid]!.index <= viewIndex) lo = mid + 1;
+    else hi = mid;
+  }
+  return points[lo - 1];
+}
+
+/**
+ * The usage series, one point per model call, folded forward while the frames only
+ * grow (same rule as replayTimelineBuilder). It also starts over when the first
+ * timestamp arrives late, because every earlier point falls back to it.
+ *
+ * Hands back the same array until a call is added, so the frames between calls
+ * (nearly all of them) do not redraw the chart.
+ */
+export function usageTimelineBuilder(): (frames: readonly AgentSseFrame[]) => UsageTimelinePoint[] {
+  let seen = 0;
+  let last: AgentSseFrame | undefined;
+  let firstTimestamp: number | undefined;
+  let cumulative = emptyTotals();
   let cumulativeCost = 0;
   let hasUnknownCost = false;
-  const points: UsageTimelinePoint[] = [
-    {
-      index: 0,
-      event: "start",
-      timestamp: firstTimestamp,
-      tokens: emptyTotals(),
-      estimatedCostUsd: 0
-    }
-  ];
+  let byModel = new Map<string, { tokens: UsageTotals; unreportedCalls: number }>();
+  let unreportedCalls = 0;
+  let cacheReadReportedCalls = 0;
+  let cacheReadUnreportedCalls = 0;
+  let startedAt = new Map<string, number>();
+  let points: UsageTimelinePoint[] = [];
+  let shared: UsageTimelinePoint[] = [];
 
-  frames.forEach((frame, index) => {
-    const metered = meteredUsage(frame);
-    if (metered) {
-      const tokens = emptyTotals();
+  return (frames) => {
+    const grows = seen > 0 && frames.length >= seen && frames[seen - 1] === last;
+    const before = grows && firstTimestamp != null ? points.length : -1;
+    if (before === -1) {
+      seen = 0;
+      firstTimestamp = undefined;
+      for (const frame of frames) {
+        firstTimestamp = timestampOf(frame) ?? undefined;
+        if (firstTimestamp != null) break;
+      }
+      cumulative = emptyTotals();
+      cumulativeCost = 0;
+      hasUnknownCost = false;
+      byModel = new Map();
+      unreportedCalls = 0;
+      cacheReadReportedCalls = 0;
+      cacheReadUnreportedCalls = 0;
+      startedAt = new Map();
+      points = [];
+    }
+    for (let index = seen; index < frames.length; index += 1) {
+      foldFrame(frames[index]!, index);
+    }
+    seen = frames.length;
+    last = frames[seen - 1];
+    if (points.length !== before) shared = points.slice();
+    return shared;
+  };
+
+  function foldFrame(frame: AgentSseFrame, index: number): void {
+    if ("type" in frame.data) {
+      if (frame.event === "model_interaction_started") {
+        startedAt.set(`model:${frame.data.agent_id}`, frame.data.timestamp);
+      } else if (frame.event === "auto_approval_evaluation_started") {
+        startedAt.set(`evaluation:${frame.data.evaluation_id}`, frame.data.timestamp);
+      }
+    }
+    const unreported = unreportedModel(frame);
+    const metered = unreported == null ? meteredUsage(frame) : null;
+    let call: UsageTotals | null = null;
+    if (unreported != null) {
+      /* Unknown tokens cost an unknown amount, at any price. */
+      hasUnknownCost = true;
+      unreportedCalls += 1;
+      cacheReadUnreportedCalls += 1;
+      entry(unreported).unreportedCalls += 1;
+    } else if (metered) {
+      const tokens = (call = emptyTotals());
       addUsage(tokens, metered.usage);
       addUsage(cumulative, metered.usage);
+      addUsage(entry(metered.model).tokens, metered.usage);
+      if (metered.usage.cached_tokens != null) cacheReadReportedCalls += 1;
       const estimatedCostUsd = estimate(metered.model, tokens);
       if (estimatedCostUsd == null) {
         /* The latch is deliberate and stays: this series is CUMULATIVE, so once a
@@ -234,18 +362,81 @@ export function buildUsageTimeline(frames: AgentSseFrame[]): UsageTimelinePoint[
       } else {
         cumulativeCost += estimatedCostUsd;
       }
+    } else {
+      return;
     }
+    const startKey =
+      frame.event === "auto_approval_evaluation_ended"
+        ? `evaluation:${frame.data.evaluation_id}`
+        : `model:${"type" in frame.data ? frame.data.agent_id : ""}`;
+    const start = startedAt.get(startKey);
+    startedAt.delete(startKey);
 
     points.push({
       index: index + 1,
-      event: frame.event,
-      timestamp: timestampOf(frame) ?? firstTimestamp,
+      timestamp: timestampOf(frame) ?? firstTimestamp ?? 0,
+      turnNumber: "type" in frame.data ? frame.data.turn_number : 0,
+      model: unreported ?? metered!.model,
+      call,
+      decision: frame.event === "auto_approval_evaluation_ended",
+      missing: metered ? OPTIONAL_FIELDS.filter(([, key]) => metered.usage[key] == null).map(([field]) => field) : [],
+      durationSeconds: start == null ? null : Math.max(0, (timestampOf(frame) ?? start) - start),
       tokens: copyTotals(cumulative),
-      estimatedCostUsd: hasUnknownCost ? null : cumulativeCost
+      estimatedCostUsd: hasUnknownCost ? null : cumulativeCost,
+      usage: snapshot()
     });
-  });
+  }
 
-  return points;
+  function entry(model: string) {
+    let found = byModel.get(model);
+    if (!found) byModel.set(model, (found = { tokens: emptyTotals(), unreportedCalls: 0 }));
+    return found;
+  }
+
+  function snapshot(): CostSummary {
+    const modelBreakdown = [...byModel.entries()].map(([model, value]) => ({
+      model,
+      tokens: copyTotals(value.tokens),
+      estimatedCostUsd: value.unreportedCalls > 0 ? null : estimate(model, value.tokens),
+      unreportedCalls: value.unreportedCalls
+    }));
+    return {
+      tokens: copyTotals(cumulative),
+      estimatedCostUsd: hasUnknownCost ? null : cumulativeCost,
+      modelBreakdown,
+      unreportedCalls,
+      cacheReadReportedCalls,
+      cacheReadUnreportedCalls
+    };
+  }
+}
+
+export interface ContextWindowUsage {
+  used: number;
+  limit: number;
+}
+
+/**
+ * How full the session agent's context window is: the prompt and reply of its latest
+ * reported model call, against the window size the producer reported for that call's
+ * model. Subagents and the approval evaluator run in contexts of their own, so only the
+ * root's calls count.
+ *
+ * Null until a call reports both numbers. The window is never guessed from the model
+ * name: no producer sends `context_window` yet, so today this is always null.
+ */
+export function contextWindowUsage(
+  entries: readonly { role: string; frame: AgentSseFrame }[]
+): ContextWindowUsage | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const { role, frame } = entries[index]!;
+    if (role !== "parent" || frame.event !== "model_interaction_ended" || !frame.data.usage) continue;
+    const limit = tokenCount((frame.data as { context_window?: unknown }).context_window);
+    const input = frame.data.usage.input_tokens;
+    if (!limit || input == null) return null;
+    return { used: input + (frame.data.usage.output_tokens ?? 0), limit };
+  }
+  return null;
 }
 
 export function formatCost(cost: number | null): string {
@@ -267,6 +458,24 @@ export function unpricedNote(models: string[]): string | null {
   return `No price configured for ${models.join(", ")} — token counts are exact, cost is not estimated.`;
 }
 
+const tokenFormat = new Intl.NumberFormat("en-US");
+
 export function formatTokens(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
+  return tokenFormat.format(value);
 }
+
+/**
+ * A token count from a summary, the one place unreported usage is written down.
+ *
+ * Once any call ended without usage the sum is what the reported calls spent, a
+ * lower bound; with nothing reported at all it is unknown. Neither is the bare
+ * number, and least of all the zero an empty sum prints.
+ */
+export function tokenFigure(value: number, unreportedCalls: number): string {
+  if (unreportedCalls === 0) return formatTokens(value);
+  return value > 0 ? `≥ ${formatTokens(value)}` : "—";
+}
+
+export const UNREPORTED_TIP =
+  "A model call ended without reporting token usage, so this counts only the calls that did: " +
+  "a lower bound, not a total.";

@@ -1,6 +1,6 @@
 /* Dev-only fixtures for the structured-reply surfaces (JsonReply, the log's "Handler reply",
    the graph's Output node). Selected with `?mock=<name>` in a dev build; see main.ts. */
-import type { AgentInterfaceFunction, AgentSseFrame, FileCitationAnnotation, Session } from "$lib/api/types";
+import type { AgentInterfaceFunction, AgentSseFrame, FileCitationAnnotation, Session, TokenUsage } from "$lib/api/types";
 import { agents, frame, meta, usage, type MockScenario } from "./scenarios";
 
 interface Reply {
@@ -259,6 +259,41 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
   const footnote = "[1] See the footnote at the end: rows 4 and 9 were skipped because their email field was empty.";
   const placeholder = "{name} is a placeholder in your mail-merge template; I left it as-is in 12 rows.";
 
+  /* The token chart's worst cases, one model call each: an unbroken 300-character model id,
+     nine-digit counts, all zeros, no usage at all, a call that took no time, one whose start
+     was never seen (so no throughput), every token category, and a decision model's call. */
+  function usageTurn(n: number): AgentSseFrame[] {
+    const m = (d = 0.5) => ({ ...meta(n, (clock += d)), message_id: `msg-${n}-0` });
+    const call = (model: string, spent: TokenUsage | null, took = 2, started = true) => [
+      ...(started ? [frame("model_interaction_started", { type: "model_interaction_started", ...m(), model })] : []),
+      frame("model_interaction_ended", { type: "model_interaction_ended", ...m(took), model, usage: spent })
+    ];
+    return [
+      frame("message_accepted", { type: "message_accepted", ...m(), handler: "ask", payload: { text: "Spend tokens every awkward way." }, disposition: "opened" }),
+      frame("turn_started", { type: "turn_started", ...m() }),
+      frame("message_handler_start", { type: "message_handler_start", ...m() }),
+      ...call(`models/${"Gemini38FlashExperimental".repeat(12)}`, usage(3100, 269, 0, 0)),
+      ...call("gpt-5.4-mini", usage(987_654_321, 123_456_789, 98_765_432, 876_543_210, 45_678_901), 40),
+      ...call("gpt-5.4-mini", usage(0, 0, 0, 0, 0)),
+      ...call("gpt-5.4-mini", null),
+      ...call("gemini-3.8-flash", usage(3100, 269, 120, 900, 60), 0),
+      ...call("نموذج‌عربي 🧑‍💻 模型 <b>x</b>", usage(2400, 310, 80, 0, 0), 2, false),
+      frame("auto_approval_evaluation_ended", {
+        type: "auto_approval_evaluation_ended",
+        ...m(),
+        tool_id: "tool-usage-eval",
+        tool_name: "spend_tokens",
+        evaluation_id: "eval-usage-1",
+        evaluator: "jev_evaluator",
+        verdict: "approve",
+        reason: "Read-only.",
+        details: { verdict: "approve", model: "gemini-3.5-flash", usage: { input_tokens: 820, output_tokens: 40, total_tokens: 860 } }
+      }),
+      frame("message_handler_end", { type: "message_handler_end", ...m(), output: { text: "Spent." } }),
+      frame("turn_end", { type: "turn_end", ...meta(n, (clock += 0.5)) })
+    ];
+  }
+
   const worst = scenario("worst", "Worst-case JSON", [
     ...turn(1, "Score and clean these rows (output has a text field).", [{ stream: pretty(textAmongFields), output: textAmongFields }]),
     ...turn(2, "Explain the plan (output has a message field).", [
@@ -284,7 +319,8 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     ...subagentTurn(),
     ...turn(12, "Clean (handler fails mid-stream).", [
       { stream: partial, error: "ValidationError: 1 validation error for CleanedRecords\nrecords.0.status\n  Input should be 'active', 'churned' or 'prospect'" }
-    ])
+    ]),
+    ...usageTurn(13)
   ]);
 
   /* Prose replies streamed in small chunks, so scrubbing lands mid-marker, mid-fence and mid-link. */

@@ -119,6 +119,7 @@ js_library(
     srcs = ["UsageLineChart.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":usageChart",
         "//typescript/apps/ui:node_modules/@tanstack/charts",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:TipCard",
@@ -135,6 +136,7 @@ js_library(
     deps = [
         ":ModelBreakdown",
         ":UsageLineChart",
+        ":usageChart",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:Reading",
         "//typescript/apps/ui/src/lib/cost:pricing",
@@ -147,6 +149,7 @@ js_library(
     srcs = ["WorkflowTimeline.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":usageChart",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
@@ -164,6 +167,20 @@ js_library(
     name = "timelineMark",
     srcs = ["timelineMark.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "usageChart",
+    srcs = ["usageChart.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/charts",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:timeTicks",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
 )
 
 vitest_test(
@@ -201,13 +218,16 @@ vitest_test(
     src = "UsageLineChart.test.mjs",
     deps = [
         ":UsageLineChart",
+        ":usageChart",
         "//typescript/apps/ui:node_modules/@tanstack/charts",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
         "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
 
@@ -217,6 +237,7 @@ vitest_test(
     deps = [
         ":UsageLineChart",
         ":UsageReading",
+        ":usageChart",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/cost:pricing",

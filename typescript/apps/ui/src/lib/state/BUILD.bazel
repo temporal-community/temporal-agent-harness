@@ -904,6 +904,7 @@ vitest_test(
     src = "workflowTimeline.test.mjs",
     deps = [
         ":stepTimeline",
+        "//typescript/apps/ui/src/lib/components/flow:usageChart",
     ],
 )
 
