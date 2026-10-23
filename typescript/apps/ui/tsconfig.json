@@ -11,10 +11,14 @@
     "verbatimModuleSyntax": true,
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["svelte", "vite/client", "node"],
     "paths": {
-      "$lib/*": ["./src/lib/*"]
+      "$lib/*": ["./src/lib/*"],
+      // svelte-check type-checks the client's source with this TypeScript, so the client
+      // must compile under it as well as under its own TypeScript 7.
+      "@temporalio/agent-harness-client": ["../../packages/client/src/index.ts"]
     }
   },
   "include": [

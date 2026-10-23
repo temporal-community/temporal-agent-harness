@@ -13,9 +13,10 @@ js_library(
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@xyflow/svelte",
         "//typescript/apps/ui:node_modules/svelte",
-        "//typescript/apps/ui/src/lib/components/primitives:Badge",
-        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/state:nodeTween",
     ],
 )
@@ -25,7 +26,12 @@ js_library(
     srcs = ["AgentStateNode.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@xyflow/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
     ],
 )
@@ -35,8 +41,9 @@ js_library(
     srcs = ["AgentWorkflowNode.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":AgentStateNode",
         "//typescript/apps/ui:node_modules/@xyflow/svelte",
-        "//typescript/apps/ui/src/lib/components/primitives:AgentGlyph",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
     ],
 )
@@ -64,11 +71,12 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/state:followScroll",
         "//typescript/apps/ui/src/lib/state:historyGap",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
-        "//typescript/apps/ui/src/lib/state:timeTicks",
     ],
 )
 
@@ -76,10 +84,7 @@ js_library(
     name = "ModelBreakdown",
     srcs = ["ModelBreakdown.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = [
-        "//typescript/apps/ui:node_modules/@lucide/svelte",
-        "//typescript/apps/ui/src/lib/cost:pricing",
-    ],
+    deps = ["//typescript/apps/ui/src/lib/cost:pricing"],
 )
 
 js_library(
@@ -90,9 +95,11 @@ js_library(
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
         "//typescript/apps/ui/src/lib/state:dismissable.svelte",
         "//typescript/apps/ui/src/lib/state:eventVelocity",
+        "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:scrubLane",
     ],
 )
@@ -103,9 +110,10 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui:node_modules/@tanstack/charts",
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:replayLog",
-        "//typescript/apps/ui/src/lib/state:timeTicks",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
     ],
 )
 
@@ -116,17 +124,17 @@ js_library(
     deps = [
         ":ModelBreakdown",
         ":UsageLineChart",
-        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
     ],
 )
 
-# One target per test file, depending on what it imports and the files it reads by path.
 vitest_test(
     name = "LatencyWaterfall_test",
     src = "LatencyWaterfall.test.mjs",
     deps = [
         ":LatencyWaterfall",
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
     ],
 )
@@ -137,27 +145,42 @@ vitest_test(
     deps = [
         ":ModelBreakdown",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/cost:pricing",
     ],
 )
 
 vitest_test(
     name = "StepController_test",
     src = "StepController.test.mjs",
-    deps = ["//typescript/apps/ui/src/lib/state:scrubLane"],
+    deps = [
+        ":StepController",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:scrubLane",
+    ],
 )
 
 vitest_test(
     name = "UsageLineChart_test",
     src = "UsageLineChart.test.mjs",
-    deps = ["//typescript/apps/ui/src/lib/state:replayLog"],
+    deps = [
+        ":UsageLineChart",
+        "//typescript/apps/ui:node_modules/@tanstack/charts",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+    ],
 )
 
 vitest_test(
     name = "UsageReading_test",
     src = "UsageReading.test.mjs",
     deps = [
+        ":UsageLineChart",
         ":UsageReading",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/cost:pricing",
     ],
 )

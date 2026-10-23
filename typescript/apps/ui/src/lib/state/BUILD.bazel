@@ -25,12 +25,14 @@ js_library(
         ":replayLog",
         ":replayTimeline",
         ":replyRuns",
+        ":sessionHistory",
         ":stepTimeline",
         ":transcript",
+        "//typescript/apps/ui:node_modules/@tanstack/pacer",
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/api:httpClient",
         "//typescript/apps/ui/src/lib/api:types",
         "//typescript/apps/ui/src/lib/cost:pricing",
-        "//typescript/apps/ui/src/lib/mock:scenarios",
     ],
 )
 
@@ -99,6 +101,8 @@ js_library(
         ":logValue",
         ":replayLog",
         ":thoughtSummary",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/cost:pricing",
     ],
 )
@@ -135,7 +139,7 @@ js_library(
     name = "initData",
     srcs = ["initData.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui/src/lib/components/chat:schemaForm"],
+    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-client"],
 )
 
 js_library(
@@ -168,6 +172,7 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         ":agentRunStorage",
+        "//typescript/apps/ui:node_modules/@tanstack/pacer",
         "//typescript/apps/ui/src/lib/panes:paneDrop",
         "//typescript/apps/ui/src/lib/panes:registry",
     ],
@@ -229,6 +234,10 @@ js_library(
     name = "sessionHistory",
     srcs = ["sessionHistory.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+    ],
 )
 
 js_library(
@@ -263,7 +272,6 @@ js_library(
     ],
 )
 
-# One target per test file, depending on what it imports and the files it reads by path.
 vitest_test(
     name = "agentState_test",
     src = "agentState.test.mjs",
@@ -337,7 +345,10 @@ vitest_test(
 vitest_test(
     name = "codeModeNesting_test",
     src = "codeModeNesting.test.mjs",
-    deps = [":codeModeNesting"],
+    deps = [
+        ":codeModeNesting",
+        ":flowProjection",
+    ],
 )
 
 vitest_test(
@@ -384,6 +395,7 @@ vitest_test(
     src = "followScroll.test.mjs",
     deps = [
         ":followScroll",
+        "//typescript/apps/ui:sources",
         "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
@@ -402,6 +414,7 @@ vitest_test(
     src = "frameArrival.test.mjs",
     deps = [
         ":agentRun.svelte",
+        ":flowProjection",
         ":hydration",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
@@ -490,7 +503,12 @@ vitest_test(
 vitest_test(
     name = "paneStack_test",
     src = "paneStack.test.mjs",
-    deps = [":paneStack.svelte"],
+    deps = [
+        ":agentRunStorage",
+        ":paneStack.svelte",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
 )
 
 vitest_test(
@@ -573,11 +591,7 @@ vitest_test(
 vitest_test(
     name = "statusNote_test",
     src = "statusNote.test.mjs",
-    deps = [
-        ":replayLog",
-        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
-        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
-    ],
+    deps = [":replayLog"],
 )
 
 vitest_test(

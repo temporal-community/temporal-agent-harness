@@ -7,9 +7,10 @@ js_library(
     srcs = ["AgentChatPanel.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
-        ":CallInput",
         ":PendingCallbackCard",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/api:httpClient",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
@@ -21,7 +22,10 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:codeModeNesting",
+        "//typescript/apps/ui/src/lib/state:dismissable.svelte",
+        "//typescript/apps/ui/src/lib/state:inboundMessageText",
         "//typescript/apps/ui/src/lib/state:logValue",
+        "//typescript/apps/ui/src/lib/state:pendingRequests",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:thoughtSummary",
     ],
@@ -33,7 +37,7 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
-        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
         "//typescript/apps/ui/src/lib/state:followScroll",
         "//typescript/apps/ui/src/lib/state:jsonPatch",
     ],
@@ -45,8 +49,10 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
     ],
 )
 
@@ -54,7 +60,10 @@ js_library(
     name = "CallInput",
     srcs = ["CallInput.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui/src/lib/state:logValue"],
+    deps = [
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/state:logValue",
+    ],
 )
 
 js_library(
@@ -67,8 +76,8 @@ js_library(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
-        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/state:fileMounts",
+        "//typescript/apps/ui/src/lib/state:replayLog",
     ],
 )
 
@@ -80,6 +89,7 @@ js_library(
         ":FileViewerDialog",
         ":MountTrees",
         ":OKFGraphDialog",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
     ],
 )
 
@@ -89,7 +99,8 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui:node_modules/@lucide/svelte",
-        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/state:fileMounts",
     ],
 )
@@ -104,9 +115,9 @@ js_library(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
-        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/state:fileMounts",
         "//typescript/apps/ui/src/lib/state:okfGraph",
+        "//typescript/apps/ui/src/lib/state:replayLog",
     ],
 )
 
@@ -126,14 +137,13 @@ js_library(
     srcs = ["PendingCallbackCard.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
-        ":CallInput",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/api:httpClient",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
         "//typescript/apps/ui/src/lib/components/chat:schemaForm",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
-        "//typescript/apps/ui/src/lib/state:replayLog",
     ],
 )
 
@@ -143,10 +153,12 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui:node_modules/@lucide/svelte",
-        "//typescript/apps/ui/src/lib/components/primitives:Badge",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
-        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:followScroll",
         "//typescript/apps/ui/src/lib/state:logValue",
@@ -160,8 +172,13 @@ vitest_test(
     src = "AgentChatPanel.test.mjs",
     deps = [
         ":AgentChatPanel",
+        ":PendingCallbackCard",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/src/lib/state:logValue",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:transcript",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
@@ -181,6 +198,7 @@ vitest_test(
     deps = [
         ":ApprovalDecisionPanel",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/panes:registry",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
@@ -190,9 +208,11 @@ vitest_test(
     src = "FilesPanel.test.mjs",
     deps = [
         ":FilesPanel",
+        ":MountTrees",
         ":OKFGraphDialog",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/state:fileMounts",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
 
@@ -202,8 +222,10 @@ vitest_test(
     deps = [
         ":TranscriptPanel",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
 
@@ -227,6 +249,7 @@ vitest_test(
     src = "chatLayout.test.mjs",
     deps = [
         ":AgentChatPanel",
+        "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
     ],
 )
@@ -236,8 +259,8 @@ vitest_test(
     src = "pendingCallback.test.mjs",
     deps = [
         ":AgentChatPanel",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
         "//typescript/apps/ui:node_modules/svelte",
-        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
         "//typescript/apps/ui/src/lib/state:replayLog",
     ],
 )

@@ -1,6 +1,9 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
+
+const client = resolve("../../packages/client/src/index.ts");
 
 export default defineConfig({
   plugins: [svelte()],
@@ -17,7 +20,10 @@ export default defineConfig({
       // From the working directory (this package, where vite runs), not from import.meta.url:
       // vite bundles this file before running it and writes in its real path, which under
       // Bazel lies outside the sandbox the build runs in.
-      $lib: resolve("src/lib")
+      $lib: resolve("src/lib"),
+      /* The client's exports point at its dist/, which nothing builds before the console.
+         Bazel links the built package instead and leaves the sources out of the sandbox. */
+      ...(existsSync(client) && { "@temporalio/agent-harness-client": client })
     }
   },
   server: {

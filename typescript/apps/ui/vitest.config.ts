@@ -1,6 +1,9 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
+
+const client = resolve("../../packages/client/src/index.ts");
 
 /* Separate from vite.config.ts rather than a `test` block inside it, because
    Vitest prefers this file wholesale when it exists — the plugin and the alias
@@ -12,11 +15,14 @@ export default defineConfig({
   resolve: {
     alias: {
       // From the working directory, as in vite.config.ts and for the same reason.
-      $lib: resolve("src/lib")
+      $lib: resolve("src/lib"),
+      /* The client's exports point at its dist/, which nothing builds before the console.
+         Bazel links the built package instead and leaves the sources out of the sandbox. */
+      ...(existsSync(client) && { "@temporalio/agent-harness-client": client })
     }
   },
   test: {
-    include: ["src/**/*.test.mjs", "tests/**/*.test.mjs"],
+    include: ["src/**/*.test.mjs", "src/**/*.test.ts", "tests/**/*.test.mjs"],
     /* Several of these drive a real controller through catch-up windows and
        backoff ladders measured in whole seconds — the attach retry budget alone
        walks 31.5s by design. The default 5s would fail them for being what they

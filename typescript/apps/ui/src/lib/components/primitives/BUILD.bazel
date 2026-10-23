@@ -3,13 +3,6 @@ load("//bazel:vitest.bzl", "vitest_test")
 
 # One target per file, depending on the files it imports.
 js_library(
-    name = "AgentGlyph",
-    srcs = ["AgentGlyph.svelte"],
-    visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui:node_modules/@lucide/svelte"],
-)
-
-js_library(
     name = "Badge",
     srcs = ["Badge.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -86,6 +79,7 @@ vitest_test(
     deps = [
         ":Copyable",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui:sources",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
@@ -118,5 +112,6 @@ vitest_test(
         ":tipFocus",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src:main",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
     ],
 )

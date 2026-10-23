@@ -7,6 +7,7 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
         "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
         "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
@@ -18,9 +19,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
         "//typescript/apps/ui/src/lib/components/flow:StepController",
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",
-        "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
-        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
         "//typescript/apps/ui/src/lib/panes:PaneLinkNotice",
         "//typescript/apps/ui/src/lib/panes:PaneMinimap",
@@ -29,10 +28,12 @@ js_library(
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
         "//typescript/apps/ui/src/lib/state:agentRunStorage",
         "//typescript/apps/ui/src/lib/state:favicon",
+        "//typescript/apps/ui/src/lib/state:hydration",
         "//typescript/apps/ui/src/lib/state:paneStack.svelte",
         "//typescript/apps/ui/src/lib/state:pendingRequests",
         "//typescript/apps/ui/src/lib/state:quickSwitch",
         "//typescript/apps/ui/src/lib/state:replayHotkeys",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
     ],
 )
 
@@ -50,7 +51,9 @@ js_library(
         ":App",
         ":app",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/api:mockClient",
         "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+        "//typescript/apps/ui/src/lib/state:agentRunStorage",
     ],
 )
 

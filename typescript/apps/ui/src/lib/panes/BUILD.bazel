@@ -17,7 +17,6 @@ js_library(
         ":launcher",
         ":registry",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
-        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/state:dismissable.svelte",
         "//typescript/apps/ui/src/lib/state:paneStack.svelte",
     ],
@@ -68,7 +67,6 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
-# One target per test file, depending on what it imports and the files it reads by path.
 vitest_test(
     name = "foldedSpine_test",
     src = "foldedSpine.test.mjs",

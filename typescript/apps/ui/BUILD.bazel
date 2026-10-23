@@ -12,6 +12,13 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
+# The sources list below, which tests/conventions.test.mjs checks the source tree against.
+js_library(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
 # What vite, vitest and svelte-check read from the package root.
 js_library(
     name = "config",
@@ -101,7 +108,6 @@ js_library(
         "//typescript/apps/ui/src/lib/components/flow:StepController",
         "//typescript/apps/ui/src/lib/components/flow:UsageLineChart",
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",
-        "//typescript/apps/ui/src/lib/components/primitives:AgentGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:Badge",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",

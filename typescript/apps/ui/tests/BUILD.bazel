@@ -36,8 +36,10 @@ vitest_test(
     name = "long-text-containment_test",
     src = "long-text-containment.test.mjs",
     deps = [
+        "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
         "//typescript/apps/ui/src/lib/components/agent:CallInput",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
         "//typescript/apps/ui/src/lib/components/agent:PendingCallbackCard",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
@@ -48,7 +50,10 @@ vitest_test(
 vitest_test(
     name = "modal-surfaces_test",
     src = "modal-surfaces.test.mjs",
-    deps = ["//typescript/apps/ui:sources"],
+    deps = [
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
+    ],
 )
 
 vitest_test(
@@ -93,9 +98,18 @@ vitest_test(
     name = "session-drawer_test",
     src = "session-drawer.test.mjs",
     deps = [
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:agentRunStorage",
         "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
@@ -104,8 +118,11 @@ vitest_test(
     name = "session-launcher_test",
     src = "session-launcher.test.mjs",
     deps = [
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src:App",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
 
@@ -124,6 +141,7 @@ vitest_test(
     src = "subagent-flow-edges.test.mjs",
     deps = [
         "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
         "//typescript/apps/ui/src/lib/state:flowProjection",
     ],
 )
