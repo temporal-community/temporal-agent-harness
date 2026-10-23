@@ -2,6 +2,7 @@
 // the build if any of these stop holding. The types below have the shape harness-codegen
 // emits (see packages/codegen/test/golden/TicTacToeAgent.ts).
 
+import { inspectSession } from "../src/inspect.ts";
 import type { HarnessMessage } from "../src/messages.ts";
 import type { PlainSessionState } from "../src/plainState.ts";
 import type { AgentSessionCore } from "../src/session.ts";
@@ -52,4 +53,8 @@ export function checks(): void {
     holds<Equals<typeof message.output, TextReply | null>>();
   }
   holds<Equals<HarnessMessage<TicTacToeAgent>["handler"], "new_game" | "play">>();
+
+  // A typed core and its state can both be inspected.
+  void inspectSession(core).activity;
+  void inspectSession(state);
 }

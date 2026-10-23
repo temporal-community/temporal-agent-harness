@@ -53,6 +53,27 @@ export interface SessionState<A extends AgentSchema> {
   appendFrames(frames: readonly AgentSseFrame[]): void;
 }
 
+/** One flush's changes, as `onFlush` reports them. */
+export interface SessionFlush<A extends AgentSchema = UntypedAgent> {
+  /** Each agent that changed, with what changed, as given to `updateAgents`. */
+  agents: ReadonlyArray<readonly [string, AgentUpdate]>;
+  /** The whole `pending` list, when it changed; otherwise null. */
+  pending: readonly HarnessMessage<A>[] | null;
+}
+
+/** Requests a session has made since it was created, and its recent frame rate. */
+export interface SessionActivity {
+  attaches: number;
+  statusQueries: number;
+  sends: number;
+  approvals: number;
+  callbackResults: number;
+  closes: number;
+  framesLast10s: number;
+  /** `solo` when not sharing with other tabs. */
+  tab: "solo" | "leader" | "follower";
+}
+
 /** A callback tool call waiting on this client. */
 export interface ToolCall {
   toolId: string;
@@ -77,15 +98,48 @@ export interface AgentSessionOptions<A extends AgentSchema> {
   onError?: (error: Error) => void;
   /** Waits before each retry of a dropped stream; the budget resets whenever it delivers. */
   reconnectBackoffMs?: readonly number[];
-  /** While the agent is idle, how often to ask whether another client gave it work. 0 turns
-   *  this off, leaving sends from this client as the only thing that re-attaches. */
+  /** While the agent is idle, how often to ask whether another client gave it work: every 30s
+   *  by default, and never while the page is hidden. Each ask is a billable Temporal Query. 0
+   *  turns this off, leaving sends from this client as the only thing that re-attaches. */
   idlePollMs?: number;
   /** Runs a flush of received frames into the state. Defaults to the next animation frame. */
   schedule?: (flush: () => void) => void;
+  /** Let one browser tab hold the stream (and the idle poll) for every tab following this
+   *  session, relaying what it receives, so N tabs cost the Temporal Actions of one. The others
+   *  still send and answer directly; only the holder runs `callbackTools`. When it closes,
+   *  another takes over. On by default where there is a page, Web Locks and BroadcastChannel,
+   *  unless `callbackTools` is given: a tab that is not the holder would never answer its calls,
+   *  so pass `true` only when one tab answering them for all is what you want. */
+  shareAcrossTabs?: boolean;
+}
+
+/** What tabs following one session tell each other over its BroadcastChannel. */
+interface TabMessage {
+  /** A tab joined and wants everything received so far. */
+  hello?: true;
+  /** A tab sent something: look for new work. */
+  wake?: true;
+  frames?: readonly AgentSseFrame[];
+  connection?: ConnectionStatus;
+  /** A follower's page was shown or hidden, so the leader knows whether anyone is watching. */
+  tab?: string;
+  visible?: boolean;
+  /** A new leader asks every follower whether it is shown. */
+  census?: true;
+}
+
+interface Tabs {
+  id: string;
+  channel: BroadcastChannel;
+  release: AbortController;
+  leader: boolean;
+  /** The followers whose pages are shown, as far as the leader has heard. */
+  visible: Set<string>;
+  shown: () => void;
 }
 
 const DEFAULT_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
-const DEFAULT_IDLE_POLL_MS = 5_000;
+const DEFAULT_IDLE_POLL_MS = 30_000;
 
 export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
   readonly sessionId: string;
@@ -100,14 +154,24 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
   readonly #sentIds = new Set<string>();
   readonly #finished = new Set<string>();
   readonly #dispatchedCalls = new Set<string>();
+  readonly #flushListeners = new Set<(flush: SessionFlush<A>) => void>();
   #buffer: AgentSseFrame[] = [];
   #flushScheduled = false;
   #resumeOffset = 0;
   #observed = false;
   #run: AbortController | null = null;
+  readonly #shareAcrossTabs: boolean;
+  #tabs: Tabs | null = null;
   #wake: (() => void) | null = null;
+  /** Poll now if the idle poll is parked because no tab was shown. */
+  #pollNow: (() => void) | null = null;
+  readonly #page = typeof document === "undefined" ? undefined : document;
   #submits: Promise<unknown> = Promise.resolve();
   #localIds = 0;
+  readonly #counts = { attaches: 0, statusQueries: 0, sends: 0, approvals: 0, callbackResults: 0, closes: 0 };
+  /** When each frame of the last 10s arrived, from `#frameHead` on. */
+  #frameTimes: number[] = [];
+  #frameHead = 0;
 
   constructor(options: AgentSessionOptions<A>, state: SessionState<A>) {
     this.sessionId = options.sessionId;
@@ -117,6 +181,11 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     this.#backoff = options.reconnectBackoffMs ?? DEFAULT_BACKOFF_MS;
     this.#idlePollMs = options.idlePollMs ?? DEFAULT_IDLE_POLL_MS;
     this.#schedule = options.schedule ?? nextFrame;
+    this.#shareAcrossTabs =
+      (options.shareAcrossTabs ?? (this.#page !== undefined && !options.callbackTools)) &&
+      typeof BroadcastChannel === "function" &&
+      typeof navigator !== "undefined" &&
+      navigator.locks != null;
   }
 
   get state(): SessionState<A> {
@@ -127,12 +196,14 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
    *  observing the session. */
   start(): void {
     this.#observed = true;
-    this.#ensureLive();
+    if (this.#tabs === null && this.#shareAcrossTabs) this.#joinTabs();
+    else this.#ensureLive();
   }
 
   /** Drop the connection. A binding calls this when nothing observes the session any more. */
   stop(): void {
     this.#observed = false;
+    this.#leaveTabs();
     this.#run?.abort();
     this.#run = null;
     this.#flush();
@@ -148,6 +219,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     const localId = `local-${++this.#localIds}`;
     this.#projection.addSending({
       id: localId,
+      key: localId,
       handler,
       input: payload as Record<string, unknown>,
       output: null,
@@ -163,9 +235,10 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     this.#scheduleFlush();
 
     // Submits go out one at a time, in the order they were sent.
-    const submitted = this.#submits.then(() =>
-      this.#transport.submitMessage(this.sessionId, { type: handler, payload })
-    );
+    const submitted = this.#submits.then(() => {
+      this.#counts.sends++;
+      return this.#transport.submitMessage(this.sessionId, { type: handler, payload });
+    });
     this.#submits = submitted.catch(() => undefined);
     try {
       const reply = await submitted;
@@ -193,11 +266,13 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
   /** Approve or deny a gated tool call, in the root agent or any subagent. The resolution
    *  itself arrives on the stream. */
   async respondToApproval(toolId: string, decision: ToolApprovalDecision): Promise<boolean> {
+    this.#counts.approvals++;
     return this.#act(() => this.#transport.approveTool(this.#workflowOf(toolId), toolId, decision));
   }
 
   /** Return a callback tool's result. The server validates it against the tool's output type. */
   async provideToolOutput(toolId: string, result: unknown): Promise<boolean> {
+    this.#counts.callbackResults++;
     return this.#act(() =>
       this.#transport.provideCallbackResult(this.#workflowOf(toolId), toolId, { result })
     );
@@ -205,6 +280,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
 
   /** Report that this client could not fulfil a callback tool call. */
   async provideToolError(toolId: string, error: string): Promise<boolean> {
+    this.#counts.callbackResults++;
     return this.#act(() =>
       this.#transport.provideCallbackResult(this.#workflowOf(toolId), toolId, { error })
     );
@@ -218,6 +294,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
 
   /** Stop the agent: it finishes its turn loop and auto-denies anything pending. */
   async closeSession(): Promise<boolean> {
+    this.#counts.closes++;
     return this.#act(() => this.#transport.closeSession(this.sessionId));
   }
 
@@ -225,10 +302,30 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     this.#state.error = undefined;
   }
 
+  /** Call `listener` after each flush that changed an agent or `pending`, once the state has
+   *  them, with just those changes: for mirroring the session into another store without
+   *  diffing the whole state. Returns the unsubscribe. */
+  onFlush(listener: (flush: SessionFlush<A>) => void): () => void {
+    this.#flushListeners.add(listener);
+    return () => this.#flushListeners.delete(listener);
+  }
+
+  /** What this session has asked the server for, how fast frames are arriving, and whether
+   *  this tab holds the session's stream: what `inspectSession` reports. */
+  get activity(): SessionActivity {
+    const since = Date.now() - 10_000;
+    return {
+      ...this.#counts,
+      framesLast10s: this.#frameTimes.slice(this.#frameHead).filter((t) => t >= since).length,
+      tab: this.#tabs === null ? "solo" : this.#tabs.leader ? "leader" : "follower"
+    };
+  }
+
   // -- the connection --------------------------------------------------------
 
   #ensureLive(): void {
     if (!this.#observed) return;
+    if (this.#tabs && !this.#tabs.leader) return this.#tabs.channel.postMessage({ wake: true });
     if (this.#run) {
       this.#wake?.();
       return;
@@ -242,15 +339,16 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
 
   async #connect(signal: AbortSignal): Promise<void> {
     let attempt = 0;
-    this.#state.connection = "connecting";
+    this.#setConnection("connecting");
     while (!signal.aborted) {
       let delivered = false;
       try {
+        this.#counts.attaches++;
         for await (const frame of this.#transport.attach(this.sessionId, this.#resumeOffset, signal)) {
           if (signal.aborted) return;
           if (!delivered) {
             delivered = true;
-            this.#state.connection = "live";
+            this.#setConnection("live");
           }
           this.#receive(frame);
         }
@@ -265,7 +363,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
       if (signal.aborted) return;
       if (delivered) attempt = 0;
       if (await this.#workflowClosed(signal)) {
-        this.#state.connection = "closed";
+        this.#setConnection("closed");
         return;
       }
       // The server ends an attach once the agent is idle and caught up, so a stream that
@@ -274,7 +372,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
         if (!(await this.#retry(attempt++, signal, null))) return;
         continue;
       }
-      this.#state.connection = "idle";
+      this.#setConnection("idle");
       await this.#waitForWork(signal);
     }
   }
@@ -282,11 +380,11 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
   async #retry(attempt: number, signal: AbortSignal, error: unknown): Promise<boolean> {
     const wait = this.#backoff[attempt];
     if (wait === undefined) {
-      this.#state.connection = "error";
+      this.#setConnection("error");
       this.#fail(error ?? new Error("the event stream kept closing mid-turn"));
       return false;
     }
-    this.#state.connection = "reconnecting";
+    this.#setConnection("reconnecting");
     await this.#sleep(wait, signal);
     return !signal.aborted;
   }
@@ -300,36 +398,55 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
   }
 
   /** Resolve when there may be something new to read: a send from this client wakes it, and
-   *  a poll of the agent's status notices work another client gave it. */
+   *  a poll of the agent's status notices work another client gave it. While no tab following
+   *  the session is shown the polls stop, and one runs as soon as any of them is shown again. */
   #waitForWork(signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let parked = false;
+      const page = this.#page;
       const done = (): void => {
         clearTimeout(timer);
+        page?.removeEventListener("visibilitychange", shown);
         signal.removeEventListener("abort", done);
         if (this.#wake === done) this.#wake = null;
+        if (this.#pollNow === shown) this.#pollNow = null;
         resolve();
       };
-      this.#wake = done;
-      signal.addEventListener("abort", done, { once: true });
-      if (this.#idlePollMs <= 0) return;
-      const poll = (): void => {
-        timer = setTimeout(async () => {
-          try {
-            const status = await this.#transport.agentStatus(this.sessionId, signal);
-            const newWork =
-              status.turn_active ||
-              status.pending_turns.length > 0 ||
-              status.current_turn > (this.#projection.root?.lastTurnNumber ?? 0);
-            if (newWork) return done();
-          } catch {
-            // A failed poll is not news; the next one will ask again.
-          }
-          if (!signal.aborted && this.#wake === done) poll();
-        }, this.#idlePollMs);
+      const shown = (): void => {
+        if (!parked || !this.#anyTabShown()) return;
+        parked = false;
+        void poll();
       };
-      poll();
+      const poll = async (): Promise<void> => {
+        if (signal.aborted || this.#wake !== done) return;
+        if (!this.#anyTabShown()) {
+          parked = true;
+          return;
+        }
+        try {
+          this.#counts.statusQueries++;
+          const status = await this.#transport.agentStatus(this.sessionId, signal);
+          const newWork =
+            status.turn_active ||
+            status.pending_turns.length > 0 ||
+            status.current_turn > (this.#projection.root?.lastTurnNumber ?? 0);
+          if (newWork) return done();
+        } catch {
+          // A failed poll is not news; the next one will ask again.
+        }
+        if (!signal.aborted && this.#wake === done) timer = setTimeout(poll, this.#idlePollMs);
+      };
+      this.#wake = done;
+      this.#pollNow = shown;
+      page?.addEventListener("visibilitychange", shown);
+      signal.addEventListener("abort", done, { once: true });
+      if (this.#idlePollMs > 0) timer = setTimeout(poll, this.#idlePollMs);
     });
+  }
+
+  #anyTabShown(): boolean {
+    return !this.#page?.hidden || (this.#tabs?.leader === true && this.#tabs.visible.size > 0);
   }
 
   /** Sleep before a retry; a send wakes it early. */
@@ -355,6 +472,14 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     const key = frameKey(frame);
     if (this.#frameKeys.has(key)) return;
     this.#frameKeys.add(key);
+    const now = Date.now();
+    this.#frameTimes.push(now);
+    // A moving head, not shift(): a replay of thousands of frames would shift every one.
+    while (this.#frameTimes[this.#frameHead]! < now - 10_000) this.#frameHead++;
+    if (this.#frameHead > 1_024 && this.#frameHead * 2 > this.#frameTimes.length) {
+      this.#frameTimes = this.#frameTimes.slice(this.#frameHead);
+      this.#frameHead = 0;
+    }
     this.#resumeOffset = Math.max(this.#resumeOffset, frame.data.resume_offset);
     this.#buffer.push(frame);
     this.#projection.apply(frame);
@@ -372,26 +497,37 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     const state = this.#state;
     if (this.#buffer.length > 0) {
       state.appendFrames(this.#buffer);
+      if (this.#tabs?.leader) this.#tabs.channel.postMessage({ frames: this.#buffer });
       this.#buffer = [];
     }
     const changes = this.#projection.takeChanges();
     if (state.rootAgentId !== this.#projection.rootAgentId) {
       state.rootAgentId = this.#projection.rootAgentId;
     }
-    if (changes.agents.length > 0) {
-      state.updateAgents(
-        changes.agents.map(([id, c]) => [
-          id,
-          {
-            info: c.info,
-            messages: c.messages,
-            states: c.states?.map(([stateId, doc]) => [stateId, doc.value] as const),
-            agentStatus: c.agentStatus
-          }
-        ])
-      );
+    const updates = changes.agents.map(([id, c]): [string, AgentUpdate] => [
+      id,
+      {
+        info: c.info,
+        messages: c.messages,
+        states: c.states?.map(([stateId, doc]) => [stateId, doc.value] as const),
+        agentStatus: c.agentStatus
+      }
+    ]);
+    if (updates.length > 0) state.updateAgents(updates);
+    const pending = changes.pending as readonly HarnessMessage<A>[] | null;
+    if (pending !== null) state.pending = pending;
+    if (updates.length > 0 || pending !== null) {
+      for (const listener of this.#flushListeners) {
+        // One listener's bug must not stop the others, or the flush's own bookkeeping below.
+        try {
+          listener({ agents: updates, pending });
+        } catch (error) {
+          const failure = error instanceof Error ? error : new Error(messageOf(error));
+          if (this.#options.onError) this.#options.onError(failure);
+          else queueMicrotask(() => { throw failure; });
+        }
+      }
     }
-    if (changes.pending !== null) state.pending = changes.pending as readonly HarnessMessage<A>[];
 
     const rootChanges = changes.agents.find(([id]) => id === this.#projection.rootAgentId)?.[1];
     for (const [, message] of rootChanges?.messages ?? []) {
@@ -400,7 +536,78 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
       this.#finished.add(message.id);
       this.#options.onFinish?.(message as HarnessMessage<A>);
     }
+    if (this.#tabs && !this.#tabs.leader) return;
     for (const { part, agent } of this.#projection.awaitingClient()) this.#dispatchCall(part, agent);
+  }
+
+  // -- tabs ------------------------------------------------------------------
+
+  /** Follow the session through whichever tab holds its lock, and take the lock, and with it
+   *  the stream, when that tab lets go. */
+  #joinTabs(): void {
+    const name = `agent-harness:${this.sessionId}`;
+    const page = this.#page;
+    const tabs: Tabs = {
+      id: Math.random().toString(36).slice(2),
+      channel: new BroadcastChannel(name),
+      release: new AbortController(),
+      leader: false,
+      visible: new Set(),
+      // The leader polls while any tab is shown, so a follower tells it when that changes.
+      shown: () => {
+        if (!tabs.leader) tabs.channel.postMessage({ tab: tabs.id, visible: !page?.hidden });
+      }
+    };
+    this.#tabs = tabs;
+    this.#state.connection = "connecting";
+    tabs.channel.onmessage = ({ data }: MessageEvent<TabMessage>) => this.#relayed(tabs, data);
+    tabs.channel.postMessage({ hello: true, tab: tabs.id, visible: !page?.hidden });
+    page?.addEventListener("visibilitychange", tabs.shown);
+    navigator.locks
+      .request(name, { signal: tabs.release.signal }, () => {
+        tabs.leader = true;
+        tabs.visible.clear();
+        // Followers may have missed frames while no tab held the stream, and the new leader
+        // has not heard which of them are shown.
+        tabs.channel.postMessage({ frames: this.#state.frames, connection: this.#state.connection, census: true });
+        // Calls the previous leader left waiting are this tab's to answer now.
+        this.#flush();
+        // Resumes from the last offset this tab received, relayed or not.
+        this.#ensureLive();
+        return new Promise((resolve) => tabs.release.signal.addEventListener("abort", resolve));
+      })
+      .catch(() => {});
+  }
+
+  #leaveTabs(): void {
+    const tabs = this.#tabs;
+    if (!tabs) return;
+    this.#tabs = null;
+    if (!tabs.leader) tabs.channel.postMessage({ tab: tabs.id, visible: false });
+    tabs.release.abort();
+    tabs.channel.close();
+    this.#page?.removeEventListener("visibilitychange", tabs.shown);
+  }
+
+  #relayed(tabs: Tabs, data: TabMessage): void {
+    if (tabs.leader) {
+      if (data.hello) tabs.channel.postMessage({ frames: this.#state.frames, connection: this.#state.connection });
+      if (data.tab !== undefined) {
+        if (data.visible) tabs.visible.add(data.tab);
+        else tabs.visible.delete(data.tab);
+        if (data.visible) this.#pollNow?.();
+      }
+      if (data.wake) this.#ensureLive();
+      return;
+    }
+    for (const frame of data.frames ?? []) this.#receive(frame);
+    if (data.connection) this.#state.connection = data.connection;
+    if (data.census) tabs.shown();
+  }
+
+  #setConnection(connection: ConnectionStatus): void {
+    this.#state.connection = connection;
+    if (this.#tabs?.leader) this.#tabs.channel.postMessage({ connection });
   }
 
   /** Whether `callbackTools` answers this tool, so a view of waiting calls can leave it out. */
@@ -463,9 +670,18 @@ export function frameKey(frame: AgentSseFrame): string {
   return `${frame.event}|${JSON.stringify(identity)}`;
 }
 
+/** Flushes on the next paint, or after a short timer in a hidden tab, where browsers pause
+ *  animation frames but still run (throttled) timers. A hidden leader still relays. */
 function nextFrame(flush: () => void): void {
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => flush());
-  else setTimeout(flush, 0);
+  if (typeof requestAnimationFrame !== "function") return void setTimeout(flush, 0);
+  let ran = false;
+  const once = (): void => {
+    if (ran) return;
+    ran = true;
+    flush();
+  };
+  requestAnimationFrame(once);
+  setTimeout(once, 100);
 }
 
 function messageOf(error: unknown): string {

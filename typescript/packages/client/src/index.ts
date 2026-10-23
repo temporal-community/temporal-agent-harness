@@ -6,6 +6,9 @@ export * from "./session.ts";
 export * from "./start.ts";
 export { PlainSessionState } from "./plainState.ts";
 export * from "./views.ts";
+export * from "./inspect.ts";
+export * from "./schemaForm.ts";
+export { parsePartialJson } from "./partialJson.ts";
 export {
   AgentProjection,
   SessionProjection,

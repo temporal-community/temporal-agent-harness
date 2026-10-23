@@ -22,6 +22,9 @@ export type MessageStatus = "sending" | "accepted" | "running" | "done" | "error
 interface MessageFields {
   /** The `message_id` the harness minted for it, or a local id while it is `sending`. */
   id: string;
+  /** Stays the same for the message's whole life, so key list rows on it: a message sent from
+   *  this client keeps its local id here after the server admits it under a new `id`. */
+  key: string;
   status: MessageStatus;
   /** What it did to the turn when admitted; null while `sending`. */
   disposition: MessageDisposition | null;

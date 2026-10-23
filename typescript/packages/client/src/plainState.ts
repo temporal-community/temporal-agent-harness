@@ -13,7 +13,8 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
   #rootAgentId: string | null = null;
   #pending: readonly HarnessMessage<A>[] = [];
   agents: Readonly<Record<string, AgentView>> = {};
-  frames: readonly AgentSseFrame[] = [];
+  readonly #frames: AgentSseFrame[] = [];
+  #framesCopy: readonly AgentSseFrame[] = [];
   readonly #listeners = new Set<() => void>();
 
   subscribe(listener: () => void): () => void {
@@ -39,7 +40,7 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
   /** Any agent in the tree by `agent_id` — e.g. a subagent part's `subagentId` — typed as `B`
    *  when its generated type is given. */
   agent<B extends AgentSchema = UntypedAgent>(agentId: string): AgentView<B> | undefined {
-    return this.agents[agentId] as AgentView<B> | undefined;
+    return this.agents[agentId] as unknown as AgentView<B> | undefined;
   }
 
   get connection(): ConnectionStatus {
@@ -81,8 +82,15 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
     this.#emit();
   }
 
+  /** Every frame received. Copied when read after new frames arrive, not on every flush, so a
+   *  long session costs nothing extra per flush unless something reads its frames. */
+  get frames(): readonly AgentSseFrame[] {
+    if (this.#framesCopy.length !== this.#frames.length) this.#framesCopy = this.#frames.slice();
+    return this.#framesCopy;
+  }
+
   appendFrames(frames: readonly AgentSseFrame[]): void {
-    this.frames = this.frames.concat(frames);
+    for (const frame of frames) this.#frames.push(frame);
     this.#emit();
   }
 

@@ -75,6 +75,9 @@ export class AgentProjection {
 
   readonly #indexById = new Map<string, number>();
   readonly #tools = new Map<string, PartLocation>();
+  /** The `#tools` waiting on a client, in the order they started waiting, so a flush asking
+   *  for them does not walk every tool call the agent ever made. */
+  readonly #awaiting = new Set<string>();
   readonly #subagentTurns = new Map<string, PartLocation>();
   readonly #touchedMessages = new Set<string>();
   readonly #touchedStates = new Set<string>();
@@ -103,10 +106,16 @@ export class AgentProjection {
     this.#push(message);
   }
 
+  /** Give a message the stream admitted the key it was sent under, so it stays one row. */
+  rekey(messageId: string, key: string): void {
+    this.#update(messageId, { key });
+  }
+
   /** Tool calls waiting on a client, in the order they started waiting. */
   awaitingClient(): ToolPart[] {
     const parts: ToolPart[] = [];
-    for (const { messageId, index } of this.#tools.values()) {
+    for (const toolId of this.#awaiting) {
+      const { messageId, index } = this.#tools.get(toolId)!;
       const part = this.#message(messageId)?.parts[index];
       if (part?.type === "tool" && part.state === "awaiting_callback") parts.push(part);
     }
@@ -176,6 +185,7 @@ export class AgentProjection {
         } else {
           this.#push({
             id: d.message_id!,
+            key: d.message_id!,
             handler: d.handler,
             input: d.payload,
             output: null,
@@ -457,7 +467,11 @@ export class AgentProjection {
       });
     }
     const part = this.#message(location.messageId)?.parts[location.index];
-    if (part?.type === "tool") this.#setPart(location.messageId, location.index, change(part));
+    if (part?.type !== "tool") return;
+    const next = change(part);
+    this.#setPart(location.messageId, location.index, next);
+    if (next.state === "awaiting_callback") this.#awaiting.add(d.tool_id);
+    else this.#awaiting.delete(d.tool_id);
   }
 
   #evaluation(
@@ -556,6 +570,7 @@ export class SessionProjection {
     const root = this.root;
     const admitted: Message = { ...sent, id: messageId, status: "accepted" };
     if (root?.has(messageId)) {
+      root.rekey(messageId, sent.key);
       this.#setPending(this.pending.filter((m) => m !== sent));
     } else if (root) {
       // The stream usually delivers its `message_accepted` first; if it has not yet, the

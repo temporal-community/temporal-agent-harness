@@ -259,7 +259,7 @@ test("a sent message waits in pending until the server admits it", () => {
   const f = new Frames();
   const p = new SessionProjection();
   const sending = {
-    id: "local-1", handler: "ask", input: { text: "hi" }, output: null, status: "sending" as const,
+    id: "local-1", key: "local-1", handler: "ask", input: { text: "hi" }, output: null, status: "sending" as const,
     disposition: null, turnNumber: null, parts: [], error: null, acceptedAt: null, startedAt: null, endedAt: null
   };
 
@@ -273,7 +273,7 @@ test("a sent message waits in pending until the server admits it", () => {
   assert.deepEqual([p.pending.length, p.root!.messages.map((m) => m.id)], [0, ["m1"]]);
 
   // ...or after, in which case the message joins now and its event fills it in.
-  p.addSending({ ...sending, id: "local-2" });
+  p.addSending({ ...sending, id: "local-2", key: "local-2" });
   p.admitSending("local-2", "m2");
   assert.deepEqual(p.root!.messages.map((m) => [m.id, m.status, m.disposition]), [
     ["m1", "accepted", "opened"],
@@ -281,4 +281,11 @@ test("a sent message waits in pending until the server admits it", () => {
   ]);
   p.apply(f.make("message_accepted", { handler: "ask", payload: { text: "hi" }, disposition: "queued" }, { message_id: "m2", turn_number: 2 }));
   assert.deepEqual([p.root!.messages[1]!.disposition, p.root!.messages[1]!.turnNumber], ["queued", 2]);
+  // Either way, each keeps the key it was sent under, so a list keyed on it keeps the row.
+  p.apply(f.make("message_accepted", { handler: "ask", payload: {}, disposition: "queued" }, { message_id: "m3", turn_number: 3 }));
+  assert.deepEqual(p.root!.messages.map((m) => [m.id, m.key]), [
+    ["m1", "local-1"],
+    ["m2", "local-2"],
+    ["m3", "m3"]
+  ]);
 });

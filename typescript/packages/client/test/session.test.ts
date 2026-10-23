@@ -1,8 +1,9 @@
 // AgentSessionCore against a scripted transport: the connection lifecycle, sends, callbacks.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
+import { exposeSession, inspectSession } from "../src/inspect.ts";
 import { PlainSessionState } from "../src/plainState.ts";
 import type { UntypedAgent } from "../src/schema.ts";
 import { AgentSessionCore, type AgentSessionOptions } from "../src/session.ts";
@@ -285,4 +286,165 @@ test("a callback tool with no callbackTools entry is left waiting for someone el
 
   await core.provideToolOutput("c2", { confirmed: true });
   assert.deepEqual(transport.callbackResults.at(-1), { toolId: "c2", outcome: { result: { confirmed: true } } });
+});
+
+test("onFlush reports each flush's changes once the state has them", async (t) => {
+  const f = new Frames();
+  const transport = new ScriptedTransport([[...f.exchange("m0", "earlier", 1)]]);
+  // Flushed only when the stream ends or a send settles.
+  const { core, state } = session(transport, { schedule: () => {} });
+  t.after(() => core.stop());
+  const flushes: string[] = [];
+  const stop = core.onFlush(({ agents, pending }) => {
+    const changed = agents.flatMap(([id, u]) => (u.messages ?? []).map(([i, m]) => `${id}:${i}:${m.id}:${m.status}`));
+    flushes.push(`${changed.join(",")}|${pending?.map((m) => m.status).join(",") ?? "-"}`);
+    assert.equal(state.messages.length, 1, "the state is written before listeners run");
+  });
+
+  core.start();
+  await until(() => state.connection === "idle");
+  transport.submitReply = () => new Error("down");
+  await core.sendMessage("ask", { text: "again" });
+  stop();
+  core.dismiss("local-1");
+
+  // The replay as one flush, the failed send as another, and nothing after the unsubscribe.
+  assert.deepEqual(flushes, ["root:0:m0:done|-", "|error"]);
+});
+
+test("a throwing onFlush listener goes to onError and the others still run", async (t) => {
+  const f = new Frames();
+  const errors: string[] = [];
+  const transport = new ScriptedTransport([f.exchange("m0", "hi", 1)]);
+  const { core, state } = session(transport, { onError: (error) => errors.push(error.message) });
+  t.after(() => core.stop());
+  let after = 0;
+  core.onFlush(() => {
+    throw new Error("listener bug");
+  });
+  core.onFlush(() => after++);
+
+  core.start();
+  await until(() => state.connection === "idle");
+  assert.ok(after > 0, "the listener after the throwing one still runs");
+  assert.deepEqual(errors, Array(after).fill("listener bug"), "and every throw goes to onError");
+  assert.equal(state.error, undefined, "a listener's bug is not the session's error");
+});
+
+test("an exposed session is inspected as plain data from the global hook", async (t) => {
+  const f = new Frames();
+  const transport = new ScriptedTransport([
+    [
+      ...f.exchange("m0", "earlier", 1),
+      f.make("tool_approval_requested", { tool_id: "gate", tool_name: "rm", tool_input: {} }, { message_id: "m0" })
+    ]
+  ]);
+  const { core, state } = session(transport);
+  t.after(() => core.stop());
+  const unexpose = exposeSession("s1", state);
+  core.start();
+  await until(() => state.connection === "idle");
+
+  const hook = (globalThis as { __AGENT_HARNESS__?: Record<string, () => unknown> }).__AGENT_HARNESS__!;
+  const seen = hook.s1!();
+  assert.deepEqual(JSON.parse(JSON.stringify(seen)), seen);
+  assert.deepEqual(seen, {
+    connection: "idle",
+    error: null,
+    rootAgentId: "root",
+    lastOffset: 7,
+    frames: 7,
+    pendingSends: 0,
+    waitingApprovals: 1,
+    waitingCallbacks: 0,
+    agents: {
+      root: { agentId: "root", parentId: null, agentKey: null, workflowId: null, lifecycle: "running", unavailable: null, agentStatus: "idle", messages: 1, states: [] }
+    }
+  });
+  unexpose();
+  assert.equal(hook.s1, undefined);
+});
+
+test("the idle poll asks every 30s by default, and not at all while the page is hidden", async (t) => {
+  const page = Object.assign(new EventTarget(), { hidden: true });
+  Object.defineProperty(globalThis, "document", { value: page, configurable: true });
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const transport = new ScriptedTransport([[]]);
+  let asks = 0;
+  transport.agentStatus = async () => (asks++, transport.status);
+  const { core, state } = session(transport, { idlePollMs: undefined });
+  t.after(() => {
+    core.stop();
+    mock.timers.reset();
+    delete (globalThis as { document?: unknown }).document;
+  });
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  core.start();
+  await settle();
+  assert.equal(state.connection, "idle");
+  mock.timers.tick(120_000);
+  await settle();
+  assert.equal(asks, 0, "a hidden page does not poll");
+
+  page.hidden = false;
+  page.dispatchEvent(new Event("visibilitychange"));
+  await settle();
+  assert.equal(asks, 1, "showing the page polls at once");
+  mock.timers.tick(29_999);
+  await settle();
+  assert.equal(asks, 1);
+  mock.timers.tick(1);
+  await settle();
+  assert.equal(asks, 2);
+});
+
+test("inspecting a core counts what it asked for, and the Actions that cost", async (t) => {
+  const f = new Frames();
+  const transport = new ScriptedTransport([f.exchange("m0", "hi", 1)]);
+  const { core, state } = session(transport);
+  t.after(() => core.stop());
+  core.start();
+  await until(() => state.connection === "idle");
+  await core.sendMessage("ask", { text: "again" });
+  await core.respondToApproval("gate", { approved: true });
+  await until(() => state.connection === "idle" && transport.attaches.length >= 2);
+
+  const attaches = transport.attaches.length;
+  assert.deepEqual(inspectSession(core).activity, {
+    attaches,
+    statusQueries: 0,
+    sends: 1,
+    approvals: 1,
+    callbackResults: 0,
+    closes: 0,
+    tab: "solo",
+    framesPerSecond: 0.6,
+    estimatedActions: 3 * attaches + 2
+  });
+  assert.equal(inspectSession(state).activity, undefined);
+});
+
+
+test("the frame rate counts only the last 10s however many frames came before", async (t) => {
+  mock.timers.enable({ apis: ["Date"], now: 0 });
+  const f = new Frames();
+  const burst = Array.from({ length: 2_000 }, () => f.make("reply_delta", { text: "x" }, { message_id: "m0" }));
+  const transport = new ScriptedTransport([burst]);
+  const { core, state } = session(transport);
+  t.after(() => {
+    core.stop();
+    mock.timers.reset();
+  });
+  core.start();
+  await until(() => state.connection === "idle");
+  assert.equal(inspectSession(core).activity?.framesPerSecond, 200);
+
+  mock.timers.tick(11_000);
+  transport.script([f.make("reply_delta", { text: "y" }, { message_id: "m0" })]);
+  await core.sendMessage("ask", { text: "again" });
+  await until(() => state.frames.length === 2_001);
+  assert.equal(inspectSession(core).activity?.framesPerSecond, 0.1);
 });

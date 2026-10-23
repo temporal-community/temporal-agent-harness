@@ -20,15 +20,31 @@ ts_project(
     visibility = ["//visibility:public"],
     deps = [
         ":frames",
+        ":inspect",
         ":jsonPatch",
         ":messages",
+        ":partialJson",
         ":plainState",
         ":projection",
         ":protocol",
         ":schema",
+        ":schemaForm",
         ":session",
         ":start",
         ":transport",
+        ":views",
+    ],
+)
+
+ts_project(
+    name = "inspect",
+    srcs = ["inspect.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":session",
         ":views",
     ],
 )
@@ -52,6 +68,14 @@ ts_project(
         ":frames",
         ":schema",
     ],
+)
+
+ts_project(
+    name = "partialJson",
+    srcs = ["partialJson.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
 )
 
 ts_project(
@@ -96,6 +120,15 @@ ts_project(
     declaration = True,
     tsconfig = "//typescript/packages/client:tsconfig",
     visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "schemaForm",
+    srcs = ["schemaForm.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [":frames"],
 )
 
 ts_project(
