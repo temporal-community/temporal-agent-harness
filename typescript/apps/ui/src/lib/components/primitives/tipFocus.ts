@@ -135,6 +135,29 @@ function placeBeside(element: Placeable, { left, right, top, bottom }: Box, view
 }
 
 /**
+ * Measure one tip as keepTipsInView does on hover and focus. Called directly for a tip that shows
+ * because something around it took focus, such as the timeline row a cap's tip belongs to.
+ */
+export function placeTip(element: Placeable, view: View = window): void {
+  const measure = () => {
+    const { left, right, top, bottom } = element.getBoundingClientRect();
+    if (element.getAttribute("data-tip-side") === "right") return placeBeside(element, { left, right, top, bottom }, view);
+    const clip = clipBox(element, view);
+    const centre = (left + right) / 2;
+    element.style.setProperty("--tip-room-left", `${centre - clip.left - TIP_MARGIN}px`);
+    element.style.setProperty("--tip-room-right", `${clip.right - TIP_MARGIN - centre}px`);
+    const below = element.hasAttribute("data-tip-below");
+    const ahead = below ? clip.bottom - bottom : top - clip.top;
+    const behind = below ? top - clip.top : clip.bottom - bottom;
+    element.toggleAttribute("data-tip-flip", ahead < tipNeeds(element) && behind > ahead);
+  };
+  measure();
+  /* A card's element can fill it in as it shows (what its row cuts short), after this runs;
+     the tip is still fading in through the frame it takes to measure it again. */
+  if (element.querySelector?.(":scope > .tip-card")) view.requestAnimationFrame?.(measure);
+}
+
+/**
  * Tell a `data-tip` element, as it is about to show its tip, how far its centre is from each side
  * of the box its tip can be seen in, so app.css can slide a centred bubble inward instead of past
  * the edge; and mark it `data-tip-flip` when its tip's side has no room and the other side has more.
@@ -151,23 +174,7 @@ export function keepTipsInView(
 ): () => void {
   const place = (event: Event) => {
     const element = (event.target as Partial<Element> | null)?.closest?.("[data-tip]") as Placeable | null | undefined;
-    if (!element?.style) return;
-    measure(element);
-    /* A card's element can fill it in as it shows (what its row cuts short), after this runs;
-       the tip is still fading in through the frame it takes to measure it again. */
-    if (element.querySelector?.(":scope > .tip-card")) view.requestAnimationFrame?.(() => measure(element));
-  };
-  const measure = (element: Placeable) => {
-    const { left, right, top, bottom } = element.getBoundingClientRect();
-    if (element.getAttribute("data-tip-side") === "right") return placeBeside(element, { left, right, top, bottom }, view);
-    const clip = clipBox(element, view);
-    const centre = (left + right) / 2;
-    element.style.setProperty("--tip-room-left", `${centre - clip.left - TIP_MARGIN}px`);
-    element.style.setProperty("--tip-room-right", `${clip.right - TIP_MARGIN - centre}px`);
-    const below = element.hasAttribute("data-tip-below");
-    const ahead = below ? clip.bottom - bottom : top - clip.top;
-    const behind = below ? top - clip.top : clip.bottom - bottom;
-    element.toggleAttribute("data-tip-flip", ahead < tipNeeds(element) && behind > ahead);
+    if (element?.style) placeTip(element, view);
   };
   doc.addEventListener("pointerover", place, true);
   doc.addEventListener("focusin", place, true);

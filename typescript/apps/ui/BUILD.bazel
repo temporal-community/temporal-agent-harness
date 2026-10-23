@@ -119,6 +119,8 @@ js_library(
         "//typescript/apps/ui/src/lib/components/flow:StepController",
         "//typescript/apps/ui/src/lib/components/flow:UsageLineChart",
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
+        "//typescript/apps/ui/src/lib/components/flow:timelineMark",
         "//typescript/apps/ui/src/lib/components/primitives:Badge",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
@@ -198,6 +200,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:timeTicks",
         "//typescript/apps/ui/src/lib/state:toolImages",
         "//typescript/apps/ui/src/lib/state:transcript",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
     ],
 )
 

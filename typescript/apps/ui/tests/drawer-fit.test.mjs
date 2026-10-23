@@ -40,15 +40,18 @@ describe("the bottom drawer is fitted to the trace it holds", () => {
     );
     assert.match(
       wiring,
-      /querySelector\("\.turns"\)/,
-      "the fit is measured off the trace's scroller, so that is what it must look in"
-    );
-    assert.match(
-      wiring,
-      /lastElementChild/,
+      /drawerFitTarget\(\)\?\.last/,
       "the last row is the live one: watching anything else either never fires or never stops"
     );
     assert.match(wiring, /\.observe\(/, "the row has to actually be observed");
+  });
+
+  /* The fit once looked for the waterfall's `.turns`, and found nothing once the timeline
+     became the drawer's default pane. Each pane names its scroller instead. */
+  it("finds the scroller by the attribute every drawer pane carries, not a pane's class", () => {
+    const target = source.slice(source.indexOf("function drawerFitTarget"));
+    assert.match(target, /querySelector\("\[data-drawer-fit\]"\)/);
+    assert.doesNotMatch(source, /querySelector\("\.turns"\)|\.turn-row:last-child/);
   });
 
   /* An observer outliving the drawer holds the detached rows of every session the

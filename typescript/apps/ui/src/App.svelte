@@ -464,10 +464,9 @@
    * indefinite row leaves every one of them nothing to fill.
    */
   function fitDrawerToContent(): number | null {
-    const turns = drawerElement?.querySelector(".turns");
-    /* The rows sit in a windowed list, so the last row is the last one drawn. */
-    const last = turns?.querySelector(".turn-row:last-child") ?? turns?.lastElementChild;
-    if (!drawerElement || !turns || !last) return null;
+    const target = drawerFitTarget();
+    if (!drawerElement || !target) return null;
+    const { scroller: turns, last } = target;
 
     /* `scrollHeight` is useless in the direction that matters, because it never
        reports less than the box: a trace with room to spare measures as exactly the
@@ -491,6 +490,14 @@
       )
     );
     return drawerHeight;
+  }
+
+  /** The scroller a drawer pane marks `data-drawer-fit`, and its last row. Its rows sit one
+   *  level down in a windowed list, so the last child there is the last row drawn. */
+  function drawerFitTarget(): { scroller: Element; last: Element } | null {
+    const scroller = drawerElement?.querySelector("[data-drawer-fit]");
+    const last = scroller?.querySelector(":scope > * > :last-child") ?? scroller?.lastElementChild;
+    return scroller && last ? { scroller, last } : null;
   }
 
   /**
@@ -520,7 +527,7 @@
    * worse thing to do to someone than leave a band of empty space below the last
    * turn — so the fit happens once per open and the slack above absorbs the rest.
    * Collapsing or expanding a turn is the same argument: the reader asked to see a
-   * turn, not to have the desk resize under them, and `.turns` scrolls.
+   * turn, not to have the desk resize under them, and the pane's rows scroll.
    *
    * Asked once per open, and once per session, because those are the two moments the
    * question is new: a drawer being opened has no height yet, and a different run is
@@ -565,8 +572,7 @@
       followLastRow();
     });
     function followLastRow(): void {
-      const turns = drawerElement?.querySelector(".turns");
-      const last = turns?.querySelector(".turn-row:last-child") ?? turns?.lastElementChild ?? null;
+      const last = drawerFitTarget()?.last ?? null;
       if (last === watched) return;
       if (watched) observer.unobserve(watched);
       watched = last;

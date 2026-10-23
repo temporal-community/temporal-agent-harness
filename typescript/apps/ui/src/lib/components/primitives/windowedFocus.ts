@@ -83,6 +83,8 @@ export function windowedFocus(
       return false;
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      /* A chord is someone else's shortcut, such as the replay transport's. */
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (!scrollToIndex || moveKey(event.key, 0) === undefined) return;
       if (pagesItself(event.target)) return;
       const total = count();

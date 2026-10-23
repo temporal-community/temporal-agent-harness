@@ -20,6 +20,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
         "//typescript/apps/ui/src/lib/components/flow:StepController",
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
         "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",

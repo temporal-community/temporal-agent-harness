@@ -342,6 +342,13 @@ js_library(
     ],
 )
 
+js_library(
+    name = "workflowTimelineScale",
+    srcs = ["workflowTimelineScale.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":timeTicks"],
+)
+
 # One target per test file, depending on what it imports and the files it reads by path.
 vitest_test(
     name = "agentNames_test",
@@ -889,5 +896,22 @@ vitest_test(
         ":agentRun.svelte",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "workflowTimeline_test",
+    src = "workflowTimeline.test.mjs",
+    deps = [
+        ":stepTimeline",
+    ],
+)
+
+vitest_test(
+    name = "workflowTimelineScale_test",
+    src = "workflowTimelineScale.test.mjs",
+    deps = [
+        ":replayLog",
+        ":workflowTimelineScale",
     ],
 )

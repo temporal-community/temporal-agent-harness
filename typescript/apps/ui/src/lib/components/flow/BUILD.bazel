@@ -85,6 +85,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
         "//typescript/apps/ui/src/lib/state:textWidth",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
     ],
 )
 
@@ -141,6 +142,30 @@ js_library(
     ],
 )
 
+js_library(
+    name = "WorkflowTimeline",
+    srcs = ["WorkflowTimeline.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
+        "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+        "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
+)
+
+js_library(
+    name = "timelineMark",
+    srcs = ["timelineMark.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
 vitest_test(
     name = "LatencyWaterfall_test",
     src = "LatencyWaterfall.test.mjs",
@@ -182,6 +207,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
     ],
 )
 
@@ -195,4 +221,27 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/cost:pricing",
     ],
+)
+
+vitest_test(
+    name = "WorkflowTimeline_test",
+    src = "WorkflowTimeline.test.mjs",
+    deps = [
+        ":LatencyWaterfall",
+        ":WorkflowTimeline",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "timelineMark_test",
+    src = "timelineMark.test.ts",
+    deps = [":timelineMark"],
 )

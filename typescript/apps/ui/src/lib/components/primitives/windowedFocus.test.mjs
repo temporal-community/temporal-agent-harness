@@ -175,6 +175,19 @@ describe("a windowed list", () => {
     assert.deepEqual(scrolled, [3, 9]);
     assert.equal(document.activeElement, list.row(9));
     assert.deepEqual(prevented, ["ArrowDown", "End"], "a key that goes nowhere, or isn't the list's, is left alone");
+    list.handlers.keydown({ key: "ArrowDown", shiftKey: true, preventDefault: () => prevented.push("Shift+ArrowDown") });
+    assert.deepEqual(scrolled, [3, 9], "a chord is left to whoever owns it");
+  });
+
+  /* The run-wide timeline is a treegrid of windowed rows, so it needs the same hand-back and
+     reach as the file tree, and its span buttons stay out of the Tab order. */
+  it("hands focus back and reaches every row in the timeline", () => {
+    const timeline = readFileSync(new URL("../flow/WorkflowTimeline.svelte", import.meta.url), "utf8");
+    assert.match(timeline, /const rowFocus = windowedFocus\(\s*\(position\) => windowedRows\?\.scrollToIndex\(position\),\s*\(\) => tree\.indexes\.length,\s*treeKey\s*\)/);
+    assert.match(timeline, /class="rows"[\s\S]*?tabindex=\{tabKey != null && !drawn\.has\(tabKey\) \? 0 : -1\}[\s\S]*?\{@attach rowFocus\}/);
+    assert.match(timeline, /data-index=\{position\}/, "timeline rows carry their shown position");
+    assert.match(timeline, /onkeydowncapture=\{\(event\) => handleRowKeydown\(event, rowIndex\)\}/, "a row folds before the list moves");
+    assert.match(timeline, /class=\{markClass\(row\)\}[\s\S]*?tabindex="-1"/, "a span's button is not a Tab stop");
   });
 
   it("is a feed of articles that know their place in the whole list, in chat and Logs", () => {

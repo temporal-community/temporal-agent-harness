@@ -294,6 +294,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
         "//typescript/apps/ui/src/lib/components/agent:MountTrees",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:transcript",
         "//typescript/apps/ui/tests/support:controllerHarness",

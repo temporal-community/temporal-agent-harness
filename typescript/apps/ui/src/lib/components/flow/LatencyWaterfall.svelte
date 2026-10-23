@@ -688,7 +688,7 @@
     <Reading label={headLabel} headline={rollup.slice(0, 1)} breakdown={rollup.slice(1)} />
   </header>
 
-  <div class="turns" bind:this={turnsElement} onscroll={follower.handleScroll}>
+  <div class="turns" data-drawer-fit bind:this={turnsElement} onscroll={follower.handleScroll}>
     {#if timeline.turns.length === 0}
       <EmptyState title="Step through the stream to chart per-step latency." />
     {:else}

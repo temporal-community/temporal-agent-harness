@@ -277,6 +277,7 @@ js_library(
         "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
