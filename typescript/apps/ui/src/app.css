@@ -42,12 +42,21 @@
   --text-1: #f8fafc;
   --text-2: #c7c9d4;
   --text-3: #8b8d9d;
-  --text-4: #5a5c6e;
+  /* 4.8:1 on --surface-1, the faintest text that still meets WCAG AA. */
+  --text-4: #808294;
+  /* Disabled controls only: WCAG exempts them, and they should read as off. */
+  --text-disabled: #5a5c6e;
 
   /* --- Borders / focus ----------------------------------------------------- */
   --border: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.22);
-  --focus-ring: color-mix(in srgb, var(--accent) 55%, transparent);
+  /* Solid: at 55% the ring measured 2.2:1 on the surfaces, under the 3:1 a focus indicator needs. */
+  --focus-ring: var(--accent);
+  /* Selected, open, or at the replay cursor: a whole-row tint, never a stroke down
+     one side. Translucent, so a cursor row inside a current turn reads a step
+     deeper. Keyboard focus adds --focus-ring on :focus-visible only, and
+     aria-selected / aria-current carry the meaning. */
+  --selected-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 
   /* --- Elevation (flat / hairline — no soft blooms) ------------------------ */
   --shadow-inset-mid: none;
@@ -68,7 +77,7 @@
   --accent: #6173f3;
   --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */
-  --live: #fad000;
+  --live: #ffc53d;
   --model: #a9aef5;
   --reasoning: #53dfca;
   /* Identity, not outcome: --tool says a tool is what this is, the way --model and
@@ -133,6 +142,19 @@
   --gap-lg: 12px;
   --gutter: var(--gap-lg);
   --gutter-tight: var(--gap-md);
+  /* Between a pane's edge and the cards it draws: the compact gutter, as a pane
+     is already a box. Flush content puts a card's stroke on the pane's own
+     border, and a focus ring drawn outward gets clipped there. */
+  --pane-inset: var(--gutter-tight);
+  /* The scrollbar track, as wide as the pane inset. A styled WebKit scrollbar is always a
+     classic one that takes layout width, so a pane scroller keeps its gutter (`scrollbar-gutter:
+     stable`) and drops this from its end padding: the track is the end inset, the content
+     sits as far from either edge, and nothing reflows when the track comes and goes.
+     One thumb and one track for every scroller. Neither is a control, so the thumb
+     gets no border — a hairline box is something you can press. */
+  --scrollbar-size: var(--pane-inset);
+  --scrollbar-thumb: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --scrollbar-track: transparent;
   /* Mono chrome lives at xs/sm; content starts at lg. Nothing below 9px. */
   --font-2xs: 9px;
   --font-xs: 10px;
@@ -154,20 +176,38 @@
   --duration-fast: 160ms;
   --duration-press: 120ms;
   --duration-pane: 220ms;
+  /* Rendered-height threshold shared by chat, traces and logs. */
+  --long-content-max-lines: 40;
+  --long-content-max-height: calc(var(--long-content-max-lines) * 1lh);
+  /* The attention queue: banners restacking, the queue arriving, the pager's digits rolling. */
+  --duration-settle: 350ms;
+  /* How small and how low a thing starts before it settles into place. */
+  --motion-scale: 0.97;
+  --motion-rise: 4px;
+  /* A working agent: one sweep of the reply loader's pixel wave and of a shimmering label. */
+  --duration-pixel-cycle: 650ms;
+  --duration-pixel-step: 90ms;
+  --duration-shimmer: 1400ms;
+  /* Work still open: Temporal Web UI's 3px-on, 3px-off dash scrolls one 6px period per
+     cycle, on a timeline span and on a state-graph edge alike. */
+  --dash-cycle: 1.8s;
   /* Hover intent for tooltips: long enough that crossing a row of controls stays
      quiet, short enough that stopping on one feels answered rather than waited
      for. Well under the browser's own ~1s for `title`. */
   --tip-delay: 350ms;
-  /* Three rows, and height says where you are. xs is everything inside a pane:
+  /* Two rows, and height says where you are. xs is everything inside a pane:
      tags, filters, status. The default is the app chrome — the status line above
      the rail and the transport below it share it, so the two strips read as one
-     frame. lg is only for rows you type into, which need the room. Nothing
-     hard-codes a height outside these. */
+     frame — and every .field a reader types or picks in. Nothing hard-codes a
+     height outside these. */
   --control-height-xs: 22px;
   --control-height: 28px;
-  --control-height-lg: 34px;
+  /* The tallest an image in a reply or tool output draws; a graph card sets a smaller one. */
+  --image-max-height: 320px;
   /* Bare icon toggles that sit inside a text row rather than on a control row. */
   --icon-target: 20px;
+  /* A header row atop a pane or a drawer: one icon target between two --gap-md, and its hairline. */
+  --head-height: calc(var(--icon-target) + 2 * var(--gap-md) + 1px);
   /* A folded pane. Wide enough for a sideways kind label and a status pixel. */
   --pane-spine: 42px;
   /* One status pixel. --pip-lg is only for pips that overlap a glyph. */
@@ -185,6 +225,22 @@
   --flow-canvas: var(--surface-1);
   --flow-dots: color-mix(in srgb, var(--text-3) 55%, var(--text-4));
 
+}
+
+/* A box whose size a click changes (a long block opening, the queue's card taking the next
+   row) eases to it, `auto` included, so the content around it slides rather than jumps. Never
+   on a streamed or windowed row: those grow as data lands, and motion there reads as jitter. */
+.animate-size {
+  interpolate-size: allow-keywords;
+  transition:
+    width var(--duration-pane) var(--ease-out),
+    height var(--duration-pane) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-size {
+    transition: none !important;
+  }
 }
 
 * {
@@ -208,16 +264,33 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+/* Firefox has no webkit pseudos, so it paints the same thumb and track with the
+   standard properties. Those properties have to stay in this query: a non-auto
+   scrollbar-color makes Chrome ignore the pseudos and drop the fixed width.
+   `thin` is this engine's --scrollbar-size. Its overlay track takes no layout
+   width, so a scroller keeps its whole end padding. Pane scrollers still reserve
+   scrollbar-gutter: stable, so the thumb appearing does not move layout. */
+@supports not selector(::-webkit-scrollbar) {
+  :root {
+    --scrollbar-size: 0px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
 }
 
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text-1) 12%, transparent);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--scrollbar-thumb);
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 button,
@@ -243,11 +316,313 @@ a {
   color: inherit;
 }
 
-/* The code-language tag. Four surfaces render code blocks; they all mark the
-   language up as data-language on the pre, so the tag is declared once here and
-   each block only says where to put it. */
+/* Token classes from lib/highlight.ts, one surface's worth of colors for all of them. */
+.md-syntax-comment,
+.md-syntax-meta {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.md-syntax-string,
+.md-syntax-inserted,
+.md-syntax-link,
+.md-syntax-code-inline {
+  color: var(--syntax-string);
+}
+
+.md-syntax-keyword,
+.md-syntax-tag,
+.md-syntax-heading {
+  color: var(--syntax-keyword);
+  font-weight: 750;
+}
+
+.md-syntax-type,
+.md-syntax-property,
+.md-syntax-selector,
+.md-syntax-attr {
+  color: var(--syntax-type);
+}
+
+.md-syntax-function,
+.md-syntax-command {
+  color: var(--syntax-function);
+}
+
+.md-syntax-number {
+  color: var(--syntax-number);
+}
+
+.md-syntax-literal,
+.md-syntax-variable {
+  color: var(--syntax-literal);
+}
+
+.md-syntax-operator {
+  color: var(--syntax-operator);
+}
+
+.md-syntax-deleted {
+  color: var(--error);
+}
+
+/* An Arabic key or value keeps its own direction without reordering the
+   punctuation around it. */
+.md-syntax-string,
+.md-syntax-property {
+  unicode-bidi: isolate;
+}
+
+/* "Look before trusting this": a document that failed to fold, a read that
+   failed, contents newer than the cursor. A class rather than a recipe each
+   pane retypes, for the same reason as .kicker. */
+.callout-warning {
+  margin: 0;
+  padding: var(--gutter-tight);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-2));
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  line-height: 1.45;
+}
+
+/* How deep a tree row is, printed once the row has stopped stepping in (NEST_CAP). */
+.nest-depth {
+  flex: 0 0 auto;
+  display: inline-block;
+  min-inline-size: 3ch;
+  padding-inline-end: 0.5ch;
+  text-align: end;
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+}
+
+/* The box a reader types or picks in. `.field` is every search and filter field in a pane:
+   a label wrapping a lead (an icon or a word) and one input or select, the box drawing the
+   hairline and the ring while the control inside draws nothing. `.form-control` is the same
+   box on the control itself, for a form's labelled inputs, selects and textareas. */
+.field,
+.form-control {
+  min-width: 0;
+  height: var(--control-height);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--control-bg);
+  font-size: var(--font-sm);
+}
+
+.field {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding-inline: var(--gap-md);
+  color: var(--text-3);
+}
+
+.form-control {
+  width: 100%;
+  padding: 0 var(--gap-md);
+  color: var(--text-1);
+  font-family: inherit;
+}
+
+textarea.form-control {
+  height: auto;
+  padding-block: var(--gap-sm);
+  font-family: var(--font-mono);
+  resize: vertical;
+}
+
+.field:has(> :is(input, select):focus-visible),
+.form-control:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.form-control[aria-invalid="true"],
+.field:has(> [aria-invalid="true"]) {
+  border-color: color-mix(in srgb, var(--error) 60%, var(--border));
+}
+
+.form-control::placeholder {
+  color: var(--text-3);
+}
+
+.form-control:disabled {
+  cursor: default;
+  opacity: var(--disabled-opacity);
+}
+
+.field > :is(input, select) {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  outline: none;
+}
+
+.field > input::placeholder {
+  color: var(--text-3);
+}
+
+.field > svg {
+  flex: none;
+}
+
+/* Select.svelte: the composer's handler picker as a native select. The value takes the chip's
+   label register and the box its 12px chevron, drawn over the select's end padding so a press
+   anywhere in the box opens the list. The list itself stays the platform's. */
+.field.select {
+  position: relative;
+  gap: 0;
+  padding-inline: 0;
+}
+
+.field.select > select {
+  appearance: none;
+  padding-inline: var(--gap-md) calc(12px + 2 * var(--gap-md));
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.field.select > select:has(> option:checked:disabled) {
+  color: var(--text-3);
+}
+
+.field.select option {
+  background: var(--surface-1);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.select-lead {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding-inline: var(--gap-md);
+  border-inline-end: 1px solid var(--border);
+}
+
+.select-chevron {
+  position: absolute;
+  inset-inline-end: var(--gap-md);
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.field.select:has(> select:disabled) {
+  opacity: var(--disabled-opacity);
+}
+
+.field.select > select:disabled {
+  cursor: default;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .field.select:has(> select:not(:disabled)):hover {
+    border-color: var(--border-strong);
+  }
+
+  .field.select:has(> select:not(:disabled)):hover > :is(select, .select-chevron) {
+    color: var(--text-1);
+  }
+}
+
+/* Clearing a field empties it at once; lib/motion/inputClearDissolve.ts leaves the old words
+   over it as an inert copy that fades out, so the clear reads as the text going rather than
+   the field blinking. The field clips only while that copy is out: at rest it hosts controls
+   whose tips and cards reach past its edge, and the zero minimums keep it sized as it was. */
+.clearable {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.clearable.has-leaving-text {
+  overflow: hidden;
+}
+
+.clearable.has-leaving-text > input::placeholder {
+  color: transparent;
+}
+
+.leaving-text {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  color: var(--text-1);
+  white-space: pre;
+  pointer-events: none;
+}
+
+/* Fades only while the field still wears .clearable. Svelte rewrites a class attribute it owns
+   when it changes (the composer form expanding drops it), and that field's copy then goes at
+   the end of the clear without fading. */
+.clearable > .leaving-text {
+  animation: text-leaves var(--duration-pane) var(--ease-out) forwards;
+}
+
+/* Down a step as it shrinks, so the words settle out of the field rather than blink. */
+@keyframes text-leaves {
+  to {
+    opacity: 0;
+    transform: translateY(var(--motion-rise)) scale(var(--motion-scale));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clearable > .leaving-text {
+    animation: none;
+  }
+}
+
+.field > .clear-search.icon-button {
+  z-index: 2;
+  flex: none;
+  width: var(--icon-target);
+  height: var(--icon-target);
+  border-color: transparent;
+  background: transparent;
+}
+
+/* Read out, never drawn. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The code-language tag. Code blocks mark the language up as data-language on the
+   pre, so the tag is declared once here and each block only says where to put it.
+   `.code-language-tag` is the same tag as an element, for a block whose header is
+   its own rather than the pre's (markdown code blocks, JSON replies). */
 pre[data-language]::before {
   content: attr(data-language);
+}
+
+pre[data-language]::before,
+.code-language-tag {
   padding: 1px 6px;
   border: 1px solid var(--code-label-border);
   background: var(--code-label-bg);
@@ -272,6 +647,257 @@ pre[data-language]::before {
   text-transform: uppercase;
 }
 
+/* Tracking pulls Arabic's joined letters apart; it has no capitals to space out either. */
+.kicker:dir(rtl) {
+  letter-spacing: normal;
+}
+
+/* The header row every pane and the Session Manager drawer open with, so the two read as one
+   frame side by side, and the top bar above them takes the same row. `.head-name` takes the
+   slack, `.head-kind` is its kicker label, `.head-title` the name after it, and `.head-button`
+   its quiet icon controls. */
+.surface-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  height: var(--head-height);
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-head);
+}
+
+.head-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  margin: 0;
+  font: inherit;
+}
+
+.head-kind {
+  flex: none;
+  padding: 0 var(--gap-xs);
+  margin-inline-start: -4px;
+  color: var(--head-accent, var(--text-3));
+  white-space: nowrap;
+}
+
+/* Inverted, the way a TUI marks its active window: a filled block, not an edge stripe. */
+.head-kind.on {
+  background: var(--head-accent, var(--text-3));
+  color: var(--surface-0);
+}
+
+/* The title yields before the kind label does: a clipped kind costs the reader the one word
+   every pane of this kind shares, while a clipped identifier still starts with the characters
+   that tell it from its siblings. Callers keep the full text in a tip or title. Its direction
+   is its own text's, so an English title clips at its end on an RTL page too. */
+.head-title {
+  min-width: 0;
+  unicode-bidi: plaintext;
+  color: var(--text-1);
+  font-size: var(--font-lg);
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A list row's label that clips by fading its end into whatever is behind it, tint included,
+   rather than spending a character on an ellipsis. The mask rides a scroll timeline, which is
+   inactive while the text fits, so a label sized to its own text is never faded either. Where
+   scroll timelines are missing it keeps the ellipsis. Not for ids or paths: those clip in the
+   middle. */
+.fade-end {
+  --fade-width: 24px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@supports (animation-timeline: scroll()) {
+  .fade-end {
+    text-overflow: clip;
+    animation: fade-end linear both;
+    animation-timeline: scroll(self inline);
+  }
+
+  .fade-end:dir(rtl) {
+    animation-name: fade-end-rtl;
+  }
+}
+
+@keyframes fade-end {
+  from,
+  to {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--fade-width)), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--fade-width)), transparent);
+  }
+}
+
+@keyframes fade-end-rtl {
+  from,
+  to {
+    -webkit-mask-image: linear-gradient(to left, #000 calc(100% - var(--fade-width)), transparent);
+    mask-image: linear-gradient(to left, #000 calc(100% - var(--fade-width)), transparent);
+  }
+}
+
+/* A dialog's one line under its title's name: where the thing came from, or what it holds. */
+.head-subtitle {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--font-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: plaintext;
+}
+
+/* Never squeezed below its target: the title beside it is what gives way. */
+.head-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-target);
+  height: var(--icon-target);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-press) var(--ease-out);
+}
+
+.head-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.head-button.on {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.head-button:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+
+.head-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .head-button:hover:not(:disabled) {
+    color: var(--text-1);
+    border-color: var(--border);
+  }
+
+  .head-button.danger:hover {
+    color: var(--error);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .head-button {
+    transition: none;
+  }
+
+  .head-button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* The trace's glyph column: one cell for every state glyph and for the working loader, so
+   they and the tree rule AgentChatPanel draws through them share one axis, 8.5px in. Odd,
+   so a 13px glyph and the 11px loader both center on whole pixels. */
+.trace-glyph {
+  flex: none;
+  width: 15px;
+  height: 16px;
+  margin-inline-start: 1px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+}
+
+/* A glyph and the caret that stands in for it share the cell. */
+.trace-glyph > * {
+  grid-area: 1 / 1;
+}
+
+/* A row that opens: `.disclosure` on the button (which carries aria-expanded), and
+   `.disclosure-chevron` on its right-pointing caret, inside the row's glyph cell. The caret
+   takes the glyph's place while the row is pointed at or focused from the keyboard, and
+   stays, turned down, on an open row, except that a `.live` row's moving glyph keeps the
+   cell until it is pointed at. A row with nothing to open is not a button and draws none. */
+.disclosure {
+  cursor: pointer;
+}
+
+.disclosure-chevron,
+.disclosure .trace-glyph > * {
+  transition:
+    opacity var(--duration-fast) var(--ease-ui),
+    rotate var(--duration-fast) var(--ease-ui);
+}
+
+.disclosure-chevron {
+  color: var(--text-3);
+  opacity: 0;
+}
+
+.disclosure-chevron:dir(rtl) {
+  scale: -1 1;
+}
+
+.disclosure:focus-visible .disclosure-chevron,
+.disclosure[aria-expanded="true"]:not(.live) .disclosure-chevron {
+  opacity: 1;
+}
+
+.disclosure:focus-visible .trace-glyph > :not(.disclosure-chevron),
+.disclosure[aria-expanded="true"]:not(.live) .trace-glyph > :not(.disclosure-chevron) {
+  opacity: 0;
+}
+
+.disclosure[aria-expanded="true"] .disclosure-chevron {
+  rotate: 90deg;
+}
+
+.disclosure[aria-expanded="true"] .disclosure-chevron:dir(rtl) {
+  rotate: -90deg;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .disclosure:hover .disclosure-chevron {
+    opacity: 1;
+    color: var(--text-2);
+  }
+
+  .disclosure:hover .trace-glyph > :not(.disclosure-chevron) {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-chevron,
+  .disclosure .trace-glyph > * {
+    transition: none;
+  }
+}
+
 /* The tooltip. `data-tip="…"` on any element, `data-tip-below` where there is no
    room above. Declared once here for the same reason the code-language tag is:
    so every hint in the app has one delay, one type, and one surface.
@@ -286,95 +912,176 @@ pre[data-language]::before {
  * The bubble is drawn with the element's own pseudo-elements, so an element that
  * already spends `::before`/`::after` cannot take a tip, and it is painted, not
  * portalled — inside an ancestor that clips, it will be clipped.
+ *
+ * A tip of more than one fact is a TipCard child of the element, with `data-tip=""`:
+ * the card takes the place of `::after` and every rule below — placement, delay,
+ * motion — applies to it the same.
  */
 [data-tip] {
   position: relative;
 }
 
 [data-tip] {
-  /* Which way the bubble grows, and how far it travels coming in. A centred
-     bubble is wider than most of the controls that carry one, so on a control
-     near a window edge it would hang off the side — and the page does not
-     scroll, so it would simply be cut off. `data-tip-align="end"` (or "start")
-     grows it inward instead. */
-  --tip-x: -50%;
-  --tip-rise: 4px;
+  /* Where the bubble sits, and how far it travels coming in. It is centred on
+     its element, under the caret, and slides only as far as it must to stay in
+     the room keepTipsInView (tipFocus.ts) measures from the element's centre to
+     each edge of whatever clips it: no further left than that room, no further
+     right than it less the bubble's own width. Unmeasured, the room is the
+     window, so it centres. Growing a tip from its element's edge instead put
+     the bubble beside the caret on a wide row; `data-tip-align` no longer
+     moves it. */
+  --tip-x: clamp(
+    calc(var(--tip-room-left, 100vw) * -1),
+    -50%,
+    calc(var(--tip-room-right, 100vw) - 100%)
+  );
+  --tip-rise: calc(var(--motion-rise) * var(--tip-dir, 1));
 }
 
-/* Both edges want the same thing — no centring offset. Which side the bubble
-   then hangs off is the `::after` rules further down. */
-[data-tip][data-tip-align="end"],
-[data-tip][data-tip-align="start"] {
-  --tip-x: 0;
+/* `data-tip-flip` is keepTipsInView's: the tip's own side is clipped and the other has more room. */
+[data-tip-below],
+[data-tip][data-tip-flip] {
+  --tip-dir: -1;
 }
 
-[data-tip-below] {
-  --tip-rise: -4px;
+[data-tip-below][data-tip-flip] {
+  --tip-dir: 1;
 }
 
+/* Hidden is gone, not transparent. A transparent bubble is still laid out, so a centered
+   one on a control near the window's edge widened the whole page while nobody could see
+   it — 91px at 1440 on ?mock=worst, from the bottom drawer's tip. */
 [data-tip]::before,
-[data-tip]::after {
+[data-tip]::after,
+[data-tip] > .tip-card {
   position: absolute;
   z-index: 40;
-  opacity: 0;
+  display: none;
   pointer-events: none;
-  transition:
-    opacity var(--duration-fast) var(--ease-ui),
-    transform var(--duration-fast) var(--ease-ui);
 }
 
-/* The caret stays on the element's centre whichever way the bubble grows, so a
-   tip that has cleared its element still points back at it. */
+[data-tip]:has(> .tip-card)::after {
+  content: none;
+}
+
+/* The caret stays on the element's centre wherever the bubble slides, so a tip
+   that has cleared its element still points back at it. It is the bubble's own
+   fill and overlaps it by 1px, painted above it: under it, a stroke on the
+   bubble cut across its base and it read as a separate, fainter piece. */
 [data-tip]::before {
   content: "";
+  z-index: 41;
   left: 50%;
   bottom: calc(100% + 3px);
   border: 5px solid transparent;
   border-top-color: var(--surface-3);
-  transform: translate(-50%, calc(var(--tip-rise) * -0.5));
+  transform: translate(-50%, 0);
 }
 
-[data-tip]::after {
-  content: attr(data-tip);
+[data-tip]::after,
+[data-tip] > .tip-card {
   left: 50%;
   bottom: calc(100% + 12px);
+  /* Border-box, which `*` does not give a pseudo-element, so the cap includes the padding. */
+  box-sizing: border-box;
   width: max-content;
-  max-width: min(320px, 60vw);
+  /* `cqi` is the nearest size container, or the viewport when there is none: a tip inside a
+     narrow drawer that clips stays narrower than the drawer. */
+  max-width: min(320px, 60vw, calc(100cqi - 16px));
+  transform: translate(var(--tip-x), 0);
+}
+
+/* The tip's surface, and a rich tip's wherever it is drawn. A fill and no stroke: a hairline
+   box is what a control looks like, and a tip is not one. */
+[data-tip]::after,
+.tip-card {
   padding: 4px 8px;
-  border: 1px solid var(--border-strong);
   background: var(--surface-3);
-  box-shadow: var(--shadow-floating);
   color: var(--text-1);
   font-family: var(--font-sans);
   font-size: var(--font-sm);
   font-weight: 500;
   line-height: 1.4;
-  text-align: left;
   text-transform: none;
   letter-spacing: normal;
-  transform: translate(var(--tip-x), var(--tip-rise));
+}
+
+/* Here rather than in TipCard, so `[data-tip] > .tip-card` above outranks it and keeps it hidden. */
+.tip-card {
+  display: grid;
+}
+
+[data-tip]::after {
+  content: attr(data-tip);
+  text-align: start;
   white-space: pre-line;
+  /* A tip that names a session can carry an unbroken token thousands of characters long:
+     it wraps anywhere, and stops at eight lines rather than growing past the window. */
+  overflow-wrap: anywhere;
+  max-height: calc(8 * 1.4em + 8px);
+  overflow: hidden;
 }
 
-[data-tip][data-tip-align="end"]::after {
-  left: auto;
-  right: 0;
-}
-
-[data-tip][data-tip-align="start"]::after {
-  left: 0;
-}
-
-[data-tip-below]::before {
+[data-tip-below]:not([data-tip-flip])::before,
+[data-tip][data-tip-flip]:not([data-tip-below])::before {
   bottom: auto;
   top: calc(100% + 3px);
   border-top-color: transparent;
   border-bottom-color: var(--surface-3);
 }
 
-[data-tip-below]::after {
+[data-tip-below]:not([data-tip-flip])::after,
+[data-tip][data-tip-flip]:not([data-tip-below])::after,
+[data-tip-below]:not([data-tip-flip]) > .tip-card,
+[data-tip][data-tip-flip]:not([data-tip-below]) > .tip-card {
   bottom: auto;
   top: calc(100% + 12px);
+}
+
+/* `data-tip-side="right"`: beside its element rather than above it, for a row in a list
+   that clips, where a painted bubble would be cut off at the list's edge. This one is the
+   exception to "painted, not portalled": `position: fixed`, at the spot keepTipsInView
+   measures (the row's middle, held inside the window), which no ancestor's overflow clips.
+   `data-tip-flip` moves it to the left. It fades in without travelling. */
+[data-tip][data-tip-side="right"] {
+  --tip-rise: 0px;
+}
+
+[data-tip][data-tip-side="right"]::before,
+[data-tip][data-tip-side="right"]::after,
+[data-tip][data-tip-side="right"] > .tip-card {
+  position: fixed;
+  bottom: auto;
+}
+
+/* The same 5px caret, turned to point back at the row, overlapping the bubble by 1px. */
+[data-tip][data-tip-side="right"]::before,
+[data-tip][data-tip-side="right"][data-tip-flip]::before {
+  top: calc(var(--tip-side-middle) - 5px);
+  left: calc(var(--tip-side-x) + 3px);
+  border-color: transparent var(--surface-3) transparent transparent;
+  transform: none;
+}
+
+[data-tip][data-tip-side="right"]::after,
+[data-tip][data-tip-side="right"] > .tip-card,
+[data-tip][data-tip-side="right"][data-tip-flip]::after,
+[data-tip][data-tip-side="right"][data-tip-flip] > .tip-card {
+  top: var(--tip-side-top);
+  left: calc(var(--tip-side-x) + 12px);
+  max-width: min(320px, var(--tip-side-room));
+  transform: none;
+}
+
+[data-tip][data-tip-side="right"][data-tip-flip]::before {
+  left: calc(var(--tip-side-x) - 13px);
+  border-color: transparent transparent transparent var(--surface-3);
+}
+
+[data-tip][data-tip-side="right"][data-tip-flip]::after,
+[data-tip][data-tip-side="right"][data-tip-flip] > .tip-card {
+  left: calc(var(--tip-side-x) - 12px);
+  transform: translate(-100%, 0);
 }
 
 /* Hover waits, so crossing a row of controls on the way somewhere else does not
@@ -382,31 +1089,39 @@ pre[data-language]::before {
 [data-tip]:hover::before,
 [data-tip]:hover::after,
 [data-tip]:focus-visible::before,
-[data-tip]:focus-visible::after {
-  opacity: 1;
-  transition-delay: var(--tip-delay);
+[data-tip]:focus-visible::after,
+[data-tip]:hover > .tip-card,
+[data-tip]:focus-visible > .tip-card {
+  display: block;
+  animation: tip-in var(--duration-fast) var(--ease-ui) var(--tip-delay) both;
 }
 
-[data-tip]:hover::before,
-[data-tip]:focus-visible::before {
-  transform: translate(-50%, 0);
-}
-
-[data-tip]:hover::after,
-[data-tip]:focus-visible::after {
-  transform: translate(var(--tip-x), 0);
+[data-tip]:hover > .tip-card,
+[data-tip]:focus-visible > .tip-card {
+  display: grid;
 }
 
 [data-tip]:focus-visible::before,
-[data-tip]:focus-visible::after {
-  transition-delay: 0s;
+[data-tip]:focus-visible::after,
+[data-tip]:focus-visible > .tip-card {
+  animation-delay: 0s;
+}
+
+/* An animation, not a transition: a box that has just been created has nothing to
+   transition from. `translate` composes with the placement `transform` above. */
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    translate: 0 var(--tip-rise);
+  }
 }
 
 /* Focus code moved here — handed back after a menu or a picker closes — is not a request for
    the hint (see tipFocus.ts). Hover still shows it. */
 [data-tip][data-tip-quiet]:not(:hover)::before,
-[data-tip][data-tip-quiet]:not(:hover)::after {
-  opacity: 0;
+[data-tip][data-tip-quiet]:not(:hover)::after,
+[data-tip][data-tip-quiet]:not(:hover) > .tip-card {
+  display: none;
 }
 
 /* A tip that is being pressed is in the way of its own result, and so is the tip of a
@@ -414,9 +1129,39 @@ pre[data-language]::before {
 [data-tip]:active::before,
 [data-tip]:active::after,
 [data-tip][aria-expanded="true"]::before,
-[data-tip][aria-expanded="true"]::after {
-  opacity: 0;
-  transition-delay: 0s;
+[data-tip][aria-expanded="true"]::after,
+[data-tip]:active > .tip-card,
+[data-tip][aria-expanded="true"] > .tip-card {
+  display: none;
+}
+
+/* Words for something still happening — "Thinking", "Running search_docs" — with light
+   sweeping across them. Shared, so the reply's status and its turn header shimmer as one. */
+.reply-shimmer {
+  color: transparent;
+  background: linear-gradient(
+      90deg,
+      var(--text-3) 35%,
+      var(--text-1) 50%,
+      var(--text-3) 65%
+    )
+    0 0 / 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: reply-shimmer var(--duration-shimmer) linear infinite;
+}
+
+.reply-shimmer:dir(rtl) {
+  animation-direction: reverse;
+}
+
+@keyframes reply-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -425,9 +1170,10 @@ pre[data-language]::before {
     --tip-rise: 0px;
   }
 
-  [data-tip]::before,
-  [data-tip]::after {
-    transition: opacity var(--duration-fast) var(--ease-ui);
+  .reply-shimmer {
+    animation: none;
+    color: var(--text-2);
+    background: none;
   }
 }
 

@@ -9,6 +9,7 @@
 // of `rest` and merged, so a caller can add one without being able to take the primitive's away.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
@@ -25,14 +26,10 @@ describe("the primitive owns behaviour", () => {
     // ...and nothing else becomes a submit button by accident.
     assert.match(html(IconButton, { label: "Reset" }), /type="button"/);
 
-    // Chip has no reason to submit anything, so it does not take `type` and a caller
-    // cannot reach past it to say otherwise. This is the assertion that fails if the
-    // spread moves back after the attributes.
-    assert.match(
-      html(Chip, { label: "Approve", onclick: () => {}, type: "submit" }),
-      /type="button"/,
-      "Chip let rest choose its type"
-    );
+    // Chip names `type` too, for a form's Send: a submit chip is a real submit button, and
+    // every other chip button stays type="button".
+    assert.match(html(Chip, { label: "Send", type: "submit" }), /<button[^>]*type="submit"/);
+    assert.match(html(Chip, { label: "Approve", onclick: () => {} }), /type="button"/);
 
     // The `rel` that makes target="_blank" safe is the primitive's to keep.
     const link = html(Chip, { label: "Docs", href: "https://example.com", rel: "" });
@@ -102,13 +99,13 @@ describe("except `class`, which merges", () => {
   // merging must not reopen the door the spread order closed.
   it("does not reopen the door the spread order closed", () => {
     const dressedChip = html(Chip, {
-      label: "Approve",
-      onclick: () => {},
+      label: "Docs",
+      href: "https://example.com",
       class: "wide",
-      type: "submit"
+      rel: ""
     });
     assert.match(dressedChip, /\bwide\b/);
-    assert.match(dressedChip, /type="button"/, "a class in the same call let rest choose Chip's type");
+    assert.match(dressedChip, /rel="noreferrer noopener"/, "a class in the same call let rest strip Chip's rel");
 
     const dressedButton = html(IconButton, {
       label: "Refresh",
@@ -120,6 +117,28 @@ describe("except `class`, which merges", () => {
       dressedButton,
       /aria-pressed/,
       "a class in the same call let rest invent a toggle state"
+    );
+  });
+});
+
+describe("a label does not look like a control", () => {
+  // The hairline box is what Logs' filters, the state tabs and every chrome action
+  // look like, so a quiet chip with nothing to press wore a button's outline: users
+  // could not tell "IN MEMORY" (a fact) from "TOOLS" (a filter). SSR cannot see
+  // CSS, so this reads the rule the static chip falls under.
+  it("renders a static quiet chip as a plain span that drops the hairline box", () => {
+    const label = html(Chip, { label: "in memory", fill: "quiet", "data-tip": "Session state" });
+    assert.match(label, /<span [^>]*class="chip\b/, "a label rendered as something other than a span");
+    assert.doesNotMatch(label, /\binteractive\b|<button|tabindex/, "a label became focusable or interactive");
+
+    const css = readFileSync(new URL("./Chip.svelte", import.meta.url), "utf8");
+    const rule = css.match(/\.chip\.quiet:not\(\.interactive\),\s*\.chip\.bare\.active:not\(\.interactive\) \{([^}]*)\}/);
+    assert.ok(rule, "the static-chip rule is gone from Chip.svelte");
+    assert.match(rule[1], /border-color: transparent;/);
+    assert.match(rule[1], /background: transparent;/);
+    assert.ok(
+      css.indexOf(rule[0]) > css.indexOf(".chip.quiet.active,"),
+      "the static-chip rule must come after the active fill it overrides"
     );
   });
 });

@@ -28,7 +28,7 @@
     model: "model",
     reasoning: "reasoning",
     tool: "tool",
-    approval: "queue",
+    approval: "live",
     queue: "queue",
     done: "success",
     error: "error"

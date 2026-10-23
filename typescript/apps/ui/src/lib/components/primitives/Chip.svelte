@@ -25,7 +25,10 @@
 
   export type ChipSize = "xs" | "sm";
 
-  /** filled: toned wash. quiet: hairline only. bare: no chrome at all. */
+  /**
+   * filled: toned wash, for a status. quiet: hairline only, for a control; without
+   * `onclick` or `href` it is a plain label. bare: no chrome at all.
+   */
   export type ChipFill = "filled" | "quiet" | "bare";
 
   interface Props {
@@ -50,6 +53,8 @@
     disabled?: boolean;
     href?: string | null;
     onclick?: (event: MouseEvent) => void;
+    /** `submit` makes the chip its form's submit button (or another form's, with `form`). */
+    type?: "button" | "submit";
     /** Icon slot, ahead of the label. */
     lead?: Snippet;
     children?: Snippet;
@@ -72,13 +77,14 @@
     disabled = false,
     href = null,
     onclick,
+    type = "button",
     lead,
     children,
     class: extraClass = "",
     ...rest
   }: Props = $props();
 
-  const interactive = $derived(Boolean(href) || Boolean(onclick));
+  const interactive = $derived(Boolean(href) || Boolean(onclick) || type === "submit");
   const classes = $derived(
     [
       "chip",
@@ -121,8 +127,8 @@
   <a {...rest} class={classes} {href} target="_blank" rel="noreferrer noopener">
     {@render body()}
   </a>
-{:else if onclick}
-  <button {...rest} class={classes} type="button" {disabled} {onclick}>
+{:else if onclick || type === "submit"}
+  <button {...rest} class={classes} {type} {disabled} {onclick}>
     {@render body()}
   </button>
 {:else}
@@ -204,6 +210,21 @@
     color: color-mix(in srgb, var(--chip-color) 82%, var(--text-1));
   }
 
+  /* The hairline box is what a filter, a tab, a toggle and a chrome action
+     look like, so a quiet chip nobody can press drops it and reads as the
+     label it is. A filled chip keeps its box: the wash is the status. */
+  .chip.quiet:not(.interactive),
+  .chip.bare.active:not(.interactive) {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  /* Without a box there is nothing to pad, and padding would indent a label
+     that wraps to the start of a line. */
+  .chip.quiet:not(.interactive) {
+    padding-inline: 0;
+  }
+
   .chip.ring::after {
     content: "";
     position: absolute;
@@ -224,12 +245,18 @@
   }
 
   .chip.interactive:active:not(:disabled) {
-    transform: scale(0.97);
+    transform: scale(var(--motion-scale));
   }
 
   .chip.interactive:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: 1px;
+  }
+
+  .chip.bare.interactive:focus-visible {
+    border-color: var(--focus-ring);
+    outline: none;
+    background: var(--selected-bg);
   }
 
   .chip.interactive:disabled {
@@ -241,6 +268,10 @@
     .chip.interactive:hover:not(:disabled) {
       color: var(--text-1);
       border-color: var(--border-strong);
+    }
+
+    .chip.bare.interactive:hover:not(:disabled) {
+      background: var(--surface-2);
     }
 
     .chip.filled.interactive:hover:not(:disabled) {

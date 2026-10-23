@@ -72,7 +72,7 @@
     Wrench,
     XCircle
   } from "@lucide/svelte";
-  import Chip, { type ChipSize } from "$lib/components/primitives/Chip.svelte";
+  import Chip, { type ChipFill, type ChipSize } from "$lib/components/primitives/Chip.svelte";
 
   interface Props {
     label: string;
@@ -86,6 +86,13 @@
      * pane, 28px in the app chrome. Only the topbar passes "sm".
      */
     size?: ChipSize;
+    /** "quiet" drops the box and keeps the hue, for a status inside something pressable. */
+    fill?: ChipFill;
+    /**
+     * Only the coloured word: no box and no glyph, for a header whose band is
+     * already tinted by the state and whose title carries the glyph (StateGlyph).
+     */
+    plain?: boolean;
   }
 
   let {
@@ -94,7 +101,9 @@
     detail = null,
     active = false,
     compact = false,
-    size = "xs"
+    size = "xs",
+    fill = "filled",
+    plain = false
   }: Props = $props();
 
   const ICONS: Record<StatusKind, typeof CircleDot> = {
@@ -133,23 +142,35 @@
   const iconSize = $derived(compact || size === "xs" ? 12 : 13);
 </script>
 
-<Chip tone={STATUS_TONES[kind]} {size} {active} ring={active} dense={compact}>
-  {#snippet lead()}
-    <span class={`status-icon ${animated ? "animated" : ""}`}>
-      <Icon size={iconSize} />
-    </span>
-  {/snippet}
-  <span class="status-text">{label}</span>
-  {#if detail && !compact}
-    <span class="status-detail">{detail}</span>
-  {/if}
-</Chip>
+{#if plain}
+  <Chip tone={STATUS_TONES[kind]} {size} fill="quiet" toned dense>
+    <span class="status-text word">{label}</span>
+  </Chip>
+{:else}
+  <Chip tone={STATUS_TONES[kind]} {size} {fill} toned={fill !== "filled"} {active} ring={active} dense={compact}>
+    {#snippet lead()}
+      <span class={`status-icon ${animated ? "animated" : ""}`}>
+        <Icon size={iconSize} />
+      </span>
+    {/snippet}
+    <span class="status-text">{label}</span>
+    {#if detail && !compact}
+      <span class="status-detail">{detail}</span>
+    {/if}
+  </Chip>
+{/if}
 
 <style>
   .status-text {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* The filled chip's mix toward --text-1: a bare hue sits on a band tinted by that same
+     hue, and --accent there measured 4.06:1. */
+  .status-text.word {
+    color: color-mix(in srgb, currentColor 82%, var(--text-1));
   }
 
   .status-detail {

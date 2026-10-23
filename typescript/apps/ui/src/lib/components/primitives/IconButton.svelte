@@ -18,7 +18,7 @@
      * and gets both states.
      */
     pressed?: boolean;
-    tone?: "default" | "primary" | "follow";
+    tone?: "default" | "primary" | "accent" | "quiet" | "follow";
     /**
      * `submit` is the one behaviour a caller may change, and it is a named prop
      * rather than something reachable through `rest` because it decides what
@@ -94,10 +94,16 @@
       border-color: var(--border-strong);
       background: var(--surface-3);
     }
+
+    .icon-button.accent:hover:not(:disabled, [aria-disabled="true"]) {
+      color: var(--surface-0);
+      border-color: transparent;
+      background: color-mix(in srgb, var(--accent) 88%, var(--text-1));
+    }
   }
 
   .icon-button:active:not(:disabled, [aria-disabled="true"]) {
-    transform: scale(0.97);
+    transform: scale(var(--motion-scale));
   }
 
   .icon-button.primary,
@@ -105,6 +111,17 @@
     color: var(--accent);
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
     background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
+  }
+
+  .icon-button.accent {
+    color: var(--surface-0);
+    border-color: transparent;
+    background: var(--accent);
+  }
+
+  .icon-button.quiet {
+    border-color: transparent;
+    background: transparent;
   }
 
   /* Named for what it does, not for the hue it borrows: --live is reserved for
@@ -127,6 +144,12 @@
   .icon-button[aria-disabled="true"] {
     opacity: var(--disabled-opacity);
     cursor: default;
+  }
+
+  .icon-button.accent:disabled,
+  .icon-button.accent[aria-disabled="true"] {
+    color: var(--text-3);
+    background: var(--surface-3);
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -33,15 +33,58 @@ js_library(
 )
 
 js_library(
+    name = "EmptyState",
+    srcs = ["EmptyState.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "IconAgent",
+    srcs = ["IconAgent.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "IconButton",
     srcs = ["IconButton.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
 js_library(
+    name = "LongContent",
+    srcs = ["LongContent.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+js_library(
     name = "MetricStrip",
     srcs = ["MetricStrip.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "Reading",
+    srcs = ["Reading.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":MetricStrip"],
+)
+
+js_library(
+    name = "Select",
+    srcs = ["Select.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/@lucide/svelte"],
+)
+
+js_library(
+    name = "StateGlyph",
+    srcs = ["StateGlyph.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/@lucide/svelte"],
 )
 
 js_library(
@@ -55,8 +98,41 @@ js_library(
 )
 
 js_library(
+    name = "TipCard",
+    srcs = ["TipCard.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "TraceRow",
+    srcs = ["TraceRow.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":StateGlyph",
+        ":nest",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+    ],
+)
+
+js_library(
+    name = "WindowedRows",
+    srcs = ["WindowedRows.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+js_library(
     name = "metrics",
     srcs = ["metrics.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "nest",
+    srcs = ["nest.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
@@ -72,6 +148,12 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
+js_library(
+    name = "windowedFocus",
+    srcs = ["windowedFocus.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
 # One target per test file, depending on what it imports and the files it reads by path.
 vitest_test(
     name = "Copyable_test",
@@ -81,6 +163,62 @@ vitest_test(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui:sources",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "IconAgent_test",
+    src = "IconAgent.test.mjs",
+    deps = [
+        ":IconAgent",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "LongContent_test",
+    src = "LongContent.test.mjs",
+    deps = [
+        ":LongContent",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+    ],
+)
+
+vitest_test(
+    name = "Reading_test",
+    src = "Reading.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
+        "//typescript/apps/ui/src/lib/components/flow:UsageReading",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+    ],
+)
+
+vitest_test(
+    name = "TipCard_test",
+    src = "TipCard.test.mjs",
+    deps = [
+        ":TipCard",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "TraceRow_test",
+    src = "TraceRow.test.mjs",
+    deps = [
+        ":TraceRow",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
@@ -113,5 +251,21 @@ vitest_test(
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src:main",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+    ],
+)
+
+vitest_test(
+    name = "windowedFocus_test",
+    src = "windowedFocus.test.mjs",
+    deps = [
+        ":windowedFocus",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:transcript",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

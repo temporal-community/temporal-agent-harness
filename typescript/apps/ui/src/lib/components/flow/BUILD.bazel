@@ -16,6 +16,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/state:nodeTween",
     ],
@@ -32,6 +33,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
     ],
 )
@@ -44,6 +46,7 @@ js_library(
         ":AgentStateNode",
         "//typescript/apps/ui:node_modules/@xyflow/svelte",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
     ],
 )
@@ -73,6 +76,8 @@ js_library(
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:Reading",
         "//typescript/apps/ui/src/lib/state:followScroll",
         "//typescript/apps/ui/src/lib/state:historyGap",
         "//typescript/apps/ui/src/lib/state:replayLog",
@@ -95,6 +100,7 @@ js_library(
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
         "//typescript/apps/ui/src/lib/state:dismissable.svelte",
@@ -111,6 +117,7 @@ js_library(
     deps = [
         "//typescript/apps/ui:node_modules/@tanstack/charts",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
@@ -124,6 +131,8 @@ js_library(
     deps = [
         ":ModelBreakdown",
         ":UsageLineChart",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:Reading",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
     ],

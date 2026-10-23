@@ -44,6 +44,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:TraceRow",
     ],
 )
 
@@ -105,6 +106,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
         "//typescript/apps/ui/src/lib/panes:PaneShell",
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
         "//typescript/apps/ui/src/lib/state:agentRunStorage",

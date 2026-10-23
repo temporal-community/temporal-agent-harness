@@ -1,0 +1,36 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "inputClearDissolve",
+    srcs = ["inputClearDissolve.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "stackAnswer",
+    srcs = ["stackAnswer.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/svelte"],
+)
+
+js_library(
+    name = "toastClose",
+    srcs = ["toastClose.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/svelte"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "inputClearDissolve_test",
+    src = "inputClearDissolve.test.mjs",
+    deps = [
+        ":inputClearDissolve",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
+    ],
+)
