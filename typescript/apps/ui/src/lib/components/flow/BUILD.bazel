@@ -183,6 +183,18 @@ js_library(
     ],
 )
 
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "AgentStateNode_test",
+    src = "AgentStateNode.test.mjs",
+    deps = [
+        ":AgentStateNode",
+        ":AgentWorkflowNode",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
 vitest_test(
     name = "LatencyWaterfall_test",
     src = "LatencyWaterfall.test.mjs",

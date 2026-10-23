@@ -218,23 +218,68 @@ describe("an empty runtime boundary", () => {
     }
   });
 
-  // --- empty is empty, not empty YET ------------------------------------------
-  /* A child enters the graph the moment the parent announces it, and `frames` is
-     scoped to the replay cursor — so "announced, nothing of its own yet" is a
-     position anyone scrubbing the run parks on, not a flicker at mount. Collapsing
-     there would drop the card and then jump it when the next frame arrives. */
-  it("is not what a running subagent gets while its cards are still coming", () => {
+  // --- running or stopped -------------------------------------------------------
+  /* A child announced and never started kept a card's worth of empty box under its
+     header for as long as it waited. Its first card grows the boundary instead. */
+  it("is also what a running subagent gets before it has drawn anything", () => {
     const running = buildAgentTreeGraph([parent, sub("wf-a", "s1", [], false)]);
-    const stopped = buildAgentTreeGraph([parent, sub("wf-a", "s1", [], true)]);
 
     assert.deepEqual(cardsOf(running, "wf-a"), [], "the fixture should leave the child frameless");
+    assert.equal(boundaryOf(running, "wf-a").height, headerHeight);
     assert.ok(
-      boundaryOf(running, "wf-a").height > boundaryOf(stopped, "wf-a").height,
-      "a running subagent with nothing in it yet must keep the room its cards are coming to"
+      boundaryOf(buildAgentTreeGraph([parent, sub("wf-a", "s1", busyFrames, false)]), "wf-a").height >=
+        headerHeight + stateNodeHeight,
+      "and its first cards open it up"
     );
-    assert.ok(
-      boundaryOf(running, "wf-a").height >= headerHeight + stateNodeHeight,
-      "and that room is a card's worth"
-    );
+  });
+
+  /* Twelve children made a column the canvas fit at 0.08, and sixty one it could
+     not fit at its minimum zoom at all. */
+  it("lays many children out in columns, stretching empty headers across theirs", () => {
+    const many = (count, framesFor) => {
+      const children = Array.from({ length: count }, (_, index) =>
+        sub(`wf-${index}`, `s${index}`, framesFor(index))
+      );
+      return {
+        children,
+        graph: buildAgentTreeGraph([
+          {
+            ...parent,
+            frames: [
+              parent.frames[0],
+              ...children.map((child) =>
+                frame("subagent_started", { subagent_id: child.subagentId, workflow_id: child.workflowId, agent_key: "task" })
+              )
+            ]
+          },
+          ...children
+        ])
+      };
+    };
+    for (const [count, framesFor, columns] of [
+      [2, () => [], 1],
+      [12, () => [], 3],
+      [60, () => [], 6],
+      [12, (index) => (index === 0 ? busyFrames : []), 3]
+    ]) {
+      const { children, graph } = many(count, framesFor);
+      const boxes = children.map((child) => boundaryOf(graph, child.workflowId));
+      const lefts = [...new Set(boxes.map((box) => box.left))];
+      assert.equal(lefts.length, columns, `${count} children should make ${columns} columns`);
+      for (const left of lefts) {
+        const column = boxes.filter((box) => box.left === left);
+        assert.equal(new Set(column.map((box) => box.width)).size, 1, "a column's empty headers span it");
+      }
+      for (const [index, box] of boxes.entries()) {
+        for (const other of boxes.slice(index + 1)) {
+          const apart = box.right <= other.left || other.right <= box.left ||
+            box.bottom <= other.top || other.bottom <= box.top;
+          assert.ok(apart, `${box.id} overlaps ${other.id}`);
+        }
+      }
+      const container = boxOf(graph.nodes.find((node) => node.id === "wf-parent::tool-container"));
+      for (const box of boxes) assert.ok(contains(container, box), `${box.id} hangs out of the container`);
+      assert.ok(contains(boundaryOf(graph, "wf-parent"), container), "the container hangs out of the parent");
+    }
   });
 });

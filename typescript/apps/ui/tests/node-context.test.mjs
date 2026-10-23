@@ -158,7 +158,7 @@ describe("what the inspector has to show", () => {
             `${name}: node "${node.id}" section "${section.label}" is empty`
           );
           assert.ok(
-            ["text", "code", "json"].includes(section.kind),
+            ["text", "code", "json", "markdown"].includes(section.kind),
             `${name}: node "${node.id}" section "${section.label}" has kind "${section.kind}"`
           );
         }
@@ -197,6 +197,20 @@ describe("what the inspector has to show", () => {
       /model_interaction_started/,
       "and what it describes is the frame that created it"
     );
+  });
+
+  // --- prose is markdown, data stays JSON ---------------------------------------
+  it("draws a prose reply, thought and message as markdown, and a data reply as JSON", () => {
+    const kinds = (graph, id) => Object.fromEntries(graph.nodes.find((n) => n.id === id).data.context.map((s) => [s.label, s.kind]));
+    const turn = fixtures["full turn"];
+    assert.equal(kinds(turn, "output").Reply, "markdown");
+    assert.equal(kinds(turn, "reasoning")["Thought summary"], "markdown");
+    assert.equal(kinds(turn, "input")["User message"], "markdown");
+    const data = buildAgentGraph([
+      frame("turn_started", { user_message: "clean", turn_number: 1 }),
+      frame("message_handler_end", { output: { records: [{ name: "Ana" }], skipped: [] } })
+    ]);
+    assert.equal(kinds(data, "output").Reply, "json");
   });
 
   // --- a tool keeps both halves of its call ------------------------------------

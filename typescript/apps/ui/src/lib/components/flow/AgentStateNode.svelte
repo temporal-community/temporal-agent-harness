@@ -1,11 +1,16 @@
 <script lang="ts" module>
+  import { createContext } from "svelte";
   import type { AgentNodeData } from "$lib/state/flowProjection";
-  import { type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+  import { STATUS_TONES, type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+
+  /** How a card asks the canvas to open its inspector; the canvas owns the dialog. */
+  export const [getNodeOpener, setNodeOpener, hasNodeOpener] =
+    createContext<(nodeId: string) => void>();
 
   /**
    * Which chip a card wears, read off the words already on it.
    *
-   * Exported for its test, the way TranscriptPanel exports statusKind: this is a
+   * Exported for its test: this is a
    * pure decision with a lot of branches and no way to reach it from a rendered
    * node, because a node needs SvelteFlow's context to render at all.
    *
@@ -37,6 +42,8 @@
     ) {
       return "complete";
     }
+    if (normalized.includes("delegating")) return "delegating";
+    if (normalized.includes("closed")) return "closed";
     if (normalized.includes("running") || normalized.includes("streaming")) {
       if (tone === "tool") return "tool";
       if (tone === "model") return "model";
@@ -49,6 +56,7 @@
     if (tone === "reasoning") return "reasoning";
     if (tone === "approval") return "approval";
     if (tone === "queue") return "queued";
+    if (tone === "error") return "error";
     /* Last, so a state string still outranks it. Without this a node toned done
        whose state says so in its own words — an Output card reading "available"
        — fell through to the neutral dot, which is the one chip that means
@@ -56,18 +64,37 @@
     if (tone === "done") return "complete";
     return "idle";
   }
+
+  /** Where the result box scrolls when its text changes; null leaves the reader where they are. */
+  export function resultScrollTop(
+    element: { scrollHeight: number },
+    streaming: boolean,
+    following: boolean
+  ): number | null {
+    if (!streaming) return 0;
+    return following ? element.scrollHeight : null;
+  }
 </script>
 
 <script lang="ts">
+  import { Maximize2 } from "@lucide/svelte";
   import { Handle, Position } from "@xyflow/svelte";
+  import { drawnPart } from "$lib/components/chat/JsonReply.svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
+  import StateGlyph from "$lib/components/primitives/StateGlyph.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
 
   interface Props {
+    id: string;
     data: AgentNodeData;
     selected?: boolean;
   }
 
-  let { data, selected = false }: Props = $props();
+  let { id, data, selected = false }: Props = $props();
+
+  const openNode = hasNodeOpener() ? getNodeOpener() : null;
 
   let resultBody = $state<HTMLElement | null>(null);
   /**
@@ -80,7 +107,9 @@
    * following means tail the live edge, not following means someone scrolled
    * back to read something and must not be dragged off it.
    */
-  let following = $state(true);
+  /* Not reactive: a scroll must never re-run the effect below, or scrolling a finished
+     reply would snap it back to its top. */
+  let following = true;
   /* A fade on the edge that is hiding something, so the region reads as clipped
      rather than as mysteriously ending. Each edge separately: while following,
      the newest text is against the bottom and a fade there would dim the one
@@ -108,17 +137,20 @@
 
   /* Jumped, never animated. This runs once per streamed delta — a smooth scroll
      that is restarted every few milliseconds never arrives, and reads as lag
-     rather than as smoothness. */
+     rather than as smoothness. Only a stream is tailed: a finished reply opens at
+     its top, or a nested payload shows nothing but its closing braces. */
   $effect(() => {
     data.detail;
     const element = resultBody;
     if (!element) return;
-    if (following) element.scrollTop = element.scrollHeight;
+    const top = resultScrollTop(element, streaming, following);
+    if (top !== null) element.scrollTop = top;
     syncEdges(element);
   });
 
   function scriptFromDetail(detail: unknown): string | null {
-    if (typeof detail !== "string") return null;
+    /* The substring test first: a megabyte reply would otherwise be parsed on every scrub step. */
+    if (typeof detail !== "string" || !detail.includes('"script"')) return null;
     try {
       const parsed = JSON.parse(detail);
       if (typeof parsed?.script === "string") return parsed.script;
@@ -145,21 +177,44 @@
   /* Present, not truthy. An empty reply is still a reply slot, and rendering the
      region only once text arrives is what made the card grow mid-turn. */
   const hasResult = $derived(typeof data.detail === "string");
-  /* Same vocabulary kindFromState reads, and only for the node the cursor is on,
-     so exactly one caret blinks during a scrub. */
-  const streaming = $derived(
-    data.active === true && /streaming|running/.test(data.state.toLowerCase())
-  );
+  /* Same vocabulary kindFromState reads. Only the node the cursor is on tails
+     its text, so a scrub never drags a card the reader is not looking at. */
+  const running = $derived(/streaming|running/.test(data.state.toLowerCase()));
+  const streaming = $derived(data.active === true && running);
+  /* A string, so an equal one stops here: a graph update that leaves this card's
+     text alone never reaches MarkdownMessage's parse. */
+  const drawnDetail = $derived(drawnPart(data.detail ?? "", streaming));
+  /* By length rather than by measuring, so no card observes its own size: about
+     this many characters fill the title's share of a 230px header. A title near
+     the line may clip without a tip. */
+  const titleTip = $derived(data.title.length > 18 ? data.title : undefined);
 
+  /* A hidden handle, drawn as a port in its edge's color only when an edge uses it. */
+  function port(handle: string) {
+    const color = data.ports?.[handle];
+    return {
+      id: handle,
+      class: color ? "node-handle port" : "node-handle",
+      style: color ? `--port-color: ${color}` : undefined,
+      isConnectable: false,
+      "aria-hidden": true
+    } as const;
+  }
 </script>
 
 <div
-  class={`state-node ${data.tone} ${data.size ?? "default"} ${data.active ? "active" : ""} ${selected ? "selected" : ""}`}
+  class={[
+    "state-node",
+    `status-${STATUS_TONES[statusKind]}`,
+    data.size ?? "default",
+    data.active && "active",
+    selected && "selected"
+  ]}
   style={nodeStyle}
 >
-  <Handle id="target-left" class="node-handle" type="target" position={Position.Left} />
-  <Handle id="target-top" class="node-handle" type="target" position={Position.Top} />
-  <Handle id="target-bottom" class="node-handle" type="target" position={Position.Bottom} />
+  <Handle {...port("target-left")} type="target" position={Position.Left} />
+  <Handle {...port("target-top")} type="target" position={Position.Top} />
+  <Handle {...port("target-bottom")} type="target" position={Position.Bottom} />
   {#if data.approvalPort}
     <Handle
       id="approval-out"
@@ -176,154 +231,137 @@
       position={Position.Right}
     />
   {/if}
-  <div class="topline">
-    <span class="title-wrap">
-      {#if data.dotTone}
-        <span class={`title-dot ${data.dotTone}`} aria-hidden="true"></span>
-      {/if}
-      <span class="title">{data.title}</span>
+  <div class="head">
+    <!-- The tip sits on the wrapper because the title clips its own overflow,
+         and a tip is drawn with the element's pseudo-elements. -->
+    <span class="title-wrap" data-tip={titleTip} data-tip-below>
+      <StateGlyph kind={statusKind} {running} />
+      <span class="title" dir="auto">{data.title}</span>
     </span>
-    <StatusChip
-      label={data.state}
-      kind={statusKind}
-      compact
-      active={data.active}
-    />
+    <StatusChip label={data.state} kind={statusKind} plain />
   </div>
-  {#if data.subtitle}
-    <div class="subtitle">{data.subtitle}</div>
-  {/if}
-  {#if hasResult}
-    <div
-      class="result"
-      class:code={detailScript != null}
-      class:clipped-top={clippedTop}
-      class:clipped-bottom={clippedBottom}
-    >
-      <div class="result-head">
-        <span class="kicker">Result</span>
-        <!-- The chip above already says "streaming" in words; this is the same
-             fact where the text is, so an in-progress reply is distinguishable
-             from a finished one without reading the status. -->
-        {#if streaming}
-          <span class="caret" aria-hidden="true"></span>
+  <div class="body">
+    {#if data.subtitle}
+      <span class="kind" dir="auto">{data.subtitle}</span>
+    {/if}
+    {#if hasResult}
+      <div
+        class={[
+          "result",
+          { code: detailScript != null, "clipped-top": clippedTop, "clipped-bottom": clippedBottom }
+        ]}
+      >
+        {#if detailScript}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scroller a keyboard must reach -->
+          <pre
+            class="result-body code"
+            data-language="python"
+            tabindex="0"
+            bind:this={resultBody}
+            onscroll={handleScroll}
+          ><code>{detailScript}</code></pre>
+        {:else if data.detail}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scroller a keyboard must reach -->
+          <div
+            class={["result-body", { markdown: data.markdown }]}
+            dir="auto"
+            tabindex="0"
+            role="group"
+            aria-label={`${data.title} result`}
+            bind:this={resultBody}
+            onscroll={handleScroll}
+          >{#if data.markdown}<MarkdownMessage text={drawnDetail} streaming={running} />{:else}{drawnDetail}{/if}</div>
+        {:else}
+          <p class="result-empty">{running ? "Waiting for output…" : "No result yet"}</p>
         {/if}
       </div>
-      {#if detailScript}
-        <pre
-          class="result-body code"
-          data-language="python"
-          bind:this={resultBody}
-          onscroll={handleScroll}
-        ><code>{detailScript}</code></pre>
-      {:else}
-        <div
-          class="result-body"
-          bind:this={resultBody}
-          onscroll={handleScroll}
-        >{data.detail}</div>
-      {/if}
+    {/if}
+    {#if data.metrics?.length}
+      <MetricStrip metrics={data.metrics} dense bare />
+    {/if}
+  </div>
+  {#if openNode}
+    <div class="actions">
+      <IconButton
+        class="nodrag nopan"
+        label={`Open ${data.title} details`}
+        tip="Open details"
+        onclick={(event) => {
+          event.stopPropagation();
+          openNode(id);
+        }}
+      >
+        <Maximize2 size={14} />
+      </IconButton>
     </div>
   {/if}
-  {#if data.metrics?.length}
-    <div class="metrics kicker">
-      {#each data.metrics as metric (metric.label)}
-        <span><strong>{metric.value}</strong>{metric.label}</span>
-      {/each}
-    </div>
-  {/if}
-  <Handle id="source-right" class="node-handle" type="source" position={Position.Right} />
-  <Handle id="source-top" class="node-handle" type="source" position={Position.Top} />
-  <Handle id="source-bottom" class="node-handle" type="source" position={Position.Bottom} />
+  <Handle {...port("source-right")} type="source" position={Position.Right} />
+  <Handle {...port("source-top")} type="source" position={Position.Top} />
+  <Handle {...port("source-bottom")} type="source" position={Position.Bottom} />
 </div>
 
 <style>
+  /* A column whose height flowProjection reserves (min-height, inline), so the
+     body flexes into whatever the header and tag leave rather than sizing to
+     its text — the card must not grow as a reply streams in. */
   .state-node {
+    --status-color: var(--text-3);
+    --result-bg: var(--surface-1);
     position: relative;
+    display: flex;
+    flex-direction: column;
     width: 230px;
     min-height: 96px;
-    padding: 12px;
-    overflow: hidden;
-    border: 1px solid color-mix(in srgb, var(--tone-color, var(--text-2)) 18%, var(--border));
+    border: 1px solid color-mix(in srgb, var(--status-color) 30%, var(--border));
     border-radius: var(--radius-md);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--tone-color, var(--text-2)) 9%, var(--surface-2)),
-        color-mix(in srgb, var(--surface-1) 88%, var(--surface-0))
-      );
+    background: var(--surface-1);
     color: var(--text-1);
     box-shadow: var(--shadow-node);
   }
 
-  .state-node.selected {
-    outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
-  }
+  .status-neutral { --status-color: var(--text-3); }
+  .status-accent { --status-color: var(--accent); }
+  .status-model { --status-color: var(--model); }
+  .status-reasoning { --status-color: var(--reasoning); }
+  .status-tool { --status-color: var(--tool); }
+  .status-queue { --status-color: var(--queue); }
+  .status-retry { --status-color: var(--retry); }
+  .status-success { --status-color: var(--success); }
+  .status-error { --status-color: var(--error); }
+  .status-live { --status-color: var(--live); }
 
-  /* Same cues the transcript spends on the playhead row: the hairline
-     brightens neutrally and the surface lifts with a full tone wash. No left
-     edge bar — presence of the fill is the signal (same call as the turn card). */
-  .state-node.active {
-    border-color: var(--border-strong);
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--tone-color, var(--text-2)) 22%, var(--surface-2)),
-      color-mix(in srgb, var(--tone-color, var(--text-2)) 10%, var(--surface-1))
-    );
-  }
-
-  .state-node.large {
-    width: 255px;
-    min-height: 112px;
-  }
-
-  .state-node.container {
-    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 12%, transparent);
-    box-shadow: var(--shadow-node-soft);
-  }
-
-  /* A container's own body has to fit above the children laid out inside it.
-     A Code Mode host overrides this inline with the height flowProjection
-     reserved for its script; the subagent container has no body worth showing. */
-  .state-node.container {
-    --result-height: 26px;
-  }
-
-  .neutral { --tone-color: var(--text-3); }
-  .agent { --tone-color: var(--accent); }
-  .model { --tone-color: var(--model); }
-  .reasoning { --tone-color: var(--reasoning); }
-  .tool { --tone-color: var(--tool); }
-  .approval,
-  .queue { --tone-color: var(--queue); }
-  .done { --tone-color: var(--success); }
-  .error { --tone-color: var(--error); }
-
-  .topline {
+  /* The state lives in the band, so the word on it needs no box of its own. */
+  .head {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--gap-md);
     min-width: 0;
+    height: 36px;
+    padding: 0 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--status-color) 22%, var(--border));
+    background: color-mix(in srgb, var(--status-color) 12%, var(--surface-2));
   }
 
   /* A status is a closed vocabulary, and one clipped character makes it ambiguous:
-     "AWAITIN…" reads as either `awaiting` or `awaiting approval`. So the chip does
-     not shrink, and the title — which a reader can still place from its first few
-     characters — yields instead.
-
-     The cap is what keeps the old bug fixed. The subagent's state is free-form —
-     "fn → turn n" measures 207px, wider than the card itself — and that did paint
-     past the border. Fixed labels are kept short enough to clear the cap instead
-     of relying on it; see replyState in flowProjection. Measured against a live
-     card, the cap sits above the whole closed vocabulary (126px at its widest, a
-     retried "requested ×10") and still leaves the title ~76px of the 204px row. */
-  .topline :global(.chip) {
+     "AWAITIN…" reads as either `awaiting` or `awaiting approval`. So the word
+     does not shrink and the title yields instead. The cap only catches the
+     free-form subagent state ("fn → turn n"); see replyState in flowProjection. */
+  .head :global(.chip) {
     flex: 0 0 auto;
     max-width: 128px;
   }
 
+  .title-wrap {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-sm);
+  }
+
   .title {
+    min-width: 0;
     overflow: hidden;
     font-size: var(--font-lg);
     font-weight: 700;
@@ -331,41 +369,98 @@
     white-space: nowrap;
   }
 
-  .title-wrap {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
+  /* Same cues the transcript spends on the playhead row: the hairline
+     brightens and the band takes a fuller wash. */
+  .state-node.active {
+    border-color: color-mix(in srgb, var(--status-color) 55%, var(--border-strong));
   }
 
-  .title-dot {
+  .state-node.active .head {
+    background: color-mix(in srgb, var(--status-color) 24%, var(--surface-2));
+  }
+
+  /* Chip's active recipe, not a bright outline: selection follows every click,
+     so it has to sit quietly once the inspector closes. Keyboard focus keeps
+     the app's ring, offset outward (AgentStateFlow), so the two never merge. */
+  .state-node.selected {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+      var(--shadow-node);
+  }
+
+  .state-node.large {
+    width: 255px;
+    min-height: 112px;
+  }
+
+  /* A container's own body has to fit above the children laid out inside it.
+     A Code Mode host overrides --result-height inline with the height
+     flowProjection reserved for its script. */
+  .state-node.container {
+    --result-height: 26px;
+    --result-bg: color-mix(in srgb, var(--status-color) 6%, var(--surface-1));
+    background: var(--result-bg);
+    box-shadow: var(--shadow-node-soft);
+  }
+
+  .body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-sm);
+    padding: var(--gap-md) 10px 10px;
+  }
+
+  /* A label, so no box, and not the uppercase label recipe: this is often a
+     model id, which is case-sensitive. One line, always — anything above the
+     preview that could wrap would outgrow the height flowProjection reserved. */
+  .kind {
     flex: 0 0 auto;
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-chip);
-    background: var(--text-3);
-    box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 10%, transparent);
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .title-dot.model { background: var(--model); }
-  .title-dot.reasoning { background: var(--reasoning); }
-  .title-dot.tool { background: var(--tool); }
-  .title-dot.approval { background: var(--queue); }
-
+  /* Zero-sized, min-size included: xyflow's 5px minimum centered the handle on
+     the border, which ended every edge 2.5px short of the card. The -0.5px
+     margin is half the card's border, so the edge ends on the border's midline. */
   :global(.node-handle) {
-    width: 1px;
-    height: 1px;
+    width: 0;
+    height: 0;
+    min-width: 0;
+    min-height: 0;
+    margin: -0.5px;
     border: 0;
     opacity: 0;
     pointer-events: none;
   }
 
+  /* One status pixel, square like every pip, centered on the edge's end. */
+  :global(.node-handle.port) {
+    opacity: 1;
+  }
+
+  /* The flow colors mix toward the translucent --border-strong, so the port is
+     laid over the canvas: the same color its edge shows, but solid, so the card
+     border and the edge underneath do not show through it. */
+  :global(.node-handle.port::before) {
+    content: "";
+    position: absolute;
+    inset: calc(var(--pip) / -2);
+    background: linear-gradient(var(--port-color), var(--port-color)), var(--flow-canvas);
+  }
+
   :global(.node-handle.approval-port) {
     width: 9px;
     height: 9px;
-    border: 1px solid color-mix(in srgb, var(--queue) 76%, var(--text-1) 10%);
-    background: var(--queue);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 24%, transparent);
+    border: 1px solid color-mix(in srgb, var(--live) 76%, var(--text-1) 10%);
+    background: var(--live);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 24%, transparent);
     opacity: 1;
   }
 
@@ -373,109 +468,113 @@
     top: 72px;
   }
 
-  /* One line, always. A card's height is reserved by flowProjection from data,
-     so anything above the Result region that can wrap makes the card outgrow its
-     reservation for some values and not others — which is the same content-driven
-     geometry the fixed region exists to remove. What gets clipped here is
-     readable in full in the node inspector. */
-  .subtitle {
-    margin-top: 7px;
-    overflow: hidden;
-    color: var(--text-2);
-    font-size: var(--font-md);
-    line-height: 1.35;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   /**
-   * FIXED, not content-sized, and deliberately not animated.
-   *
-   * The graph re-renders on every streamed delta while someone scrubs, so a
-   * region that grew with its text would relayout the card hundreds of times a
-   * turn and the node would move under the cursor. Measured on the run this came
-   * from (1,805 reply deltas), the old `max-height: 58px` card stepped 96px ->
-   * 137px as the reply crossed four lines; every other node held still. So the
-   * height is a constant, the overflow scrolls, and the fade says it is clipped.
-   *
-   * 132px holds ~8 lines at the 11px/1.35 body scale — roughly a paragraph,
-   * against the ~4 lines that were visible before. It lands the card at 231px,
-   * which flowProjection reserves as resultNodeHeight; measured on the same run,
-   * the graph's bounds are still set by the runtime boundary, so auto-fit holds
-   * the same zoom it did at 137px and the extra height costs no type size.
+   * Flexed into the reserved height, never sized by its text, and not animated:
+   * the graph re-renders on every streamed delta, and a region that grew with
+   * its text moved the node under the cursor hundreds of times a turn. The
+   * overflow scrolls and the fades say it is clipped; the full text is one
+   * click away in the inspector.
    */
   .result {
-    --result-top: calc(16px + var(--gap-xs));
     position: relative;
-    margin-top: 8px;
-  }
-
-  /* A definite height, so the card's own height stays a constant the projection
-     can reserve — and so the fades know where the body starts. */
-  .result-head {
+    flex: 1 1 0;
+    min-height: 0;
     display: flex;
-    align-items: center;
-    gap: var(--gap-sm);
-    height: 16px;
-    margin-bottom: var(--gap-xs);
-    color: var(--text-4);
+    flex-direction: column;
   }
 
-  /* A terminal caret, because that is what the region behaves like. */
-  .caret {
-    width: 2px;
-    height: 9px;
-    background: var(--tone-color, var(--text-2));
-    animation: caret-blink 1.1s steps(2, jump-none) infinite;
-  }
-
-  @keyframes caret-blink {
-    to {
-      opacity: 0.15;
-    }
+  .state-node.container .result {
+    flex: 0 0 var(--result-height);
   }
 
   .result-body {
-    height: var(--result-height, 132px);
-    max-width: 100%;
+    flex: 1 1 0;
+    min-height: 0;
     margin: 0;
-    padding: var(--gap-sm);
-    overflow-y: auto;
     overflow-x: hidden;
-    border: 1px solid color-mix(in srgb, var(--tone-color, var(--text-3)) 20%, var(--border));
-    background: var(--result-bg);
-    color: var(--text-3);
+    overflow-y: auto;
+    color: var(--text-2);
     font-size: var(--font-sm);
-    line-height: 1.35;
+    line-height: 1.4;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: anywhere;
     overscroll-behavior: contain;
   }
 
-  .state-node {
-    --result-bg: var(--surface-0);
+  /* The chat's renderer at the card's density: headings at body size, tight
+     blocks, and fences without the copy strip, which the inspector carries. */
+  .result-body.markdown {
+    --markdown-block-gap: 4px;
+    --markdown-list-gap: 1px;
+    --markdown-body-size: var(--font-sm);
+    --markdown-body-line-height: 1.4;
+    --markdown-heading-size: var(--font-sm);
+    --markdown-heading-line-height: 1.4;
+    /* A thumbnail inside the reserved height; the full image is one click away. */
+    --image-max-height: 64px;
+    white-space: normal;
   }
 
-  /* Inside the border, so a fade ends where the box does. Only on the edge that
-     is actually hiding something — see clippedTop/clippedBottom above. */
+  .result :global(.markdown-message ul),
+  .result :global(.markdown-message ol) {
+    padding-left: 0;
+    padding-inline-start: 16px;
+  }
+
+  .result :global(.markdown-message code) {
+    font-size: inherit;
+  }
+
+  .result :global(.markdown-message .md-code-head) {
+    display: none;
+  }
+
+  /* The card is the one scroller; a fence still streaming is not capped into a second. */
+  .result :global(.markdown-message pre.md-code-block) {
+    max-height: none;
+    padding: var(--gap-sm);
+  }
+
+  .result :global(.markdown-message table) {
+    min-width: 360px;
+    font-size: inherit;
+  }
+
+  .result :global(.markdown-message th),
+  .result :global(.markdown-message td) {
+    padding: 3px 6px;
+  }
+
+  .result-body:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .result-empty {
+    margin: 0;
+    color: var(--text-4);
+    font-size: var(--font-sm);
+  }
+
+  /* Only on the edge that is actually hiding something — see clippedTop/clippedBottom. */
   .result::before,
   .result::after {
     content: "";
     position: absolute;
-    right: 1px;
-    left: 1px;
+    right: 0;
+    left: 0;
     height: 20px;
     opacity: 0;
     pointer-events: none;
   }
 
   .result::before {
-    top: calc(var(--result-top) + 1px);
+    top: 0;
     background: linear-gradient(to bottom, var(--result-bg), transparent);
   }
 
   .result::after {
-    bottom: 1px;
+    bottom: 0;
     background: linear-gradient(to top, var(--result-bg), transparent);
   }
 
@@ -484,27 +583,35 @@
     opacity: 1;
   }
 
-  /* app.css owns how a code block looks; this only says where the language tag
-     goes and that it keeps the region's height contract. On the wrapper, not the
-     `pre`, because the fade above reads --result-bg from `.result`. */
+  /* app.css owns how a code block looks, box included; this only keeps it to
+     the region's height and pins the language tag to the wrapper, because a
+     tag inside the scroller scrolls away. */
   .result.code {
     --result-bg: var(--code-block-bg);
   }
 
+  .result.code::before {
+    top: 1px;
+  }
+
+  .result.code::after {
+    bottom: 1px;
+  }
+
   .result-body.code {
-    border-color: var(--code-block-border);
+    padding: var(--gap-sm);
+    border: 1px solid var(--code-block-border);
+    background: var(--code-block-bg);
     color: var(--code-block-text);
     box-shadow: var(--code-block-shadow);
     font-family: var(--font-mono);
     line-height: 1.55;
     tab-size: 2;
     white-space: pre;
-    word-break: normal;
+    overflow-wrap: normal;
     overflow-x: auto;
   }
 
-  /* On the head row opposite the "Result" label, rather than floating over the
-     body — inside the body it is a child of the scroller and scrolls away. */
   .result-body.code::before {
     position: absolute;
     top: 0;
@@ -516,28 +623,32 @@
     font: inherit;
   }
 
-  /* The caret is the one thing here that moves, and it repeats forever. */
-  @media (prefers-reduced-motion: reduce) {
-    .caret {
-      animation: none;
+  /* Revealed where the reader is: on hover, or when the card or its button has
+     keyboard focus. A touch screen has no hover to reveal it with. */
+  .actions {
+    position: absolute;
+    right: var(--gap-md);
+    bottom: var(--gap-md);
+    opacity: 0;
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+
+  .state-node:hover .actions,
+  .state-node:focus-within .actions,
+  :global(.svelte-flow__node:focus-visible) .actions,
+  :global(.svelte-flow__node.selected) .actions {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .actions {
+      opacity: 1;
     }
   }
 
-  .metrics {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-  }
-
-  .metrics span {
-    display: inline-flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .metrics strong {
-    color: var(--text-1);
-    font-size: var(--font-md);
-    font-variant-numeric: tabular-nums;
+  @media (prefers-reduced-motion: reduce) {
+    .actions {
+      transition: none;
+    }
   }
 </style>

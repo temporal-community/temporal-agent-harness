@@ -494,6 +494,18 @@ vitest_test(
 )
 
 vitest_test(
+    name = "flowEdges_test",
+    src = "flowEdges.test.mjs",
+    deps = [
+        ":flowProjection",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
+    ],
+)
+
+vitest_test(
     name = "focusFold_test",
     src = "focusFold.test.mjs",
     deps = [

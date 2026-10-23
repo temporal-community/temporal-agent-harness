@@ -8,21 +8,25 @@
     Controls,
     MiniMap,
     SvelteFlow,
+    type DefaultEdgeOptions,
     type Edge,
     type Node,
     type NodeTypes
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
-  import Badge from "$lib/components/primitives/Badge.svelte";
-  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
   import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
+  import StateGlyph from "$lib/components/primitives/StateGlyph.svelte";
+  import StatusChip, { STATUS_TONES } from "$lib/components/primitives/StatusChip.svelte";
+  import { highlight } from "$lib/highlight";
   import type {
     AgentGraph,
     AgentNodeContext,
     AgentNodeData
   } from "$lib/state/flowProjection";
   import { lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
-  import AgentStateNode from "./AgentStateNode.svelte";
+  import AgentStateNode, { kindFromState, setNodeOpener } from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
 
@@ -39,15 +43,18 @@
 
   interface Props {
     graph: AgentGraph;
+    /** Snapshot paint and stream catch-up have reached their final frame. */
+    ready: boolean;
     /** Settled tools leave the canvas, rather than every card being kept. */
     focus: boolean;
     onFocusChange: (focus: boolean) => void;
     onNodeSelect?: (nodeId: string) => void;
   }
 
-  let { graph, focus, onFocusChange, onNodeSelect }: Props = $props();
+  let { graph, ready, focus, onFocusChange, onNodeSelect }: Props = $props();
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
+  let settled = $state(false);
   let inspectedNode = $state<Node<AgentNodeData> | null>(null);
   let inspectorElement = $state<HTMLDialogElement | null>(null);
   let flowWrapElement = $state<HTMLDivElement | null>(null);
@@ -72,6 +79,10 @@
     agentState: AgentStateNode,
     agentWorkflow: AgentWorkflowNode
   };
+  /* Edges only show the way; nothing happens on clicking one. Without the
+     selection and the invisible hit path, an edge cannot turn the selection
+     color and costs one path, not two. */
+  const defaultEdgeOptions: DefaultEdgeOptions = { selectable: false, interactionWidth: 0 };
   const autoFitSignature = $derived(
     graph.nodes
       .map((item) =>
@@ -104,13 +115,16 @@
    */
   $effect(() => {
     const next = graph.nodes;
-    edges = graph.edges;
+    edges =
+      ready && settled
+        ? graph.edges
+        : graph.edges.map((edge) => (edge.animated ? { ...edge, animated: false } : edge));
     /* untracked: this effect writes `nodes`, and reading it as a dependency
        would make every interpolated frame re-enter the effect that produced it. */
     const previous = untrack(() => nodes);
 
     if (tweenFrame) cancelAnimationFrame(tweenFrame);
-    if (reduceMotion() || !nodesMovedInPlace(previous, next)) {
+    if (!ready || !settled || reduceMotion() || !nodesMovedInPlace(previous, next)) {
       nodes = next;
       tweening = false;
       return;
@@ -185,6 +199,11 @@
     onNodeSelect?.(node.id);
   }
 
+  setNodeOpener((nodeId) => {
+    const node = nodes.find((item) => item.id === nodeId);
+    if (node) handleNodeClick(node);
+  });
+
   function closeInspector(): void {
     inspectedNode = null;
   }
@@ -203,7 +222,8 @@
     if (tone === "error") return "var(--error)";
     if (tone === "model" || tone === "reasoning") return "var(--model)";
     if (tone === "tool") return "var(--tool)";
-    if (tone === "queue" || tone === "approval") return "var(--queue)";
+    if (tone === "approval") return "var(--live)";
+    if (tone === "queue") return "var(--queue)";
     return "var(--accent)";
   }
 
@@ -218,11 +238,12 @@
   });
 </script>
 
-<div class="flow-wrap" bind:this={flowWrapElement}>
+<div class="flow-wrap" class:settled bind:this={flowWrapElement}>
   <SvelteFlow
     bind:nodes
     bind:edges
     {nodeTypes}
+    {defaultEdgeOptions}
     fitView
     {fitViewOptions}
     {minZoom}
@@ -230,11 +251,18 @@
     colorMode="dark"
     nodesDraggable={false}
     nodesConnectable={false}
+    edgesFocusable={false}
     elementsSelectable
     onnodeclick={({ node }) => handleNodeClick(node)}
     proOptions={{ hideAttribution: true }}
   >
-    <AutoFitView signature={fitSignature} {fitViewOptions} hold={tweening} />
+    <AutoFitView
+      signature={fitSignature}
+      {fitViewOptions}
+      {ready}
+      hold={tweening}
+      onSettled={() => (settled = true)}
+    />
     <!-- No lock button: nothing on this canvas is draggable, so it only ever
          toggled selection on a pane whose single click opens an inspector.
          The tool switch takes its place rather than sitting in a bar of its own,
@@ -272,53 +300,77 @@
   {#if inspectedNode}
     {@const data = inspectedNode.data}
     {@const sections = sectionsFor(data)}
+    {@const kind = kindFromState(data.state, data.statusTone ?? data.tone)}
+    {@const statusTone = STATUS_TONES[kind]}
     <!-- The scrim is the dialog's own ::backdrop now, so there is no element
          between the canvas and the dialog to catch the click. A click that lands
          on the dialog itself can only have come from the backdrop, because the
-         body fills it edge to edge. -->
+         head and body fill it edge to edge. -->
     <dialog
       bind:this={inspectorElement}
       class={`node-inspector ${data.tone}`}
-      aria-label={`${data.title} context`}
+      style:--status-color={statusTone === "neutral" ? "var(--text-3)" : `var(--${statusTone})`}
+      aria-label={`${data.title} details`}
       onclose={closeInspector}
       onclick={(event) => {
         if (event.target === inspectorElement) inspectorElement?.close();
       }}
     >
+      <!-- The card's own anatomy in the pane header's row: the glyph only where
+           the state warrants one, the title, and the status as a plain word. -->
+      <header class="surface-head">
+        <h2 class="head-name">
+          <StateGlyph {kind} running={/streaming|running/.test(data.state.toLowerCase())} />
+          <span class="head-title" title={data.title}>{data.title}</span>
+        </h2>
+        <StatusChip label={data.state} {kind} plain />
+        <button
+          type="button"
+          class="head-button"
+          aria-label="Close details"
+          data-tip="Close details"
+          data-tip-below
+          data-tip-align="end"
+          onclick={() => inspectorElement?.close()}
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </header>
+
+      <!-- Scrolls as one column: the reply the node card had to clip belongs
+           here in full, and it is routinely longer than the dialog is tall. -->
       <div class="inspector-body">
-        <header class="inspector-header">
-          <div class="inspector-heading">
-            <span class={`inspector-dot ${data.dotTone ?? data.tone}`} aria-hidden="true"></span>
-            <div>
-              <h2>{data.title}</h2>
-              <p>{data.subtitle ?? "state diagram node"}</p>
-            </div>
-          </div>
-          <div class="inspector-actions">
-            <Badge label={data.state} tone={data.statusTone ?? data.tone} size="sm" />
-            <IconButton label="Close node context" onclick={() => inspectorElement?.close()}>
-              <X size={16} />
-            </IconButton>
-          </div>
-        </header>
+        {#if data.subtitle}
+          <p class="inspector-subtitle" dir="auto">{data.subtitle}</p>
+        {/if}
 
         {#if data.metrics?.length}
           <MetricStrip metrics={data.metrics} />
         {/if}
 
-        <!-- Scrolls as one column: the reply the node card had to clip belongs
-             here in full, and it is routinely longer than the dialog is tall. -->
-        <div class="inspector-content">
-          {#each sections as section (section.label)}
-            <div class="inspector-section">
-              <div class="kicker">{section.label}</div>
-              <div class="expanded-detail-wrap"><pre
-                  class={`expanded-detail ${section.kind}`}
-                  data-language={section.kind === "text" ? undefined : section.kind}
-                ><code>{section.text}</code></pre></div>
-            </div>
-          {/each}
-        </div>
+        {#each sections as section (section.label)}
+          <section class="inspector-section">
+            <h3 class="kicker">{section.label}</h3>
+            <Copyable block value={section.text} label={`Copy ${section.label.toLowerCase()}`}>
+              {#if section.kind === "markdown"}
+                <div class="expanded-detail markdown" dir="auto"><MarkdownMessage text={section.text} /></div>
+              {:else if section.kind === "text"}
+                <pre class="expanded-detail" dir="auto">{section.text}</pre>
+              {:else}
+                <!-- The direction goes on the code, not the pre, so the pre keeps the
+                     page's and its reserved corner stays under the copy button in RTL.
+                     A tab stop, so a keyboard can scroll it where the browser does not. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <pre
+                  class="expanded-detail code"
+                  role="region"
+                  aria-label={section.label}
+                  tabindex="0"
+                ><code dir="ltr">{@html highlight(section.text, section.kind === "json" ? "json" : "python")}</code></pre>
+              {/if}
+            </Copyable>
+          </section>
+        {/each}
       </div>
     </dialog>
   {/if}
@@ -333,11 +385,20 @@
     background: var(--flow-canvas);
   }
 
+  /* Keep the canvas chrome in place while Svelte Flow measures its first node
+     set. Only the graph plane waits, so revealing final geometry cannot flash
+     the whole pane. */
+  .flow-wrap:not(.settled) :global(.svelte-flow__viewport),
+  .flow-wrap:not(.settled) :global(.svelte-flow__viewport *) {
+    visibility: hidden !important;
+  }
+
   /* Centred by the UA's own :modal rule rather than by a translate, which is
      the other thing the top layer hands over for free. */
   .node-inspector {
     --tone-color: var(--text-3);
     display: flex;
+    flex-direction: column;
     width: min(760px, calc(100% - var(--gutter) * 4));
     max-height: min(720px, calc(100% - var(--gutter) * 4));
     padding: 0;
@@ -353,7 +414,10 @@
   }
 
   /* The inset lives here, not on the dialog, so the dialog's own box is only
-     ever the backdrop's click target. */
+     ever the backdrop's click target. The dialogs' --gutter, not --pane-inset:
+     it floats free of any pane edge. The column scrolls, not each section:
+     several bodies of very different lengths, and a reply that is routinely
+     taller than the dialog. */
   .inspector-body {
     flex: 1;
     min-width: 0;
@@ -362,6 +426,7 @@
     flex-direction: column;
     gap: var(--gutter);
     padding: var(--gutter);
+    overflow-y: auto;
   }
 
   .node-inspector.neutral { --tone-color: var(--text-3); }
@@ -369,79 +434,25 @@
   .node-inspector.model { --tone-color: var(--model); }
   .node-inspector.reasoning { --tone-color: var(--reasoning); }
   .node-inspector.tool { --tone-color: var(--tool); }
-  .node-inspector.approval,
+  .node-inspector.approval { --tone-color: var(--live); }
   .node-inspector.queue { --tone-color: var(--queue); }
   .node-inspector.done { --tone-color: var(--success); }
   .node-inspector.error { --tone-color: var(--error); }
 
-  .inspector-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--gutter);
-    min-width: 0;
+  /* The status word may not shrink: one clipped character makes it ambiguous, so
+     the title yields instead, as on the card. */
+  .node-inspector :global(.chip) {
+    flex: none;
+    max-width: 40%;
   }
 
-  .inspector-heading {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--gutter-tight);
-    min-width: 0;
-  }
-
-  .inspector-heading h2 {
+  /* Model ids and handler kinds are case-sensitive, so not the kicker recipe. */
+  .inspector-subtitle {
     margin: 0;
-    font-size: var(--font-title);
-    line-height: 1.2;
-    letter-spacing: 0;
-  }
-
-  .inspector-heading p {
-    margin: var(--gap-xs) 0 0;
-    color: var(--text-2);
-    font-size: var(--font-lg);
-    line-height: 1.35;
-    word-break: break-word;
-  }
-
-  /* The one part of the header with no primitive behind it: a tone square, the
-     same mark Chip draws as its pip and the node card draws beside its title.
-     Sized by the pip token so all three stay one size, and unringed because the
-     elevation layer has no blooms in it. */
-  .inspector-dot {
-    flex: 0 0 auto;
-    width: var(--pip-lg);
-    height: var(--pip-lg);
-    margin-top: var(--gap-md);
-    background: var(--tone-color);
-  }
-
-  .inspector-dot.neutral { background: var(--text-3); }
-  .inspector-dot.agent { background: var(--accent); }
-  .inspector-dot.model { background: var(--model); }
-  .inspector-dot.reasoning { background: var(--reasoning); }
-  .inspector-dot.tool { background: var(--tool); }
-  .inspector-dot.approval,
-  .inspector-dot.queue { background: var(--queue); }
-  .inspector-dot.done { background: var(--success); }
-  .inspector-dot.error { background: var(--error); }
-
-  .inspector-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--gap-md);
-    flex: 0 0 auto;
-  }
-
-  /* The column scrolls, not each section: several bodies of very different
-     lengths, and a reply that is routinely taller than the dialog. */
-  .inspector-content {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--gutter);
-    overflow-y: auto;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    overflow-wrap: anywhere;
   }
 
   .inspector-section {
@@ -450,12 +461,8 @@
     gap: var(--gap-sm);
   }
 
-  /* Positions the language tag from outside the scroller: an absolutely
-     positioned box whose containing block is the scroll container is laid out in
-     scrolled coordinates and slides away with the code. */
-  .expanded-detail-wrap {
-    position: relative;
-    min-width: 0;
+  .inspector-section h3 {
+    margin: 0;
   }
 
   .expanded-detail {
@@ -472,24 +479,32 @@
     overflow-wrap: anywhere;
   }
 
-  .expanded-detail.code,
-  .expanded-detail.json {
-    /* The gutter, plus a chip row for the language tag to sit in. */
-    padding-top: calc(var(--gutter) + var(--control-height-xs));
+  /* Prose reads in the body face; only its own code is monospace. */
+  .expanded-detail.markdown {
+    color: var(--text-1);
+    font-family: inherit;
+    font-size: var(--font-md);
+    white-space: normal;
+  }
+
+  /* Wrapped like every block with a copy button in its corner (Copyable), so a
+     long unbroken value never runs under the button or off the dialog. */
+  .expanded-detail.code {
     border-color: var(--code-block-border);
     background: var(--code-block-bg);
     color: var(--code-block-text);
     box-shadow: var(--code-block-shadow);
-    white-space: pre;
-    overflow-wrap: normal;
+    tab-size: 2;
   }
 
-  /* app.css draws the language tag; this only says where to put it. */
-  .expanded-detail.code::before,
-  .expanded-detail.json::before {
-    position: absolute;
-    top: var(--gap-md);
-    right: var(--gap-md);
+  .expanded-detail.code code {
+    display: block;
+    font: inherit;
+  }
+
+  .expanded-detail.code:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   /* Deliberately no z-index on either layer, which is what these two rules used
@@ -520,38 +535,42 @@
     outline-offset: 2px;
   }
 
-  :global(.svelte-flow__edge-text) {
-    fill: var(--text-2);
-    font-size: var(--font-sm);
-    font-weight: 650;
+  /* One color per kind of flow, read by both the stroke and its arrowhead
+     (flowProjection passes the variable as xyflow's marker color) so the two
+     cannot drift: control into the agent in the accent, the reply out in
+     green, an approval in the live color. */
+  .flow-wrap {
+    --edge-main: color-mix(in srgb, var(--accent) 78%, var(--border-strong));
+    --edge-reasoning: color-mix(in srgb, var(--reasoning) 70%, var(--border-strong));
+    --edge-approval: color-mix(in srgb, var(--live) 78%, var(--text-1) 6%);
+    --edge-output: color-mix(in srgb, var(--success) 72%, var(--border-strong));
   }
 
   :global(.svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
-    stroke-width: 1.4;
+    stroke: var(--edge-main);
+    stroke-width: 1.6;
   }
 
-  :global(.edge-main .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--accent) 48%, var(--border-strong));
+  :global(.edge-reasoning .svelte-flow__edge-path) { stroke: var(--edge-reasoning); }
+  :global(.edge-approval .svelte-flow__edge-path) { stroke: var(--edge-approval); }
+  :global(.edge-output .svelte-flow__edge-path) { stroke: var(--edge-output); }
+
+  /* xyflow's `animated` edge, which flowProjection sets only on an edge into a step still
+     working or waiting, redrawn as the timeline's open span: 3px on, 3px off, one 6px
+     period per --dash-cycle. Only these few paths animate, and only their dash offset. */
+  .flow-wrap :global(.svelte-flow__edge.animated path) {
+    stroke-dasharray: 3 3;
+    animation: edge-march var(--dash-cycle) linear infinite;
   }
 
-  :global(.edge-reasoning .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--reasoning) 62%, var(--border-strong));
-    stroke-width: 1.3;
+  @keyframes edge-march {
+    from { stroke-dashoffset: 6; }
   }
 
-  :global(.edge-approval .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--queue) 78%, var(--text-1) 6%);
-    stroke-width: 2;
-    stroke-dasharray: 6 5;
-  }
-
-  :global(.edge-approval .svelte-flow__edge-text) {
-    fill: color-mix(in srgb, var(--queue) 82%, var(--text-1) 8%);
-  }
-
-  :global(.edge-output .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--success) 58%, var(--border-strong));
+  @media (prefers-reduced-motion: reduce) {
+    .flow-wrap :global(.svelte-flow__edge.animated path) {
+      animation: none;
+    }
   }
 
   :global(.svelte-flow__controls) {

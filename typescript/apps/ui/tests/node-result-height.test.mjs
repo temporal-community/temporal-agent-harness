@@ -121,11 +121,16 @@ describe("a node's geometry does not track the text it holds", () => {
         .map((m) => m[1].trim());
 
     /* A definite height. `var(--x, 132px)` counts — the fallback is a length and
-       the custom property is only ever set to one in this file. */
+       the custom property is only ever set to one in this file. So does a flex
+       item grown from a zero basis with no minimum: it fills the height the card
+       reserved, and its text has no say in it. */
     const heights = declared("height");
+    const zeroBasis =
+      declared("flex").some((value) => /^\d+\s+\d+\s+0(px)?$/.test(value)) &&
+      declared("min-height").some((value) => /^0(px)?$/.test(value));
     assert.ok(
-      heights.length > 0,
-      ".result-body must declare a height, or it is sized by its content"
+      heights.length > 0 || zeroBasis,
+      ".result-body must declare a height or grow from a zero flex basis, or it is sized by its content"
     );
     for (const value of heights) {
       assert.ok(

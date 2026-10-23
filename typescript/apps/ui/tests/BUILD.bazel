@@ -77,6 +77,15 @@ vitest_test(
 )
 
 vitest_test(
+    name = "graph-streaming-tokens_test",
+    src = "graph-streaming-tokens.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
     name = "input-turn-label_test",
     src = "input-turn-label.test.mjs",
     deps = ["//typescript/apps/ui/src/lib/state:flowProjection"],
@@ -124,6 +133,15 @@ vitest_test(
 )
 
 vitest_test(
+    name = "node-inspector_test",
+    src = "node-inspector.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "node-result-height_test",
     src = "node-result-height.test.mjs",
     deps = [
@@ -131,6 +149,12 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
         "//typescript/apps/ui/src/lib/state:flowProjection",
     ],
+)
+
+vitest_test(
+    name = "parent-runtime-subtitle_test",
+    src = "parent-runtime-subtitle.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/state:flowProjection"],
 )
 
 vitest_test(

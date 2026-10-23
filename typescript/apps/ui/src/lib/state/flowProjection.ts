@@ -2,10 +2,15 @@ import type { Edge, Node } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
+  SubagentUnavailableCode,
   ToolId
 } from "$lib/api/types";
-import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
+import { kindFromState } from "$lib/components/flow/AgentStateNode.svelte";
+import type { Metric } from "$lib/components/primitives/metrics";
+import { STATUS_TONES } from "$lib/components/primitives/StatusChip.svelte";
+import { formatTokens, summarizeCost, tokenFigure, UNREPORTED_TIP, type CostSummary } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { handlerReply, outputSchemaTracker, streamingIsData, stripJsonFence } from "$lib/state/handlerReply";
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
 import { formatDuration } from "$lib/state/replayLog";
 import { NO_THOUGHT_SUMMARY, thoughtDeltaText } from "$lib/state/thoughtSummary";
@@ -24,15 +29,20 @@ export type AgentNodeTone =
 export interface AgentNodeData {
   [key: string]: unknown;
   tone: AgentNodeTone;
-  dotTone?: AgentNodeTone;
   title: string;
   state: string;
   subtitle?: string;
   detail?: string;
+  /** A runtime boundary's one line on why its detail is missing. */
+  reason?: string;
+  /** `detail` is a prose reply, drawn as markdown; decided by handlerReply's rule. */
+  markdown?: boolean;
   active?: boolean;
   size?: "default" | "large" | "container";
   runtimeRole?: "parent" | "subagent";
   statusTone?: AgentNodeTone;
+  /** Lit ports by handle id, each in a CSS color; set by markEdgeCues. */
+  ports?: Record<string, string>;
   approvalPort?: boolean;
   approvalDecisionPort?: boolean;
   nodeWidth?: number;
@@ -40,7 +50,7 @@ export interface AgentNodeData {
   /** Overrides the result body's height, in px. See codeModeScriptHeight. */
   resultHeight?: number;
   flowGroup?: number;
-  metrics?: Array<{ label: string; value: string }>;
+  metrics?: Metric[];
   interfaces?: AgentInterfaceSummary[];
   /** Never empty — see contextFor(). The inspector renders these in order. */
   context?: AgentNodeContext[];
@@ -64,7 +74,8 @@ export interface AgentInterfaceSummary {
 export interface AgentNodeContext {
   label: string;
   text: string;
-  kind: "text" | "code" | "json";
+  /** `markdown` is prose a model or person wrote, drawn by MarkdownMessage. */
+  kind: "text" | "code" | "json" | "markdown";
 }
 
 export interface AgentGraph {
@@ -72,7 +83,92 @@ export interface AgentGraph {
   edges: Edge[];
   activeTurn: number | null;
   status: "idle" | "running" | "replied" | "error";
+  /** The latest turn's handler ended in an error. Kept past turn_end, which sets `status`
+      back to idle. */
+  failed: boolean;
   usage: CostSummary;
+  /** Set on a subagent whose stream the merge gave up on: what the UI knows of it instead. */
+  unreadable?: UnreadableChildState;
+}
+
+/**
+ * What a subagent whose stream could not be read is doing, from what the UI knows without
+ * that stream: the parent's reply, whether the parent stopped it, and Temporal's status. Never
+ * from the free-text reason, and a missing stream alone is never an error.
+ */
+export type UnreadableChildState = "complete" | "error" | "closed" | "delegating" | "idle";
+
+export interface UnreadableChildFacts {
+  /** The parent's subagent_reply_received outcome for the child's latest turn. */
+  reply?: "ok" | "error";
+  stoppedByParent: boolean;
+  /** Temporal's execution status, e.g. RUNNING or FAILED, when it has been asked. */
+  executionStatus?: string;
+  /** Closed as far as this console knows, which may be without a status. */
+  closed: boolean;
+}
+
+export function unreadableChildState(facts: UnreadableChildFacts): UnreadableChildState {
+  if (facts.reply === "ok") return "complete";
+  if (facts.reply === "error") return "error";
+  switch (facts.executionStatus) {
+    case "FAILED":
+    case "TIMED_OUT":
+    case "TERMINATED":
+      return "error";
+    case "CANCELED":
+    case "COMPLETED":
+      return "closed";
+  }
+  if (facts.stoppedByParent || facts.closed) return "closed";
+  return facts.executionStatus === "RUNNING" ? "delegating" : "idle";
+}
+
+const unreadableLooks: Record<UnreadableChildState, AgentNodeTone> = {
+  complete: "done",
+  error: "error",
+  closed: "neutral",
+  delegating: "agent",
+  idle: "neutral"
+};
+
+/** The one line a boundary says about why its detail is missing. */
+export function unreadableReasonLine(code: SubagentUnavailableCode | undefined, reason: string): string {
+  if (code === undefined) return reason.trim() || "Its detail could not be read";
+  switch (code) {
+    case "closed_not_replayable":
+      return "Finished before its detail could be replayed";
+    case "read_failed":
+      return "Its detail could not be read";
+    case "ended_mid_turn":
+      return "Ended mid-turn, before its detail was delivered";
+    case "stalled":
+      return "Stalled without delivering its turn";
+    default: {
+      const unhandled: never = code;
+      throw new Error(`No reason line for ${String(unhandled)}`);
+    }
+  }
+}
+
+/** The inspector's account of a missing detail: the line, the merge's own words, and the facts. */
+function unreadableContext(record: DelegationRecord, executionStatus: string | undefined): AgentNodeContext {
+  const line = unreadableReasonLine(record.reasonCode, record.reason);
+  const reported = record.reason.trim();
+  return {
+    label: "Why the detail is missing",
+    text: [
+      line,
+      reported && reported !== line ? `Reported: ${reported}` : "",
+      `Parent reply: ${record.reply ?? "none yet"}`,
+      record.stoppedByParent ? "Stopped by its parent" : "",
+      /* Asked once, on the marker, which lands before the parent's reply and any stop. */
+      `Temporal status when last asked: ${executionStatus ?? "not known"}`
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    kind: "text"
+  };
 }
 
 export interface AgentGraphSource {
@@ -85,6 +181,8 @@ export interface AgentGraphSource {
   agentKey?: string;
   agentInterface?: AgentInterfaceFunction[];
   stopped?: boolean;
+  /** Temporal's execution status for this workflow, once something has asked. */
+  executionStatus?: string;
 }
 
 interface ToolRuntime {
@@ -154,6 +252,8 @@ interface AgentGraphOptions {
    * the timing and only ever puts a live settle in this set.
    */
   linger?: ReadonlySet<ToolId>;
+  /** No edge is `animated`, so an open step's edge keeps its dash standing still. */
+  reducedMotion?: boolean;
 }
 
 type RuntimeNodeId =
@@ -305,6 +405,8 @@ function runtimeBoundaryHeight(count: number): number {
  * insets on either side of the card grid have no grid to sit around.
  */
 const runtimeHeaderHeight = 88;
+/** What `.workflow-reason` adds to that header: its 6px gap and two clamped lines of 11px at 1.35. */
+const runtimeReasonHeight = 36;
 
 function outputPosition(boundaryWidth: number): { x: number; y: number } {
   return {
@@ -335,23 +437,29 @@ function node(
     type,
     position,
     data,
+    /* The whole title, which the card may have to clip, and the state it is in. */
+    ariaLabel: `${data.title}, ${data.state}`,
     draggable: false,
     selectable: type !== "agentWorkflow",
     zIndex: type === "agentWorkflow" ? 0 : 10
   };
 }
 
+/* xyflow's default bezier, colored by its kind (the variables live in
+   AgentStateFlow), with no marker: where it meets a card is drawn by that
+   card's port, and which way it runs by the left-to-right layout. A wrap onto
+   the next row is xyflow's square smoothstep instead, so it drops straight
+   into the port rather than sweeping in sideways. What state the edge is in is
+   added by markEdgeCues. */
 function edge(
   id: string,
   source: string,
   target: string,
-  animated = false,
-  label?: string,
   options: {
     sourceHandle?: string;
     targetHandle?: string;
     kind?: EdgeKind;
-    edgeType?: string;
+    wrap?: boolean;
   } = {}
 ): Edge {
   const kind = options.kind ?? "main";
@@ -359,13 +467,92 @@ function edge(
     id,
     source,
     target,
-    animated,
-    label,
     sourceHandle: options.sourceHandle ?? "source-right",
     targetHandle: options.targetHandle ?? "target-left",
-    type: options.edgeType ?? "step",
     class: `edge-${kind}`,
-    zIndex: 1
+    zIndex: 1,
+    ...(options.wrap ? { type: "smoothstep", pathOptions: { borderRadius: 0 } } : {})
+  };
+}
+
+type EdgeState = "delivered" | "flowing" | "waiting" | "unreached" | "failed";
+
+/* Pattern says what kind of flow it is, color says whether it needs attention.
+   No color keeps the edge's own kind color, on the stroke and the target port.
+   An animated edge is still open, as the timeline's open spans are: it takes
+   xyflow's `animated` class, which AgentStateFlow draws as the timeline's
+   marching dash, and under reduced motion keeps that dash standing still. */
+const edgeLooks: Record<EdgeState, { color?: string; pattern?: string; animated?: true }> = {
+  delivered: {},
+  flowing: { animated: true },
+  waiting: { color: "var(--live)", animated: true },
+  unreached: { color: "var(--text-4)", pattern: "stroke-dasharray: 1 4; stroke-linecap: round" },
+  failed: { color: "var(--error)" }
+};
+
+/* Read through the card's own kindFromState and STATUS_TONES, so an edge can
+   only say what the card it points at says: red into a red card, amber into an
+   amber one, moving only into a card that is still working or waiting. */
+function edgeStateOf(data: AgentNodeData): EdgeState {
+  const tone = STATUS_TONES[kindFromState(data.state, data.statusTone ?? data.tone)];
+  if (tone === "error") return "failed";
+  if (tone === "live") return "waiting";
+  if (/streaming|running|delegating/i.test(data.state)) return "flowing";
+  return tone === "success" ? "delivered" : "unreached";
+}
+
+/* Each edge takes the state of the step it leads into. A step the run has
+   already gone past counts as delivered whatever it now says: the model card
+   reads "idle" again once a turn ends, and the edge into it was still used. */
+function markEdgeCues(
+  nodes: Node<AgentNodeData>[],
+  edges: Edge[],
+  reducedMotion: boolean
+): Pick<AgentGraph, "nodes" | "edges"> {
+  const states = new Map(nodes.map((item) => [item.id, edgeStateOf(item.data)]));
+  /* Repeated until nothing changes, so a pass costs edges × chain length. */
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const item of edges) {
+      const next = states.get(item.target);
+      if (states.get(item.source) === "unreached" && next && next !== "unreached") {
+        states.set(item.source, "delivered");
+        changed = true;
+      }
+    }
+  }
+  /* Each card's lit ports, by handle id: a target port in its incoming edge's
+     color, a source port in its outgoing flow color. */
+  const ports = new Map<string, Record<string, string>>();
+  const light = (nodeId: string, handle: string | null | undefined, color: string) => {
+    if (!handle) return;
+    const lit = ports.get(nodeId) ?? {};
+    lit[handle] = color;
+    ports.set(nodeId, lit);
+  };
+  const marked = edges.map((item): Edge => {
+    const state = states.get(item.target) ?? "delivered";
+    const look = edgeLooks[state];
+    const still = look.animated && reducedMotion;
+    const color = look.color ?? `var(--${item.class})`;
+    light(item.source, item.sourceHandle, `var(--${item.class})`);
+    light(item.target, item.targetHandle, color);
+    return {
+      ...item,
+      animated: Boolean(look.animated) && !reducedMotion,
+      style:
+        [look.color && `stroke: ${color}`, still ? "stroke-dasharray: 3 3" : look.pattern]
+          .filter(Boolean)
+          .join("; ") || undefined
+    };
+  });
+  return {
+    nodes: nodes.map((item) =>
+      ports.has(item.id) || item.data.ports
+        ? { ...item, data: { ...item.data, ports: ports.get(item.id) } }
+        : item
+    ),
+    edges: marked
   };
 }
 
@@ -616,26 +803,83 @@ function graphBounds(graph: AgentGraph): GraphBounds {
   };
 }
 
+interface EmbeddedToolGrid {
+  columns: number;
+  columnLefts: number[];
+  columnWidths: number[];
+  rowTops: number[];
+  width: number;
+  height: number;
+}
+
+function embeddedToolGrid(bounds: readonly GraphBounds[], columns: number): EmbeddedToolGrid {
+  const columnWidths: number[] = [];
+  const rowHeights: number[] = [];
+  bounds.forEach((item, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    columnWidths[column] = Math.max(columnWidths[column] ?? 0, item.width);
+    rowHeights[row] = Math.max(rowHeights[row] ?? 0, item.height);
+  });
+  const offsets = (sizes: number[]) => {
+    let next = 0;
+    return sizes.map((size) => {
+      const at = next;
+      next += size + embeddedToolGap;
+      return at;
+    });
+  };
+  const sum = (sizes: number[]) => sizes.reduce((total, size) => total + size, 0) + (sizes.length - 1) * embeddedToolGap;
+  return {
+    columns,
+    columnLefts: offsets(columnWidths),
+    columnWidths,
+    rowTops: offsets(rowHeights),
+    width: sum(columnWidths),
+    height: sum(rowHeights)
+  };
+}
+
+/**
+ * Children in reading order on a grid, each column as wide as its widest child. The column
+ * count is whichever lets a 16:10 frame show the grid largest, so two children still stack
+ * and sixty make a block the canvas can fit rather than a column it cannot. Tried for every
+ * count, which is quadratic in the number of children; a few hundred is still nothing.
+ *
+ * A child that drew nothing stretches its header across its column instead of truncating
+ * its name in a narrow card beside wide siblings.
+ */
 function layoutEmbeddedToolGraphs(graphs: AgentGraph[]): EmbeddedToolLayout | null {
   if (graphs.length === 0) return null;
-  let nextY = embeddedToolHeaderHeight;
-  let maxWidth = 0;
-  const placements: EmbeddedToolPlacement[] = [];
-  for (const graph of graphs) {
-    const bounds = graphBounds(graph);
-    placements.push({
-      graph,
-      x: embeddedToolPadding - bounds.minX,
-      y: nextY - bounds.minY
-    });
-    nextY += bounds.height + embeddedToolGap;
-    maxWidth = Math.max(maxWidth, bounds.width);
+  const bounds = graphs.map(graphBounds);
+  const fitScale = (grid: EmbeddedToolGrid) => Math.min(16 / grid.width, 10 / grid.height);
+  let grid = embeddedToolGrid(bounds, 1);
+  for (let columns = 2; columns <= graphs.length; columns += 1) {
+    const candidate = embeddedToolGrid(bounds, columns);
+    if (fitScale(candidate) > fitScale(grid)) grid = candidate;
   }
-  const contentHeight = nextY - embeddedToolGap + embeddedToolPadding;
+  const placements = graphs.map((graph, index): EmbeddedToolPlacement => {
+    const column = index % grid.columns;
+    const row = Math.floor(index / grid.columns);
+    return {
+      graph:
+        graph.nodes.length === 1
+          ? {
+              ...graph,
+              nodes: graph.nodes.map((item) => ({
+                ...item,
+                data: { ...item.data, boundaryWidth: grid.columnWidths[column] }
+              }))
+            }
+          : graph,
+      x: embeddedToolPadding + grid.columnLefts[column]! - bounds[index]!.minX,
+      y: embeddedToolHeaderHeight + grid.rowTops[row]! - bounds[index]!.minY
+    };
+  });
   return {
     dimensions: {
-      width: Math.max(stateNodeWidth, maxWidth + embeddedToolPadding * 2),
-      height: contentHeight
+      width: Math.max(stateNodeWidth, grid.width + embeddedToolPadding * 2),
+      height: embeddedToolHeaderHeight + grid.height + embeddedToolPadding
     },
     placements
   };
@@ -670,26 +914,21 @@ function codeModeChildPosition(index: number): { x: number; y: number } {
 /**
  * One graph paints as a ladder: boundary 0, its own flow edges 1, its cards 10,
  * a Code Mode host's children 14. A graph embedded in a card climbs that ladder
- * whole — and its edges have further to climb than its nodes.
+ * whole, nodes and edges alike.
  *
- * Nodes lift by 4, which is enough to clear the enclosing graph's boundary and
- * no more, so the translucent Subagent activity container at 10 still tints the
- * subagent boundary drawn inside it. An edge lifted by the same 4 lands at 5,
- * under that container, so the arrows between a subagent's Input, Model
- * interaction and Output were drawn at the right coordinates and painted over —
- * the parent's identical arrows survive only because the parent's boundary is 0.
- * Edges clear the container outright and still pass under the nested cards, at
- * 10 + 4, that they run between.
+ * The Subagent activity container is a card at 10 with an opaque fill, so the
+ * embedded graph has to start above it: lifted by 11, its boundary lands at 11,
+ * its edges at 12 and its cards at 21. Lifted by less, the boundary — and with
+ * it the subagent's name and state — painted under the container, and a child
+ * with no cards of its own showed as an empty box.
  */
-const nestedNodeZIndexBoost = 4;
-const nestedEdgeZIndexBoost = 11;
+const nestedZIndexBoost = 11;
 
 function offsetGraph(
   graph: AgentGraph,
   xOffset: number,
   yOffset: number,
-  zIndexBoost = 0,
-  edgeZIndexBoost = zIndexBoost
+  zIndexBoost = 0
 ): AgentGraph {
   return {
     ...graph,
@@ -703,7 +942,7 @@ function offsetGraph(
     })),
     edges: graph.edges.map((item) => ({
       ...item,
-      zIndex: (item.zIndex ?? 0) + edgeZIndexBoost
+      zIndex: (item.zIndex ?? 0) + zIndexBoost
     }))
   };
 }
@@ -712,11 +951,11 @@ function runtimeEdgeOptions(
   source: string,
   target: string,
   runtimeLayout: RuntimeLayout
-): Parameters<typeof edge>[5] {
+): Parameters<typeof edge>[3] {
   const sourcePosition = runtimeLayout.positions.get(source as RuntimeNodeId);
   const targetPosition = runtimeLayout.positions.get(target as RuntimeNodeId);
   return sourcePosition && targetPosition && sourcePosition.y !== targetPosition.y
-    ? { sourceHandle: "source-bottom", targetHandle: "target-top", kind: "main" }
+    ? { sourceHandle: "source-bottom", targetHandle: "target-top", kind: "main", wrap: true }
     : { kind: "main" };
 }
 
@@ -764,8 +1003,7 @@ function addRuntimeFlowEdges(
   dataById: Map<RuntimeNodeId, AgentNodeData>,
   runtimeLayout: RuntimeLayout,
   inputSeen: boolean,
-  inputPlacement: AgentGraphOptions["inputPlacement"],
-  latestNodeId: LocalNodeId | null
+  inputPlacement: AgentGraphOptions["inputPlacement"]
 ): void {
   let sources: string[] = inputSeen && inputPlacement === "external" ? ["input"] : [];
   for (const segment of runtimeFlowSegments(order, dataById)) {
@@ -777,8 +1015,6 @@ function addRuntimeFlowEdges(
               `flow-${source}-${target}`,
               source,
               target,
-              latestNodeId === target,
-              undefined,
               runtimeEdgeOptions(source, target, runtimeLayout)
             )
           );
@@ -795,17 +1031,6 @@ function terminalRuntimeSources(
 ): RuntimeNodeId[] {
   const segments = runtimeFlowSegments(order, dataById);
   return segments.at(-1)?.ids ?? [];
-}
-
-function textFromReply(data: { text?: unknown; output?: unknown }): string {
-  if (typeof data.text === "string") return data.text;
-  const output = data.output;
-  if (typeof output === "string") return output;
-  if (typeof output === "object" && output != null) {
-    if ("text" in output && typeof output.text === "string") return output.text;
-    if ("message" in output && typeof output.message === "string") return output.message;
-  }
-  return "";
 }
 
 function textSection(
@@ -897,6 +1122,25 @@ function valueSection(label: string, value: unknown): AgentNodeContext | null {
   return { label, text: JSON.stringify(value, null, 2), kind: "json" };
 }
 
+/**
+ * A token count, or a muted placeholder while the interaction that adds to it streams. Usage is
+ * only reported when the interaction ends, so until then the settled figure is the finished
+ * interactions' total, and a bare 0 would read as "this reply cost nothing".
+ */
+function tokenMetric(label: string, settled: number, streaming: boolean, unreportedCalls = 0): Metric {
+  if (!streaming) {
+    return unreportedCalls > 0
+      ? { label, value: tokenFigure(settled, unreportedCalls), note: UNREPORTED_TIP }
+      : { label, value: formatTokens(settled) };
+  }
+  return {
+    label,
+    value: settled > 0 ? `${formatTokens(settled)} + streaming\u2026` : "streaming\u2026",
+    tone: "pending",
+    note: "Usage is reported when the model interaction ends"
+  };
+}
+
 export function buildAgentGraph(
   frames: AgentSseFrame[],
   options: AgentGraphOptions = {}
@@ -905,9 +1149,11 @@ export function buildAgentGraph(
   const showSubagentDispatch = options.showSubagentDispatch ?? true;
   const outputPlacement = options.outputPlacement ?? "external";
   const agentInterface = summarizeAgentInterface(options.agentInterface);
+  const schemaOf = outputSchemaTracker();
   const lingeringTools = options.linger ?? noLingeringTools;
   let activeTurn: number | null = null;
   let status: AgentGraph["status"] = "idle";
+  let failed = false;
   let currentUserMessage = "No message received";
   let queuedMessage = "";
   /* The envelope the rendered text came from — `{type, payload}` as the message was sent —
@@ -924,8 +1170,10 @@ export function buildAgentGraph(
   let reasoningStartTs: number | null = null;
   let reasoningEndTs: number | null = null;
   let replyText = "";
+  let replyIsData = false;
   let replyState = "waiting";
   let queued = 0;
+  const queuedByTurn = new Map<number, [message: string, envelope: string]>();
   let runtimeHeaderPrefix: string | undefined;
   let subagentState = "idle";
   let subagentSubtitle = "";
@@ -950,6 +1198,9 @@ export function buildAgentGraph(
   const activeRuntimeToolIds = new Set<ToolId>();
   let runtimeToolFlowGroup = 0;
   const runtimeNodeOrder: RuntimeNodeId[] = [];
+  /* What the fold has put in runtimeNodeOrder: a turn of hundreds of tools made its
+     `includes` the fold's hottest line. */
+  const runtimeNodes = new Set<RuntimeNodeId>();
   let inputSeen = false;
   let outputSeen = false;
   let latestNodeId: LocalNodeId | null = null;
@@ -977,7 +1228,10 @@ export function buildAgentGraph(
   }
 
   function markRuntimeNode(id: RuntimeNodeId): void {
-    if (!runtimeNodeOrder.includes(id)) runtimeNodeOrder.push(id);
+    if (!runtimeNodes.has(id)) {
+      runtimeNodes.add(id);
+      runtimeNodeOrder.push(id);
+    }
     latestNodeId = id;
     remember(id);
   }
@@ -1057,7 +1311,10 @@ export function buildAgentGraph(
 
   function childToolParent(toolId: ToolId, isCodeModeTool: boolean): ToolId | undefined {
     if (isCodeModeTool) return undefined;
-    return tools.get(toolId)?.parentToolId ?? activeCodeModeToolIds.at(-1);
+    // A call keeps the place its first frame gave it: one the model asked for alongside a
+    // host starts while the host runs, but is not one of its script's calls.
+    const existing = tools.get(toolId);
+    return existing ? existing.parentToolId : activeCodeModeToolIds.at(-1);
   }
 
   function markCodeModeStarted(toolId: ToolId): void {
@@ -1081,6 +1338,7 @@ export function buildAgentGraph(
     runtimeToolFlowGroup = 0;
     for (let index = runtimeNodeOrder.length - 1; index >= 0; index -= 1) {
       if (isToolRuntimeNodeId(runtimeNodeOrder[index])) {
+        runtimeNodes.delete(runtimeNodeOrder[index]);
         runtimeNodeOrder.splice(index, 1);
       }
     }
@@ -1089,6 +1347,7 @@ export function buildAgentGraph(
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
     currentFrame = frame;
+    const outputSchema = schemaOf(frame, options.agentInterface);
     if (frame.event === "message_accepted") {
       // The one event carrying what was sent, whatever it did to the turn. Only a QUEUED one
       // shows in the queue depth; an "opened" message is about to be the turn, and a "joined"
@@ -1102,20 +1361,31 @@ export function buildAgentGraph(
       if (frame.data.disposition === "queued") {
         queued += 1;
         queuedMessage = currentUserMessage;
+        queuedByTurn.set(frame.data.turn_number, [currentUserMessage, currentUserEnvelope]);
         inputState = `${queued} queued`;
+      } else {
+        // The card now shows this message, and turn_started is at least a frame away (the
+        // frame a turn jump lands on), so the label can't wait for it.
+        inputState = `turn ${frame.data.turn_number}`;
       }
     }
     if (frame.event === "turn_started") {
       markInput();
       activeTurn = frame.data.turn_number;
       status = "running";
+      failed = false;
       inputState = `turn ${frame.data.turn_number}`;
+      // Later queued messages overwrote the card's text; the turn starting now is about its own.
+      const opening = queuedByTurn.get(frame.data.turn_number);
+      if (opening) [currentUserMessage, currentUserEnvelope] = opening;
+      queuedByTurn.delete(frame.data.turn_number);
       modelState = "waiting";
       reasoningState = "waiting";
       reasoningDetail = "";
       reasoningStartTs = null;
       reasoningEndTs = null;
       replyText = "";
+      replyIsData = false;
       replyState = "waiting";
       resetTurnTools();
       runtimeHeaderPrefix = undefined;
@@ -1146,6 +1416,7 @@ export function buildAgentGraph(
     } else if (frame.event === "reply_delta") {
       markOutput();
       replyText += frame.data.text;
+      replyIsData = streamingIsData(replyText, outputSchema);
       replyState = "streaming";
     } else if (frame.event === "text_annotation") {
       markOutput();
@@ -1153,13 +1424,16 @@ export function buildAgentGraph(
     } else if (frame.event === "message_handler_end") {
       markOutput();
       status = "replied";
-      replyText = textFromReply(frame.data) || replyText;
+      const reply = handlerReply(frame.data, outputSchema);
+      replyText = reply.text || replyText;
+      replyIsData = reply.json !== undefined;
       /* "reply available" was wider than the chip, the same way "awaiting
          approval" was. The noun is carried by the card, which is titled Output. */
       replyState = "available";
     } else if (frame.event === "message_handler_error") {
       markOutput();
       status = "error";
+      failed = true;
       replyText = frame.data.message;
       replyState = "error";
     } else if (frame.event === "turn_end") {
@@ -1362,6 +1636,26 @@ export function buildAgentGraph(
         }
       }
       tools.set(frame.data.tool_id, runtime);
+    } else if (frame.event === "callback_requested" || frame.event === "callback_resolved") {
+      /* Between tool_start and tool_end: the call is parked on a client, usually a person
+         answering a question, so it waits the way an approval does until it is answered. */
+      const parentToolId = childToolParent(frame.data.tool_id, false);
+      markTool(frame.data.tool_id, parentToolId);
+      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name, parentToolId);
+      if (frame.event === "callback_requested") {
+        runtime.status = "awaiting";
+        runtime.tone = "approval";
+        runtime.statusTone = "approval";
+        runtime.subtitle = "waiting on client";
+        runtime.detail = JSON.stringify(frame.data.tool_input, null, 2);
+        runtime.input = runtime.detail;
+      } else {
+        runtime.status = "running";
+        runtime.tone = "tool";
+        runtime.statusTone = "tool";
+        runtime.subtitle = "callback answered";
+      }
+      tools.set(frame.data.tool_id, runtime);
     } else if (
       frame.event === "subagent_started" ||
       frame.event === "subagent_message_sent" ||
@@ -1449,12 +1743,16 @@ export function buildAgentGraph(
    * The two synthetic nodes — the tool container and the runtime boundary — have
    * no frame of their own, so they describe what they are made of instead.
    */
+  function replySection(label: string): AgentNodeContext | null {
+    return streamingIsData(replyText) ? maybeJsonSection(label, stripJsonFence(replyText)) : textSection(label, replyText, "markdown");
+  }
+
   function contextFor(id: LocalNodeId): AgentNodeContext[] {
     const sections: Array<AgentNodeContext | null> = [];
 
     if (id === "input") {
       const rendered = currentUserMessage || queuedMessage;
-      sections.push(textSection("User message", rendered));
+      sections.push(textSection("User message", rendered, "markdown"));
       if (currentUserEnvelope && currentUserEnvelope !== rendered) {
         sections.push(maybeJsonSection("Raw message", currentUserEnvelope));
       }
@@ -1463,14 +1761,14 @@ export function buildAgentGraph(
          name. Both were already in this scope; nothing reached them because the
          inspector only ever read `detail`, and this node has never had one. */
       sections.push(
-        textSection("Model output", replyText),
-        textSection("Thought summary", reasoningSummary),
+        replySection("Model output"),
+        textSection("Thought summary", reasoningSummary, "markdown"),
         textSection("Model", currentModel)
       );
     } else if (id === "reasoning") {
-      sections.push(textSection("Thought summary", reasoningSummary));
+      sections.push(textSection("Thought summary", reasoningSummary, "markdown"));
     } else if (id === "output") {
-      sections.push(textSection("Reply", replyText));
+      sections.push(replySection("Reply"));
     } else if (id === "subagent") {
       sections.push(
         textSection("Subagent", subagentSubtitle),
@@ -1491,7 +1789,7 @@ export function buildAgentGraph(
       sections.push(
         textSection("Evaluator", evaluation?.evaluator),
         textSection("Verdict", evaluation?.verdict ?? evaluation?.status),
-        textSection("Reason", evaluation?.detail),
+        textSection("Reason", evaluation?.detail, "markdown"),
         evaluation?.reasoning
           ? { label: "Evaluator reasoning", text: evaluation.reasoning, kind: "json" }
           : null,
@@ -1540,15 +1838,14 @@ export function buildAgentGraph(
     if (id === "model") {
       return {
         tone: modelState === "running" ? "model" : "neutral",
-        dotTone: "model",
         title: "Model interaction",
         state: modelState,
         subtitle: currentModel,
         active: latestNodeId === id,
         size: "large",
         metrics: [
-          { label: "input", value: formatTokens(usage.tokens.input) },
-          { label: "output", value: formatTokens(usage.tokens.output) }
+          tokenMetric("input", usage.tokens.input, modelState === "running", usage.unreportedCalls),
+          tokenMetric("output", usage.tokens.output, modelState === "running", usage.unreportedCalls)
         ]
       };
     }
@@ -1558,7 +1855,6 @@ export function buildAgentGraph(
           reasoningState === "running" || reasoningState === "captured"
             ? "reasoning"
             : "neutral",
-        dotTone: "reasoning",
         title: "Thought summary",
         state: reasoningState,
         /* How long it thought, once that is a settled number, because that is the question
@@ -1588,7 +1884,6 @@ export function buildAgentGraph(
       const retryCount = runtime?.retryCount ?? 1;
       return {
         tone: runtime?.tone ?? "neutral",
-        dotTone: "tool",
         title: runtime?.name ?? "Tool",
         state: retryCount > 1 ? `${toolStatus} ×${retryCount}` : toolStatus,
         statusTone: runtime?.statusTone,
@@ -1611,7 +1906,6 @@ export function buildAgentGraph(
       const evaluation = evaluations.get(id.slice("approval:".length));
       return {
         tone: evaluation?.tone ?? "approval",
-        dotTone: "approval",
         /* The evaluator, not the tool: this card is about who judged, and the tool it
            judged is one edge away. */
         title: evaluation?.evaluator ?? "approval evaluator",
@@ -1625,10 +1919,8 @@ export function buildAgentGraph(
     }
     if (id === "tool-container") {
       return {
-        tone: "tool",
-        dotTone: "tool",
+        ...delegatedState(options.embeddedToolGraphs ?? []),
         title: "Subagent activity",
-        state: "delegating",
         subtitle: "delegated runtimes",
         active: latestNodeId === id,
         size: "container",
@@ -1659,6 +1951,7 @@ export function buildAgentGraph(
         state: replyState,
         subtitle: "streaming response",
         detail: replyText,
+        markdown: !replyIsData && replyState !== "error",
         nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
@@ -1846,7 +2139,7 @@ export function buildAgentGraph(
       zIndex: 14
     });
     edges.push(
-      edge(nodeId, toolNodeId, nodeId, latestNodeId === nodeId, undefined, {
+      edge(nodeId, toolNodeId, nodeId, {
         sourceHandle: "source-bottom",
         targetHandle: "target-top",
         kind: "approval"
@@ -1860,8 +2153,7 @@ export function buildAgentGraph(
         placement.graph,
         toolPosition.x + placement.x,
         toolPosition.y + placement.y,
-        nestedNodeZIndexBoost,
-        nestedEdgeZIndexBoost
+        nestedZIndexBoost
       );
       nodes.push(...embeddedGraph.nodes);
       edges.push(...embeddedGraph.edges);
@@ -1878,8 +2170,6 @@ export function buildAgentGraph(
         "flow-model-reasoning",
         "model",
         "reasoning",
-        latestNodeId === "reasoning",
-        undefined,
         {
           sourceHandle: "source-bottom",
           targetHandle: "target-top",
@@ -1894,8 +2184,7 @@ export function buildAgentGraph(
     runtimeDataById,
     runtimeLayout,
     inputSeen,
-    inputPlacement,
-    latestNodeId
+    inputPlacement
   );
   if (outputSeen && outputPlacement === "external") {
     const outputSources = terminalRuntimeSources(runtimeFlowOrder, runtimeDataById);
@@ -1906,22 +2195,26 @@ export function buildAgentGraph(
             `flow-${source}-output`,
             source,
             "output",
-            latestNodeId === "output",
-            undefined,
             { kind: "output" }
           )
         )
       );
     } else if (inputSeen) {
       edges.push(
-        edge("flow-input-output", "input", "output", latestNodeId === "output", undefined, {
+        edge("flow-input-output", "input", "output", {
           kind: "output"
         })
       );
     }
   }
 
-  return { nodes, edges, activeTurn, status, usage };
+  return {
+    ...markEdgeCues(nodes, edges, options.reducedMotion ?? false),
+    activeTurn,
+    status,
+    failed,
+    usage
+  };
 }
 
 function graphSourceLabel(agent: AgentGraphSource): string {
@@ -1929,18 +2222,30 @@ function graphSourceLabel(agent: AgentGraphSource): string {
   return `${agent.agentKey ?? "subagent"} subagent`;
 }
 
+/* The parent's label is the agent name the console header already shows, so
+   repeating it here only pushes the real description off the card. */
 function graphSourceSubtitle(agent: AgentGraphSource): string {
-  const bits = [agent.label];
+  const bits = [agent.role === "parent" ? "" : agent.label];
   if (agent.subagentId) bits.unshift(`subagent ${agent.subagentId}`);
   if (agent.stopped) bits.push("stopped");
   return bits.filter(Boolean).join(" · ");
+}
+
+/** What the parent's frames, and the merge's marker, say about one child. */
+interface DelegationRecord {
+  unavailable: boolean;
+  reason: string;
+  reasonCode?: SubagentUnavailableCode;
+  reply?: "ok" | "error";
+  stoppedByParent: boolean;
 }
 
 function scopedGraph(
   agent: AgentGraphSource,
   graph: AgentGraph,
   xOffset: number,
-  yOffset: number
+  yOffset: number,
+  delegation?: DelegationRecord
 ): AgentGraph {
   const scopedNodeId = (id: string) =>
     id.includes("::") ? id : scopedId(agent.workflowId, id);
@@ -1952,36 +2257,65 @@ function scopedGraph(
    * room for one: 290px around an 88px header, which is the 202px of nothing
    * under a stopped subagent whose own stream was never readable.
    *
-   * Stopped, because empty has to mean empty and not "empty yet". A child enters
-   * the graph the moment the parent announces it and is legitimately childless
-   * until its own first frame is merged — and since `frames` here is scoped to
-   * the replay cursor, that is a position anyone scrubbing the run parks on, not
-   * a flicker at mount. Collapsing there would drop the card and then jump it.
-   * A stopped child with no nodes has none coming.
+   * Running or not: a child announced and never started kept an empty box under
+   * its header for as long as it waited. Its first card grows the boundary when
+   * it arrives, which a scrub across that frame shows as a step.
    */
-  const emptyBoundary = agent.stopped === true && graph.nodes.length === 1;
-  const nodes = graph.nodes.map((item) => ({
-    ...item,
-    id: scopedNodeId(item.id),
-    position: {
+  const emptyBoundary = agent.role === "subagent" && graph.nodes.length === 1;
+  /* Whether or not the child drew anything before the merge gave up: a partly streamed
+     child's own frames stop mid-turn, and would say "running" forever. */
+  const unreadable =
+    delegation?.unavailable === true
+      ? unreadableChildState({
+          reply: delegation.reply,
+          stoppedByParent: delegation.stoppedByParent,
+          executionStatus: agent.executionStatus,
+          closed: agent.stopped === true
+        })
+      : undefined;
+  const reason =
+    unreadable && delegation
+      ? unreadableReasonLine(delegation.reasonCode, delegation.reason)
+      : undefined;
+  /* The reason line grows the header, so what the boundary holds moves down by as much. */
+  const reasonShift = reason ? runtimeReasonHeight : 0;
+  const nodes = graph.nodes.map((item): Node<AgentNodeData> => {
+    const position = {
       x: item.position.x + xOffset,
-      y: item.position.y + yOffset
-    },
-    data:
-      item.id === "agent-runtime"
+      y: item.position.y + yOffset + (item.id === "agent-runtime" ? 0 : reasonShift)
+    };
+    if (item.id !== "agent-runtime") return { ...item, id: scopedNodeId(item.id), position };
+    const data: AgentNodeData = {
+      ...item.data,
+      ...(unreadable && delegation
         ? {
-            ...item.data,
-            tone: agent.stopped ? "done" : item.data.tone,
-            runtimeRole: agent.role,
-            state: agent.stopped ? "stopped" : item.data.state,
-            boundaryHeight: emptyBoundary ? runtimeHeaderHeight : item.data.boundaryHeight,
-            title: `${graphSourceLabel(agent)} runtime`,
-            subtitle: [graphSourceSubtitle(agent), item.data.subtitle]
-              .filter(Boolean)
-              .join(" · ")
+            tone: unreadableLooks[unreadable],
+            state: unreadable,
+            reason,
+            context: [
+              unreadableContext(delegation, agent.executionStatus),
+              ...(item.data.context ?? [])
+            ]
           }
-        : item.data
-  }));
+        : {
+            tone: agent.stopped ? "done" : item.data.tone,
+            state: agent.stopped ? "stopped" : item.data.state
+          }),
+      runtimeRole: agent.role,
+      boundaryHeight:
+        (emptyBoundary ? runtimeHeaderHeight : numericData(item.data, "boundaryHeight", runtimeHeaderHeight)) +
+        reasonShift,
+      title: `${graphSourceLabel(agent)} runtime`,
+      /* The runtime's own "model calls, tool execution…" describes cards an empty one lacks. */
+      subtitle: [graphSourceSubtitle(agent), emptyBoundary ? "" : item.data.subtitle]
+        .filter(Boolean)
+        .join(" · ")
+    };
+    /* Rebuilt from the rewritten title and state, or every child announces itself as the
+       generic "Agent runtime, idle" buildAgentGraph named it. */
+    const ariaLabel = [data.title, data.state, reason].filter(Boolean).join(", ");
+    return { ...item, id: scopedNodeId(item.id), position, data, ariaLabel };
+  });
   const edges = graph.edges.map((item) => ({
     ...item,
     id: item.id.includes("::") ? item.id : scopedId(agent.workflowId, item.id),
@@ -1989,11 +2323,41 @@ function scopedGraph(
     target: scopedNodeId(item.target)
   }));
 
-  return { ...graph, nodes, edges };
+  return { ...graph, nodes, edges, unreadable };
 }
 
 function graphWidth(graph: AgentGraph): number {
   return graphBounds(graph).width;
+}
+
+/**
+ * The Subagent activity container's state, from its children's: a failed child makes it an
+ * error, one still running (or dispatched and not yet started) keeps it delegating, and once
+ * every child has finished it is complete. A child whose stream could not be read counts by
+ * its unreadableChildState instead of its own frames, which may have stopped mid-turn: only
+ * "delegating" keeps the container busy, and only "error" fails it.
+ */
+function delegatedState(children: readonly AgentGraph[]): Pick<AgentNodeData, "tone" | "state"> {
+  if (children.some((child) => child.failed || child.unreadable === "error")) {
+    return { tone: "error", state: "error" };
+  }
+  const busy = children.some((child) => {
+    if (child.unreadable !== undefined) return child.unreadable === "delegating";
+    switch (child.status) {
+      case "running":
+        return true;
+      case "idle":
+        return child.activeTurn === null;
+      case "replied":
+      case "error":
+        return false;
+      default: {
+        const unhandled: never = child.status;
+        throw new Error(`No container state for child status ${String(unhandled)}`);
+      }
+    }
+  });
+  return busy ? { tone: "tool", state: "delegating" } : { tone: "done", state: "complete" };
 }
 
 function composeStatus(statuses: AgentGraph["status"][]): AgentGraph["status"] {
@@ -2007,7 +2371,7 @@ export function buildAgentTreeGraph(
   agents: AgentGraphSource[],
   /* Forwarded to every agent in the tree, not just the root: a focus mode that
      only applied to the parent would leave a busy subagent drawing every card. */
-  options: Pick<AgentGraphOptions, "focus" | "linger"> = {}
+  options: Pick<AgentGraphOptions, "focus" | "linger" | "reducedMotion"> = {}
 ): AgentGraph {
   if (agents.length === 0) return buildAgentGraph([], options);
 
@@ -2018,6 +2382,32 @@ export function buildAgentTreeGraph(
     const children = childrenByParent.get(agent.parentWorkflowId) ?? [];
     children.push(agent);
     childrenByParent.set(agent.parentWorkflowId, children);
+  }
+  /* Read here rather than through showSubagentDispatch, which would also draw
+     the dispatch card the tree already shows as the child's own boundary. The
+     marker rides the child's frames and the rest the parent's, so only each
+     list's own order is relied on: a new message clears the last reply. */
+  const delegations = new Map<string, DelegationRecord>();
+  const delegationOf = (workflowId: string): DelegationRecord => {
+    const found = delegations.get(workflowId);
+    if (found) return found;
+    const created: DelegationRecord = { unavailable: false, reason: "", stoppedByParent: false };
+    delegations.set(workflowId, created);
+    return created;
+  };
+  for (const frame of agents.flatMap((agent) => agent.frames)) {
+    if (frame.event === "subagent_message_sent") {
+      delegationOf(frame.data.workflow_id).reply = undefined;
+    } else if (frame.event === "subagent_reply_received") {
+      delegationOf(frame.data.workflow_id).reply = frame.data.outcome;
+    } else if (frame.event === "subagent_stopped") {
+      delegationOf(frame.data.workflow_id).stoppedByParent = true;
+    } else if (frame.event === "subagent_stream_unavailable") {
+      const record = delegationOf(frame.data.workflow_id);
+      record.unavailable = true;
+      record.reason = frame.data.reason;
+      record.reasonCode = frame.data.reason_code;
+    }
   }
 
   const builtGraphs: AgentGraph[] = [];
@@ -2037,9 +2427,10 @@ export function buildAgentTreeGraph(
       agentInterface: agent.agentInterface,
       embeddedToolGraphs: childGraphs,
       focus: options.focus,
-      linger: options.linger
+      linger: options.linger,
+      reducedMotion: options.reducedMotion
     });
-    const scoped = scopedGraph(agent, graph, 0, 0);
+    const scoped = scopedGraph(agent, graph, 0, 0, delegations.get(agent.workflowId));
     builtGraphs.push(scoped);
     return scoped;
   }
@@ -2066,6 +2457,7 @@ export function buildAgentTreeGraph(
     edges,
     activeTurn: builtGraphs.find((graph) => graph.activeTurn != null)?.activeTurn ?? null,
     status: composeStatus(builtGraphs.map((graph) => graph.status)),
+    failed: builtGraphs.some((graph) => graph.failed),
     usage: summarizeCost(agents.flatMap((agent) => agent.frames))
   };
 }

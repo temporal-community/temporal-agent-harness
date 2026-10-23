@@ -1,8 +1,11 @@
 <script lang="ts">
   import { Handle, Position } from "@xyflow/svelte";
+  import { markdownToText } from "$lib/components/chat/MarkdownMessage.svelte";
   import type { AgentNodeData } from "$lib/state/flowProjection";
-  import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
+  import { kindFromState } from "$lib/components/flow/AgentStateNode.svelte";
+  import StateGlyph from "$lib/components/primitives/StateGlyph.svelte";
   import StatusChip, {
+    STATUS_TONES,
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
 
@@ -26,68 +29,52 @@
   );
   const visibleInterfaces = $derived(interfaces.slice(0, 2));
   const hiddenInterfaces = $derived(interfaces.slice(visibleInterfaces.length));
-  const hiddenInterfaceCount = $derived(
-    hiddenInterfaces.length
-  );
   const hiddenInterfaceTitle = $derived(
     hiddenInterfaces
-      .map((item) => item.description ? `${item.name}: ${item.description}` : item.name)
+      .map((item) => item.description ? `${item.name}: ${markdownToText(item.description)}` : item.name)
       .join("\n")
   );
   const runtimeRole = $derived(
     data.runtimeRole === "subagent" ? "subagent" : "parent"
   );
-  const statusKind = $derived(kindFromState(data.state, data.tone));
-
-  function kindFromState(state: string, tone: AgentNodeData["tone"]): StatusKind {
-    const normalized = state.toLowerCase();
-    if (normalized.includes("error") || normalized.includes("fail")) return "error";
-    if (normalized.includes("approval") || normalized.includes("pending")) return "approval";
-    if (normalized.includes("running") || normalized.includes("stream")) {
-      return runtimeRole === "subagent" ? "delegating" : "thinking";
-    }
-    if (
-      normalized.includes("replied") ||
-      normalized.includes("complete") ||
-      normalized.includes("stopped")
-    ) {
-      return "complete";
-    }
-    if (tone === "agent") return "available";
-    return "idle";
-  }
+  /* The cards' own reading, so a boundary, its inspector chip and its minimap mark agree.
+     A running subagent is its parent delegating, not thinking. */
+  const cardKind = $derived(kindFromState(data.state, data.tone));
+  const statusKind: StatusKind = $derived(
+    runtimeRole === "subagent" && cardKind === "thinking" ? "delegating" : cardKind
+  );
+  const running = $derived(statusKind === "thinking" || statusKind === "delegating");
+  /* Measured by length, not layout; see the same call in AgentStateNode. */
+  const titleTip = $derived(data.title.length > 40 ? data.title : undefined);
 </script>
 
 <div
-  class={`workflow-boundary ${runtimeRole}`}
+  class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}
   style={`width: ${boundaryWidth}px; height: ${boundaryHeight}px;`}
 >
   <Handle id="target-top" class="workflow-handle" type="target" position={Position.Top} />
   <div class="workflow-head">
-    <AgentGlyph
-      label={data.title}
-      role={runtimeRole === "subagent" ? "subagent" : "agent"}
-      status={statusKind === "error"
-        ? "error"
-        : statusKind === "approval"
-          ? "approval"
-          : statusKind === "available" || statusKind === "complete"
-            ? "available"
-            : "busy"}
-    />
     <div class="workflow-title-group">
-      <span class="workflow-title">{data.title}</span>
+      <span class="workflow-title-row" data-tip={titleTip} data-tip-below>
+        <StateGlyph kind={statusKind} {running} />
+        <span class="workflow-title" dir="auto">{data.title}</span>
+      </span>
+      {#if data.reason}
+        <!-- Shown, not a tip, which a keyboard or touch cannot reach. Two lines is what
+             runtimeReasonHeight in flowProjection reserves; the inspector has it in full. -->
+        <span class="workflow-reason" dir="auto">{markdownToText(data.reason)}</span>
+      {/if}
       {#if data.subtitle}
-        <span class="workflow-subtitle">{data.subtitle}</span>
+        <span class="workflow-subtitle" dir="auto">{data.subtitle}</span>
       {/if}
       {#if visibleInterfaces.length}
         <div class="interfaces">
           <span class="kicker">accepts</span>
-          {#each visibleInterfaces as item}
-            <span class="interface-chip" title={item.description}>{item.name}</span>
+          {#each visibleInterfaces as item (item)}
+            <code class="handler" data-tip={markdownToText(item.description) || undefined}>{item.name}</code>
           {/each}
-          {#if hiddenInterfaceCount > 0}
-            <span class="interface-chip muted" title={hiddenInterfaceTitle}>+{hiddenInterfaceCount}</span>
+          {#if hiddenInterfaces.length > 0}
+            <span class="handler more" data-tip={hiddenInterfaceTitle}>+{hiddenInterfaces.length}</span>
           {/if}
         </div>
       {/if}
@@ -96,12 +83,7 @@
       {#if headerPrefix}
         <span>{headerPrefix}</span>
       {/if}
-      <StatusChip
-        label={data.state}
-        kind={statusKind}
-        compact
-        active={statusKind === "thinking" || statusKind === "delegating"}
-      />
+      <StatusChip label={data.state} kind={statusKind} plain />
     </span>
   </div>
   <Handle id="source-bottom" class="workflow-handle" type="source" position={Position.Bottom} />
@@ -109,41 +91,34 @@
 
 <style>
   .workflow-boundary {
+    --status-color: var(--accent);
     pointer-events: none;
     border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
     border-radius: var(--radius-lg);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--surface-1) 88%, var(--accent) 12%),
-        color-mix(in srgb, var(--surface-2) 90%, var(--accent) 10%)
-      );
+    background: color-mix(in srgb, var(--surface-1) 90%, var(--accent) 10%);
     box-shadow: var(--shadow-node-tall);
-  }
-
-  .workflow-boundary.parent .workflow-head {
-    background: color-mix(in srgb, var(--surface-0) 28%, transparent);
   }
 
   .workflow-boundary.subagent {
     border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--surface-1) 92%, var(--accent) 8%),
-        color-mix(in srgb, var(--surface-2) 88%, var(--accent) 12%)
-      );
+    background: color-mix(in srgb, var(--surface-1) 92%, var(--accent) 8%);
     box-shadow: var(--shadow-node-mid);
   }
 
-  .workflow-boundary.subagent .workflow-head {
-    background: color-mix(in srgb, var(--surface-0) 34%, transparent);
-    border-bottom-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  }
+  .status-neutral { --status-color: var(--text-3); }
+  .status-accent { --status-color: var(--accent); }
+  .status-reasoning { --status-color: var(--reasoning); }
+  .status-success { --status-color: var(--success); }
+  .status-error { --status-color: var(--error); }
+  .status-live { --status-color: var(--live); }
 
+  /* Zero-sized for the same reason as AgentStateNode's .node-handle. */
   :global(.workflow-handle) {
-    width: 1px;
-    height: 1px;
+    width: 0;
+    height: 0;
+    min-width: 0;
+    min-height: 0;
+    margin: -1px;
     border: 0;
     opacity: 0;
     pointer-events: none;
@@ -156,7 +131,9 @@
     justify-content: space-between;
     gap: 12px;
     padding: 13px 14px 11px;
-    border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+    border-bottom: 1px solid color-mix(in srgb, var(--status-color) 26%, var(--border));
+    /* No more than 8%: --text-3 on a 12% green band measured 4.36:1. */
+    background: color-mix(in srgb, var(--status-color) 8%, var(--surface-1));
     color: var(--text-1);
     font-size: var(--font-md);
     font-weight: 700;
@@ -170,10 +147,31 @@
     gap: 6px;
   }
 
+  .workflow-title-row {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    pointer-events: auto;
+  }
+
   .workflow-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .workflow-reason {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    font-weight: 500;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .workflow-subtitle {
@@ -187,6 +185,7 @@
   }
 
   .workflow-status {
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -199,29 +198,26 @@
     pointer-events: auto;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--gap-md);
     min-width: 0;
   }
 
-  .interface-chip {
+  /* Names, not controls: nothing here can be pressed, so no box. The tip
+     carries the handler's description. */
+  .handler {
     min-width: 0;
-    max-width: 96px;
+    max-width: 120px;
     overflow: hidden;
+    color: color-mix(in srgb, var(--accent) 74%, var(--text-1));
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
-    padding: 2px 7px;
-    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-    border-radius: var(--radius-chip);
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    color: color-mix(in srgb, var(--accent) 74%, var(--text-1));
-    font-size: var(--font-xs);
-    font-weight: 650;
   }
 
-  .interface-chip.muted {
-    max-width: none;
+  .handler.more {
+    flex: 0 0 auto;
     color: var(--text-3);
-    background: color-mix(in srgb, var(--text-3) 8%, transparent);
-    border-color: color-mix(in srgb, var(--text-3) 20%, var(--border));
   }
 </style>
