@@ -122,6 +122,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "mock-split_test",
+    src = "mock-split.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:main",
+        "//typescript/apps/ui/src/lib/api:mockClient",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+    ],
+)
+
+vitest_test(
     name = "modal-surfaces_test",
     src = "modal-surfaces.test.mjs",
     deps = [
@@ -165,6 +175,23 @@ vitest_test(
 )
 
 vitest_test(
+    name = "paneCost_test",
+    src = "paneCost.test.mjs",
+    tags = ["exclusive"],
+    deps = [
+        "//typescript/apps/ui/src/lib/components/flow:usageChart",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replayTimeline",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
+)
+
+vitest_test(
     name = "parent-runtime-subtitle_test",
     src = "parent-runtime-subtitle.test.mjs",
     deps = ["//typescript/apps/ui/src/lib/state:flowProjection"],
@@ -173,6 +200,7 @@ vitest_test(
 vitest_test(
     name = "projectionCost_test",
     src = "projectionCost.test.mjs",
+    tags = ["exclusive"],
     deps = [
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:flowProjection",

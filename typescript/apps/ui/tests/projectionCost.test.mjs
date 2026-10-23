@@ -1,6 +1,6 @@
-// ABOUTME: Asserts one commit stays O(frames). #publishFrames re-runs every derived projection from
-// scratch, and the live path commits once per paint, so total work is (commits x frames): linear per
-// commit is what keeps a long session merely expensive instead of unusable. Doubling the events must
+// ABOUTME: Asserts a full rebuild of the derived projections stays O(frames). A live commit folds
+// them forward, but a reset, another session or a scrub back rebuilds every one from scratch, so a
+// rebuild that went quadratic would freeze the tab on a long run. Doubling the events must
 // roughly double the cost, never quadruple it. This is the cheap stand-in for a soak test — the
 // degradation is a function of EVENT COUNT, not elapsed time, so it is reproduced by choosing n
 // rather than by waiting for n to arrive.
@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
 import { summarizeCost } from "$lib/cost/pricing.ts";
-import { buildAgentTreeGraph } from "$lib/state/flowProjection.ts";
+import { buildAgentGraph, buildAgentTreeGraph } from "$lib/state/flowProjection.ts";
 import { buildReplayLog } from "$lib/state/replayLog.ts";
 import { buildReplayTimeline } from "$lib/state/replayTimeline.ts";
 import { buildStepTimeline } from "$lib/state/stepTimeline.ts";
@@ -52,7 +52,7 @@ const frame = (i) => {
 const SESSION = { workflow_id: "wf-root", agent_workflow_type: "QaAgent", created_at: 1 };
 const SUBAGENTS = [{ subagentId: "kid", workflowId: "wf-kid", label: "QA (kid)" }];
 
-/* Exactly what #publishFrames triggers: every derived projection, rebuilt.
+/* Exactly what a rebuild runs: every derived projection, from scratch.
    buildReplayTimeline is called here rather than hoisted into build(), and that
    is the whole point of it being in this file: it is a $derived on frames, so a
    commit rebuilds it too. This check previously handed the downstream builders a
@@ -176,6 +176,44 @@ describe("one commit stays O(frames)", () => {
        read is the same as a number nobody recorded. */
     console.log(
       `projection cost OK (4k ${small.toFixed(1)}ms, 16k ${large.toFixed(1)}ms, ${ratio.toFixed(1)}x)${advisory}`
+    );
+  });
+});
+
+/* One open turn of many tools, as a long live run's last turn is: the turn boundary that
+   keeps the mix above realistic never comes, so every tool the turn started is still a
+   runtime node when the next one arrives. Asking whether a node was already placed by
+   scanning that list made the fold quadratic in the turn's tools (a 100,000-frame run's
+   graph cost 62ms a frame, 12ms of it that scan). */
+describe("one long turn stays O(frames)", () => {
+  const turn = (tools) => [
+    { event: "turn_started", data: { type: "turn_started", agent_id: "root", turn_id: "t1", turn_number: 1, timestamp: 0 } },
+    ...Array.from({ length: tools }, (_, i) =>
+      ["tool_start", "tool_end"].map((kind, k) => ({
+        event: kind,
+        data: { type: kind, agent_id: "root", turn_id: "t1", turn_number: 1, timestamp: 1 + i + k / 2, tool_id: `tool-${i}`, tool_name: "search", tool_input: {}, tool_output: "{}" }
+      }))
+    ).flat()
+  ];
+  const measure = (frames, reps) => {
+    buildAgentGraph(frames);
+    let best = Infinity;
+    for (let round = 0; round < 3; round += 1) {
+      const started = performance.now();
+      for (let r = 0; r < reps; r += 1) buildAgentGraph(frames);
+      best = Math.min(best, (performance.now() - started) / reps);
+    }
+    return best;
+  };
+
+  it("4x the tools in one turn must not cost more than 8x the work", () => {
+    measure(turn(500), 10);
+    const small = measure(turn(2_000), 10);
+    const large = measure(turn(8_000), 3);
+    const ratio = large / small;
+    assert.ok(
+      ratio < 8,
+      `4x the tools in one turn cost ${ratio.toFixed(1)}x the work (2,000 tools: ${small.toFixed(1)}ms, 8,000: ${large.toFixed(1)}ms)`
     );
   });
 });

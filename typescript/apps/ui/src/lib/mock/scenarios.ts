@@ -1,21 +1,40 @@
 import type {
   AgentDescriptor,
+  AgentInterfaceFunction,
   AgentSseFrame,
   AgentSseEventMap,
   FileCitationAnnotation,
+  OKFGraph,
   Session,
   TokenUsage
 } from "$lib/api/types";
+import type { OperatorPrefs } from "$lib/state/agentRunStorage";
 
 export interface MockScenario {
   agents: AgentDescriptor[];
   sessions: Session[];
   frames: AgentSseFrame[];
+  /** What `agent_interface` answers for this scenario's sessions; the mock's default when absent. */
+  agentInterface?: AgentInterfaceFunction[];
+  /** How many leading frames replay without the per-frame delay, as a reattach backfill would. */
+  instantFrames?: number;
+  /** The delay before each frame after `instantFrames`; 40ms when absent. */
+  liveIntervalMs?: number;
+  /** What `okfGraph` answers for any OKF mount; the mock's three-concept bundle when absent. */
+  okfGraph?: OKFGraph;
+  /** Keep the stream open after the frames and answer each approval and callback. */
+  answersApprovals?: boolean;
+  /** How long `submitMessage` takes, so a send stays in flight long enough to press again. */
+  submitDelayMs?: number;
+  /** Per-session streams in place of `frames`; "silent" never opens, as with its worker down. */
+  streams?: Record<string, AgentSseFrame[] | "silent">;
+  /** Session Manager pins and archives this fixture expects in the store; seeded by main.ts. */
+  prefs?: OperatorPrefs;
 }
 
 const startedAt = 1_789_126_400;
 
-const agents: AgentDescriptor[] = [
+export const agents: AgentDescriptor[] = [
   {
     key: "qa",
     workflow_type: "QaAgent",
@@ -74,7 +93,7 @@ const searchSubagentId = `${rootAgentId}-b52e04`;
 const searchSubagentWorkflowId = "agent-session-mock-qa-search";
 let resumeOffset = 0;
 
-function frame<T extends keyof AgentSseEventMap>(
+export function frame<T extends keyof AgentSseEventMap>(
   event: T,
   data: Omit<AgentSseEventMap[T], "agent_id" | "resume_offset"> &
     { agent_id?: string; resume_offset?: number }
@@ -97,7 +116,7 @@ function frame<T extends keyof AgentSseEventMap>(
 
 // One message per turn in these scenarios, so the message id is derived from the turn — real
 // sessions mint a uuid per message, and a shared turn carries several distinct ones.
-function meta(turn_number: number, deltaSeconds: number) {
+export function meta(turn_number: number, deltaSeconds: number) {
   const padded = String(turn_number).padStart(3, "0");
   return {
     turn_id: `turn-${padded}`,
@@ -107,7 +126,7 @@ function meta(turn_number: number, deltaSeconds: number) {
   };
 }
 
-function usage(
+export function usage(
   input_tokens: number,
   output_tokens: number,
   thought_tokens: number,

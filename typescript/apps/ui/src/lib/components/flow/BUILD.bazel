@@ -201,6 +201,7 @@ vitest_test(
     deps = [
         ":LatencyWaterfall",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
     ],
 )
@@ -253,6 +254,7 @@ vitest_test(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
     ],
 )
 

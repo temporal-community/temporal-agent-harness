@@ -147,6 +147,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/src/lib/motion:inputClearDissolve",
         "//typescript/apps/ui/src/lib/motion:stackAnswer",
