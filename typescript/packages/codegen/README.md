@@ -30,6 +30,21 @@ not typed.
 Options: `-o <file>` writes to a file instead of stdout; `--name <TypeName>` renames the mapping
 type, which defaults to the agent's workflow type name.
 
+`--json-schemas` also writes `<TypeName>Schemas`: each handler's input and output as JSON Schema,
+so you can check a message or a reply at runtime with any validator. Each schema is
+self-contained (a `$ref` plus just the `$defs` it reaches), and the constant is `as const` for
+tools that derive types from schemas. For example, with Ajv:
+
+```ts
+import Ajv from "ajv";
+import { TicTacToeAgentSchemas } from "./TicTacToeAgent";
+
+const validPlay = new Ajv().compile(TicTacToeAgentSchemas.play.input);
+if (!validPlay(move)) console.warn(validPlay.errors);
+```
+
+It is off by default, so the generated files examples commit stay as they are.
+
 ## The event protocol
 
 With `--protocol`, it reads `temporal-agent-harness schema --protocol` instead and writes the

@@ -34,6 +34,9 @@ interface SchemaRef {
 export interface GenerateOptions {
   /** Name of the mapping type. Defaults to the agent's workflow type name. */
   typeName?: string;
+  /** Also emit `<typeName>Schemas`: each handler's input and output as JSON Schema, for
+   *  validating them at runtime with any validator. */
+  jsonSchemas?: boolean;
 }
 
 const REF_PREFIX = "#/$defs/";
@@ -61,11 +64,13 @@ export async function generateAgentTypes(
 ): Promise<string> {
   const names = typeNames(Object.keys(doc.$defs));
   const typeName = options.typeName ?? safeName(doc.agent);
-  if ([...names.values()].includes(typeName)) {
-    throw new Error(
-      `the mapping type name ${typeName} is also the name of one of the agent's models; ` +
-        "pass a different name"
-    );
+  for (const name of options.jsonSchemas ? [typeName, `${typeName}Schemas`] : [typeName]) {
+    if ([...names.values()].includes(name)) {
+      throw new Error(
+        `the generated name ${name} is also the name of one of the agent's models; ` +
+          "pass a different type name"
+      );
+    }
   }
 
   return [
@@ -76,7 +81,38 @@ export async function generateAgentTypes(
     mappingType(doc, typeName, names),
     "",
     definitionValue(doc, typeName),
+    ...(options.jsonSchemas ? ["", handlerSchemas(doc, typeName)] : []),
     ""
+  ].join("\n");
+}
+
+/** Every handler's input and output as a self-contained JSON Schema: a `$ref` to its model,
+ *  with `$defs` holding just the models that one reaches. */
+function handlerSchemas(doc: AgentSchemaDocument, typeName: string): string {
+  const standalone = (ref: SchemaRef): JSONSchema => {
+    const $defs: Record<string, JSONSchema> = {};
+    const visit = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(visit);
+      if (node === null || typeof node !== "object") return;
+      for (const [key, value] of Object.entries(node)) {
+        if (key !== "$ref" || typeof value !== "string") visit(value);
+        else if (value.startsWith(REF_PREFIX) && !(value.slice(REF_PREFIX.length) in $defs)) {
+          const name = value.slice(REF_PREFIX.length);
+          $defs[name] = doc.$defs[name]!;
+          visit($defs[name]);
+        }
+      }
+    };
+    visit(ref);
+    return { $ref: ref.$ref, $defs };
+  };
+  const schemas = Object.fromEntries(
+    Object.entries(doc.handlers).map(([name, h]) => [name, { input: standalone(h.input), output: standalone(h.output) }])
+  );
+  return [
+    `/** Each \`${doc.agent}\` handler's input and output as JSON Schema, to validate them with any`,
+    " *  JSON Schema validator. */",
+    `export const ${typeName}Schemas = ${JSON.stringify(schemas, null, 2)} as const;`
   ].join("\n");
 }
 

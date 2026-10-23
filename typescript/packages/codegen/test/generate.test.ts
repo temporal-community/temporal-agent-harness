@@ -55,6 +55,17 @@ test("tic-tac-toe matches the golden", async () => {
   assert.equal(await generateAgentTypes(schema), read("test/golden/TicTacToeAgent.ts"));
 });
 
+test("with jsonSchemas, each handler's schemas follow the golden, each with just its models", async () => {
+  const schema = JSON.parse(read("../../../python/examples/tictactoe/TicTacToeAgent.schema.json"));
+  const out = await generateAgentTypes(schema, { jsonSchemas: true });
+  assert.ok(out.startsWith(read("test/golden/TicTacToeAgent.ts")));
+  const emitted = /export const TicTacToeAgentSchemas = (\{[\s\S]*\}) as const;\n$/.exec(out);
+  const schemas = JSON.parse(emitted![1]!);
+  assert.deepEqual(Object.keys(schemas), ["new_game", "play"]);
+  assert.deepEqual(schemas.play.input, { $ref: "#/$defs/PlayMove", $defs: { PlayMove: schema.$defs.PlayMove } });
+  assert.deepEqual(schemas.play.output, { $ref: "#/$defs/TextReply", $defs: { TextReply: schema.$defs.TextReply } });
+});
+
 test("an input/output pair of one model becomes two interfaces", async () => {
   const out = await generateAgentTypes(doc());
   assert.match(out, /export interface EchoInput \{\n {2}text\?: string;\n\}/);

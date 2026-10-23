@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// harness-codegen <schema.json | -> [-o <out.ts>] [--name TypeName] [--protocol]
+// harness-codegen <schema.json | -> [-o <out.ts>] [--name TypeName] [--json-schemas] [--protocol]
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -11,11 +11,12 @@ import {
   type ProtocolSchemaDocument
 } from "./generate.ts";
 
-const USAGE = `usage: harness-codegen <schema.json | -> [-o <out.ts>] [--name <TypeName>] [--protocol]
+const USAGE = `usage: harness-codegen <schema.json | -> [-o <out.ts>] [--name <TypeName>] [--json-schemas] [--protocol]
 
 Reads the document \`temporal-agent-harness schema module:Class\` prints (from a file, or
 stdin for -) and writes TypeScript types for the agent: one interface per model, and a
-mapping type naming each handler's input and output and each declared state.
+mapping type naming each handler's input and output and each declared state. With
+--json-schemas, also writes each handler's input and output JSON Schema as a constant.
 
 With --protocol, reads \`temporal-agent-harness schema --protocol\` instead and writes the
 event stream's types.`;
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
       output: { type: "string", short: "o" },
       name: { type: "string" },
       protocol: { type: "boolean" },
+      "json-schemas": { type: "boolean" },
       help: { type: "boolean", short: "h" }
     }
   });
@@ -39,7 +41,10 @@ async function main(): Promise<void> {
   const doc: unknown = JSON.parse(input);
   const source = values.protocol
     ? await generateProtocolTypes(doc as ProtocolSchemaDocument)
-    : await generateAgentTypes(doc as AgentSchemaDocument, { typeName: values.name });
+    : await generateAgentTypes(doc as AgentSchemaDocument, {
+        typeName: values.name,
+        jsonSchemas: values["json-schemas"]
+      });
   if (values.output === undefined) process.stdout.write(source);
   else writeFileSync(values.output, source);
 }
