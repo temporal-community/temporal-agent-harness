@@ -59,6 +59,6 @@ describe("a Logs row's copyable IDs", () => {
     assert.ok(parse(source, { modern: true }), "the component should still parse");
     assert.match(block, /\{#each ids as id/);
     assert.match(block, /<Copyable value=\{id\.value\}/);
-    assert.match(block, /<code title=\{id\.value\}>\{id\.value\}<\/code>/);
+    assert.match(block, /<code class="fade-end" title=\{id\.value\}>\{id\.value\}<\/code>/);
   });
 });

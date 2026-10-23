@@ -182,6 +182,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:inboundMessageText",
         "//typescript/apps/ui/src/lib/state:initData",
         "//typescript/apps/ui/src/lib/state:jsonPatch",
+        "//typescript/apps/ui/src/lib/state:logTree",
         "//typescript/apps/ui/src/lib/state:logValue",
         "//typescript/apps/ui/src/lib/state:nodeTween",
         "//typescript/apps/ui/src/lib/state:okfGraph",

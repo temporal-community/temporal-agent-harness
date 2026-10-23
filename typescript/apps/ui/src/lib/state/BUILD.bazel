@@ -194,6 +194,16 @@ js_library(
 )
 
 js_library(
+    name = "logTree",
+    srcs = ["logTree.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":codeModeNesting",
+        ":replyStatus",
+    ],
+)
+
+js_library(
     name = "logValue",
     srcs = ["logValue.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -652,6 +662,16 @@ vitest_test(
     name = "jsonPatch_test",
     src = "jsonPatch.test.mjs",
     deps = [":jsonPatch"],
+)
+
+vitest_test(
+    name = "logTree_test",
+    src = "logTree.test.mjs",
+    deps = [
+        ":logTree",
+        ":replayLog",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+    ],
 )
 
 vitest_test(

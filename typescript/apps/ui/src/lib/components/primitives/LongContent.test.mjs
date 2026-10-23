@@ -36,6 +36,12 @@ describe("the shared long-content clamp", () => {
     assert.match(source, /\.long-content-toggle \{[\s\S]*?border: 0;/);
   });
 
+  /* Pulled up over the fade, the toggle hid an open block's last line: a log's timestamp. */
+  it("covers only the collapsed fade, never an open block's last line", () => {
+    assert.match(source, /\.long-content-toggle \{[\s\S]*?margin-top: calc\(-1 \* /);
+    assert.match(source, /\.expanded \.long-content-toggle \{\s*margin-top: 0;\s*\}/);
+  });
+
   it("remembers state by content id and asks both virtual lists to remeasure", () => {
     assert.match(source, /remembered\[id\] = expanded/);
     assert.match(chat, /const remeasureMessages = \(\) => messageList\(\)\.measure\(\)/);

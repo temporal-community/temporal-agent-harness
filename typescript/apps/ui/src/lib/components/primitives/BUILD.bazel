@@ -249,6 +249,7 @@ vitest_test(
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
         "//typescript/apps/ui/src/lib/components/agent:ReplyStatus",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

@@ -33,7 +33,7 @@
     /** The trailing figure: a duration, or a clock time. */
     meta?: string;
     tip?: string;
-    /** Levels in. Past NEST_CAP a row keeps the cap's indent. */
+    /** Levels in, for the line only. Past NEST_CAP a row keeps the cap's indent. */
     depth?: number;
     expandable?: boolean;
     expanded?: boolean;
@@ -120,8 +120,11 @@
   .glyph-approval { --status-color: var(--live); }
   .glyph-error { --status-color: var(--error); }
 
-  /* A call a Code Mode script made, or a subagent's event: a level in per depth, details and all. */
-  .trace-row.nested {
+  /* A call a Code Mode script made, or a subagent's event: its line steps in a level per depth.
+     Its details and media do not: they span the row at any depth, so a deep row's payload is not
+     squeezed into what the indent leaves. */
+  .trace-row.nested > .trace-line {
+    width: calc(100% - var(--depth) * 20px);
     margin-inline-start: calc(var(--depth) * 20px);
   }
 

@@ -1,7 +1,7 @@
 // ABOUTME: Pins TraceRow, the one line the chat's turn trace and the Logs pane both draw. A row
 // with details is the button that opens them, its glyph doubling as the caret; a row without is
-// no button at all. Hue is the glyph's and the status word's only, and one level of depth indents
-// the row with its details.
+// no button at all. Hue is the glyph's and the status word's only, and depth indents the row's
+// line but not its details.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -43,12 +43,30 @@ describe("TraceRow", () => {
     assert.match(plain, /<div class="trace-line[^"]*"/);
   });
 
-  it("indents a nested row, its details with it", () => {
+  it("indents a nested row's line", () => {
     assert.match(html({ name: "read_trip_board", depth: 1 }), /class="trace-row[^"]*\bnested\b/);
     assert.doesNotMatch(html({ name: "run_travel_script" }), /class="trace-row[^"]*\bnested\b/);
-    assert.match(rule(".trace-row.nested"), /margin-inline-start: calc\(var\(--depth\) \* 20px\);/);
+    assert.match(rule(".trace-row.nested > .trace-line"), /margin-inline-start: calc\(var\(--depth\) \* 20px\);/);
     assert.match(html({ name: "search_flights", depth: 3 }), /--depth: 3/);
     assert.match(html({ name: "search_flights", depth: 40 }), /--depth: 8/, "a deep row keeps the cap's indent");
+  });
+
+  /* Indenting the whole row stepped its details in with it: three levels down, the Logs pane's
+     Full details block started 95px in and a workflow id wrapped over three lines. */
+  it("starts a row's details at one edge whatever the row's depth", () => {
+    const depthRules = [...source.matchAll(/\n\s*([^{}\n]+) \{([^}]*)\}/g)].filter(([, , body]) => /--depth/.test(body));
+    assert.ok(depthRules.length > 0);
+    for (const [, selector] of depthRules) assert.match(selector, /> \.trace-line$/, `${selector} indents only the line`);
+    for (const depth of [1, 3, 5, 40]) {
+      const open = html({ name: "search_flights", depth, expandable: true, expanded: true });
+      assert.match(open, /<\/button>\s*<p class="probe-details">/, `depth ${depth}: details sit beside the indented line, not in it`);
+    }
+    const logs = readFileSync(new URL("../agent/TranscriptPanel.svelte", import.meta.url), "utf8");
+    const lineDetails = logs.match(/\n\s*\.line-details \{([^}]*)\}/)?.[1] ?? "";
+    const turnHead = logs.match(/\n\s*\.turn-head \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(lineDetails, /padding: 0 var\(--gap-md\) var\(--gap-md\);/, "the Logs details sit at the turn's inset");
+    assert.match(turnHead, /padding: 6px var\(--gap-md\) 8px;/, "which is the turn header's");
+    assert.doesNotMatch(lineDetails, /depth/);
   });
 
   it("colours only the glyph and the status word, by the glyph's state", () => {

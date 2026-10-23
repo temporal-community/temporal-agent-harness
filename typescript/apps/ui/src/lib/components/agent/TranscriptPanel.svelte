@@ -1,79 +1,48 @@
-<script lang="ts" module>
-  import type { StatusKind } from "$lib/components/primitives/StatusChip.svelte";
-  import type { ReplayLogRow } from "$lib/state/replayLog";
-
-  /**
-   * The colour a surviving status chip is drawn in. Module scope, and exported,
-   * so statusNote.test.mjs can call this one rather than keep a copy: the
-   * ordering below is the whole content of the function and a copy of it drifts
-   * without a word. Pure, so nothing is lost by lifting it out of the instance.
-   */
-  export function statusKind(row: ReplayLogRow): StatusKind {
-    const status = row.status?.toLowerCase() ?? "";
-    if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
-      return "error";
-    }
-    if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
-      return "approval";
-    }
-    if (row.actor === "tool" || status.includes("tool")) return "tool";
-    if (row.actor === "model") return "model";
-    if (row.actor === "reasoning") return "reasoning";
-    if (row.actor === "queue" || status.includes("queue")) return "queued";
-    /* The row's own tone settles the outcome, so the chip cannot disagree with
-       the line it sits on: a subagent reply says ok or error in its tone and
-       nowhere in its status text, and matching on the text alone left every
-       successful reply looking like one still in flight. */
-    if (
-      row.tone === "done" ||
-      status.includes("done") ||
-      status.includes("complete") ||
-      status.includes("approved")
-    ) {
-      return "complete";
-    }
-    if (status.includes("running") || status.includes("streaming")) return "thinking";
-    /* Last, not first. Delegation is what a subagent row is doing when nothing
-       sharper is known about it; asked before the outcome tests it swallowed
-       them, and ok, error, and still-running all came out the same colour. */
-    if (row.actor === "subagent") return "delegating";
-    return "idle";
-  }
-</script>
-
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Bot,
-    BrainCircuit,
-    CheckCircle2,
-    ChevronDown,
-    ChevronRight,
-    Clock3,
-    Cpu,
-    MessageSquarePlus,
-    Radio,
-    UserRound,
-    Wrench,
-    XCircle
-  } from "@lucide/svelte";
-  import { Search, X } from "@lucide/svelte";
-  import Badge from "$lib/components/primitives/Badge.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
+  import { Search, X, XCircle } from "@lucide/svelte";
+  import { rowIcon } from "$lib/components/flow/WorkflowTimeline.svelte";
+  import { createVirtualizer } from "@tanstack/svelte-virtual";
+  import { untrack } from "svelte";
+  import type { Attachment } from "svelte/attachments";
   import Chip from "$lib/components/primitives/Chip.svelte";
-  import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import type { StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+  import TraceImages from "$lib/components/primitives/TraceImages.svelte";
+  import TraceRow from "$lib/components/primitives/TraceRow.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import LongContent from "$lib/components/primitives/LongContent.svelte";
+  import { citationAriaLabel, citationLinks, markdownToText } from "$lib/components/chat/MarkdownMessage.svelte";
+  import { windowedFocus } from "$lib/components/primitives/windowedFocus";
+  import WindowedRows from "$lib/components/primitives/WindowedRows.svelte";
   import { scrollFollower } from "$lib/state/followScroll";
   import { formatLogValue } from "$lib/state/logValue";
+  import { toolImages } from "$lib/state/toolImages";
+  import { dissolveClear, inputClearDissolve } from "$lib/motion/inputClearDissolve";
   import {
     formatDuration,
+    formatElapsedDuration,
     formatTimestamp,
+    plural,
     rowIdentifiers,
     statusNote,
-    type TurnLogGroup
+    type ReplayActor,
+    type ReplayLogRow,
+    type TurnLogGroup,
+    type TurnLogSummary
   } from "$lib/state/replayLog";
+  import { rowHasDetails, type TraceStep } from "$lib/state/replyStatus";
+  import { STEP_GLYPHS, logLines, type LogLine } from "$lib/state/logTree";
   import { formatTokens } from "$lib/cost/pricing";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
+
+  /* A folded line: --control-height, with no rule under it. */
+  const LINE_HEIGHT = 28;
+
+  const SHORT_TIME: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const FULL_TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "medium" };
+  const compactTokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
   interface Props {
     groups: TurnLogGroup[];
@@ -93,7 +62,21 @@
     onFilterChange
   }: Props = $props();
   let expandedRows = $state<Record<string, boolean>>({});
+  /* Heads the reader folded or opened, by step id; any other keeps logLines' default. */
+  let collapsedSteps = $state<Record<string, boolean>>({});
   let query = $state("");
+  let searchInput = $state<HTMLInputElement | null>(null);
+
+  function clearSearch(): void {
+    dissolveClear(searchInput, () => (query = ""));
+    searchInput?.focus({ preventScroll: true });
+  }
+
+  function handleSearchKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Escape" || event.isComposing || !query) return;
+    event.preventDefault();
+    clearSearch();
+  }
 
   const filters: Array<{ key: TranscriptFilter; label: string }> = [
     { key: "all", label: "All" },
@@ -115,7 +98,6 @@
   interface PrimaryPayload {
     label: string;
     text: string;
-    kind: "block" | "text";
   }
 
   function inputText(row: ReplayLogRow): string {
@@ -124,7 +106,7 @@
 
   function primaryPayload(row: ReplayLogRow): PrimaryPayload | null {
     const output = formatLogValue(row.output);
-    if (output) return { label: "output", text: output, kind: "block" };
+    if (output) return { label: "output", text: output };
 
     return null;
   }
@@ -187,15 +169,13 @@
 
   const filtering = $derived(filter !== "all" || query.trim().length > 0);
 
+  /* Unfiltered, the groups pass through as they are, so a commit that touched one turn
+     leaves every other turn's object, and so its rendered section, alone. */
   const visibleGroups = $derived(
-    groups
+    !filtering ? groups : groups
       .map((group) => {
         const needle = query.trim().toLowerCase();
-        const rows = group.rows.filter(
-          (row) =>
-            row.ordinal === activeOrdinal ||
-            (matchesFilter(row, filter) && matchesQuery(row, needle))
-        );
+        const rows = group.rows.filter((row) => matchesFilter(row, filter) && matchesQuery(row, needle));
         return { ...group, rows };
       })
       .filter((group) => group.rows.length > 0)
@@ -208,22 +188,198 @@
     visibleGroups.reduce((sum, group) => sum + group.rows.length, 0)
   );
 
+  /* By a turn's rows, so a commit to one turn leaves every other turn's lines as they were, and
+     only for turns that are drawn or revealed. */
+  const lineCache = new WeakMap<
+    readonly ReplayLogRow[],
+    { collapsed: Record<string, boolean>; filtering: boolean; lines: LogLine[]; offsets: Map<string, string> }
+  >();
+  function cachedLines(group: TurnLogGroup) {
+    const hit = lineCache.get(group.rows);
+    if (hit && hit.collapsed === collapsedSteps && hit.filtering === filtering) return hit;
+    const lines = logLines(group.rows, collapsedSteps, filtering);
+    const entry = { collapsed: collapsedSteps, filtering, lines, offsets: lineOffsets(lines, group.startedAt) };
+    lineCache.set(group.rows, entry);
+    return entry;
+  }
+  const linesFor = (group: TurnLogGroup): LogLine[] => cachedLines(group).lines;
+
+  const lineTime = (line: LogLine) => (line.kind === "step" ? line.step.startedAt : line.row.timestamp);
+
+  /**
+   * Each line's time as an offset into its turn, by line id, only where it differs from the line
+   * above: a run of events in the same second reads as one time, and the turn's own start, which
+   * the header already says, reads as none. The wall clock is in each row's tip.
+   */
+  function lineOffsets(lines: readonly LogLine[], startedAt: number): Map<string, string> {
+    const offsets = new Map<string, string>();
+    let previous = `+${formatDuration(0)}`;
+    for (const line of lines) {
+      const time = lineTime(line);
+      if (!Number.isFinite(time) || !Number.isFinite(startedAt)) continue;
+      const offset = `+${formatDuration(time - startedAt)}`;
+      if (offset !== previous) offsets.set(line.id, offset);
+      previous = offset;
+    }
+    return offsets;
+  }
+
+  /** The bookkeeping around a turn: a message arriving, a handler or turn opening and closing, a
+      reply streaming. Drawn quiet, so the calls, gates, subagents and errors stand out. */
+  function lifecycle(actor: ReplayActor): boolean {
+    switch (actor) {
+      case "user":
+      case "agent":
+      case "queue":
+      case "system":
+        return true;
+      case "model":
+      case "tool":
+      case "approval":
+      case "reasoning":
+      case "subagent":
+      case "error":
+        return false;
+      default: {
+        const unhandled: never = actor;
+        throw new Error(`Unknown log actor ${String(unhandled)}`);
+      }
+    }
+  }
+
+  /** Signal is drawn bright beside its glyph, lifecycle dim, and the cursor's row never dim. */
+  function lineTone(line: LogLine, active: boolean): "signal" | "routine" | null {
+    if (line.signal) return "signal";
+    if (active || line.kind === "step") return null;
+    return lifecycle(line.row.actor) ? "routine" : null;
+  }
+
+  interface TurnFigure {
+    key: "model" | "tool" | "approval" | "error" | "tokens";
+    value: string;
+    words: string;
+  }
+
+  /** A turn's counts, each read in full by its name and tip; a zero is not drawn. Tokens come last,
+      so they are what fades when the pane is narrower still. */
+  function turnFigures(summary: TurnLogSummary): TurnFigure[] {
+    const figures: Array<TurnFigure | null> = [
+      summary.modelCalls ? { key: "model", value: String(summary.modelCalls), words: plural(summary.modelCalls, "model call") } : null,
+      summary.toolCalls ? { key: "tool", value: String(summary.toolCalls), words: plural(summary.toolCalls, "tool call") } : null,
+      summary.approvals ? { key: "approval", value: String(summary.approvals), words: plural(summary.approvals, "approval") } : null,
+      summary.errors ? { key: "error", value: String(summary.errors), words: plural(summary.errors, "error") } : null,
+      summary.tokens ? { key: "tokens", value: `${compactTokens.format(summary.tokens)} tok`, words: plural(summary.tokens, "token") } : null
+    ];
+    return figures.filter((figure) => figure != null);
+  }
+
+  function figureIcon(key: TurnFigure["key"]): typeof XCircle | null {
+    switch (key) {
+      case "model":
+      case "tool":
+      case "approval":
+        return rowIcon({ kind: key });
+      case "error":
+        return XCircle;
+      case "tokens":
+        return null;
+      default: {
+        const unhandled: never = key;
+        throw new Error(`No icon for turn figure ${String(unhandled)}`);
+      }
+    }
+  }
+
+  /** A step's one figure: a model call's tokens, or the duration of a step with nothing else to
+      say. The duration it does not show goes in its tip, after the wall clock. */
+  function stepCells(step: TraceStep): { figure?: string; note?: string; tip: string } {
+    const duration = step.durationMs ? formatElapsedDuration(step.durationMs) : "";
+    const tokens = step.kind === "model" && step.note ? step.note : "";
+    const note = tokens ? "" : step.note;
+    const figure = tokens || (note ? "" : duration);
+    const tip = [formatTimestamp(step.startedAt), duration && duration !== figure ? `took ${duration}` : ""];
+    return { figure: figure || undefined, note: note || undefined, tip: tip.filter(Boolean).join(" · ") };
+  }
+
+  /** The cursor's row, or the folded head it is inside. */
+  function holdsActive(line: LogLine): boolean {
+    if (line.kind === "step") return line.collapsed && activeRowId != null && line.rowIds.has(activeRowId);
+    return activeRowId === line.row.id || (activeRowId == null && activeOrdinal === line.row.ordinal);
+  }
+
+  const lineElementId = (line: LogLine) => (line.kind === "row" ? `log-row-${line.row.id}` : `log-${line.id}`);
+
   /* The pane's own scroller, and the only box this component is allowed to move.
      See followScroll.ts: `scrollIntoView` was moving the whole pane rail sideways. */
   let itemsElement = $state<HTMLElement | null>(null);
   const follower = scrollFollower(() => itemsElement);
 
+  /* Only the turns in view are in the DOM: a 5,000-message run drew some 20,000 rows. A
+     turn is one item, measured as drawn, so its header and rows keep their markup. */
+  const turns = createVirtualizer<HTMLElement, HTMLElement>({
+    /* Seeded here as well as in the effect below, which SSR never runs. */
+    count: untrack(() => visibleGroups.length),
+    getItemKey: (index) => visibleGroups[index]?.turnNumber ?? index,
+    estimateSize: (index) => 60 + LINE_HEIGHT * (visibleGroups[index]?.rows.length ?? 0),
+    getScrollElement: () => itemsElement,
+    initialRect: { width: 0, height: 800 },
+    gap: 8,
+    overscan: 2
+  });
+  /* Untracked: setOptions publishes the store, which would re-run the effect calling it. */
+  const turnList = () => untrack(() => $turns);
+  const measureTurn: Attachment<HTMLElement> = (node) => turnList().measureElement(node);
+  const turnFocus = windowedFocus(
+    (index) => turnList().scrollToIndex(index, { align: "auto" }),
+    () => visibleGroups.length
+  );
+
+  /* Pre, so a shrunk list's count lands before the turns render and index past its end. */
+  $effect.pre(() => {
+    const count = visibleGroups.length;
+    itemsElement;
+    turnList().setOptions({ count });
+  });
+
+  /* Each drawn turn's rows, by turn number, to reveal a row the turn has not drawn. */
+  const rowLists: Record<number, { scrollToIndex(index: number): void; measure(): void } | null> = {};
+
+  function remeasureLogRow(turnNumber: number): void {
+    rowLists[turnNumber]?.measure();
+    turnList().measure();
+  }
+
+  const activeGroupIndex = () => visibleGroups.findIndex((group) => group.rows.some((row) => row.id === activeRowId));
+
+  function revealActiveTurn(): void {
+    const index = activeGroupIndex();
+    if (index < 0) return;
+    const group = visibleGroups[index];
+    const lineIndex = linesFor(group).findIndex(holdsActive);
+    const revealRow = () => rowLists[group.turnNumber]?.scrollToIndex(lineIndex);
+    if (rowLists[group.turnNumber]) return revealRow();
+    turnList().scrollToIndex(index, { align: "auto" });
+    requestAnimationFrame(revealRow);
+  }
+
   /* Follow the cursor's row; do not open it. Opening it is what made a scrub look
      broken: every tick closed one detail block and opened another, and those blocks are
      tall — on the mock run alone the cursor's `Full details` measures 130..350px, so a
      single tick moved up to 700px of content past the reader while the follower chased a
-     row whose position had just changed under it. The cursor's row is already marked, by
-     `.active-row`, by its active StatusChip, and by the turn group's border; it does not
+     row whose position had just changed under it. The cursor's row is already marked by
+     `.active-row`, with its turn identified by its tinted header; it does not
      also have to be the one row the reader is allowed to have open. LatencyWaterfall
      follows the same playhead and has only ever followed. */
   $effect(() => {
     if (activeRowId == null) return;
-    follower.to(`log-row-${activeRowId}`);
+    /* Untracked: only the cursor moving may scroll the pane. Folding a head or typing a search
+       re-ran this and pulled a reader who had scrolled away back to the cursor. */
+    const target = untrack(() => {
+      const group = visibleGroups[activeGroupIndex()];
+      const line = group && linesFor(group).find(holdsActive);
+      return line ? lineElementId(line) : `log-row-${activeRowId}`;
+    });
+    follower.to(target, revealActiveTurn);
   });
 
   function isRowExpanded(rowId: string): boolean {
@@ -237,74 +393,86 @@
     };
   }
 
-  function actorLabel(row: ReplayLogRow): string {
-    const prefix = row.parentTurnNumber != null ? "Subagent " : "";
-    if (row.parentTurnNumber != null && row.actor === "user") return "Subagent input";
-    if (row.parentTurnNumber != null && row.actor === "agent") return "Subagent output";
-    if (row.actor === "user") return "User";
-    if (row.actor === "agent") return "Agent";
-    if (row.actor === "model") return `${prefix}Model`;
-    if (row.actor === "tool") return `${prefix}${row.toolName || "Tool"}`;
-    if (row.actor === "approval") return `${prefix}Approval`;
-    if (row.actor === "subagent") return "Subagent";
-    if (row.actor === "queue") return `${prefix}Queue`;
-    if (row.actor === "reasoning") return `${prefix}Reasoning`;
-    if (row.actor === "error") return `${prefix}Error`;
-    return `${prefix}System`;
+  function toggleStep(line: Extract<LogLine, { kind: "step" }>): void {
+    collapsedSteps = { ...collapsedSteps, [line.step.id]: !line.collapsed };
   }
 
-  /** The tool an event belongs to, unless the label already names it. */
-  function toolNote(row: ReplayLogRow): string | null {
-    if (!row.toolName) return null;
-    return row.label.toLowerCase().includes(row.toolName.toLowerCase()) ? null : row.toolName;
+  /**
+   * The state a row's glyph draws, or null for a row whose state is only its label. A log
+   * row is one event, not a step still in motion: a "started" row stays in the log long
+   * after its step ends, so no row spins.
+   */
+  function rowGlyph(row: ReplayLogRow): StatusKind | null {
+    if (row.tone === "error" || row.actor === "error") return "error";
+    if (row.tone === "done") return "complete";
+    if (row.tone === "approval") return "approval";
+    return null;
+  }
+
+  /** The tool or model an event belongs to, unless the label already names it. */
+  function rowName(row: ReplayLogRow): string | undefined {
+    const name = row.toolName || (row.actor === "model" ? row.model : null);
+    if (!name) return undefined;
+    return row.label.toLowerCase().includes(name.toLowerCase()) ? undefined : name;
+  }
+
+  const rowFigure = (row: ReplayLogRow) => (row.usage?.total ? `${formatTokens(row.usage.total)} tok` : undefined);
+
+  /** The row's muted context: a status neither the glyph nor its tokens already say, its source. */
+  function rowNote(row: ReplayLogRow, glyph: StatusKind | null, status: string | null): string | undefined {
+    const parts = [
+      row.usage?.total || glyph ? null : status,
+      row.parentTurnNumber != null ? `subagent turn ${row.sourceTurnNumber}` : null
+    ].filter(Boolean);
+    return parts.length ? parts.join(" · ") : undefined;
   }
 
 </script>
 
 <section class="transcript" aria-label="Replay logs">
-  <div class="transcript-head">
-    <h2>Logs</h2>
-    <Badge
-      label={filtering ? `${shownRows}/${totalRows} events` : `${totalRows} events`}
-      tone="neutral"
-    />
-  </div>
-
   <div class="transcript-controls">
-    <div class="filter-chips" role="group" aria-label="Filter logs">
-      {#each filters as item (item.key)}
-        <Chip
-          label={item.label}
-          tone="accent"
-          size="xs"
-          fill="quiet"
-          active={filter === item.key}
-          aria-pressed={filter === item.key}
-          onclick={() => onFilterChange?.(item.key)}
-        />
-      {/each}
+    <div class="filter-row">
+      <div class="filter-chips" role="group" aria-label="Filter logs">
+        {#each filters as item (item.key)}
+          <Chip
+            label={item.label}
+            tone="accent"
+            size="xs"
+            fill="quiet"
+            active={filter === item.key}
+            aria-pressed={filter === item.key}
+            onclick={() => onFilterChange?.(item.key)}
+          />
+        {/each}
+      </div>
+      <span class="event-count" dir="auto">
+        {filtering ? `${shownRows}/${plural(totalRows, "event")}` : plural(totalRows, "event")}
+      </span>
     </div>
-    <div class="search">
-      <Search size={14} />
+    <div class="field">
+      <Search size={14} aria-hidden="true" />
       <input
         type="search"
         placeholder="Search events"
+        bind:this={searchInput}
         bind:value={query}
         aria-label="Search log events"
+        use:inputClearDissolve
+        onkeydown={handleSearchKeydown}
       />
       {#if query}
-        <button class="clear" type="button" aria-label="Clear search" onclick={() => (query = "")}>
-          <X size={13} />
-        </button>
+        <IconButton class="clear-search" label="Clear search" onclick={clearSearch}>
+          <X size={13} aria-hidden="true" />
+        </IconButton>
       {/if}
     </div>
   </div>
 
-  <div class="items" bind:this={itemsElement} onscroll={follower.handleScroll}>
+  <div class="items" tabindex="-1" bind:this={itemsElement} onscroll={follower.handleScroll} {@attach turnFocus}>
     {#if groups.length === 0}
-      <p class="empty">Step through the stream to build the logs.</p>
+      <EmptyState title="Step through the stream to build the logs." />
     {:else if visibleGroups.length === 0}
-      <p class="empty">No events match this filter.</p>
+      <EmptyState title="No events match this filter." />
     {:else}
       <!-- Keyed, because a scrub inserts into the MIDDLE of this list rather than only
            appending to it. Rows arrive in frame order but render grouped by turn, and
@@ -312,45 +480,97 @@
            started, so its row sits here while the turn before it is still filling in
            above. On the mock run 23 of 162 ticks move a row that is already on screen,
            63 of them at once. Unkeyed, Svelte rewrites all 63 in place. -->
-      {#each visibleGroups as group (group.turnNumber)}
+      <div class="turns" role="feed" aria-label="Turns" style:height={`${$turns.getTotalSize()}px`}>
+      {#each $turns.getVirtualItems() as item (item.key)}
+        {@const group = visibleGroups[item.index]}
+        {#if group}
+        {@const summary = group.summary}
+        {@const preview = markdownToText(summary.preview)}
+        {@const figures = turnFigures(summary)}
+        {@const events = plural(summary.eventCount, "event")}
         <section
           class={`turn-group ${activeTurnNumber === group.turnNumber ? "active-turn" : ""}`}
+          role="article"
           aria-label={`Turn ${group.turnNumber}`}
+          aria-posinset={item.index + 1}
+          aria-setsize={visibleGroups.length}
+          tabindex="-1"
+          data-index={item.index}
+          style:top={`${item.start}px`}
+          {@attach measureTurn}
         >
           <header class="turn-head">
-            <div class="turn-summary">
-              <span class="turn-main">
-                <span class="turn-title">Turn {group.turnNumber}</span>
-                <span class="turn-preview">{group.summary.preview}</span>
-              </span>
-              <span class="turn-meta">
-                <time>{formatTimestamp(group.startedAt)}</time>
-              </span>
-            </div>
-
-            <div class="turn-stats" aria-label={`Turn ${group.turnNumber} summary`}>
-              <span>{formatDuration(group.summary.durationSeconds)}</span>
-              <span>{group.summary.eventCount} events</span>
-              {#if group.summary.modelCalls}
-                <span>{group.summary.modelCalls} model</span>
+            <div class="turn-line">
+              <span class="turn-title">Turn {group.turnNumber}</span>
+              {#if Math.round(summary.durationSeconds) > 0}
+                <span class="turn-duration" data-tip={`Took ${formatDuration(summary.durationSeconds)} · ${events}`}>
+                  {formatDuration(summary.durationSeconds)}
+                </span>
               {/if}
-              {#if group.summary.toolCalls}
-                <span>{group.summary.toolCalls} tools</span>
-              {/if}
-              {#if group.summary.approvals}
-                <span>{group.summary.approvals} approvals</span>
-              {/if}
-              {#if group.summary.errors}
-                <span class="error-stat">{group.summary.errors} errors</span>
-              {/if}
-              {#if group.summary.tokens}
-                <span>{formatTokens(group.summary.tokens)} tok</span>
+              {#if Number.isFinite(group.startedAt)}
+                <time
+                  class="turn-time"
+                  datetime={new Date(group.startedAt * 1000).toISOString()}
+                  data-tip={formatTimestamp(group.startedAt, FULL_TIME)}
+                >
+                  {formatTimestamp(group.startedAt, SHORT_TIME)}
+                </time>
               {/if}
             </div>
+            <!-- The tip sits on a box that does not clip, or the fade would clip it too. -->
+            <div class="turn-preview" data-tip={preview}>
+              <span class="fade-end" dir="auto">{preview}</span>
+            </div>
+            {#if figures.length}
+              <div class="turn-stats" role="group" aria-label={`Turn ${group.turnNumber} summary, ${events}`}>
+                {#each figures as figure (figure.key)}
+                  {@const Icon = figureIcon(figure.key)}
+                  <span class={["turn-figure", figure.key]} role="img" aria-label={figure.words} data-tip={figure.words}>
+                    {#if Icon}<Icon size={13} aria-hidden="true" />{/if}
+                    <span class="fade-end">{figure.value}</span>
+                  </span>
+                {/each}
+              </div>
+            {/if}
           </header>
 
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
-            {#each group.rows as row (row.id)}
+            <WindowedRows
+              items={linesFor(group)}
+              getKey={(line) => line.id}
+              scroller={itemsElement}
+              start={item.start}
+              estimateSize={LINE_HEIGHT}
+              bind:this={rowLists[group.turnNumber]}
+            >
+              {#snippet children(line)}
+              {@const active = holdsActive(line)}
+              <!-- Signal is drawn bright beside its glyph; lifecycle is drawn dim, so the eye
+                   lands on the calls, and on what went wrong or is waiting, without the rest
+                   going missing. -->
+              {@const tone = lineTone(line, active)}
+              {@const offset = cachedLines(group).offsets.get(line.id) ?? ""}
+              {#if line.kind === "step"}
+                {@const step = line.step}
+                {@const cells = stepCells(step)}
+                <article id={lineElementId(line)} class={["log-line", "log-step", tone, active && "active-row"]}>
+                  <TraceRow
+                    glyph={STEP_GLYPHS[step.state]}
+                    name={step.name}
+                    mono={step.kind === "tool" || step.kind === "model"}
+                    status={step.status}
+                    figure={cells.figure}
+                    note={cells.note}
+                    meta={offset}
+                    tip={cells.tip}
+                    depth={line.depth}
+                    expandable
+                    expanded={!line.collapsed}
+                    onToggle={() => toggleStep(line)}
+                  />
+                </article>
+              {:else}
+              {@const row = line.row}
               <!-- A seam, drawn where it is rather than as a badge on the rows around
                    it: the log's whole claim is that consecutive lines are consecutive
                    events, and this is the one place that is untrue. -->
@@ -359,115 +579,47 @@
               {/if}
               {@const expanded = isRowExpanded(row.id)}
               {@const status = statusNote(row)}
-              {@const tool = toolNote(row)}
-              {@const active = activeRowId === row.id || (activeRowId == null && activeOrdinal === row.ordinal)}
+              {@const glyph = rowGlyph(row)}
               <article
-                id={`log-row-${row.id}`}
-                class={`log-line ${row.tone} ${row.parentTurnNumber != null ? "nested-subagent" : ""} ${expanded ? "expanded" : ""} ${active ? "active-row" : ""}`}
+                id={lineElementId(line)}
+                class={["log-line", tone, active && "active-row"]}
               >
-                <div
-                  class="actor-icon"
-                  role="img"
-                  aria-label={actorLabel(row)}
-                  title={actorLabel(row)}
+                <TraceRow
+                  {glyph}
+                  glyphLabel={glyph && status ? status : undefined}
+                  prefix={row.label}
+                  name={line.underStep ? undefined : rowName(row)}
+                  mono
+                  figure={rowFigure(row)}
+                  note={rowNote(row, glyph, status)}
+                  meta={offset}
+                  tip={[formatTimestamp(row.timestamp), row.sourceLabel].filter(Boolean).join(" · ")}
+                  depth={line.depth}
+                  expandable={rowHasDetails(row) || row.citations.length > 0}
+                  {expanded}
+                  controls={`log-row-${row.id}-details`}
+                  onToggle={() => toggleRow(row.id)}
                 >
-                  {#if row.actor === "user"}
-                    <UserRound size={15} />
-                  {:else if row.actor === "agent" || row.actor === "subagent"}
-                    <Bot size={15} />
-                  {:else if row.actor === "model"}
-                    <Cpu size={15} />
-                  {:else if row.actor === "reasoning"}
-                    <BrainCircuit size={15} />
-                  {:else if row.actor === "approval"}
-                    {#if row.tone === "done"}
-                      <CheckCircle2 size={15} />
-                    {:else if row.tone === "error"}
-                      <XCircle size={15} />
-                    {:else}
-                      <Clock3 size={15} />
-                    {/if}
-                  {:else if row.actor === "queue"}
-                    <MessageSquarePlus size={15} />
-                  {:else if row.actor === "error"}
-                    <AlertTriangle size={15} />
-                  {:else if row.tone === "done"}
-                    <CheckCircle2 size={15} />
-                  {:else if row.tone === "error"}
-                    <XCircle size={15} />
-                  {:else if row.actor === "system"}
-                    <Radio size={15} />
-                  {:else}
-                    <Wrench size={15} />
-                  {/if}
-                </div>
-
-                <div class="line-content">
-                  <button
-                    class="line-toggle"
-                    type="button"
-                    aria-expanded={expanded}
-                    aria-controls={`log-row-${row.id}-details`}
-                    onclick={() => toggleRow(row.id)}
-                  >
-                    <span class="line-toggle-main">
-                      <span class="line-meta">
-                        <Badge label={row.label} tone={row.tone} />
-                        {#if tool}
-                          <span class="line-tool">{tool}</span>
-                        {/if}
-                        {#if status}
-                          <StatusChip
-                            label={status}
-                            kind={statusKind(row)}
-                            compact
-                            active={row.ordinal === activeOrdinal}
-                          />
-                        {/if}
-                        {#if row.parentTurnNumber != null}
-                          <span class="source-turn" title={row.sourceLabel ?? undefined}>
-                            subagent turn {row.sourceTurnNumber}
-                          </span>
-                        {/if}
-                        <time>{formatTimestamp(row.timestamp)}</time>
-                      </span>
-                    </span>
-                    <span class="row-toggle-icon" aria-hidden="true">
-                      {#if expanded}
-                        <ChevronDown size={15} />
-                      {:else}
-                        <ChevronRight size={15} />
-                      {/if}
-                    </span>
-                  </button>
-
-                  {#if expanded}
                     {@const primary = primaryPayload(row)}
                     {@const fullDetail = fullLogDetail(row)}
                     {@const ids = rowIdentifiers(row)}
+                    {@const images = toolImages(row.output, row.toolName)}
                     <div class="line-details" id={`log-row-${row.id}-details`}>
+                      <TraceImages {images} />
                       {#if primary}
                         <section class="primary-payload" aria-label={`${primary.label} preview`}>
-                          <Copyable value={primary.text} label={`Copy ${primary.label}`}>
-                            <span class="payload-label">{primary.label}</span>
-                          </Copyable>
-                          {#if primary.kind === "text"}
-                            <p>{primary.text}</p>
-                          {:else}
-                            <pre class="primary-pre">{primary.text}</pre>
-                          {/if}
+                          <span class="payload-label">{primary.label}</span>
+                          <LongContent id={`log-${row.id}-${primary.label}`} text={primary.text} label={`${primary.label} preview`} onResize={() => remeasureLogRow(group.turnNumber)}>
+                            <Copyable block value={primary.text} label={`Copy ${primary.label}`}>
+                              <pre class="primary-pre">{primary.text}</pre>
+                            </Copyable>
+                          </LongContent>
                         </section>
                       {/if}
                       {#if row.citations.length}
                         <div class="citations">
-                          {#each row.citations as citation, i (i)}
-                            <a
-                              href={citation.custom_metadata?.deep_url ?? citation.document_uri ?? "#"}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {citation.custom_metadata?.heading ?? citation.file_name ?? "Source"}
-                            </a>
+                          {#each citationLinks(row.citations) as link (link.number)}
+                            <a href={link.url} target="_blank" rel="noreferrer" aria-label={citationAriaLabel(link)}>{link.title}</a>
                           {/each}
                         </div>
                       {/if}
@@ -478,7 +630,7 @@
                               <dt>{id.label}</dt>
                               <dd>
                                 <Copyable value={id.value} label={`Copy ${id.label} ID`}>
-                                  <code title={id.value}>{id.value}</code>
+                                  <code class="fade-end" title={id.value}>{id.value}</code>
                                 </Copyable>
                               </dd>
                             </div>
@@ -486,19 +638,23 @@
                         </dl>
                       {/if}
                       <section class="full-details" aria-label="Full details">
-                        <Copyable value={fullDetail} label="Copy full details">
-                          <span class="payload-label">Full details</span>
-                        </Copyable>
-                        <pre>{fullDetail}</pre>
+                        <LongContent id={`log-${row.id}-details`} text={fullDetail} label="Full details" onResize={() => remeasureLogRow(group.turnNumber)}>
+                          <Copyable block value={fullDetail} label="Copy full details">
+                            <pre>{fullDetail}</pre>
+                          </Copyable>
+                        </LongContent>
                       </section>
                     </div>
-                  {/if}
-                </div>
+                </TraceRow>
               </article>
-            {/each}
+              {/if}
+              {/snippet}
+            </WindowedRows>
           </div>
         </section>
+        {/if}
       {/each}
+      </div>
     {/if}
   </div>
 </section>
@@ -514,24 +670,33 @@
     overflow: hidden;
   }
 
-  .transcript-head {
+  /* The chips give way first; the count only drops to its own line when even the
+     widest chip beside it would cut it short. */
+  .filter-row {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 12px;
-    padding: 14px 14px 10px;
-    border-bottom: 1px solid var(--border);
+    gap: 8px;
   }
 
-  h2 {
-    margin: 0;
-    font-size: var(--font-lg);
+  .filter-row .filter-chips {
+    flex: 1 1 0;
+  }
+
+  /* A figure, not a control, so no box: the turn header's figures read the same way. */
+  .event-count {
+    line-height: var(--control-height-xs);
+    color: var(--text-3);
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .transcript-controls {
     display: grid;
     gap: 8px;
-    padding: 10px 12px;
+    padding: var(--pane-inset);
     border-bottom: 1px solid var(--border);
   }
 
@@ -544,158 +709,133 @@
   /* A row you type into, so the lg box: the same token and the same 34px as the
      session search in SessionControls. The height lives on the box rather than
      on the input, which had been sitting on a literal 30px. */
-  .search {
-    height: var(--control-height-lg);
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-0);
-    color: var(--text-3);
-  }
-
-  .search input {
-    flex: 1;
-    min-width: 0;
-    border: 0;
-    background: transparent;
-    color: var(--text-1);
-    font-size: var(--font-md);
-    outline: none;
-  }
-
-  .search input::placeholder {
-    color: var(--text-3);
-  }
-
-  .search .clear {
-    display: inline-flex;
-    padding: 2px;
-    border: 0;
-    border-radius: var(--radius-xs);
-    color: var(--text-3);
-    background: transparent;
-    cursor: pointer;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .search .clear:hover {
-      color: var(--text-1);
-    }
-  }
-
   .items {
     min-height: 0;
     overflow-y: auto;
-    padding: 10px;
+    scrollbar-gutter: stable;
+    padding: var(--pane-inset);
+    padding-inline-end: calc(var(--pane-inset) - var(--scrollbar-size));
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .turn-group {
+  .turns {
+    position: relative;
     flex: 0 0 auto;
+  }
+
+  /* The pane scroller clips at its edge, so the ring goes inside. */
+  .turn-group:focus-visible {
+    outline-offset: -2px;
+  }
+
+  /* A turn is not something to press, so no card: a section ruled off from the next, as the
+     waterfall's turn rows are. */
+  .turn-group {
+    position: absolute;
+    inset-inline: 0;
     display: flex;
     flex-direction: column;
-    min-height: 58px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    background: color-mix(in srgb, var(--surface-1) 75%, var(--surface-0));
-    transition:
-      border-color var(--duration-fast) var(--ease-ui),
-      transform var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui);
+    padding-block-end: var(--gap-md);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   }
 
-  .turn-group.active-turn {
-    border-color: var(--border-strong);
-    transform: translateY(-1px);
-    background: color-mix(in srgb, var(--accent) 14%, var(--surface-0));
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .turn-group:hover {
-      border-color: var(--border-strong);
-      transform: translateY(-1px);
-      background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
-    }
-  }
-
+  /* Three lines at every width, none of them wrapping: the turn, its time and how long it took;
+     the message, faded at its end; the counts. Every word that only repeats what an icon or
+     the rows below already say is in a tip. Inset like a row's glyph, so the turn's words and
+     its rows' glyphs start at one x. */
   .turn-head {
-    z-index: 1;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    font-weight: 650;
-  }
-
-  .turn-summary {
-    width: 100%;
-    min-height: 42px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 7px 9px 5px;
-    color: inherit;
-  }
-
-  .turn-main {
-    min-width: 0;
     display: grid;
     gap: 2px;
-  }
-
-  .turn-title {
-    color: var(--text-1);
-    font-size: var(--font-md);
-  }
-
-  .turn-preview {
-    max-width: 275px;
-    overflow: hidden;
+    padding: 6px var(--gap-md) 8px;
     color: var(--text-3);
+    font-size: var(--font-sm);
     font-weight: 500;
-    text-overflow: ellipsis;
+  }
+
+  /* The turn holding the cursor, by its header; the cursor's own row carries the same tint. */
+  .turn-group.active-turn .turn-head {
+    background: var(--selected-bg);
+  }
+
+  .turn-line {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
     white-space: nowrap;
   }
 
-  .turn-meta {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
+  .turn-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-1);
+    font-size: var(--font-md);
+    font-weight: 650;
+  }
+
+  .turn-duration,
+  .turn-time {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .turn-time {
+    margin-inline-start: auto;
+  }
+
+  .turn-preview {
+    min-width: 0;
+    display: flex;
+  }
+
+  .turn-preview > span {
     min-width: 0;
   }
 
-  .turn-meta time {
-    color: var(--text-3);
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-
+  /* Figures nobody can press, so icons and numbers in a line rather than boxes. The counts never
+     give way; the token total, last, fades instead of wrapping. */
   .turn-stats {
+    min-width: 0;
     display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    padding: 0 9px 8px;
-    color: var(--text-3);
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 12px;
     font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
-  .turn-stats span {
-    padding: 2px 6px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-chip);
-    background: var(--surface-0);
+  /* A number in any language, so isolated left to right beside its icon. */
+  .turn-figure {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    direction: ltr;
+    unicode-bidi: isolate;
   }
 
-  .turn-stats .error-stat {
-    color: var(--error);
+  .turn-figure.tokens {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .turn-figure > span {
+    min-width: 0;
+  }
+
+  .turn-figure.model :global(svg) { color: var(--model); }
+  .turn-figure.tool :global(svg) { color: var(--tool); }
+  .turn-figure.approval :global(svg) { color: var(--live); }
+  .turn-figure.error { color: var(--error); }
+
+  /* Each line's offset into its turn, at the end of the row: one width for anything under a
+     minute, right-aligned so longer ones line up too, and never cut. */
+  .log-line :global(.trace-meta) {
+    min-width: 5ch;
+    white-space: nowrap;
   }
 
   .log-lines {
@@ -703,192 +843,61 @@
     overflow: visible;
   }
 
-  .log-line {
-    display: grid;
-    grid-template-columns: 24px minmax(0, 1fr);
-    gap: 8px;
-    padding: 8px 9px;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-    background: transparent;
-  }
-
   /* Same tone and the same words as the waterfall's seam, so the two surfaces are
      read as one fact about the run rather than two coincidences. */
   .history-gap {
     margin: 0;
-    padding: 7px 9px;
+    padding: 7px var(--gap-md);
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-    border-left: 2px solid var(--error);
     background: color-mix(in srgb, var(--error) 8%, transparent);
     color: var(--text-2);
     font-size: var(--font-xs);
     line-height: 1.45;
   }
 
-  .log-line.nested-subagent {
-    position: relative;
-    margin-left: 18px;
-    padding-left: 12px;
-    border-left: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
-    background: color-mix(in srgb, var(--accent) 5%, transparent);
-  }
-
-  .log-line.nested-subagent::before {
-    content: "";
-    position: absolute;
-    left: -1px;
-    top: 19px;
-    width: 10px;
-    border-top: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
-  }
-
-  .log-line:last-child {
-    border-bottom: 0;
-  }
-
   .log-line.active-row {
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    background: var(--selected-bg);
   }
 
-  .actor-icon {
-    width: 24px;
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-2);
-    background: var(--surface-0);
-  }
-
-  /* Full-strength hue on the glyph, now that most rows no longer carry a second
-     chip's wash to say the same thing. */
-  .log-line.agent .actor-icon { color: var(--accent); }
-  .log-line.model .actor-icon { color: var(--model); }
-  .log-line.tool .actor-icon { color: var(--tool); }
-  .log-line.approval .actor-icon,
-  .log-line.queue .actor-icon { color: var(--queue); }
-  .log-line.done .actor-icon { color: var(--success); }
-  .log-line.error .actor-icon { color: var(--error); }
-
-  .line-content {
-    min-width: 0;
-  }
-
-  .line-toggle {
-    width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: start;
-    padding: 0;
-    border: 0;
-    color: inherit;
-    background: transparent;
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-  }
-
-  .line-toggle:focus-visible {
-    outline: 2px solid var(--focus-ring);
-    outline-offset: 3px;
-    border-radius: var(--radius-xs);
-  }
-
-  .line-toggle-main {
-    min-width: 0;
-    display: grid;
-  }
-
-  .row-toggle-icon {
-    width: 20px;
-    height: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 1px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-3);
-    background: var(--surface-0);
-  }
-
-  .log-line.expanded .row-toggle-icon,
-  .line-toggle:focus-visible .row-toggle-icon {
+  .log-line.signal :global(:is(.trace-prefix, strong)) {
     color: var(--text-1);
-    border-color: var(--border-strong);
   }
 
-  @media (hover: hover) and (pointer: fine) {
-    .log-line:hover .row-toggle-icon {
-      color: var(--text-1);
-      border-color: var(--border-strong);
-    }
-  }
-
-  .line-meta {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    flex-wrap: nowrap;
-    gap: 6px;
-    overflow: hidden;
+  .log-line.routine :global(:is(.trace-prefix, strong)) {
     color: var(--text-3);
-    font-size: var(--font-sm);
-    font-variant-numeric: tabular-nums;
   }
 
-  .log-line.expanded .line-meta {
-    flex-wrap: wrap;
-  }
-
-  /* The kind and status chips keep their words; only the tool name gives way. */
-  .line-meta > :global(.chip) {
-    flex-shrink: 0;
-  }
-
-  /* An identifier, so it stays mono and unshouted, as tool names are elsewhere.
-     It shrinks before the label does: `reprice_ro…` still reads as the tool it
-     names, which a truncated label does not. */
-  .line-tool {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-3);
-    font-family: var(--font-mono);
-    font-size: var(--figure-size);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .source-turn {
-    flex: 0 0 auto;
-    padding: 1px 5px;
-    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
-    border-radius: var(--radius-chip);
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 9%, transparent);
-    font-size: var(--font-xs);
-  }
-
-  /* Pushed to the right edge, where a run of events that really did happen in
-     the same second reads as a column rather than as the same word repeated
-     down the middle of every row. */
-  .line-meta time {
-    flex: 0 0 auto;
-    margin-left: auto;
+  .log-line.routine :global(:is(.trace-note, .trace-meta)) {
     color: var(--text-4);
-    font-family: var(--font-mono);
-    font-size: var(--figure-size);
-    font-variant-numeric: tabular-nums;
   }
 
+  /* The chat trace's row at the log's density: the whole row is the button, at the
+     LINE_HEIGHT WindowedRows estimates for it, with no rule between rows, and the event's
+     label reads as words, not as a muted prefix. The pane scroller clips, so the focus ring
+     goes inside the row. */
+  .log-line :global(.trace-row) {
+    gap: 0;
+  }
+
+  .log-line :global(.trace-line) {
+    min-height: var(--control-height);
+    padding: var(--gap-xs) var(--gap-md);
+  }
+
+  .log-line :global(.trace-line:focus-visible) {
+    outline-offset: -2px;
+  }
+
+  .log-line :global(.trace-prefix) {
+    color: var(--text-2);
+  }
+
+  /* At the turn header's inset whatever the row's depth (TraceRow steps in only its line), so a
+     deep row's details get the turn's full width. */
   .line-details {
     display: grid;
     gap: 8px;
-    margin-top: 8px;
+    padding: 0 var(--gap-md) var(--gap-md);
   }
 
   p {
@@ -914,7 +923,6 @@
   /* Capped like CallInput's full input, so a traceback scrolls inside its block instead of
      filling the pane. */
   pre {
-    max-height: 320px;
     margin: 0;
     padding: 8px;
     border-radius: var(--radius-sm);
@@ -959,16 +967,12 @@
 
   .row-ids code {
     min-width: 0;
-    overflow: hidden;
     color: var(--text-2);
     font-family: var(--font-mono);
     font-size: var(--font-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .full-details pre {
-    margin-top: 6px;
     color: var(--text-2);
     /* A bare `pre` clips rather than scrolls in a pane this narrow, so anything past the
        fold was silently gone. AgentChatPanel's equivalent block already wraps; this one
@@ -988,19 +992,5 @@
     font-size: var(--font-sm);
     text-decoration: none;
     border-bottom: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
-  }
-
-  .empty {
-    color: var(--text-3);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .turn-group {
-      transition: none;
-    }
-
-    .turn-group.active-turn {
-      transform: none;
-    }
   }
 </style>

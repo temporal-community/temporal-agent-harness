@@ -166,6 +166,12 @@
     cursor: pointer;
   }
 
+  /* Over the fade while collapsed; open, there is no fade, so it takes a line of its own rather
+     than covering the content's last line. */
+  .expanded .long-content-toggle {
+    margin-top: 0;
+  }
+
   @media (hover: hover) and (pointer: fine) {
     .long-content-toggle:hover {
       color: var(--text-1);
