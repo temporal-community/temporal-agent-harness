@@ -7,7 +7,10 @@ js_library(
     srcs = ["AgentChatPanel.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":PendingBannerStack",
         ":PendingCallbackCard",
+        ":PendingCard",
+        ":PendingClientToolCard",
         ":ReplyStatus",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
@@ -157,10 +160,27 @@ js_library(
 )
 
 js_library(
+    name = "PendingBannerStack",
+    srcs = ["PendingBannerStack.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":QueuePager",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/motion:stackAnswer",
+        "//typescript/apps/ui/src/lib/motion:toastClose",
+    ],
+)
+
+js_library(
     name = "PendingCallbackCard",
     srcs = ["PendingCallbackCard.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":PendingCard",
+        ":QueuePager",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
         "//typescript/apps/ui:node_modules/svelte",
@@ -168,6 +188,38 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
         "//typescript/apps/ui/src/lib/components/chat:schemaForm",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
+    ],
+)
+
+js_library(
+    name = "PendingCard",
+    srcs = ["PendingCard.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":CallInput",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)
+
+js_library(
+    name = "PendingClientToolCard",
+    srcs = ["PendingClientToolCard.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":PendingCard",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+    ],
+)
+
+js_library(
+    name = "QueuePager",
+    srcs = ["QueuePager.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
     ],
 )
 
@@ -213,6 +265,7 @@ vitest_test(
     deps = [
         ":AgentChatPanel",
         ":PendingCallbackCard",
+        ":PendingCard",
         ":ReplyStatus",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib:highlight",
@@ -261,6 +314,24 @@ vitest_test(
 )
 
 vitest_test(
+    name = "PendingBannerStack_test",
+    src = "PendingBannerStack.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        ":PendingBannerStack",
+        ":PendingCallbackCard",
+        ":PendingCard",
+        ":QueuePager",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/motion:stackAnswer",
+        "//typescript/apps/ui/src/lib/motion:toastClose",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:pendingRequests",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "TranscriptPanel_test",
     src = "TranscriptPanel.test.mjs",
     deps = [
@@ -295,6 +366,8 @@ vitest_test(
     src = "chatLayout.test.mjs",
     deps = [
         ":AgentChatPanel",
+        ":PendingBannerStack",
+        ":PendingCard",
         ":ReplyStatus",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",

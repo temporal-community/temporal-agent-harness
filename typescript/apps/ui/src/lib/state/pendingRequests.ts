@@ -5,19 +5,26 @@ export interface PendingRequestCounts {
   responses: number;
 }
 
+/** A request's identity: the agent that asked plus its tool id, since tool ids are only unique
+ * within one agent. Rows without a workflow id are the session parent's. */
+export function requestKey(row: ReplayLogRow, parentWorkflowId: string): string | null {
+  return row.toolId ? `${row.workflowId ?? parentWorkflowId}:${row.toolId}` : null;
+}
+
 /** Tool approvals and callbacks the agent is blocked on: requested and not yet resolved. */
-export function countPendingRequests(rows: ReplayLogRow[]): PendingRequestCounts {
-  const resolved = new Set<string>();
-  for (const row of rows) {
-    if (row.toolId && (row.event === "tool_approval_resolved" || row.event === "callback_resolved")) {
-      resolved.add(`${row.event}:${row.toolId}`);
-    }
-  }
-  const open = (requested: string, resolution: string) =>
-    rows.filter(
-      (row) =>
-        row.event === requested && row.toolId != null && !resolved.has(`${resolution}:${row.toolId}`)
-    ).length;
+export function countPendingRequests(
+  rows: ReplayLogRow[],
+  parentWorkflowId: string
+): PendingRequestCounts {
+  const open = (requested: string, resolution: string) => {
+    const resolved = new Set<string | null>();
+    for (const row of rows) if (row.event === resolution) resolved.add(requestKey(row, parentWorkflowId));
+    return rows.filter((row) => {
+      if (row.event !== requested) return false;
+      const key = requestKey(row, parentWorkflowId);
+      return key != null && !resolved.has(key);
+    }).length;
+  };
   return {
     approvals: open("tool_approval_requested", "tool_approval_resolved"),
     responses: open("callback_requested", "callback_resolved")

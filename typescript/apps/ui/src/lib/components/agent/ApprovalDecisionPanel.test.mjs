@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
 import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
+import { PANE_META } from "../../panes/registry.ts";
 import ApprovalDecisionPanel, { traceText } from "./ApprovalDecisionPanel.svelte";
+
+const source = readFileSync(new URL("./ApprovalDecisionPanel.svelte", import.meta.url), "utf8");
 
 const baseDecision = {
   key: "wf-root:e1",
@@ -124,6 +128,57 @@ describe("the approval decision panel", () => {
       );
     }
     assert.match(body, /aria-label="Copy decision trace"/);
+  });
+
+  /* Two columns at rest would make this pane outweigh the log beside it even when empty, so
+     it rests at the log's width and splits only once a reader widens it. */
+  it("rests at its siblings' width and goes two-column only in a wide container", () => {
+    assert.equal(PANE_META.decisions.defaultSize, PANE_META.logs.defaultSize);
+    assert.equal(PANE_META.decisions.minSize, PANE_META.logs.minSize);
+
+    const twoColumn = /grid-template-columns:\s*minmax\(176px/g;
+    assert.equal((source.match(twoColumn) ?? []).length, 1, "one two-column template");
+    const wide = source.indexOf("@container approval-panel (min-width: 640px)");
+    assert.ok(wide !== -1 && source.search(twoColumn) > wide, "only inside the wide query");
+
+    for (const selector of ["\\.trace-title h3", "\\.audit-meta dd", "\\.branch-label"]) {
+      assert.match(source, new RegExp(`${selector} \\{[^}]*overflow-wrap:\\s*anywhere`), selector);
+    }
+  });
+
+  /* A hairline or washed box means "press me"; a verdict is a status, so it is a coloured
+     word, and the row that is pressable carries the full tool name it may truncate. */
+  it("shows verdicts as plain status words and tips the full tool name", () => {
+    const longName = `run_travel_concierge_${"x".repeat(80)}`;
+    const body = stripComments(html([{ ...baseDecision, toolName: longName }]));
+    const plainWord = (word) =>
+      new RegExp(`class="chip xs quiet success toned dense[^"]*"[^>]*>\\s*<span[^>]*>${word}<`);
+    const signal = body.slice(body.indexOf('class="evaluation-signal')).split("</button>")[0];
+    assert.match(signal, plainWord("Approve"));
+    const head = body.slice(body.indexOf('class="trace-head')).split("</header>")[0];
+    assert.match(head, plainWord("Auto-approved"));
+    assert.doesNotMatch(signal + head, /\bfilled\b/);
+
+    const row = body.match(/<button[^>]*class="evaluation\b[^>]*>/)[0];
+    assert.match(row, new RegExp(`data-tip="${longName}"`));
+    assert.match(body, new RegExp(`<span class="tool-name[^"]*">${longName}</span>`));
+  });
+
+  /* A long run judged thousands of calls, and every one was a 9-node button in the DOM. */
+  it("draws only the decisions in view, newest first and still selected", () => {
+    const many = Array.from({ length: 3_000 }, (_, i) => ({
+      ...baseDecision,
+      key: `wf-root:e${i}`,
+      evaluationId: `e${i}`,
+      toolName: `tool_${i}`
+    }));
+    const body = stripComments(html(many));
+    const rows = body.match(/<button[^>]*class="evaluation\b[^>]*>/g) ?? [];
+
+    assert.ok(rows.length > 0 && rows.length <= 60, `${rows.length} rows drawn for 3,000 decisions`);
+    assert.match(rows[0], /aria-pressed="true"[^>]*data-index="0"[^>]*data-tip="tool_2999"/);
+    assert.match(body, /<span class="list-count[^"]*">3000</);
+    assert.match(body, /class="evaluation-items[^"]*" tabindex="-1"/, "the list takes focus back");
   });
 
   it("copies the decision trace as the evaluator, verdict and rationale", () => {

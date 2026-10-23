@@ -1,9 +1,27 @@
 <script lang="ts" module>
+  import type { ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import {
+    STATUS_TONES,
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
   import type {
     ApprovalDecision,
     ApprovalProbabilities,
     ApprovalVerdict
   } from "$lib/state/approvalDecisionTree";
+
+  /** The one verdict-to-hue map: the status words, the tree and the pane header all read it. */
+  const VERDICT_STATUS: Record<ApprovalVerdict, StatusKind> = {
+    approve: "complete",
+    deny: "error",
+    escalate: "approval"
+  };
+
+  export function verdictTone(verdict: ApprovalVerdict): ChipTone {
+    return STATUS_TONES[VERDICT_STATUS[verdict]];
+  }
+
+  const verdictColor = (verdict: ApprovalVerdict) => `var(--${verdictTone(verdict)})`;
 
   function percent(value: number): string {
     const scaled = value * 100;
@@ -46,9 +64,14 @@
 </script>
 
 <script lang="ts">
-  import { CheckCircle2, GitBranch, ShieldAlert, XCircle } from "@lucide/svelte";
-  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import { CheckCircle2, ShieldAlert, XCircle } from "@lucide/svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
+  import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import WindowedRows from "$lib/components/primitives/WindowedRows.svelte";
+  import { windowedFocus } from "$lib/components/primitives/windowedFocus";
 
   interface Props {
     decisions: ApprovalDecision[];
@@ -65,8 +88,15 @@
 
   let { decisions, ahead = 0, onJumpToLive }: Props = $props();
   let chosenKey = $state<string | null>(null);
+  let listElement = $state<HTMLElement | null>(null);
+  let rowList = $state<{ scrollToIndex(index: number): void } | null>(null);
 
   const newestFirst = $derived([...decisions].reverse());
+  /* A long run judges thousands of calls; only the rows in view are drawn. */
+  const decisionFocus = windowedFocus(
+    (index) => rowList?.scrollToIndex(index),
+    () => newestFirst.length
+  );
   /* Null follows the live edge; a deliberate selection stays put until that
      decision disappears because the cursor or session moved behind it. */
   const current = $derived(
@@ -77,12 +107,6 @@
     if (verdict === "approve") return "Approve";
     if (verdict === "deny") return "Deny";
     return "Escalate";
-  }
-
-  function verdictTone(verdict: ApprovalVerdict): ChipTone {
-    if (verdict === "approve") return "success";
-    if (verdict === "deny") return "error";
-    return "live";
   }
 
   function probability(
@@ -97,30 +121,27 @@
   }
 </script>
 
-<section class="approval-decisions" aria-label="Automatic approval decisions">
+<section class="approval-decisions" class:empty={!current} aria-label="Automatic approval decisions">
   {#if !current}
-    <div class="empty">
-      <GitBranch size={22} aria-hidden="true" />
-      {#if ahead > 0}
-        <h3>
-          {ahead} approval {ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor
-        </h3>
+    {#if ahead > 0}
+      <EmptyState
+        title={`${ahead} approval ${ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor`}
+      >
         <p>
           This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
           is parked before {ahead === 1 ? "it" : "them"} — so there is nothing to show
           <em>yet</em>.
         </p>
-        <button type="button" class="jump" onclick={onJumpToLive}>
-          Jump to latest step
-        </button>
-      {:else}
-        <h3>No completed approval decisions</h3>
+        <Chip label="Jump to latest step" tone="accent" size="xs" onclick={onJumpToLive} />
+      </EmptyState>
+    {:else}
+      <EmptyState title="No completed approval decisions">
         <p>
           Completed <code>auto_approval_evaluation_ended</code> events will appear here as
           the replay cursor reaches them.
         </p>
-      {/if}
-    </div>
+      </EmptyState>
+    {/if}
   {:else}
     <div class="decision-layout">
       <nav class="evaluation-list" aria-label="Completed approval evaluations">
@@ -128,33 +149,46 @@
           <span class="kicker">Completed</span>
           <span class="list-count">{decisions.length}</span>
         </div>
-        <div class="evaluation-items">
-          {#each newestFirst as decision (decision.key)}
-            <button
-              type="button"
-              class="evaluation"
-              class:chosen={decision.key === current.key}
-              aria-pressed={decision.key === current.key}
-              onclick={() => (chosenKey = decision.key)}
-            >
-              <span class="evaluation-main">
-                <span class="tool-name">{decision.toolName}</span>
-                <span class="evaluation-meta">
-                  turn {decision.turnNumber} · {decision.agentLabel}
+        <div class="evaluation-items" tabindex="-1" bind:this={listElement} {@attach decisionFocus}>
+          <WindowedRows
+            items={newestFirst}
+            getKey={(decision) => decision.key}
+            scroller={listElement}
+            start={0}
+            estimateSize={58}
+            gap={1}
+            bind:this={rowList}
+          >
+            {#snippet children(decision, index)}
+              <button
+                type="button"
+                class="evaluation"
+                class:chosen={decision.key === current.key}
+                aria-pressed={decision.key === current.key}
+                data-index={index}
+                data-tip={decision.toolName}
+                data-tip-below
+                onclick={() => (chosenKey = decision.key)}
+              >
+                <span class="evaluation-main">
+                  <span class="tool-name">{decision.toolName}</span>
+                  <span class="evaluation-meta">
+                    turn {decision.turnNumber} · <bdi>{decision.agentLabel}</bdi>
+                  </span>
                 </span>
-              </span>
-              <span class="evaluation-signal">
-                {#if decision.confidence !== null}
-                  <span class="confidence-figure">{percent(decision.confidence)}</span>
-                {/if}
-                <Chip
-                  label={verdictLabel(decision.verdict)}
-                  tone={verdictTone(decision.verdict)}
-                  size="xs"
-                />
-              </span>
-            </button>
-          {/each}
+                <span class="evaluation-signal">
+                  {#if decision.confidence !== null}
+                    <span class="confidence-figure">{percent(decision.confidence)}</span>
+                  {/if}
+                  <StatusChip
+                    label={verdictLabel(decision.verdict)}
+                    kind={VERDICT_STATUS[decision.verdict]}
+                    plain
+                  />
+                </span>
+              </button>
+            {/snippet}
+          </WindowedRows>
         </div>
       </nav>
 
@@ -166,21 +200,19 @@
             </Copyable>
             <h3>{current.toolName}</h3>
             <p class="trace-meta">
-              {current.evaluator}, turn {current.turnNumber}{#if current.role === "subagent"}
-                , {current.agentLabel}{/if}
+              <bdi>{current.evaluator}</bdi>, turn {current.turnNumber}{#if current.role === "subagent"}
+                , <bdi>{current.agentLabel}</bdi>{/if}
             </p>
           </div>
-          <Chip
-            label={outcomeLabel(current.verdict)}
-            tone={verdictTone(current.verdict)}
-            size="xs"
-            toned
-          />
+          <StatusChip label={outcomeLabel(current.verdict)} kind={VERDICT_STATUS[current.verdict]} plain />
         </header>
 
         <ol class="decision-tree" aria-label="Decision stages">
           {#each current.stages as stage (stage.kind)}
-            <li class={`stage ${stage.kind}`}>
+            <li
+              class={`stage ${stage.kind}`}
+              style:--outcome-color={stage.kind === "outcome" ? verdictColor(stage.verdict) : undefined}
+            >
               <span class="stage-marker" aria-hidden="true"></span>
 
               {#if stage.kind === "confidence"}
@@ -246,7 +278,7 @@
                       <p class="kicker">Evaluator verdict</p>
                       <h4>Which policy branch applies?</h4>
                     </div>
-                    <strong class={`verdict-word ${stage.verdict}`}>
+                    <strong class="verdict-word" style:color={verdictColor(stage.verdict)}>
                       {verdictLabel(stage.verdict)}
                     </strong>
                   </div>
@@ -256,8 +288,9 @@
                       {@const typedVerdict = branchVerdict as ApprovalVerdict}
                       {@const branchProbability = probability(stage.probabilities, typedVerdict)}
                       <div
-                        class={`branch ${typedVerdict}`}
+                        class="branch"
                         class:taken={stage.verdict === typedVerdict}
+                        style:--branch-color={verdictColor(typedVerdict)}
                         data-verdict={typedVerdict}
                       >
                         <span class="branch-label">
@@ -317,10 +350,7 @@
                   </div>
                 </section>
               {:else}
-                <section
-                  class={`decision-node outcome-node ${stage.verdict}`}
-                  data-verdict={stage.verdict}
-                >
+                <section class="decision-node outcome-node" data-verdict={stage.verdict}>
                   <div class="outcome-icon" aria-hidden="true">
                     {#if stage.verdict === "approve"}
                       <CheckCircle2 size={20} />
@@ -334,7 +364,7 @@
                     <p class="kicker">Final verdict</p>
                     <h4>{outcomeLabel(stage.verdict)}</h4>
                     {#if current.reason}
-                      <p class="reason">{current.reason}</p>
+                      <div class="reason"><MarkdownMessage text={current.reason} compact /></div>
                     {/if}
                   </div>
                 </section>
@@ -392,14 +422,21 @@
     min-width: 0;
     min-height: 0;
     height: 100%;
-    padding: var(--gutter);
+    padding: var(--pane-inset);
     background: var(--surface-1);
     overflow: hidden;
   }
 
+  .approval-decisions.empty {
+    overflow: auto;
+  }
+
+  /* Stacked at the pane's resting width; side by side only once both columns
+     fit, so the panel never asks the rail for more room than its siblings. */
   .decision-layout {
     display: grid;
-    grid-template-columns: minmax(176px, 0.62fr) minmax(340px, 1.38fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(132px, 0.5fr) minmax(0, 1.5fr);
     gap: var(--gutter);
     min-width: 0;
     min-height: 0;
@@ -439,10 +476,9 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* The 1px between rows is WindowedRows' gap over this background. */
   .evaluation-items {
-    display: grid;
-    align-content: start;
-    gap: 1px;
+    position: relative;
     min-height: 0;
     overflow: auto;
     background: var(--border);
@@ -450,6 +486,7 @@
 
   .evaluation {
     display: grid;
+    width: 100%;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--gap-md);
@@ -458,7 +495,7 @@
     border: 0;
     background: var(--surface-1);
     color: var(--text-1);
-    text-align: left;
+    text-align: start;
     cursor: pointer;
     transition:
       background var(--duration-fast) var(--ease-out),
@@ -470,9 +507,9 @@
     transform: scale(0.99);
   }
 
+  /* Over its own surface: the gaps between rows are the list's background. */
   .evaluation.chosen {
-    background: var(--surface-2);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, var(--border));
+    background: linear-gradient(var(--selected-bg), var(--selected-bg)), var(--surface-1);
   }
 
   .evaluation:focus-visible {
@@ -490,6 +527,12 @@
   .evaluation-main {
     display: grid;
     gap: var(--gap-xs);
+  }
+
+  /* An Arabic name keeps its own order without reordering what sits beside it. */
+  .tool-name,
+  .trace-title h3 {
+    unicode-bidi: isolate;
   }
 
   .tool-name {
@@ -587,20 +630,8 @@
   }
 
   .stage.outcome .stage-marker {
-    border-color: color-mix(in srgb, var(--outcome-color, var(--accent)) 55%, var(--border));
-    background: var(--outcome-color, var(--accent));
-  }
-
-  .stage.outcome:has(.outcome-node.approve) .stage-marker {
-    --outcome-color: var(--success);
-  }
-
-  .stage.outcome:has(.outcome-node.deny) .stage-marker {
-    --outcome-color: var(--error);
-  }
-
-  .stage.outcome:has(.outcome-node.escalate) .stage-marker {
-    --outcome-color: var(--live);
+    border-color: color-mix(in srgb, var(--outcome-color) 55%, var(--border));
+    background: var(--outcome-color);
   }
 
   .decision-node {
@@ -650,18 +681,6 @@
     font-size: var(--font-lg);
     letter-spacing: var(--letter-tight);
     text-transform: uppercase;
-  }
-
-  .verdict-word.approve {
-    color: var(--success);
-  }
-
-  .verdict-word.deny {
-    color: var(--error);
-  }
-
-  .verdict-word.escalate {
-    color: var(--live);
   }
 
   .meter {
@@ -738,18 +757,12 @@
     color: var(--text-3);
   }
 
-  .branch.approve,
   .branch.success {
     --branch-color: var(--success);
   }
 
-  .branch.deny,
   .branch.error {
     --branch-color: var(--error);
-  }
-
-  .branch.escalate {
-    --branch-color: var(--live);
   }
 
   .branch.taken {
@@ -779,20 +792,11 @@
   }
 
   .outcome-node {
-    --outcome-color: var(--live);
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--gutter-tight);
     border-color: color-mix(in srgb, var(--outcome-color) 48%, var(--border));
     background: color-mix(in srgb, var(--outcome-color) 8%, var(--surface-1));
-  }
-
-  .outcome-node.approve {
-    --outcome-color: var(--success);
-  }
-
-  .outcome-node.deny {
-    --outcome-color: var(--error);
   }
 
   .outcome-icon {
@@ -801,7 +805,7 @@
   }
 
   .reason {
-    margin-top: var(--gutter-tight) !important;
+    margin-top: var(--gutter-tight);
     max-width: 72ch;
     color: var(--text-2);
     font-size: var(--font-sm);
@@ -837,75 +841,20 @@
     line-height: 1.45;
   }
 
-  .empty {
-    display: grid;
-    align-content: start;
-    justify-items: start;
-    gap: var(--gutter-tight);
-    max-width: 560px;
-    padding: var(--gutter);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-3);
-  }
-
-  .empty :is(h3, p) {
-    margin: 0;
-  }
-
-  .empty h3 {
-    color: var(--text-1);
-    font-size: var(--font-xl);
-  }
-
-  .empty p {
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.5;
-  }
-
-  .empty code {
-    color: var(--accent-soft);
-    font-family: var(--font-mono);
-    font-size: inherit;
-    overflow-wrap: anywhere;
-  }
-
-  .jump {
-    padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
-    border-radius: var(--radius-chip);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    color: var(--text-1);
-    font-size: var(--font-sm);
-    font-weight: 650;
-    cursor: pointer;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .jump:hover {
-      background: color-mix(in srgb, var(--accent) 20%, transparent);
-    }
-  }
-
   @media (hover: hover) and (pointer: fine) {
     .evaluation:hover {
       background: var(--control-hover);
     }
   }
 
-  @container approval-panel (max-width: 620px) {
+  @container approval-panel (min-width: 640px) {
     .decision-layout {
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(116px, 0.34fr) minmax(0, 1.66fr);
+      grid-template-columns: minmax(176px, 0.62fr) minmax(340px, 1.38fr);
+      grid-template-rows: minmax(0, 1fr);
     }
   }
 
-  @container approval-panel (max-width: 430px) {
-    .approval-decisions {
-      padding: var(--gutter-tight);
-    }
-
+  @container approval-panel (max-width: 380px) {
     .trace {
       padding: var(--gutter-tight);
     }

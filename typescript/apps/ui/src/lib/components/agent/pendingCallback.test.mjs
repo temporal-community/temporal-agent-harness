@@ -7,7 +7,7 @@ import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
 import AgentChatPanel from "./AgentChatPanel.svelte";
-import { resultForm } from "$lib/components/chat/schemaForm.ts";
+import { resultForm } from "@temporalio/agent-harness-client";
 import { buildReplayLog } from "$lib/state/replayLog.ts";
 
 const meta = (seconds) => ({
@@ -57,12 +57,12 @@ const chatHtml = (frames) =>
 describe("pending callback card", () => {
   it("shows the question and a labelled response box while the callback is open", () => {
     const body = chatHtml([requested]);
-    assert.match(body, /aria-label="Pending callback requests"/);
+    assert.match(body, /aria-label="Requests waiting on you"/);
     assert.match(body, /ask_user/);
     assert.match(body, /Which Springfield do you mean\?/);
     assert.match(body, /<label[^>]*for="callback-call_ask1-result"[^>]*>\s*Response/);
     assert.match(body, /<input[^>]*id="callback-call_ask1-result"/);
-    assert.match(body, /Send response/);
+    assert.match(body, /<button[^>]*class="chip [^"]*"[^>]*type="submit"[^>]*>(?:(?!<\/button>)[\s\S])*Send/);
   });
 
   it("labels a lone non-question argument by name instead of showing a bare value", () => {
@@ -71,15 +71,39 @@ describe("pending callback card", () => {
       data: { ...requested.data, tool_id: "call_tree1", tool_name: "tree", tool_input: { path: "." } }
     };
     const body = chatHtml([tree]);
-    assert.match(body, /<dt[^>]*>path<\/dt>\s*<dd[^>]*>\.<\/dd>/);
-    assert.doesNotMatch(body, /<p class="prose[^"]*">\.<\/p>/);
-    assert.match(chatHtml([requested]), /<p class="prose[^"]*">Which Springfield do you mean\?<\/p>/);
+    assert.match(body, /<dt[^>]*>path<\/dt>\s*(?:<!--[^>]*-->)?<dd[^>]*>\.<\/dd>/);
+    assert.doesNotMatch(body, /class="prose/);
+    assert.match(chatHtml([requested]), /<div class="prose question[^"]*"><div class="markdown-message[\s\S]*?<p>Which Springfield do you mean\?<\/p>/);
   });
 
   it("goes away once the callback resolves, whoever answered it", () => {
     const body = chatHtml([requested, resolved]);
     assert.doesNotMatch(body, /Pending callback requests/);
     assert.doesNotMatch(body, /Send response/);
+  });
+
+  it("replaces the response form for callbacks answered by a client-tool provider", () => {
+    const body = render(AgentChatPanel, {
+      props: {
+        items: [],
+        logs: buildReplayLog([
+          {
+            ...requested,
+            data: {
+              ...requested.data,
+              tool_id: "call_write1",
+              tool_name: "write_code",
+              tool_input: { code: "print('hello')" }
+            }
+          }
+        ]).rows,
+        agentLabel: "DAG Builder",
+        sessionId: "wf-root",
+        clientToolStatuses: { call_write1: { state: "answering" } }
+      }
+    }).body;
+    assert.match(body, /Answering automatically/);
+    assert.doesNotMatch(body, />Response</);
   });
 
   it("carries the output schema onto the replay row", () => {
