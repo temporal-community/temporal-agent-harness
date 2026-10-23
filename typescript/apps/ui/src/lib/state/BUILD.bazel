@@ -129,6 +129,13 @@ js_library(
 )
 
 js_library(
+    name = "handlerRouting",
+    srcs = ["handlerRouting.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-client"],
+)
+
+js_library(
     name = "historyGap",
     srcs = ["historyGap.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -503,6 +510,12 @@ vitest_test(
 )
 
 vitest_test(
+    name = "handlerRouting_test",
+    src = "handlerRouting.test.mjs",
+    deps = [":handlerRouting"],
+)
+
+vitest_test(
     name = "historyGap_test",
     src = "historyGap.test.mjs",
     deps = [
@@ -748,6 +761,16 @@ vitest_test(
     name = "runtimeWrap_test",
     src = "runtimeWrap.test.mjs",
     deps = [":flowProjection"],
+)
+
+vitest_test(
+    name = "sendFailure_test",
+    src = "sendFailure.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+        "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
 )
 
 vitest_test(

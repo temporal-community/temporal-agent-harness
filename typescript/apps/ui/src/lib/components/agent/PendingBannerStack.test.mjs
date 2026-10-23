@@ -189,7 +189,6 @@ describe("the attention queue", () => {
     const chat = source("./AgentChatPanel.svelte");
     const stack = source("./PendingBannerStack.svelte");
     assert.match(chat, /querySelector<HTMLInputElement>\("\.reject-reason"\)\?\.focus\(\{ preventScroll: true \}\)/);
-    assert.match(chat, /const queueReserve = \$derived\(queueHead > 0 \? queueHead \+ 18 : 0\);/, "the reserve is the folded header's alone");
     assert.match(stack, /<header class="stack-head" \{@attach measureHead\}>/, "measured from the header, never the card");
     assert.match(stack, /style:height=\{paging && height !== null \? `\$\{height\}px` : null\}/, "at rest the banner is its row's height, in the same frame");
     assert.match(stack, /onintrostart=\{\(\) => \(paging = true\)\}\s*onintroend=\{\(\) => \(paging = false\)\}/, "held to a measured height only while a row slides in");

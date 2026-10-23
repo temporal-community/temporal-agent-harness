@@ -3,11 +3,13 @@
    * A gated or pending call's arguments, as the person answering it reads them.
    *
    * Approval cards and callback cards both show the input they are asking about. A lone
-   * question-like string (ask_user's `question`) reads as the sentence it is; anything
+   * question-like string (ask_user's `question`) is drawn as the markdown it is; anything
    * else is a name/value list, nested objects opened into dotted key paths. A multi-line
    * value (a script) is shown whole as a block, since that is what is being approved;
    * other long values are clamped, with the full JSON behind a disclosure.
    */
+  import JsonReply from "$lib/components/chat/JsonReply.svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
 
   interface Props {
@@ -65,24 +67,29 @@
 {:else if typeof input === "string" && input.trim()}
   <p class="prose">{input.trim()}</p>
 {:else if question}
-  <p class="prose">{question}</p>
+  <div class="prose question"><MarkdownMessage text={question} compact /></div>
 {:else if rows.length}
   <dl class="args">
     {#each rows as { id, key, value } (id)}
       <div>
         <dt>{key}</dt>
-        <dd class:block={multiline(value)}>{show(value)}</dd>
+        {#if multiline(value)}
+          <!-- The shared code block, highlighted and copyable; a `script` is a Code Mode script. -->
+          <dd class="block"><MarkdownMessage text={value} language={/(^|\.)script$/.test(key) ? "python" : ""} compact /></dd>
+        {:else}
+          <dd>{show(value)}</dd>
+        {/if}
       </div>
     {/each}
   </dl>
   {#if truncated}
     <details>
       <summary>Full input</summary>
-      <pre><code>{JSON.stringify(input, null, 2)}</code></pre>
+      <div class="json"><JsonReply json={input} /></div>
     </details>
   {/if}
 {:else if Array.isArray(input) && input.length}
-  <pre><code>{JSON.stringify(input, null, 2)}</code></pre>
+  <JsonReply json={input} />
 {/if}
 
 <style>
@@ -93,6 +100,12 @@
     line-height: 1.45;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
+  }
+
+  .question {
+    --markdown-body-size: var(--font-lg);
+    --markdown-body-line-height: 1.45;
+    white-space: normal;
   }
 
   .unknown {
@@ -112,7 +125,14 @@
     display: contents;
   }
 
+  /* Clamped like the value: an unclamped long key stretches the row, and the value's own
+     clamp then shows through the taller box. */
   .args dt {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     overflow-wrap: anywhere;
     color: var(--text-3);
     font-family: var(--font-mono);
@@ -138,17 +158,15 @@
   .args dd.block {
     display: block;
     grid-column: 1 / -1;
-    max-height: 320px;
-    overflow: auto;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-1);
-    font-family: var(--font-mono);
+    overflow: visible;
     font-size: var(--font-sm);
-    white-space: pre-wrap;
     -webkit-line-clamp: none;
     line-clamp: none;
+  }
+
+  .args dd.block :global(pre) {
+    max-height: 320px;
+    overflow-y: auto;
   }
 
   summary {
@@ -164,19 +182,8 @@
     }
   }
 
-  pre {
-    max-height: 320px;
-    overflow: auto;
-    margin: 6px 0 0;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-1);
-    color: var(--text-2);
-    font-family: var(--font-mono);
-    font-size: var(--font-sm);
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
+  /* The highlighter folds a long input itself; the footer stays in reach either way. */
+  .json {
+    margin-top: 6px;
   }
 </style>

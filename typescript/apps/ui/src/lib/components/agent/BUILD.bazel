@@ -7,6 +7,8 @@ js_library(
     srcs = ["AgentChatPanel.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":ContextUsage",
+        ":HandlerActionCard",
         ":PendingBannerStack",
         ":PendingCallbackCard",
         ":PendingCard",
@@ -19,8 +21,6 @@ js_library(
         "//typescript/apps/ui/src/lib/api:httpClient",
         "//typescript/apps/ui/src/lib/components/chat:JsonReply",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
-        "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
-        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
@@ -34,6 +34,7 @@ js_library(
         "//typescript/apps/ui/src/lib/motion:inputClearDissolve",
         "//typescript/apps/ui/src/lib/state:codeModeNesting",
         "//typescript/apps/ui/src/lib/state:dismissable.svelte",
+        "//typescript/apps/ui/src/lib/state:handlerRouting",
         "//typescript/apps/ui/src/lib/state:inboundMessageText",
         "//typescript/apps/ui/src/lib/state:logValue",
         "//typescript/apps/ui/src/lib/state:pendingRequests",
@@ -84,6 +85,16 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:JsonReply",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/state:logValue",
+    ],
+)
+
+js_library(
+    name = "ContextUsage",
+    srcs = ["ContextUsage.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/cost:pricing",
     ],
 )
 
@@ -171,6 +182,23 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/motion:stackAnswer",
         "//typescript/apps/ui/src/lib/motion:toastClose",
+    ],
+)
+
+js_library(
+    name = "HandlerActionCard",
+    srcs = ["HandlerActionCard.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":PendingCard",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Select",
     ],
 )
 
@@ -301,6 +329,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "ContextUsage_test",
+    src = "ContextUsage.test.mjs",
+    deps = [
+        ":ContextUsage",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+    ],
+)
+
+vitest_test(
     name = "FilesPanel_test",
     src = "FilesPanel.test.mjs",
     deps = [
@@ -371,6 +409,28 @@ vitest_test(
         ":ReplyStatus",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+    ],
+)
+
+vitest_test(
+    name = "composerChoices_test",
+    src = "composerChoices.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:handlerRouting",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "composerFormHandlers_test",
+    src = "composerFormHandlers.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        ":HandlerActionCard",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
 

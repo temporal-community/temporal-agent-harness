@@ -32,7 +32,7 @@ const common = {
     }
   ]
 };
-const composerOf = (body) => body.match(/<input[^>]*aria-label="Message[^"]*"[^>]*>/)?.[0];
+const composerOf = (body) => body.match(/<textarea[^>]*aria-label="Message[^"]*"[^>]*>/)?.[0];
 const html = (props) => stripComments(render(AgentChatPanel, { props: { ...common, ...props } }).body);
 
 describe("the chat pane and the replay cursor", () => {
@@ -60,7 +60,7 @@ describe("the chat pane and the replay cursor", () => {
     const before = raw({ items: run.chatTranscript, logs: run.fullReplayLog.rows });
     const after = raw({ ...view, onJumpToLive: () => {} });
     assert.equal(after, before);
-    assert.match(after, /bubble thinking/, "the reply arriving still shows at the live head");
+    assert.match(after, /turn-summary[^"]*"[^>]*>[\s\S]*?class="reply-status/, "the reply arriving still shows at the live head");
     assert.doesNotMatch(after, /replay-strip/);
   });
 
@@ -85,7 +85,8 @@ describe("the chat pane and the replay cursor", () => {
       "the strip reads the cursor the way the transport counts it"
     );
     assert.match(strip, /aria-label="Jump to latest step"[^>]*>\s*Latest/);
-    assert.doesNotMatch(body, /bubble thinking/, "no live 'thinking' dots under a past view");
+    /* Parked on the first reply chunk, mid-turn: the turn's header says so, timed to the cursor. */
+    assert.match(body, /turn-summary[^"]*"[^>]*>[\s\S]*?Replying[\s\S]*?class="elapsed[^"]*">\d+(\.\d)?s</);
     const composer = composerOf(body);
     assert.ok(composer, "the composer is still there");
     assert.doesNotMatch(composer, /disabled/, "scrubbing back does not disable the composer");
@@ -157,12 +158,12 @@ describe("chat activity at a past cursor", () => {
       live: false,
       onApproveTool: async () => {}
     });
-    assert.match(body, /1 approval needed/i);
+    assert.match(body, /1 needs you/);
     assert.match(body, /refund/);
     assert.match(body, /Requested ahead of the replay cursor/);
 
     const atHead = html({ items: [], logs: liveLogs, onApproveTool: async () => {} });
-    assert.match(atHead, /1 approval needed/i);
+    assert.match(atHead, /1 needs you/);
     assert.doesNotMatch(atHead, /ahead of the replay cursor/, "at the head nothing is ahead");
   });
 });
@@ -182,6 +183,10 @@ describe("the turn card under a moving cursor", () => {
   it("never fades, live or replayed", () => {
     assert.doesNotMatch(feed, /\s(in|transition):/);
   });
+
+  it("leads its header with words, not a decorative glyph", () => {
+    assert.doesNotMatch(feed, /activity-icon/);
+  });
 });
 
 describe("the chat footer", () => {
@@ -190,22 +195,59 @@ describe("the chat footer", () => {
     { name: "cancel", parameters: common.agentInterface[0].parameters, mid_turn: "accept" }
   ];
 
-  it("is one toolbar of chips, then the input — and no search glyph on a message box", () => {
-    const body = html({ items: [], agentInterface: twoHandlers, onStopAgent: async () => {} });
-    const toolbar = body.match(/<div class="composer-toolbar[\s\S]*?<form/)?.[0] ?? "";
-    assert.match(toolbar, /class="chip sm quiet model toned interactive[^"]*"[^>]*>[\s\S]*?ask/);
-    assert.match(toolbar, /class="chip sm quiet neutral[^"]*">\s*<span class="chip-label[^"]*">queues/);
-    assert.match(toolbar, /class="chip sm quiet error toned interactive stop-chip[^"]*"/);
-    assert.match(toolbar, /aria-label="Stop Planner"[\s\S]*?Stop\s*<\/button>/);
+  it("puts the handler picker and controls inside the composer", () => {
+    const body = html({ items: [], agentInterface: twoHandlers });
+    const composer = body.match(/<form class="composer[\s\S]*?<\/form>/)?.[0] ?? "";
+    assert.match(composer, /<textarea[\s\S]*?<div class="composer-controls[^"]*"/);
+    assert.match(composer, /class="icon-button default choice-button handler-button[^"]*"[^>]*aria-label="Handler: ask"/);
+    assert.match(composer, /data-tip="Handler: ask\. Sent while busy: waits[^"]*Type \/ to choose\."/);
+    assert.doesNotMatch(composer, />\s*queues\s*</, "no bare disposition badge beside the chip");
     assert.doesNotMatch(body, /lucide-search/);
-    assert.doesNotMatch(body, /class="composer-actions/, "Stop is no longer a row of its own");
   });
 
-  it("keeps Stop in the toolbar when there is nothing to choose between", () => {
-    const body = html({ items: [], onStopAgent: async () => {} });
-    const toolbar = body.match(/<div class="composer-toolbar[\s\S]*?<form/)?.[0] ?? "";
-    assert.match(toolbar, /stop-chip/);
-    assert.doesNotMatch(toolbar, /queues/, "a single-handler agent still looks like a chat box");
+  /* The disposition only matters mid-reply; at rest it was a caps word nobody could read. */
+  it("says what sending will do only while a reply is under way", () => {
+    const idle = html({ items: [], sending: false, agentInterface: twoHandlers });
+    assert.match(idle, /aria-label="Handler: ask"/, "the handler button is still there");
+    assert.doesNotMatch(idle, /Sent while busy|Sends after this reply/);
+  });
+
+  describe("its styles", () => {
+    const source = readFileSync(new URL("./AgentChatPanel.svelte", import.meta.url), "utf8");
+    const rule = (selector) => source.match(new RegExp(`\\n  ${selector} \\{[^}]*\\}`))?.[0] ?? "";
+
+    it("ends the conversation with a hairline above the controls", () => {
+      assert.match(rule("\\.composer-wrap"), /border-top: 1px solid var\(--border\)/);
+      assert.match(rule("\\.composer-wrap"), /padding-top: var\(--pane-inset\)/);
+    });
+
+    /* A narrow-width inset on the text box alone left it indented under the handler chip. */
+    it("lets the handler chip and the text box share both edges at every width", () => {
+      const narrow = source.match(/@media \(max-width: 980px\) \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+      assert.ok(narrow, "the narrow block is still there");
+      assert.doesNotMatch(narrow, /\.composer\s*\{/);
+    });
+  });
+
+  /* "Stop" here ended the whole session, and readers took it for "stop this reply". The harness
+     cannot stop one reply yet, and what the agent is doing is said in its turn, so the composer
+     stays neutral while a turn runs. */
+  it("holds no status and no control that ends the session while a turn runs", () => {
+    const body = html({ items: [], agentInterface: twoHandlers });
+    const composer = body.match(/<div class="composer-wrap[\s\S]*$/)?.[0] ?? "";
+    assert.match(composer, /aria-label="Handler: ask"/, "the handler button is still there");
+    assert.doesNotMatch(composer, /role="status"|Replying|Thinking|reply-status/);
+    assert.match(body, /class="activity-feed reply-pending[^"]*"[\s\S]*?Thinking/, "it is in the turn's header");
+    assert.doesNotMatch(body, /stop-chip|>\s*Stop\s*<|aria-label="(Stop|End)[^"]*"/i);
+    const source = readFileSync(new URL("./AgentChatPanel.svelte", import.meta.url), "utf8");
+    assert.doesNotMatch(source, /onStopAgent|closeSession|endSession/);
+  });
+
+  it("reads Session ended once closed, and offers a new session with the same agent", () => {
+    const body = html({ items: [], sending: false, closed: true, onStartNewSession: () => {} });
+    assert.match(composerOf(body), /placeholder="Session ended"/);
+    assert.match(body, /class="closed-banner[^"]*"[\s\S]*?Session ended[\s\S]*?Start a new session/);
+    assert.doesNotMatch(body, /reply-pending/);
   });
 });
 
@@ -219,7 +261,6 @@ describe("the composer's handler surface", () => {
       messageTargets: controller.messageTargets,
       agentLabel: controller.runInfo.agentLabel,
       sessionId: controller.runInfo.sessionId,
-      onStopAgent: async () => {},
       onRetryInterface: () => {}
     });
   const controllerWith = (agentInterface) => {
@@ -239,7 +280,8 @@ describe("the composer's handler surface", () => {
     assert.equal(controller.chatView.live, false);
     const composer = composerOf(paneOf(controller));
     assert.doesNotMatch(composer, /disabled/);
-    assert.match(composer, /placeholder="text → /i, "addressed to the live handler");
+    assert.match(composer, /placeholder="Message"/, "the live composer, ready to type");
+    assert.match(composer, /aria-label="Message /, "still named for the live agent");
   });
 
   it("says a failed lookup failed, offers Retry, and recovers when it succeeds", async () => {
