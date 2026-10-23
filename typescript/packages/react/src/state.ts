@@ -23,15 +23,37 @@ export interface SessionSnapshot<A extends AgentSchema = UntypedAgent> {
   readonly frames: readonly AgentSseFrame[];
 }
 
+type SnapshotFields<A extends AgentSchema> = Omit<SessionSnapshot<A>, "frames"> & { readonly frameCount: number };
+
+/** A snapshot whose frames are the first `frameCount` of the state's append-only log, copied out
+ *  only when read: every flush makes a snapshot, and copying the whole log into each would make
+ *  a flush cost more the longer the session ran. */
+class Snapshot<A extends AgentSchema> implements SessionSnapshot<A> {
+  declare readonly connection: ConnectionStatus;
+  declare readonly error: Error | undefined;
+  declare readonly rootAgentId: string | null;
+  declare readonly agents: Readonly<Record<string, AgentView>>;
+  declare readonly pending: readonly HarnessMessage<A>[];
+  declare readonly frameCount: number;
+  readonly #log: readonly AgentSseFrame[];
+  #frames: readonly AgentSseFrame[] | undefined;
+
+  constructor(fields: SnapshotFields<A>, log: readonly AgentSseFrame[]) {
+    Object.assign(this, fields);
+    this.#log = log;
+  }
+
+  get frames(): readonly AgentSseFrame[] {
+    return (this.#frames ??= this.#log.slice(0, this.frameCount));
+  }
+}
+
 export class ReactSessionState<A extends AgentSchema = UntypedAgent> implements SessionState<A> {
-  #snapshot: SessionSnapshot<A> = {
-    connection: "stopped",
-    error: undefined,
-    rootAgentId: null,
-    agents: {},
-    pending: [],
-    frames: []
-  };
+  readonly #log: AgentSseFrame[] = [];
+  #snapshot = new Snapshot<A>(
+    { connection: "stopped", error: undefined, rootAgentId: null, agents: {}, pending: [], frameCount: 0 },
+    this.#log
+  );
   readonly #listeners = new Set<() => void>();
 
   /* Arrow properties: `useSyncExternalStore` resubscribes whenever these change identity. */
@@ -80,9 +102,6 @@ export class ReactSessionState<A extends AgentSchema = UntypedAgent> implements 
   get frames(): readonly AgentSseFrame[] {
     return this.#snapshot.frames;
   }
-  set frames(frames: readonly AgentSseFrame[]) {
-    this.#set("frames", frames);
-  }
 
   updateAgents(updates: ReadonlyArray<readonly [string, AgentUpdate]>): void {
     const next = { ...this.#snapshot.agents };
@@ -91,12 +110,13 @@ export class ReactSessionState<A extends AgentSchema = UntypedAgent> implements 
   }
 
   appendFrames(frames: readonly AgentSseFrame[]): void {
-    this.#set("frames", this.#snapshot.frames.concat(frames));
+    for (const frame of frames) this.#log.push(frame);
+    this.#set("frameCount", this.#log.length);
   }
 
-  #set<K extends keyof SessionSnapshot<A>>(key: K, value: SessionSnapshot<A>[K]): void {
+  #set<K extends keyof SnapshotFields<A>>(key: K, value: SnapshotFields<A>[K]): void {
     if (this.#snapshot[key] === value) return;
-    this.#snapshot = { ...this.#snapshot, [key]: value };
+    this.#snapshot = new Snapshot<A>({ ...this.#snapshot, [key]: value }, this.#log);
     for (const listener of this.#listeners) listener();
   }
 }

@@ -20,7 +20,16 @@ export class SvelteSessionState<A extends AgentSchema = UntypedAgent> implements
   rootAgentId = $state<string | null>(null);
   agents = $state.raw<Readonly<Record<string, AgentView>>>({});
   pending = $state.raw<readonly HarnessMessage<A>[]>([]);
-  frames = $state.raw<readonly AgentSseFrame[]>([]);
+  #frameCount = $state(0);
+  readonly #frames: AgentSseFrame[] = [];
+  #framesCopy: readonly AgentSseFrame[] = [];
+
+  /** Every frame received. Copied when read after new frames arrive, not on every flush, so a
+   *  long session costs nothing extra per flush unless something reads its frames. */
+  get frames(): readonly AgentSseFrame[] {
+    if (this.#framesCopy.length !== this.#frameCount) this.#framesCopy = this.#frames.slice();
+    return this.#framesCopy;
+  }
 
   updateAgents(updates: ReadonlyArray<readonly [string, AgentUpdate]>): void {
     const next = { ...this.agents };
@@ -29,6 +38,7 @@ export class SvelteSessionState<A extends AgentSchema = UntypedAgent> implements
   }
 
   appendFrames(frames: readonly AgentSseFrame[]): void {
-    this.frames = this.frames.concat(frames);
+    for (const frame of frames) this.#frames.push(frame);
+    this.#frameCount = this.#frames.length;
   }
 }

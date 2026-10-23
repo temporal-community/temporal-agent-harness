@@ -13,7 +13,7 @@ import type {
   WorkflowExecutionState
 } from "@temporalio/agent-harness-client";
 
-import { HarnessProvider, useAgentSession, type AgentSession } from "../src/index.js";
+import { HarnessProvider, useAgentSession, useAgentSessionSelector, type AgentSession } from "../src/index.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -136,6 +136,7 @@ describe("useAgentSession", () => {
     /* The empty list, then the finished exchange: never a list mid-exchange. */
     expect([...lists].map((l) => l.length)).toEqual([0, 1]);
     expect(latest!.messages[0]!.status).toBe("done");
+    expect(latest!.frames.map((f) => f.event)).toEqual(exchange("m1", "hello").map((f) => f.event));
 
     unmount();
     await released();
@@ -260,5 +261,51 @@ describe("useAgentSession", () => {
     }
     expect(renderToString(<Status />)).toBe("<p>stopped:0</p>");
     expect(transport.attaches).toEqual([]);
+  });
+  test("a selector re-renders only when what it selects changes", async () => {
+    const transport = new FakeTransport();
+    transport.scripts.set("s1", [exchange("m1", "hi")]);
+    const connections: string[] = [];
+    let fullRenders = 0;
+    function Connection() {
+      connections.push(useAgentSessionSelector({ sessionId: "s1", transport, ...quick }, (s) => s.connection));
+      return null;
+    }
+    function Everything() {
+      fullRenders += 1;
+      useAgentSession({ sessionId: "s1", transport, ...quick });
+      return null;
+    }
+    const { unmount } = render(
+      <HarnessProvider>
+        <Connection />
+        <Everything />
+      </HarnessProvider>
+    );
+    await until(() => connections.at(-1) === "idle");
+
+    /* One render per connection change, none for the flushes that only brought frames. */
+    expect(connections).toEqual(["stopped", "connecting", "live", "idle"]);
+    expect(fullRenders).toBeGreaterThan(connections.length);
+    unmount();
+  });
+
+  test("a selector that changes between renders reads the current snapshot with the new one", async () => {
+    const transport = new FakeTransport();
+    transport.scripts.set("s1", [exchange("m1", "hi")]);
+    let pick!: (field: "connection" | "root") => void;
+    function Picked() {
+      const [field, setField] = useState<"connection" | "root">("connection");
+      pick = setField;
+      const value = useAgentSessionSelector({ sessionId: "s1", transport, ...quick }, (s) =>
+        field === "connection" ? s.connection : `root agent ${s.rootAgentId}`
+      );
+      return <p>{value}</p>;
+    }
+    render(<Picked />);
+    await until(() => screen.queryByText("idle") !== null);
+
+    act(() => pick("root"));
+    expect(screen.getByText("root agent root")).toBeTruthy();
   });
 });

@@ -110,7 +110,7 @@ describe("AgentSession", () => {
     const seen: string[] = [];
     const stop = $effect.root(() => {
       $effect(() => {
-        seen.push(session.messages.map((m) => `${m.id}:${m.status}`).join(","));
+        seen.push(`${session.messages.map((m) => `${m.id}:${m.status}`).join(",")} ${session.frames.length}`);
       });
     });
     flushSync();
@@ -118,7 +118,7 @@ describe("AgentSession", () => {
 
     expect(transport.attaches).toEqual(["s1"]);
     // One re-run for the flush, not one per frame.
-    expect(seen).toEqual(["", "m1:done"]);
+    expect(seen).toEqual([" 0", "m1:done 5"]);
 
     stop();
     await released();

@@ -8,6 +8,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode
@@ -142,18 +143,45 @@ export interface AgentSession<A extends AgentSchema = UntypedAgent> {
 export function useAgentSession<A extends AgentSchema = UntypedAgent>(
   options: AgentSessionOptions<A>
 ): AgentSession<A> {
+  const entry = useEntry(options);
+  /* The server snapshot is the same empty state: effects never run there, so nothing connects. */
+  const snapshot = useSyncExternalStore(entry.state.subscribe, entry.state.getSnapshot, entry.state.getSnapshot);
+  return useMemo(() => sessionView(entry, snapshot), [entry, snapshot]);
+}
+
+/**
+ * Follow one session, like `useAgentSession`, but re-render only when `select`'s result changes
+ * (by `Object.is`): `useAgentSessionSelector(options, (s) => s.connection)` sits out every flush
+ * that only adds frames or messages.
+ */
+export function useAgentSessionSelector<T, A extends AgentSchema = UntypedAgent>(
+  options: AgentSessionOptions<A>,
+  select: (snapshot: SessionSnapshot<A>) => T
+): T {
+  const entry = useEntry(options);
+  const last = useRef<{ snapshot: SessionSnapshot<A>; select: typeof select; value: T } | null>(null);
+  const get = (): T => {
+    const snapshot = entry.state.getSnapshot();
+    // A new `select` (say, one closing over changed props) reads the same snapshot afresh.
+    if (last.current?.snapshot !== snapshot || last.current.select !== select) {
+      const value = select(snapshot);
+      last.current = { snapshot, select, value: last.current && Object.is(last.current.value, value) ? last.current.value : value };
+    }
+    return last.current.value;
+  };
+  return useSyncExternalStore(entry.state.subscribe, get, get);
+}
+
+/** The session's shared entry, held open while the calling component is mounted. */
+function useEntry<A extends AgentSchema>(options: AgentSessionOptions<A>): SessionEntry<A> {
   const context = useContext(StoreContext);
   const [own] = useState(() => new SessionStore());
   const entry = (context ?? own).entry<A>(options);
-
   useEffect(() => {
     entry.acquire();
     return () => entry.release();
   }, [entry]);
-
-  /* The server snapshot is the same empty state: effects never run there, so nothing connects. */
-  const snapshot = useSyncExternalStore(entry.state.subscribe, entry.state.getSnapshot, entry.state.getSnapshot);
-  return useMemo(() => sessionView(entry, snapshot), [entry, snapshot]);
+  return entry;
 }
 
 function sessionView<A extends AgentSchema>(entry: SessionEntry<A>, snapshot: SessionSnapshot<A>): AgentSession<A> {
@@ -173,7 +201,9 @@ function sessionView<A extends AgentSchema>(entry: SessionEntry<A>, snapshot: Se
     pending: snapshot.pending,
     agents: snapshot.agents,
     rootAgentId: snapshot.rootAgentId,
-    frames: snapshot.frames,
+    get frames() {
+      return snapshot.frames;
+    },
     get pendingApprovals() {
       return waitingNow().approvals;
     },
