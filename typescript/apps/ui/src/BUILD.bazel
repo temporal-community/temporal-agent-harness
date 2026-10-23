@@ -54,6 +54,7 @@ js_library(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/api:mockClient",
         "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/state:agentRunStorage",
     ],
 )

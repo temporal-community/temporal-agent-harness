@@ -27,15 +27,21 @@ import type {
   TurnId
 } from "$lib/api/types";
 
+/** The field name of a lone-string payload — the bubble's text — or null for any other shape. */
+export function promptField(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const entries = Object.entries(payload);
+  return entries.length === 1 && typeof entries[0][1] === "string" ? entries[0][0] : null;
+}
+
 function renderEnvelope(handler: string, payload: unknown): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return handler;
   }
   const entries = Object.entries(payload as Record<string, unknown>);
   if (entries.length === 0) return handler;
-  if (entries.length === 1 && typeof entries[0][1] === "string") {
-    return entries[0][1] as string;
-  }
+  const field = promptField(payload);
+  if (field !== null) return (payload as Record<string, string>)[field];
   const rendered = entries
     .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
     .sort()
@@ -48,6 +54,11 @@ function renderEnvelope(handler: string, payload: unknown): string {
  */
 export function renderUserMessage(handler: string, payload: JsonRecord): string {
   return renderEnvelope(handler, payload);
+}
+
+/** Build a single-string handler payload without normalizing the user's text. */
+export function singleStringPayload(field: string, text: string): JsonRecord {
+  return { [field]: text };
 }
 
 /**

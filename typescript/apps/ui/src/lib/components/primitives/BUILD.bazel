@@ -74,6 +74,17 @@ js_library(
 )
 
 js_library(
+    name = "SafeImage",
+    srcs = ["SafeImage.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":IconButton",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/state:imagePolicy",
+    ],
+)
+
+js_library(
     name = "Select",
     srcs = ["Select.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -101,6 +112,13 @@ js_library(
     name = "TipCard",
     srcs = ["TipCard.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "TraceImages",
+    srcs = ["TraceImages.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":SafeImage"],
 )
 
 js_library(
@@ -201,6 +219,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "SafeImage_test",
+    src = "SafeImage.test.mjs",
+    deps = [
+        ":SafeImage",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "TipCard_test",
     src = "TipCard.test.mjs",
     deps = [
@@ -219,6 +247,7 @@ vitest_test(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:ReplyStatus",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

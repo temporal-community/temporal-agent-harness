@@ -1,5 +1,13 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 
+# One target per file, depending on the files it imports.
+js_library(
+    name = "jsonReplyScenarios",
+    srcs = ["jsonReplyScenarios.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":scenarios"],
+)
+
 js_library(
     name = "scenarios",
     srcs = ["scenarios.ts"],

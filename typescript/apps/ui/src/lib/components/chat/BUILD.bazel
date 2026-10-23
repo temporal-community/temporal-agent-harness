@@ -10,14 +10,30 @@ js_library(
 )
 
 js_library(
+    name = "JsonReply",
+    srcs = ["JsonReply.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:LongContent",
+        "//typescript/apps/ui/src/lib/state:handlerReply",
+    ],
+)
+
+js_library(
     name = "MarkdownMessage",
     srcs = ["MarkdownMessage.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":JsonReply",
         "//typescript/apps/ui:node_modules/@tanstack/markdown",
         "//typescript/apps/ui:node_modules/remend",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib:highlight",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:SafeImage",
+        "//typescript/apps/ui/src/lib/state:imagePolicy",
     ],
 )
 
@@ -91,9 +107,22 @@ js_library(
     deps = ["//typescript/apps/ui:node_modules/svelte"],
 )
 
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "JsonReply_test",
+    src = "JsonReply.test.mjs",
+    deps = [
+        ":JsonReply",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
 vitest_test(
     name = "MarkdownMessage_test",
     src = "MarkdownMessage.test.mjs",
+    tags = ["exclusive"],
     deps = [
         ":MarkdownMessage",
         ":SchemaForm",

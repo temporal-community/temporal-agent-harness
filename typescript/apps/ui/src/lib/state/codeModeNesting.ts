@@ -20,7 +20,7 @@ export function codeModeScript(input: unknown): string | null {
 /** One scope's worth of the rule — one agent's tool frames, reset at each turn. */
 export class CodeModeNesting {
   readonly #hosts = new Set<ToolId>();
-  readonly #parents = new Map<ToolId, ToolId>();
+  readonly #parents = new Map<ToolId, ToolId | undefined>();
   readonly #running: ToolId[] = [];
 
   /**
@@ -28,7 +28,8 @@ export class CodeModeNesting {
    *
    * The host is looked up on every frame rather than only on `tool_requested`,
    * because a child's request is not always published: its first frame can be
-   * `tool_start`. Once a call has a host it keeps it.
+   * `tool_start`. A call keeps the place its first frame gave it, so one the
+   * model asked for alongside a host is not adopted when it starts mid-script.
    */
   place(event: string, toolId: ToolId, script: string | null): ToolId | undefined {
     if (script != null) this.#hosts.add(toolId);
@@ -41,9 +42,8 @@ export class CodeModeNesting {
       }
       return undefined;
     }
-    const parent = this.#parents.get(toolId) ?? this.#running.at(-1);
-    if (parent != null) this.#parents.set(toolId, parent);
-    return parent;
+    if (!this.#parents.has(toolId)) this.#parents.set(toolId, this.#running.at(-1));
+    return this.#parents.get(toolId);
   }
 
   reset(): void {

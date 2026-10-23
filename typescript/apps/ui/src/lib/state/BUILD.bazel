@@ -98,6 +98,7 @@ js_library(
     srcs = ["flowProjection.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":handlerReply",
         ":inboundMessageText",
         ":logValue",
         ":replayLog",
@@ -121,6 +122,13 @@ js_library(
 )
 
 js_library(
+    name = "handlerReply",
+    srcs = ["handlerReply.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":inboundMessageText"],
+)
+
+js_library(
     name = "historyGap",
     srcs = ["historyGap.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -133,6 +141,12 @@ js_library(
 js_library(
     name = "hydration",
     srcs = ["hydration.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "imagePolicy",
+    srcs = ["imagePolicy.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
@@ -208,6 +222,7 @@ js_library(
     srcs = ["replayLog.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":handlerReply",
         ":historyGap",
         ":inboundMessageText",
         ":replyRuns",
@@ -229,6 +244,16 @@ js_library(
     srcs = ["replyRuns.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [":inboundMessageText"],
+)
+
+js_library(
+    name = "replyStatus",
+    srcs = ["replyStatus.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":codeModeNesting",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+    ],
 )
 
 js_library(
@@ -270,10 +295,18 @@ js_library(
 )
 
 js_library(
+    name = "toolImages",
+    srcs = ["toolImages.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":imagePolicy"],
+)
+
+js_library(
     name = "transcript",
     srcs = ["transcript.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":handlerReply",
         ":inboundMessageText",
         ":thoughtSummary",
     ],
@@ -507,6 +540,12 @@ vitest_test(
 )
 
 vitest_test(
+    name = "imagePolicy_test",
+    src = "imagePolicy.test.mjs",
+    deps = [":imagePolicy"],
+)
+
+vitest_test(
     name = "inboundMessageText_test",
     src = "inboundMessageText.test.mjs",
     deps = [
@@ -527,6 +566,7 @@ vitest_test(
         ":stepTimeline",
         ":transcript",
         "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
     ],
 )
@@ -653,6 +693,7 @@ vitest_test(
     src = "replayLogFold.test.mjs",
     deps = [
         ":replayLog",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
     ],
 )
@@ -692,6 +733,18 @@ vitest_test(
 )
 
 vitest_test(
+    name = "replyStatus_test",
+    src = "replyStatus.test.mjs",
+    deps = [
+        ":replayLog",
+        ":replyStatus",
+        ":toolImages",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:ReplyStatus",
+    ],
+)
+
+vitest_test(
     name = "runtimeWrap_test",
     src = "runtimeWrap.test.mjs",
     deps = [":flowProjection"],
@@ -716,6 +769,18 @@ vitest_test(
     name = "statusNote_test",
     src = "statusNote.test.mjs",
     deps = [":replayLog"],
+)
+
+vitest_test(
+    name = "structuredReply_test",
+    src = "structuredReply.test.mjs",
+    deps = [
+        ":flowProjection",
+        ":handlerReply",
+        ":replayLog",
+        ":transcript",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
+    ],
 )
 
 vitest_test(
@@ -745,6 +810,12 @@ vitest_test(
     name = "timeTicks_test",
     src = "timeTicks.test.mjs",
     deps = [":timeTicks"],
+)
+
+vitest_test(
+    name = "toolImages_test",
+    src = "toolImages.test.mjs",
+    deps = [":toolImages"],
 )
 
 vitest_test(

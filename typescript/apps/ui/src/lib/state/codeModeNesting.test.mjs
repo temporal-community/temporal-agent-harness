@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
 import { codeModeHostsByRow } from "./codeModeNesting.ts";
+import { buildAgentGraph } from "./flowProjection.ts";
 
 let next = 0;
 const row = (event, toolId, over = {}) => ({ id: `r${next++}`, event, toolId, ...over });
@@ -66,5 +67,53 @@ describe("codeModeHostsByRow", () => {
       row("tool_start", "fresh")
     ];
     assert.deepEqual(hostsOf(rows), {});
+  });
+});
+
+/* The model asks for two plain calls and a script at once, and the plain calls start after
+   the script does. */
+function parallelWithHost() {
+  next = 0;
+  return [
+    row("turn_started", undefined),
+    row("tool_requested", "search", { input: { origin: "SFO" } }),
+    row("tool_requested", "book", { input: { flight_id: "F1" } }),
+    row("tool_requested", "host", { input: SCRIPT }),
+    row("tool_approval_requested", "book"),
+    row("tool_start", "host", { input: SCRIPT }),
+    row("tool_start", "search"),
+    row("tool_end", "search"),
+    row("tool_start", "child"),
+    row("tool_end", "child"),
+    row("tool_approval_resolved", "book"),
+    row("tool_start", "book"),
+    row("tool_end", "book"),
+    row("tool_end", "host")
+  ];
+}
+
+describe("a call the model asked for alongside a host", () => {
+  it("is not nested under the host when it starts mid-script", () => {
+    assert.deepEqual(hostsOf(parallelWithHost()), { r8: "host", r9: "host" });
+  });
+
+  it("is drawn once in the graph, beside the host rather than also inside it", () => {
+    const frames = parallelWithHost().map(({ event, toolId, input }) => ({
+      event,
+      data: {
+        type: event,
+        turn_number: 1,
+        ...(toolId ? { tool_id: toolId, tool_name: toolId } : {}),
+        ...(input ? { tool_input: input } : {})
+      }
+    }));
+    for (let end = 1; end <= frames.length; end += 1) {
+      const ids = buildAgentGraph(frames.slice(0, end)).nodes.map((node) => node.id);
+      assert.deepEqual(
+        ids.filter((id, i) => ids.indexOf(id) !== i),
+        [],
+        `duplicate node ids after ${end} frames`
+      );
+    }
   });
 });

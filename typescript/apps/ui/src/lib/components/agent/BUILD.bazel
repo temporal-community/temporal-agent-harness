@@ -8,11 +8,13 @@ js_library(
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         ":PendingCallbackCard",
+        ":ReplyStatus",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
         "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
         "//typescript/apps/ui/src/lib/components/chat:schemaForm",
@@ -22,6 +24,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:LongContent",
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:TraceImages",
         "//typescript/apps/ui/src/lib/components/primitives:TraceRow",
         "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
         "//typescript/apps/ui/src/lib/cost:pricing",
@@ -32,7 +35,9 @@ js_library(
         "//typescript/apps/ui/src/lib/state:logValue",
         "//typescript/apps/ui/src/lib/state:pendingRequests",
         "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replyStatus",
         "//typescript/apps/ui/src/lib/state:thoughtSummary",
+        "//typescript/apps/ui/src/lib/state:toolImages",
     ],
 )
 
@@ -73,6 +78,7 @@ js_library(
     srcs = ["CallInput.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/state:logValue",
     ],
@@ -166,6 +172,13 @@ js_library(
 )
 
 js_library(
+    name = "ReplyStatus",
+    srcs = ["ReplyStatus.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/state:replyStatus"],
+)
+
+js_library(
     name = "TranscriptPanel",
     srcs = ["TranscriptPanel.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -179,6 +192,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/components/primitives:LongContent",
+        "//typescript/apps/ui/src/lib/components/primitives:TraceImages",
         "//typescript/apps/ui/src/lib/components/primitives:TraceRow",
         "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
         "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
@@ -187,6 +201,8 @@ js_library(
         "//typescript/apps/ui/src/lib/state:followScroll",
         "//typescript/apps/ui/src/lib/state:logValue",
         "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replyStatus",
+        "//typescript/apps/ui/src/lib/state:toolImages",
     ],
 )
 
@@ -197,11 +213,15 @@ vitest_test(
     deps = [
         ":AgentChatPanel",
         ":PendingCallbackCard",
+        ":ReplyStatus",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib:highlight",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/src/lib/state:logValue",
         "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replyStatus",
         "//typescript/apps/ui/src/lib/state:transcript",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
@@ -248,6 +268,7 @@ vitest_test(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/tests/support:controllerHarness",
@@ -274,6 +295,7 @@ vitest_test(
     src = "chatLayout.test.mjs",
     deps = [
         ":AgentChatPanel",
+        ":ReplyStatus",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
     ],

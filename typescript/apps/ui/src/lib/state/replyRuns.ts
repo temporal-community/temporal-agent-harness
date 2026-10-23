@@ -38,6 +38,13 @@ interface ReplyRunEntry {
   workflowId?: string;
 }
 
+/** Which run a reply chunk continues: two consecutive chunks with the same key are one run. */
+export function replyRunKey(entry: ReplyRunEntry): string {
+  const { frame } = entry;
+  const agentId = "type" in frame.data ? frame.data.agent_id : "";
+  return `${entry.workflowId ?? agentId}:${messageKey(frame)}`;
+}
+
 /**
  * Fold consecutive reply chunks into runs, in order.
  *
@@ -48,44 +55,53 @@ interface ReplyRunEntry {
 export function buildReplyRuns(
   input: readonly (AgentSseFrame | ReplyRunEntry)[]
 ): ReplyRun[] {
-  const runs: ReplyRun[] = [];
-  let open: ReplyRun | null = null;
+  return replyRunsBuilder()(input);
+}
 
-  input.forEach((item, position) => {
-    const entry: ReplyRunEntry = "frame" in item ? item : { frame: item };
-    const { frame } = entry;
-    if (frame.event !== "reply_delta" || !("type" in frame.data)) {
-      open = null;
-      return;
+/**
+ * The runs, folded forward while the input only grows (same rule as replayTimelineBuilder).
+ * A run that grows is replaced rather than edited, so runs handed out earlier never change.
+ */
+export function replyRunsBuilder(): (input: readonly (AgentSseFrame | ReplyRunEntry)[]) => ReplyRun[] {
+  let seen = 0;
+  let last: AgentSseFrame | ReplyRunEntry | undefined;
+  let runs: ReplyRun[] = [];
+  let open = false;
+
+  return (input) => {
+    if (input.length < seen || (seen > 0 && input[seen - 1] !== last)) {
+      seen = 0;
+      runs = [];
+      open = false;
     }
+    for (let position = seen; position < input.length; position += 1) {
+      const item = input[position]!;
+      const entry: ReplyRunEntry = "frame" in item ? item : { frame: item };
+      const { frame } = entry;
+      if (frame.event !== "reply_delta" || !("type" in frame.data)) {
+        open = false;
+        continue;
+      }
 
-    const key = `${entry.workflowId ?? frame.data.agent_id}:${messageKey(frame)}`;
-    const index = position + 1;
-    const { text, timestamp } = frame.data;
+      const key = replyRunKey(entry);
+      const index = position + 1;
+      const { text, timestamp } = frame.data;
 
-    /* Contiguity needs no check of its own: every non-delta frame above clears
-       `open`, so an open run's last frame is always the one before this. */
-    if (open != null && open.key === key) {
-      open.endIndex = index;
-      open.endTs = timestamp;
-      open.text += text;
-      open.frameCount += 1;
-      return;
+      /* Contiguity needs no check of its own: every non-delta frame above clears
+         `open`, so an open run's last frame is always the one before this. */
+      const run = runs.at(-1);
+      if (open && run != null && run.key === key) {
+        runs[runs.length - 1] = { ...run, endIndex: index, endTs: timestamp, text: run.text + text, frameCount: run.frameCount + 1 };
+        continue;
+      }
+
+      open = true;
+      runs.push({ key, startIndex: index, endIndex: index, text, startTs: timestamp, endTs: timestamp, frameCount: 1 });
     }
-
-    open = {
-      key,
-      startIndex: index,
-      endIndex: index,
-      text,
-      startTs: timestamp,
-      endTs: timestamp,
-      frameCount: 1
-    };
-    runs.push(open);
-  });
-
-  return runs;
+    seen = input.length;
+    last = input[seen - 1];
+    return runs.slice();
+  };
 }
 
 /** The run a 1-based frame index falls inside, or null when it is not a reply chunk. */

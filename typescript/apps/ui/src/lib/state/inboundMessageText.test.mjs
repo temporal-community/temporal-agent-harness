@@ -11,7 +11,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 
-import { displayTextForMessage, renderUserMessage } from "./inboundMessageText.ts";
+import {
+  displayTextForMessage,
+  renderUserMessage,
+  singleStringPayload
+} from "./inboundMessageText.ts";
 import { buildReplayLog } from "./replayLog.ts";
 import { buildTranscript } from "./transcript.ts";
 
@@ -76,6 +80,11 @@ function assertAllShow(handler, payload, expected, what) {
 const SCRIPT = 'book_flight("SFO", "LHR")';
 
 describe("the message an operator gets shown back", () => {
+  it("puts multi-line text in the send payload verbatim", () => {
+    const script = '"""Two scouts in parallel -> planner."""\nimport asyncio\n\nasync def main():\n    return await run_agent({"name": "Planner"})\n';
+    assert.deepEqual(singleStringPayload("script", script), { script });
+  });
+
   it("shows a lone string field bare, whatever it is called", () => {
     assertAllShow("run_script", { script: SCRIPT }, SCRIPT, "a run_script message");
     assertAllShow("ask", { text: "hello there" }, "hello there", "a chat message");
