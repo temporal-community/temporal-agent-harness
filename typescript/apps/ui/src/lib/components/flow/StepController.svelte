@@ -2,10 +2,18 @@
   import { PanelBottom, Pause, Play, SkipBack, SkipForward } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import TipCard, { type TipField } from "$lib/components/primitives/TipCard.svelte";
+  import { formatCost, formatTokens } from "$lib/cost/pricing";
   import { PLAYBACK_SPEEDS, type PlaybackSpeed } from "$lib/state/agentRun.svelte";
   import { dismissable } from "$lib/state/dismissable.svelte";
   import { eventVelocity, velocityPath } from "$lib/state/eventVelocity";
-  import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
+  import {
+    formatDuration,
+    formatTimestamp,
+    type ReplayLogRow,
+    type ReplayMarker,
+    type ReplayTone
+  } from "$lib/state/replayLog";
   import {
     laneCues,
     lanePct,
@@ -30,6 +38,7 @@
      * lane costs no second pass over the log.
      */
     eventRows: ReplayLogRow[];
+    overview?: boolean;
     /**
      * Whether the bottom drawer is showing anything. Its control lives here
      * because the transport is the drawer's top edge — the drawer collapses
@@ -56,6 +65,7 @@
     turnMarkers,
     anomalyMarkers,
     eventRows,
+    overview = false,
     drawerOpen,
     onToggleDrawer,
     onPlay,
@@ -75,11 +85,50 @@
      even one frame of streaming. */
   let aimedIndex = $state<number | null>(null);
 
+  /** Statuses the position pip distinguished. The rest stay the chip's own text. */
+  function readoutStatus(eventTone: ReplayTone): "done" | "error" | "approval" | "queue" | null {
+    switch (eventTone) {
+      case "done":
+      case "error":
+      case "approval":
+      case "queue":
+        return eventTone;
+      case "neutral":
+      case "agent":
+      case "model":
+      case "tool":
+        return null;
+      default: {
+        const unhandled: never = eventTone;
+        return unhandled;
+      }
+    }
+  }
+
   const tone = $derived(currentEvent?.tone ?? "neutral");
+  const statusTone = $derived(readoutStatus(tone));
   const eventTitle = $derived(currentEvent?.label ?? "Replay start");
   const eventType = $derived(currentEvent?.event ?? null);
   const eventBody = $derived(currentEvent?.body ?? currentEvent?.status ?? "");
   const hasDetail = $derived(Boolean(eventBody || eventType));
+  /* The readout already shows where the event is in the run, and the header whose run it is,
+     so the card leaves both out: it names an agent only for a subagent's event. */
+  const eventFields = $derived.by((): TipField[] => {
+    const row = currentEvent;
+    if (!row) return [];
+    const start = eventRows[0]?.timestamp;
+    const at = row.timestamp > 0 ? formatTimestamp(row.timestamp) : "";
+    return [
+      { key: "Type", value: eventType, mono: true },
+      { key: "Turn", value: currentTurn == null ? null : String(currentTurn) },
+      { key: "At", value: at && start != null && start > 0 ? `+${formatDuration(row.timestamp - start)} · ${at}` : at },
+      { key: "Agent", value: row.parentTurnNumber == null ? null : row.sourceLabel },
+      { key: "Model", value: row.model, mono: true },
+      { key: "Tool", value: row.toolName, mono: true },
+      { key: "Tokens", value: row.usage ? formatTokens(row.usage.total) : null },
+      { key: "Cost", value: row.estimatedCostUsd == null ? null : formatCost(row.estimatedCostUsd) }
+    ];
+  });
 
   /* Wraps, where the `↑`/`↓` keys clamp. One button has no second direction, so a cycle is
      the only route back to ×1. */
@@ -110,7 +159,7 @@
   /* Where the run sped up and where it stalled, against the same scale the cues
      are placed on. Independent of the cursor, so scrubbing and playback never
      recompute it — only an arriving event or a released scale can. */
-  const ridge = $derived(velocityPath(eventVelocity(eventRows, scale)));
+  const ridge = $derived(overview ? "" : velocityPath(eventVelocity(eventRows, scale)));
 
   const aimedCue = $derived(
     aimedIndex == null ? null : (cues.find((cue) => cue.index === aimedIndex) ?? null)
@@ -228,7 +277,7 @@
       class="speed"
       tone={playbackSpeed === 1 ? "neutral" : "accent"}
       active={playbackSpeed !== 1}
-      aria-label={`Playback speed ${playbackSpeed}x, switch to ${nextSpeed}x`}
+      aria-label={`Playback speed ${playbackSpeed}×, switch to ${nextSpeed}×`}
       data-tip={`Playback speed ${playbackSpeed}× — click for ${nextSpeed}×`}
       onclick={() => onSpeedChange(nextSpeed)}
     >
@@ -240,30 +289,37 @@
        only decide what the lane is drawn against while a hand is over it, so
        there is no role here for anything to operate. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="scrub" onpointerenter={holdScale} onpointerleave={releaseScale}>
+  <div
+    class={["scrub", overview && "overview"]}
+    onpointerenter={holdScale}
+    onpointerleave={releaseScale}
+  >
     <!-- The label rides the playhead on hover — or the cue being pointed at, so
          a mark can say what it is without a second bubble over the same lane. -->
-    <div
-      class="tip"
-      style={`left: ${labelPct}%; transform: translateX(-${labelPct}%)`}
-      aria-hidden="true"
-    >
-      <span class={`dot ${labelTone}`}></span>
-      <span class="tip-title">{labelTitle}</span>
-      {#if labelTurn != null}
-        <span class="kicker tip-turn">turn {labelTurn}</span>
-      {/if}
-      {#if aimedCue}
-        <span class="kicker tip-hint">jump</span>
-      {/if}
-    </div>
+    {#if !overview}
+      <div
+        class="tip"
+        style={`left: ${labelPct}%; transform: translateX(-${labelPct}%)`}
+        aria-hidden="true"
+      >
+        <span class={`dot ${labelTone}`}></span>
+        <span class="tip-title">{labelTitle}</span>
+        {#if labelTurn != null}
+          <span class="kicker tip-turn">turn {labelTurn}</span>
+        {/if}
+        {#if aimedCue}
+          <span class="kicker tip-hint">jump</span>
+        {/if}
+      </div>
+    {/if}
 
     <div class="bar">
       <div class="segments" aria-hidden="true">
-        {#each turnSegments as segment (segment.turnNumber)}
+        <!-- Keyed by position: a segment is pure presentation positioned by its own span, and turn numbers
+             are not unique across a continue-as-new roll-over, so they cannot key it. -->
+        {#each turnSegments as segment, position (position)}
           <span
-            class="segment"
-            class:current={segment.turnNumber === currentTurn}
+            class={["segment", segment.turnNumber === currentTurn && "current"]}
             style={`left: ${segment.leftPct}%; width: ${segment.widthPct}%; --fill: ${segment.fillPct}%`}
           ></span>
         {/each}
@@ -302,9 +358,8 @@
     {#each cues as marker (marker.index)}
       <button
         type="button"
-        class={`cue ${marker.tone}`}
-        class:aimed={aimedIndex === marker.index}
-        style={`left: ${lanePct(marker.index, scale)}%`}
+        class={["cue", marker.tone, aimedIndex === marker.index && "aimed"]}
+        style={`--at: ${lanePct(marker.index, scale) / 100}`}
         aria-label={`Jump to ${marker.label}, turn ${marker.turnNumber}`}
         onpointerenter={() => (aimedIndex = marker.index)}
         onpointerleave={() => (aimedIndex = null)}
@@ -314,8 +369,8 @@
       ></button>
     {/each}
 
-    <div class="playhead" style={`left: ${cursorPct}%`} aria-hidden="true">
-      <span class="knob"></span>
+    <div class="playhead" style={`--at: ${cursorPct / 100}`} aria-hidden="true">
+      {#if !overview}<span class="knob"></span>{/if}
     </div>
   </div>
 
@@ -332,41 +387,27 @@
           ? `${eventTitle} — click for details (stays open while scrubbing)`
           : eventTitle}
       data-tip-align="end"
+      aria-label={statusTone ? `${shownIndex}/${scale}, ${statusTone}` : undefined}
       onclick={() => (detailOpen = !detailOpen)}
     >
-      {#snippet lead()}
-        <span class={`dot ${tone}`}></span>
-      {/snippet}
       <!-- Against the held scale, and holding room for the widest reading it can
            reach. The digits are tabular but their count is not: one more of them
            widens this chip, the lane is the flex item that pays for it, and
            every mark a hand is reaching for slides. Reserving the room here is
            what makes the lane's width, and so its aim, hold still. -->
-      <span class="pos" style={`--pos-chars: ${String(scale).length * 2 + 1}`}
+      <span class={["pos", statusTone]} style={`--pos-chars: ${String(scale).length * 2 + 1}`}
         >{shownIndex}/{scale}</span>
     </Chip>
 
     {#if detailOpen && hasDetail}
-      <div
+      <TipCard
         class="now-card"
         id="now-card"
         {@attach dismissable({ ondismiss: () => (detailOpen = false), keep: ".step-controller" })}
-      >
-        <div class="now-head">
-          <span class={`dot ${tone}`}></span>
-          <strong>{eventTitle}</strong>
-          {#if eventType}
-            <span class="kicker now-type">{eventType}</span>
-          {/if}
-        </div>
-        <p class="kicker now-where">
-          {#if currentTurn != null}turn {currentTurn} ·{/if}
-          event {viewIndex} of {total}
-        </p>
-        {#if eventBody}
-          <p class="now-body">{eventBody}</p>
-        {/if}
-      </div>
+        heading={eventTitle}
+        fields={eventFields}
+        body={eventBody}
+      />
     {/if}
   </div>
 
@@ -430,9 +471,13 @@
     letter-spacing: var(--letter-tight);
   }
 
-  /* A fixed-height lane holds the bar, so growing it on hover shifts nothing. */
+  /* A fixed-height lane holds the bar, so growing it on hover shifts nothing.
+     Left to right in every script, like any media timeline: the marks are placed
+     from the left, and an inherited `rtl` turned only the native range around,
+     so a drag moved the cursor away from the hand. */
   .scrub {
     position: relative;
+    direction: ltr;
     flex: 1 1 240px;
     min-width: 160px;
     height: 18px;
@@ -453,6 +498,10 @@
     height: 12px;
   }
 
+  .scrub.overview:focus-within .bar {
+    height: 6px;
+  }
+
   .segments {
     position: absolute;
     inset: 0;
@@ -463,6 +512,8 @@
     position: absolute;
     top: 0;
     bottom: 0;
+    padding: 0;
+    border: 0;
     background: linear-gradient(
       to right,
       color-mix(in srgb, var(--text-2) 40%, transparent) 0 var(--fill),
@@ -473,6 +524,10 @@
        still ahead. An opaque divider in --surface-0 was the bar's own background
        colour, so it only showed where the fill behind it happened to be light. */
     border-right: 1px solid var(--border-strong);
+  }
+
+  .overview .bar {
+    transition: none;
   }
 
   .segment.current {
@@ -549,10 +604,12 @@
     border: 0;
   }
 
-  /* Small mark, generous hit box: the tick is 3px, the button is 11px. */
+  /* Small mark, generous hit box: the tick is 3px, the button is 11px. Centered
+     where the playhead's centre would be at the same event. */
   .cue {
     position: absolute;
     top: 0;
+    left: calc(var(--at) * (100% - 2px) + 1px);
     z-index: 2;
     width: 11px;
     height: 100%;
@@ -575,7 +632,10 @@
     transition: height var(--duration-fast) var(--ease-out);
   }
 
-  .cue.approval::before,
+  .cue.approval::before {
+    background: var(--live);
+  }
+
   .cue.queue::before {
     background: var(--queue);
   }
@@ -595,30 +655,46 @@
     height: 14px;
   }
 
+  .overview .cue::before,
+  .overview .cue.aimed::before {
+    height: 6px;
+    transition: none;
+  }
+
+  /* Travels the lane less its own width, the way the native 2px thumb does, so
+     it sits over the thumb and never hangs past either end of the bar. */
   .playhead {
     position: absolute;
     top: 0;
+    left: calc(var(--at) * (100% - 2px));
     z-index: 3;
     height: 100%;
     width: 2px;
-    margin-left: -1px;
     background: var(--text-1);
     pointer-events: none;
   }
 
+  .overview .playhead {
+    top: 50%;
+    height: 6px;
+    transform: translateY(-50%);
+  }
+
+  /* Centered on the line mid-lane, flush with the bar at either end: it leads the
+     line by up to the 7px it is wider. */
   .knob {
     position: absolute;
     top: 50%;
-    left: 50%;
+    left: calc(var(--at) * -7px);
     width: 9px;
     height: 9px;
     background: var(--text-1);
-    transform: translate(-50%, -50%) scale(0);
+    transform: translateY(-50%) scale(0);
     transition: transform var(--duration-fast) var(--ease-out);
   }
 
   .scrub:focus-within .knob {
-    transform: translate(-50%, -50%) scale(1);
+    transform: translateY(-50%) scale(1);
   }
 
   .tip {
@@ -630,9 +706,7 @@
     gap: 6px;
     max-width: min(340px, 100%);
     padding: 3px 8px;
-    border: 1px solid var(--border-strong);
     background: var(--surface-3);
-    box-shadow: var(--shadow-floating);
     color: var(--text-1);
     font-size: var(--font-sm);
     white-space: nowrap;
@@ -672,7 +746,10 @@
     background: var(--error);
   }
 
-  .dot.approval,
+  .dot.approval {
+    background: var(--live);
+  }
+
   .dot.queue {
     background: var(--queue);
   }
@@ -700,19 +777,35 @@
     letter-spacing: var(--letter-tight);
   }
 
-  /* Grows out of the readout rather than fading in from nowhere. */
-  .now-card {
+  /* The tokens the status pip used. Unmarked tones keep the chip's text. */
+  .pos.done {
+    color: var(--success);
+  }
+
+  .pos.error {
+    color: var(--error);
+  }
+
+  .pos.approval {
+    color: var(--live);
+  }
+
+  .pos.queue {
+    color: var(--queue);
+  }
+
+  /* Grows out of the readout rather than fading in from nowhere. TipCard draws the rest. It
+     scrolls rather than cutting the message off: unlike a tip, a reader can scroll this. */
+  .now :global(.now-card) {
     position: absolute;
     right: 0;
     bottom: calc(100% + var(--gap-sm));
     z-index: 20;
-    width: min(340px, 70vw);
-    display: grid;
-    gap: 6px;
+    box-sizing: border-box;
+    width: min(340px, calc(100vw - 2 * var(--gutter)));
+    max-height: min(60vh, var(--long-content-max-height));
+    overflow-y: auto;
     padding: 9px 10px;
-    border: 1px solid var(--border-strong);
-    background: var(--surface-3);
-    box-shadow: var(--shadow-floating);
     transform-origin: bottom right;
     opacity: 1;
     transform: none;
@@ -722,50 +815,10 @@
   }
 
   @starting-style {
-    .now-card {
+    .now :global(.now-card) {
       opacity: 0;
       transform: scale(0.96) translateY(3px);
     }
-  }
-
-  .now-head {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
-  }
-
-  .now-head strong {
-    min-width: 0;
-    color: var(--text-1);
-    font-size: var(--font-md);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .now-type {
-    flex: none;
-    margin-left: auto;
-    color: var(--text-4);
-  }
-
-  .now-where {
-    margin: 0;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .now-body {
-    margin: 0;
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.4;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 4;
-    line-clamp: 4;
   }
 
   @media (hover: hover) and (pointer: fine) {
@@ -774,7 +827,7 @@
     }
 
     .scrub:hover .knob {
-      transform: translate(-50%, -50%) scale(1);
+      transform: translateY(-50%) scale(1);
     }
 
     .scrub:hover .tip {
@@ -784,12 +837,29 @@
     .cue:hover::before {
       height: 14px;
     }
+
+    .scrub.overview:hover .bar,
+    .scrub.overview .cue:hover::before {
+      height: 6px;
+    }
   }
 
+  /* The lane takes its own row and the readout lands mid-row, where a card the width of a
+     narrow window fits against neither of its edges: it is placed against the bar's instead. */
   @media (max-width: 760px) {
     .scrub {
       order: 3;
       flex: 1 1 100%;
+    }
+
+    .now {
+      position: static;
+    }
+
+    .now :global(.now-card) {
+      right: auto;
+      left: var(--gutter);
+      transform-origin: bottom left;
     }
   }
 
@@ -798,12 +868,12 @@
     .knob,
     .tip,
     .cue::before,
-    .now-card {
+    .now :global(.now-card) {
       transition: none;
     }
 
     @starting-style {
-      .now-card {
+      .now :global(.now-card) {
         opacity: 0;
         transform: none;
       }

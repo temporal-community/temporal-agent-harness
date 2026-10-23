@@ -307,6 +307,12 @@ js_library(
 )
 
 js_library(
+    name = "textWidth",
+    srcs = ["textWidth.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "thoughtSummary",
     srcs = ["thoughtSummary.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -845,6 +851,12 @@ vitest_test(
         "//typescript/apps/ui/tests/support:controllerHarness",
         "//typescript/apps/ui/tests/support:fakeIndexedDb",
     ],
+)
+
+vitest_test(
+    name = "textWidth_test",
+    src = "textWidth.test.mjs",
+    deps = [":textWidth"],
 )
 
 vitest_test(

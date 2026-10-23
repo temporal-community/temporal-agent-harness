@@ -76,6 +76,17 @@ describe("incremental projections", () => {
     assert.equal(second[0], first[0]);
   });
 
+  it("the timeline's workflow rows and gaps match a full rebuild at every step", () => {
+    const timeline = replayTimelineBuilder();
+    const fold = stepTimelineBuilder();
+    for (const input of [...steps.map(([s, frames, agents]) => timeline(s, frames, agents, "Agent")), ...interleaved, ...subagentsOutliveTurn]) {
+      const { workflow } = fold(input);
+      const expected = buildStepTimeline(input).workflow;
+      assert.deepEqual(workflow.rows(), expected.rows(), `workflow rows at ${input.length}`);
+      assert.deepEqual(workflow.gaps, expected.gaps, `gaps at ${input.length}`);
+    }
+  });
+
   it("step boundaries read off folded turns are every span edge, once, in order", () => {
     const timeline = replayTimelineBuilder();
     const fold = stepTimelineBuilder();
@@ -89,15 +100,16 @@ describe("incremental projections", () => {
   });
 });
 
+const entry = (event, timestamp, turnNumber, data = {}) => ({
+  frame: { event, data: { type: event, agent_id: "root", turn_number: turnNumber, timestamp, ...data } },
+  workflowId: "root-workflow",
+  role: "parent",
+  label: "Agent"
+});
+
 /* A tool of turn 1 that ends after turn 2 has started, so a later frame rewrites an earlier
    turn's rows rather than the last turn's. */
 const interleaved = (() => {
-  const entry = (event, timestamp, turnNumber, data = {}) => ({
-    frame: { event, data: { type: event, agent_id: "root", turn_number: turnNumber, timestamp, ...data } },
-    workflowId: "root-workflow",
-    role: "parent",
-    label: "Agent"
-  });
   const tool = (id) => ({ tool_id: id, tool_name: `tool ${id}`, tool_input: {} });
   const all = [
     entry("turn_started", 0, 1),
@@ -108,6 +120,23 @@ const interleaved = (() => {
     entry("tool_end", 5, 2, tool("b")),
     entry("turn_started", 6, 3),
     entry("tool_start", 7, 3, tool("c"))
+  ];
+  return all.map((_, n) => all.slice(0, n + 1));
+})();
+
+/* Subagents started in turn 1 that end in turn 2: one stops, one is dispatched again. Their rows
+   belong to turn 1, so a turn-2 frame has to rewrite it. */
+const subagentsOutliveTurn = (() => {
+  const sub = (id) => ({ subagent_id: id, workflow_id: `child-${id}`, agent_key: "researcher" });
+  const all = [
+    entry("turn_started", 0, 1),
+    entry("subagent_started", 1, 1, sub("s1")),
+    entry("subagent_started", 2, 1, sub("s2")),
+    entry("turn_end", 3, 1),
+    entry("turn_started", 4, 2),
+    entry("subagent_stopped", 5, 2, sub("s1")),
+    entry("subagent_started", 6, 2, sub("s2")),
+    entry("turn_end", 7, 2)
   ];
   return all.map((_, n) => all.slice(0, n + 1));
 })();

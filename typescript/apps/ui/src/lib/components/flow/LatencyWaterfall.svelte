@@ -5,6 +5,35 @@
     type StepTimeline,
     type TurnTimeline
   } from "$lib/state/stepTimeline";
+  import {
+    distinctTickLabels,
+    tickLabelBoxes,
+    workflowScaleTicks,
+    type ScaledSegment
+  } from "$lib/state/workflowTimelineScale";
+  import { formatDuration } from "$lib/state/replayLog";
+
+  /**
+   * One row's ruler: the Timeline's tick rule on a single unfolded segment, so a tick
+   * is placed per `spacingPx` of track rather than five per row whatever its width, and
+   * a label that would collide with the end label is dropped. `gap` is the guide pitch,
+   * in percent of the track, taken from the nice step before the end tick is added.
+   */
+  export function axisTicks(
+    scale: number,
+    widthPx: number,
+    labelWidth: (tick: number) => number
+  ): { ticks: number[]; gap: number } {
+    const segments: ScaledSegment[] = [
+      { key: "turn", startTs: 0, endTs: scale, startPx: 0, endPx: widthPx, collapsed: false }
+    ];
+    const raw = workflowScaleTicks(segments);
+    const ticks = tickLabelBoxes(segments, distinctTickLabels(raw, formatDuration), labelWidth).map(
+      (box) => box.tick
+    );
+    const step = raw.length > 2 ? raw[1]! - raw[0]! : scale;
+    return { ticks, gap: (step / scale) * 100 };
+  }
 
   /**
    * Turns above which a row folds to a proportion bar instead of drawing its tracks.
@@ -13,7 +42,7 @@
    * 30,000px, or 89 screens of a 340px drawer. Twelve is where that starts to bite,
    * and high enough that today's two-turn sessions never meet the affordance.
    *
-   * Module scope and exported, the way TranscriptPanel exports statusKind(), so
+   * Module scope and exported, so
    * LatencyWaterfall.test.mjs asserts this number and the two rules below rather
    * than a copy that would pass forever while these rotted.
    */
@@ -94,18 +123,33 @@
 </script>
 
 <script lang="ts">
+  import { onDestroy, untrack } from "svelte";
+  import type { Attachment } from "svelte/attachments";
+  import { createVirtualizer, defaultRangeExtractor } from "@tanstack/svelte-virtual";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
+  import Reading from "$lib/components/primitives/Reading.svelte";
+  import type { Metric } from "$lib/components/primitives/metrics";
   import { ChevronDown, ChevronRight, Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
   import { scrollFollower } from "$lib/state/followScroll";
-  import { formatDuration } from "$lib/state/replayLog";
-  import { niceTimeTicks } from "$lib/state/timeTicks";
-  /* `turnScale` is not here: the module block above imports it for the collapse
-     predicate, and that binding is in scope for this one. */
+  import type { ReplayMarker } from "$lib/state/replayLog";
+  import { textWidth } from "$lib/state/textWidth";
+  /* `turnScale` and `formatDuration` are not here: the module block above imports them
+     for the collapse predicate and the ruler, and those bindings are in scope for this one. */
   import { HISTORY_GAP_NOTE } from "$lib/state/historyGap";
-  import { aggregateSpans, type SpanKind, type TimelineSpan } from "$lib/state/stepTimeline";
+  import {
+    aggregateSpans,
+    denseLanes,
+    indexAtFraction,
+    spanNear,
+    type LaneStrip,
+    type SpanKind,
+    type TimelineSpan
+  } from "$lib/state/stepTimeline";
 
   interface Props {
     timeline: StepTimeline;
     viewIndex: number;
+    anomalyMarkers?: ReplayMarker[];
     onScrub: (index: number) => void;
   }
 
@@ -121,9 +165,12 @@
     turnStart: number;
     /** 0..1 along the scale, or null when the cursor is not in this turn. */
     head: number | null;
+    turn: TurnTimeline;
     subagent: boolean;
     /** Prepended to every bar's tooltip, naming the subagent a nested row belongs to. */
     prefix?: string;
+    /** A subagent's own start and end, in seconds from `turnStart`, drawn as its band. */
+    range?: { startTs: number; endTs: number };
     /**
      * This track's turn straddles a seam in the run's history, so "no spans" here is
      * not evidence that nothing ran. Parent tracks only — the seam is a root-log
@@ -132,7 +179,7 @@
     gap?: boolean;
   }
 
-  let { timeline, viewIndex, onScrub }: Props = $props();
+  let { timeline, viewIndex, anomalyMarkers = [], onScrub }: Props = $props();
 
   const aggregates = $derived(aggregateSpans(timeline));
   const totalSpanSeconds = $derived(
@@ -152,12 +199,10 @@
    */
   let trackWidths = $state<Record<string, number>>({});
 
-  /* Roughly one character of --font-xs tabular text, plus the bar's own padding.
-     An estimate rather than a canvas measurement, and it rounds up deliberately:
-     a few pixels pessimistic costs a label that would just have fitted, which
-     lands on hover anyway, while optimistic is the truncation this replaced. */
-  const CHAR_PX = 6.6;
+  /* The bar's horizontal padding and border. */
   const LABEL_PAD_PX = 16;
+  /* The bar's own font, read from the tokens once rather than per bar. */
+  let labelFont = "";
 
   function pct(
     span: TimelineSpan,
@@ -183,7 +228,7 @@
    * The first lane each kind owns, which is where its rail glyph goes, and how many
    * spans of that kind this track holds.
    *
-   * The count rides along because the instrument form drops the rollup cards, and a
+   * The count rides along because the instrument form drops the rollup, and a
    * glyph that can answer "how many tool calls in this turn" costs no pixels to ask.
    */
   function laneKinds(spans: TimelineSpan[]): { kind: SpanKind; lane: number; count: number }[] {
@@ -212,10 +257,21 @@
     return `${span.label} · ${formatDuration(span.durationSeconds)}`;
   }
 
+  function font(): string {
+    if (!labelFont && typeof document !== "undefined") {
+      const root = getComputedStyle(document.documentElement);
+      labelFont = `${root.getPropertyValue("--font-xs")} ${root.getPropertyValue("--font-sans")}`;
+    }
+    return labelFont;
+  }
+
   /** Stolen from TanStack's `eventBarCanFitLabel`, in pixels rather than data units. */
   function fitsLabel(span: TimelineSpan, widthPct: number, trackPx: number): boolean {
-    return (widthPct / 100) * trackPx >= barText(span).length * CHAR_PX + LABEL_PAD_PX;
+    return (widthPct / 100) * trackPx >= textWidth(barText(span), font()) + LABEL_PAD_PX;
   }
+
+  /* Digits as zeros: ticks render tabular figures, which a canvas measurement ignores. */
+  const tickWidth = (tick: number) => textWidth(formatDuration(tick).replace(/\d/g, "0"), font());
 
   function barClass(span: TimelineSpan, fits: boolean, left: number): string {
     const tone = span.tone === "error" ? "error" : span.kind;
@@ -237,6 +293,9 @@
     return `${prefix ? `${prefix} · ` : ""}${barText(span)}${detail}`;
   }
 
+  /* One word each: the header figures carry an icon, so the label only has to name it. */
+  const kindWord: Record<SpanKind, string> = { model: "model", tool: "tool", approval: "approval", evaluation: "check" };
+
   const kindLabel: Record<SpanKind, string> = {
     model: "model",
     tool: "tool",
@@ -246,6 +305,32 @@
        much of that was the approver rather than the person. */
     evaluation: "approval check"
   };
+
+  const kindIcon: Record<SpanKind, Metric["icon"]> = { model: Cpu, tool: Wrench, approval: ShieldCheck, evaluation: ShieldCheck };
+  const kindHue: Partial<Record<SpanKind, string>> = { model: "--model", tool: "--tool", approval: "--live" };
+
+  const headLabel = $derived(
+    `per step · ${timeline.turns.length.toLocaleString("en-US")} ${timeline.turns.length === 1 ? "turn" : "turns"}` +
+      (subagentTurnCount > 0 ? ` · ${subagentTurnCount.toLocaleString("en-US")} nested` : "")
+  );
+
+  /* Led by the total, like Tokens, then one plain figure per kind. Count and share are
+     in each figure's tip: on the strip they tripled every label, and the durations
+     beside the total already say the share. A kind that rounds to 0% is drawn quiet. */
+  const rollup: Metric[] = $derived([
+    { label: "total", value: formatDuration(totalSpanSeconds), tone: "strong" },
+    ...aggregates.map((agg): Metric => {
+      const share = totalSpanSeconds > 0 ? Math.round((agg.totalSeconds / totalSpanSeconds) * 100) : 0;
+      return {
+        label: kindWord[agg.kind],
+        value: formatDuration(agg.totalSeconds),
+        tone: share === 0 ? "quiet" : "neutral",
+        icon: kindIcon[agg.kind],
+        hue: kindHue[agg.kind],
+        note: `${kindLabel[agg.kind]} · ${agg.count.toLocaleString("en-US")}× · ${share}% of total`
+      };
+    })
+  ]);
 
   /** Turns the reader opened by hand. Ephemeral — see the note on `turnExpanded`. */
   let openedTurns = $state<ReadonlySet<number>>(new Set());
@@ -275,9 +360,170 @@
     }));
   }
 
+  /**
+   * A track's bars and strips: lanes too crowded for a bar per span are binned into a strip,
+   * and only the lanes with room draw a bar per span.
+   *
+   * Kept per spans array, because a turn's spans keep their identity until the fold
+   * rebuilds that turn, and the snippet re-reads its track on every step of the cursor.
+   */
+  const trackCache = new WeakMap<
+    TimelineSpan[],
+    { key: string; strips: LaneStrip[]; bars: TimelineSpan[] }
+  >();
+
+  /* Before a track is measured, a guess at its width rather than zero, so a short turn
+     does not flash as strips on its first frame. */
+  const UNMEASURED_PX = 600;
+
+  function trackLayout(track: TrackView): { strips: LaneStrip[]; bars: TimelineSpan[] } {
+    const width = trackWidths[track.key] || UNMEASURED_PX;
+    const key = `${width}:${track.scale}:${track.turnStart}`;
+    const cached = trackCache.get(track.spans);
+    if (cached?.key === key) return cached;
+    const strips = denseLanes(track.spans, track.turnStart, track.scale, width);
+    const dense = new Set(strips.map((strip) => strip.lane));
+    const layout = { key, strips, bars: dense.size ? track.spans.filter((span) => !dense.has(span.lane)) : track.spans };
+    trackCache.set(track.spans, layout);
+    return layout;
+  }
+
+  /** The span under the pointer on a strip, drawn as a bar over it so its label shows. */
+  let hovered = $state<{ key: string; span: TimelineSpan } | null>(null);
+
+  /* How far either side of the pointer a strip looks for a span: the bar's hit slop. */
+  const STRIP_SLOP_PX = 6;
+
+  function spanUnder(event: MouseEvent, track: TrackView, strip: LaneStrip): TimelineSpan | null {
+    const box = (event.currentTarget as Element).getBoundingClientRect();
+    if (box.width === 0) return null;
+    const perPx = track.scale / box.width;
+    const at = track.turnStart + (event.clientX - box.left) * perPx;
+    return spanNear(strip.spans, at - STRIP_SLOP_PX * perPx, at + STRIP_SLOP_PX * perPx);
+  }
+
+  /* A click lands on the span under the pointer; Enter or Space, which has no pointer, steps
+     to the lane's next span after the cursor, so a strip is not a dead end for the keyboard. */
+  function scrubStrip(event: MouseEvent, track: TrackView, strip: LaneStrip): void {
+    const span =
+      event.detail === 0
+        ? (strip.spans.find((item) => item.startIndex > viewIndex) ?? strip.spans[0])
+        : spanUnder(event, track, strip);
+    if (span) onScrub(span.startIndex);
+  }
+
+  let scrubGesture: { element: HTMLElement; pointerId: number; turn: TurnTimeline } | null = null;
+  let scrubFrame = 0;
+  let pendingScrub: { element: HTMLElement; clientX: number; turn: TurnTimeline } | null = null;
+
+  function scrubAt(element: HTMLElement, clientX: number, turn: TurnTimeline): void {
+    const box = element.getBoundingClientRect();
+    if (box.width === 0) return;
+    let fraction = (clientX - box.left) / box.width;
+    if (getComputedStyle(element).direction === "rtl") fraction = 1 - fraction;
+    const index = indexAtFraction(turn, fraction);
+    if (index != null) onScrub(index);
+  }
+
+  function startScrub(event: PointerEvent, turn: TurnTimeline): void {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    const element = event.currentTarget as HTMLElement;
+    element.setPointerCapture(event.pointerId);
+    scrubGesture = { element, pointerId: event.pointerId, turn };
+    scrubAt(element, event.clientX, turn);
+  }
+
+  function moveScrub(event: PointerEvent): void {
+    if (scrubGesture?.pointerId !== event.pointerId) return;
+    pendingScrub = {
+      element: scrubGesture.element,
+      clientX: event.clientX,
+      turn: scrubGesture.turn
+    };
+    if (scrubFrame) return;
+    scrubFrame = requestAnimationFrame(() => {
+      scrubFrame = 0;
+      if (pendingScrub) scrubAt(pendingScrub.element, pendingScrub.clientX, pendingScrub.turn);
+      pendingScrub = null;
+    });
+  }
+
+  function stopScrub(event: PointerEvent): void {
+    if (scrubGesture?.pointerId !== event.pointerId) return;
+    if (scrubGesture.element.hasPointerCapture(event.pointerId)) {
+      scrubGesture.element.releasePointerCapture(event.pointerId);
+    }
+    scrubGesture = null;
+    pendingScrub = null;
+    if (scrubFrame) cancelAnimationFrame(scrubFrame);
+    scrubFrame = 0;
+  }
+
+  onDestroy(() => {
+    if (scrubFrame) cancelAnimationFrame(scrubFrame);
+  });
+
+  /* Where along a strip its spans turn from past to future: the playhead, when the cursor is
+     in this turn, else all or nothing. Bars fade to .32 past the cursor; a strip fades there. */
+  function futureFrom(track: TrackView, strip: LaneStrip): number {
+    return track.head ?? (viewIndex < strip.spans[0]!.startIndex ? 0 : 1);
+  }
+
+  /** Spans in a strip holding the cursor, drawn as bars so the active tint survives binning. */
+  function activeIn(strips: LaneStrip[]): TimelineSpan[] {
+    return strips.flatMap((strip) =>
+      strip.spans.filter((span) => viewIndex >= span.startIndex && viewIndex <= span.endIndex)
+    );
+  }
+
   /* This pane's own scroller, and the only box the follow below may move. */
   let turnsElement = $state<HTMLElement | null>(null);
   const follower = scrollFollower(() => turnsElement);
+
+  /* The row holding focus, kept in the DOM while it is scrolled out of view: unmounting it
+     would drop focus to the body, and the next Tab would start from the top of the page. */
+  let focusedIndex: number | null = null;
+
+  /* Only the rows in view are in the DOM. Folding bounded a row's height, not its cost:
+     12,500 folded turns were still 12,500 rows, each with its proportion bar. */
+  const rows = createVirtualizer<HTMLElement, HTMLElement>({
+    /* Seeded here as well as in the effect below, which SSR never runs. */
+    count: untrack(() => timeline.turns.length),
+    getItemKey: (index) => timeline.turns[index]?.turnNumber ?? index,
+    estimateSize: (index) => {
+      const turn = timeline.turns[index];
+      return turn && timeline.turns.length <= COLLAPSE_THRESHOLD ? 60 + trackHeight(turn.laneCount) : 46;
+    },
+    getScrollElement: () => turnsElement,
+    initialRect: { width: 0, height: 800 },
+    gap: 8,
+    overscan: 4,
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range);
+      if (focusedIndex == null || focusedIndex >= range.count || indexes.includes(focusedIndex)) return indexes;
+      return [...indexes, focusedIndex].sort((a, b) => a - b);
+    }
+  });
+  /* Untracked: setOptions publishes the store, which would re-run the effect calling it. */
+  const rowList = () => untrack(() => $rows);
+  const measureRow: Attachment<HTMLElement> = (node) => rowList().measureElement(node);
+
+  /* Pre, so a shrunk list's count lands before the rows render and index past its end. */
+  $effect.pre(() => {
+    const count = timeline.turns.length;
+    void turnsElement;
+    rowList().setOptions({ count });
+  });
+
+  function trackFocus(event: FocusEvent): void {
+    const row = (event.target as Element).closest<HTMLElement>("[data-index]");
+    focusedIndex = row ? Number(row.dataset.index) : null;
+  }
+
+  function releaseFocus(event: FocusEvent): void {
+    if (!(event.currentTarget as Element).contains(event.relatedTarget as Node | null)) focusedIndex = null;
+  }
 
   /**
    * Keep the row holding the playhead on screen.
@@ -285,12 +531,15 @@
    * The pane had no scroll-follow of any kind, so past a dozen turns `→` or `.` moved
    * a line in a row eighty screens away with no way to reach it. Still the same shape
    * as the Logs pane's follow, because it is now literally the same code: see
-   * followScroll.ts for why `scrollIntoView` had to go from both of them.
+   * followScroll.ts for why `scrollIntoView` had to go from both of them. A row
+   * windowed out of the DOM is scrolled to by index first, then followed.
    */
   $effect(() => {
-    const followed = timeline.turns.find((turn) => playheadFraction(turn, viewIndex) != null);
-    if (!followed) return;
-    follower.to(`waterfall-turn-${followed.turnNumber}`);
+    const index = timeline.turns.findIndex((turn) => playheadFraction(turn, viewIndex) != null);
+    if (index < 0) return;
+    follower.to(`waterfall-turn-${timeline.turns[index]!.turnNumber}`, () =>
+      rowList().scrollToIndex(index, { align: "auto" })
+    );
   });
 </script>
 
@@ -313,10 +562,39 @@
   <span class="turn-dur">{formatDuration(turn.durationSeconds)}</span>
 {/snippet}
 
+<!-- One span's bar. Over a strip it is a picture of the span rather than a control —
+     the strip under it takes the pointer — so it says the same thing without a second
+     target for the same click. -->
+{#snippet bar(span: TimelineSpan, track: TrackView, overStrip = false)}
+  {@const box = pct(span, track.turnStart, track.scale)}
+  {@const fits = fitsLabel(span, box.width, trackWidths[track.key] ?? 0)}
+  {#if overStrip}
+    <span
+      class={`${barClass(span, fits, box.left)} over-strip`}
+      style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span.lane)}px`}
+      aria-hidden="true"
+    >
+      <span class="bar-text"><bdi>{span.label}</bdi> · {formatDuration(span.durationSeconds)}</span>
+    </span>
+  {:else}
+    <button
+      class={barClass(span, fits, box.left)}
+      style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span.lane)}px`}
+      title={spanTitle(span, track.prefix)}
+      onpointerdown={(event) => event.stopPropagation()}
+      onclick={() => onScrub(span.startIndex)}
+    >
+      <span class="bar-text"><bdi>{span.label}</bdi> · {formatDuration(span.durationSeconds)}</span>
+    </button>
+  {/if}
+{/snippet}
+
 <!-- Both tracks in a turn — the parent's and each subagent's — are the same
-     object: named lanes down the left, bars against the turn's scale, one
-     playhead. Written once and rendered twice. -->
+     object: named lanes down the left, bars against the turn's scale. Written
+     once and rendered twice. -->
 {#snippet laneTrack(track: TrackView)}
+  {@const layout = trackLayout(track)}
+  {@const active = layout.strips.length > 0 ? activeIn(layout.strips) : []}
   <div class="track-wrap">
     <div class="lane-rail" style={`height: ${trackHeight(track.laneCount)}px`}>
       {#each laneKinds(track.spans) as entry (entry.kind)}
@@ -340,25 +618,57 @@
       class="track"
       class:parent-track={!track.subagent}
       class:subagent-track={track.subagent}
+      role="presentation"
       style={`height: ${trackHeight(track.laneCount)}px`}
       bind:clientWidth={null, (value) => (trackWidths[track.key] = value ?? 0)}
+      onpointerdown={(event) => startScrub(event, track.turn)}
+      onpointermove={moveScrub}
+      onpointerup={stopScrub}
+      onpointercancel={stopScrub}
     >
-      {#if track.head != null}
-        <span class="playhead" style={`left: ${track.head * 100}%`} aria-hidden="true"></span>
+      {#if track.range}
+        {@const start = Math.max(0, ((track.range.startTs - track.turnStart) / track.scale) * 100)}
+        <span
+          class="subagent-band"
+          style={`left: ${start}%; width: ${Math.max(0, Math.min(100 - start, ((track.range.endTs - track.range.startTs) / track.scale) * 100))}%`}
+          aria-hidden="true"
+        ></span>
       {/if}
-
-      {#each track.spans as span (span.id)}
-        {@const box = pct(span, track.turnStart, track.scale)}
-        {@const fits = fitsLabel(span, box.width, trackWidths[track.key] ?? 0)}
+      <!-- One button per dense lane, its spans traced as pixel runs. Its label says what a
+           bar per span would have; the bars that matter right now — the one under the
+           pointer and the ones holding the cursor — are drawn over it below. -->
+      {#each layout.strips as strip (strip.lane)}
         <button
-          class={barClass(span, fits, box.left)}
-          style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span.lane)}px`}
-          title={spanTitle(span, track.prefix)}
-          onclick={() => onScrub(span.startIndex)}
+          class={`strip ${strip.kind}`}
+          style={`top: ${laneTop(strip.lane)}px; --future: ${futureFrom(track, strip) * 100}%`}
+          aria-label={`${kindLabel[strip.kind]} lane · ${strip.spans.length.toLocaleString()} spans` +
+            `${strip.errors ? ` · ${strip.errors.toLocaleString()} failed` : ""}` +
+            " · too dense to draw one by one; press to step to the next"}
+          onpointerdown={(event) => event.stopPropagation()}
+          onpointermove={(event) => {
+            const span = spanUnder(event, track, strip);
+            hovered = span ? { key: track.key, span } : null;
+          }}
+          onpointerleave={() => (hovered = null)}
+          onclick={(event) => scrubStrip(event, track, strip)}
         >
-          <span class="bar-text">{barText(span)}</span>
+          <svg viewBox={`0 0 ${trackWidths[track.key] || UNMEASURED_PX} 20`} preserveAspectRatio="none" aria-hidden="true">
+            <path class="fill" d={strip.fill} />
+            <path class="error" d={strip.error} />
+            <path class="ongoing" d={strip.ongoing} />
+          </svg>
         </button>
       {/each}
+
+      {#each layout.bars as span (span.id)}
+        {@render bar(span, track)}
+      {/each}
+      {#each active as span (span.id)}
+        {@render bar(span, track, true)}
+      {/each}
+      {#if hovered?.key === track.key && !active.includes(hovered.span)}
+        {@render bar(hovered.span, track, true)}
+      {/if}
 
       <!-- Suppressed over a seam, because there it is the bug: "no measured parent
            steps" reads as a turn that ran none, which is the one thing this track
@@ -375,45 +685,12 @@
 
 <section class="waterfall" aria-label="Latency waterfall">
   <header class="waterfall-head">
-    <div class="title">
-      <h2>Latency waterfall</h2>
-      <p>
-        Per-step wall-clock across {timeline.turns.length} parent turns
-        {#if subagentTurnCount > 0}
-          · {subagentTurnCount} nested subagent turns
-        {/if}
-        · each row on its own scale
-      </p>
-    </div>
-    <div class="rollup" aria-label="Time by step kind">
-      {#each aggregates as agg (agg.kind)}
-        <div class={`roll ${agg.kind}`}>
-          <span class="roll-icon" aria-hidden="true">
-            {#if agg.kind === "model"}
-              <Cpu size={14} />
-            {:else if agg.kind === "tool"}
-              <Wrench size={14} />
-            {:else}
-              <ShieldCheck size={14} />
-            {/if}
-          </span>
-          <span class="roll-text">
-            <strong>{formatDuration(agg.totalSeconds)}</strong>
-            <small class="kicker">
-              {kindLabel[agg.kind]} · {agg.count}×
-              {#if totalSpanSeconds > 0}
-                · {Math.round((agg.totalSeconds / totalSpanSeconds) * 100)}%
-              {/if}
-            </small>
-          </span>
-        </div>
-      {/each}
-    </div>
+    <Reading label={headLabel} headline={rollup.slice(0, 1)} breakdown={rollup.slice(1)} />
   </header>
 
   <div class="turns" bind:this={turnsElement} onscroll={follower.handleScroll}>
     {#if timeline.turns.length === 0}
-      <p class="empty">Step through the stream to chart per-step latency.</p>
+      <EmptyState title="Step through the stream to chart per-step latency." />
     {:else}
       <!-- No shared ruler heads these rows, because each is scaled to its own turn
            and no single ruler would be true of all of them. Nor does a sentence
@@ -423,10 +700,24 @@
            The per-row rulers carry it instead — they are next to the bars, and a
            reader comparing 0s–40s against 0s–8m has the answer in the same
            glance. -->
-      {#each timeline.turns as turn (turn.turnNumber)}
+      <!-- A feed of turns, windowed: each row says where it sits in the whole run, since
+           most of the run is not in the DOM to count. -->
+      <div
+        class="turn-list"
+        role="feed"
+        aria-label="Turns"
+        style:height={`${$rows.getTotalSize()}px`}
+        onfocusin={trackFocus}
+        onfocusout={releaseFocus}
+      >
+      {#each $rows.getVirtualItems() as item (item.key)}
+        {@const turn = timeline.turns[item.index]}
+        {#if turn}
         {@const scale = turnScale(turn)}
-        {@const ticks = niceTimeTicks(scale, 5)}
+        {@const axis = axisTicks(scale, trackWidths[`turn-${turn.turnNumber}`] || UNMEASURED_PX, tickWidth)}
+        {@const ticks = axis.ticks}
         {@const head = playheadFraction(turn, viewIndex)}
+        {@const cues = anomalyMarkers.filter((marker) => marker.turnNumber === turn.turnNumber)}
         {@const expanded = turnExpanded(turn, viewIndex, timeline.turns.length, openedTurns)}
         <!-- A turn held open by the rules above offers no toggle, because a control
              promising to fold away the failure would be lying. Otherwise the toggle
@@ -440,7 +731,12 @@
           id={`waterfall-turn-${turn.turnNumber}`}
           class="turn-row"
           class:collapsed={!expanded}
-          style={`--tick-gap: ${100 / Math.max(ticks.length - 1, 1)}%`}
+          aria-label={`Turn ${turn.turnNumber}`}
+          aria-posinset={item.index + 1}
+          aria-setsize={timeline.turns.length}
+          data-index={item.index}
+          style={`--tick-gap: ${axis.gap}%; top: ${item.start}px`}
+          {@attach measureRow}
         >
           {#if canFold}
             <button
@@ -466,11 +762,26 @@
                 {/each}
               </div>
             {:else}
+              {#if head != null}
+                <span
+                  class="playhead"
+                  style={`left: calc(18px + (100% - 18px) * ${head})`}
+                  aria-hidden="true"
+                ></span>
+              {/if}
+
               <!-- One ruler per row, ending at that row's own duration: the axis is
                    where the difference between two rows' scales is actually read. -->
               <div class="track-wrap">
                 <div class="lane-rail"></div>
-                <div class="axis" role="presentation">
+                <div
+                  class="axis"
+                  role="presentation"
+                  onpointerdown={(event) => startScrub(event, turn)}
+                  onpointermove={moveScrub}
+                  onpointerup={stopScrub}
+                  onpointercancel={stopScrub}
+                >
                   {#each ticks as tick, i (tick)}
                     <span
                       class="tick"
@@ -479,6 +790,19 @@
                     >
                       {formatDuration(tick)}
                     </span>
+                  {/each}
+                  {#each cues as marker (marker.id)}
+                    {@const at = playheadFraction(turn, marker.index)}
+                    {#if at != null}
+                      <button
+                        type="button"
+                        class={`cue ${marker.tone}`}
+                        style={`--at: ${at}`}
+                        aria-label={`Jump to ${marker.label}, turn ${marker.turnNumber}`}
+                        onpointerdown={(event) => event.stopPropagation()}
+                        onclick={() => onScrub(marker.index)}
+                      ></button>
+                    {/if}
                   {/each}
                 </div>
               </div>
@@ -498,6 +822,7 @@
                 scale,
                 turnStart: turn.startTs,
                 head,
+                turn,
                 subagent: false,
                 gap: turn.historyGap
               })}
@@ -505,10 +830,13 @@
               {#if turn.subagentTurns.length > 0}
                 <div class="subagent-stack" aria-label={`Subagent latency for turn ${turn.turnNumber}`}>
                   {#each turn.subagentTurns as subagent (`${subagent.workflowId}:${subagent.turnNumber}`)}
+                    <!-- Captioned above its track rather than beside it, at every width:
+                         a label column here would start this track right of the parent's,
+                         and the two share one time scale. -->
                     <div class="subagent-row">
                       <div class="subagent-label">
                         <span>Subagent</span>
-                        <strong title={subagent.label}>{subagent.label}</strong>
+                        <strong class="fade-end" dir="auto" title={subagent.label}>{subagent.label}</strong>
                         <small>
                           turn {subagent.turnNumber} · {formatDuration(subagent.durationSeconds)}
                         </small>
@@ -520,8 +848,10 @@
                         scale,
                         turnStart: turn.startTs,
                         head,
+                        turn,
                         subagent: true,
-                        prefix: subagent.label
+                        prefix: subagent.label,
+                        range: subagent
                       })}
                     </div>
                   {/each}
@@ -530,7 +860,9 @@
             {/if}
           </div>
         </article>
+        {/if}
       {/each}
+      </div>
     {/if}
   </div>
 </section>
@@ -543,63 +875,14 @@
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     background: var(--surface-0);
+    container: waterfall / inline-size;
   }
 
+  /* The divider is the scroller's edge, not a card: the turns scroll under it. */
   .waterfall-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 14px;
+    min-width: 0;
     padding: 14px 18px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface-1);
-  }
-
-  .title h2 {
-    margin: 0;
-    font-size: var(--font-xl);
-  }
-
-  .title p {
-    margin: 3px 0 0;
-    color: var(--text-3);
-    font-size: var(--font-md);
-  }
-
-  .rollup {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .roll {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-2);
-  }
-
-  .roll-icon {
-    display: inline-flex;
-  }
-
-  .roll.model .roll-icon { color: var(--model); }
-  .roll.tool .roll-icon { color: var(--tool); }
-  .roll.approval .roll-icon { color: var(--queue); }
-
-  .roll-text {
-    display: grid;
-    line-height: 1.2;
-  }
-
-  .roll-text strong {
-    color: var(--text-1);
-    font-size: var(--font-lg);
-    font-variant-numeric: tabular-nums;
   }
 
   .turns {
@@ -611,13 +894,29 @@
     gap: 8px;
   }
 
+  .turn-list {
+    position: relative;
+    flex: 0 0 auto;
+  }
+
   .turn-row {
+    position: absolute;
+    inset-inline: 0;
     display: grid;
     grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
     gap: 14px;
     align-items: start;
     padding: 8px 0;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+
+  /* Below the Timeline's breakpoint the label column would leave the track a sliver, so
+     the label goes above the track and the track takes the row, whatever the host says. */
+  @container waterfall (max-width: 559px) {
+    .turn-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+    }
   }
 
   /* The glyph rail and the thing it labels, so a ruler and the track under it start
@@ -647,17 +946,72 @@
 
   .lane-mark.model { color: var(--model); }
   .lane-mark.tool { color: var(--tool); }
-  .lane-mark.approval { color: var(--queue); }
+  .lane-mark.approval { color: var(--live); }
 
   .axis {
     position: relative;
-    height: 16px;
+    height: 22px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .axis,
+  .track {
+    direction: ltr;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .axis:active,
+  .track:active {
+    cursor: grabbing;
+  }
+
+  .cue {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: calc(var(--at) * 100%);
+    z-index: 3;
+    width: 11px;
+    height: 8px;
+    margin-inline-start: -5.5px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .cue::before {
+    content: "";
+    position: absolute;
+    inset-block-start: 1px;
+    inset-inline-start: 4px;
+    width: 3px;
+    height: 6px;
+    background: var(--text-3);
+  }
+
+  .cue.approval::before {
+    background: var(--live);
+  }
+
+  .cue.queue::before {
+    background: var(--queue);
+  }
+
+  .cue.error::before {
+    background: var(--error);
+  }
+
+  .cue:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
   }
 
   /* Where the transport's cursor falls in this row's wall-clock. Decorative: the
      scrubber under the rail is the control, and a second draggable time cursor on a
-     different domain would be two answers to "where am I". */
+     different domain would be two answers to "where am I". It belongs to the row
+     body so one line crosses the ruler and every lane. */
   .playhead {
     position: absolute;
     top: 0;
@@ -762,16 +1116,19 @@
     background: color-mix(in srgb, var(--surface-2) 55%, transparent);
   }
 
-  /* The kind tokens, stated the third time in this file after .lane-mark and .roll —
+  /* The kind tokens, stated again in this file after .lane-mark —
      a segment is not a `.bar`, which is absolutely positioned on a track and carries
      10px of hit slop, and inheriting all that to reuse three background declarations
      would cost more lines than repeating the triple the way the file already does. */
   .slice.model { background: var(--model); }
   .slice.tool { background: var(--tool); }
-  .slice.approval { background: var(--queue); }
+  .slice.approval { background: var(--live); }
 
+  /* Clipped across only, so a bar's overflow label can never widen the scroller: at
+     opacity 0 it is still layout, and one long tool name made the pane 12,000px wide. */
   .track {
     position: relative;
+    overflow-x: clip;
     min-height: 30px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--surface-2) 55%, transparent);
@@ -785,6 +1142,7 @@
   }
 
   .turn-body {
+    position: relative;
     min-width: 0;
     display: grid;
     gap: 8px;
@@ -797,26 +1155,38 @@
   .subagent-stack {
     display: grid;
     gap: 7px;
-    padding-left: 12px;
-    border-left: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   }
 
   .subagent-row {
-    display: grid;
-    grid-template-columns: minmax(120px, 168px) minmax(0, 1fr);
-    gap: 10px;
-    align-items: start;
-  }
-
-  .subagent-label {
     min-width: 0;
     display: grid;
-    gap: 1px;
-    padding-top: 1px;
+    gap: 3px;
+  }
+
+  /* Indented by the lane rail, so the caption starts where its track does. */
+  .subagent-label {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding-inline-start: 18px;
+  }
+
+  .subagent-label span,
+  .subagent-label small {
+    flex: none;
+  }
+
+  /* A subagent's own run inside the parent's turn, on the parent's scale: a fill and no
+     stroke, as the Timeline's parent band. */
+  .subagent-band {
+    position: absolute;
+    inset-block: 0;
+    background: color-mix(in srgb, var(--surface-3) 35%, transparent);
+    pointer-events: none;
   }
 
   .subagent-label span {
-    width: max-content;
     padding: 1px 5px;
     border: 1px solid color-mix(in srgb, var(--accent) 44%, transparent);
     border-radius: var(--radius-xs);
@@ -829,12 +1199,9 @@
 
   .subagent-label strong {
     min-width: 0;
-    overflow: hidden;
     color: var(--text-2);
     font-size: var(--font-sm);
     font-weight: 650;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .subagent-label small {
@@ -869,7 +1236,7 @@
     /* Visible, so the hit slop below and an overflow label can leave the bar. The
        text is still held inside it by the flex box, not by clipping. */
     overflow: visible;
-    transition: filter var(--duration-fast) var(--ease-ui), opacity var(--duration-fast) var(--ease-ui), outline-color var(--duration-fast) var(--ease-ui);
+    transition: filter var(--duration-fast) var(--ease-ui), opacity var(--duration-fast) var(--ease-ui), box-shadow var(--duration-fast) var(--ease-ui);
   }
 
   /* Hit slop, TanStack example 91's 44px handle target adapted: the TARGET grows,
@@ -901,6 +1268,7 @@
     top: 50%;
     left: calc(100% + 6px);
     z-index: 9;
+    max-width: min(40ch, 50cqi);
     padding: 1px 6px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-xs);
@@ -935,7 +1303,7 @@
   }
 
   .bar.tool { background: var(--tool); }
-  .bar.approval { background: var(--queue); }
+  .bar.approval { background: var(--live); }
   .bar.error { background: var(--error); }
 
   .bar.ongoing {
@@ -946,12 +1314,13 @@
     opacity: 0.32;
   }
 
-  /* Was a 2px outline offset by one, which on a hairline bar drew a white box
-     several times the size of the thing it was pointing at. The playhead is what
-     says where the cursor is now; this only has to say which span holds it. */
+  /* The playhead is what says where the cursor is now; this only has to say which
+     span holds it, and in the app's own selection language — a tint, not a stroke.
+     A --text-1 outline boxed every concurrent span in white, a stack of fifty of them
+     at once, and outranked :focus-visible so a focused active bar lost its ring. A
+     halo leaves `outline` to the focus ring, and the 2px fits the lane gap. */
   .bar.active {
-    outline: 1px solid var(--text-1);
-    outline-offset: 0;
+    box-shadow: 0 0 0 2px var(--selected-bg);
   }
 
   /* Guarded rather than left decorative: the bar is a button that scrubs, and a
@@ -963,13 +1332,60 @@
     }
   }
 
-  .track-empty,
-  .empty {
-    color: var(--text-3);
-    font-size: var(--font-sm);
+  /* A lane too dense for a bar per span: one control the width of the track, its spans
+     painted as runs of pixels in the kind's color, failures and running spans over them. */
+  .strip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .strip svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    /* `.bar.future`'s opacity, cut at the playhead rather than per bar. */
+    mask-image: linear-gradient(to right, #000 var(--future), rgb(0 0 0 / 32%) var(--future));
+  }
+
+  .strip.tool .fill { fill: var(--tool); }
+  .strip.model .fill { fill: color-mix(in srgb, var(--model) 45%, var(--surface-0)); }
+  .strip.approval .fill { fill: var(--live); }
+  .strip.evaluation .fill { fill: var(--queue); }
+  .strip .error { fill: var(--error); }
+
+  .strip .ongoing {
+    fill: none;
+    stroke: var(--text-1);
+    stroke-dasharray: 2 2;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .strip:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  /* The span under the pointer, and any holding the cursor, drawn over the strip with
+     their labels showing; the strip under them keeps the pointer. */
+  .bar.over-strip {
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .bar.over-strip.unlabelled .bar-text {
+    opacity: 1;
   }
 
   .track-empty {
+    color: var(--text-3);
+    font-size: var(--font-sm);
     position: absolute;
     left: 8px;
     top: 6px;
@@ -981,7 +1397,7 @@
   .history-gap {
     margin: 0 0 6px;
     padding: 5px 8px;
-    border-left: 2px solid var(--error);
+    border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--error) 8%, transparent);
     color: var(--text-2);
@@ -989,12 +1405,8 @@
     line-height: 1.45;
   }
 
-  .empty {
-    padding: 20px 2px;
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    /* Nothing here moves, but a bar's filter/opacity fade is still a change
+    /* Nothing here moves, but a bar's filter/opacity/tint fade is still a change
        the setting asks us not to animate. */
     .bar,
     .bar .bar-text {

@@ -18,7 +18,9 @@ export function niceTimeTicks(span: number, targetCount = 6): number[] {
   if (!Number.isFinite(span) || span <= 0) return [0, 1];
   const target = Math.max(2, Math.floor(targetCount));
 
-  const rough = span / target;
+  /* Coarsen rather than truncate: the loop below stops at 512, and a step that needs more
+     would leave the end of a long span with no ticks at all. */
+  const rough = Math.max(span / target, span / 512);
   const step = STEPS_SECONDS.find((candidate) => candidate >= rough) ?? STEPS_SECONDS.at(-1)!;
 
   const ticks: number[] = [];

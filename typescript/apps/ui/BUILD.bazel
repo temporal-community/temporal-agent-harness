@@ -193,6 +193,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:scrubLane",
         "//typescript/apps/ui/src/lib/state:sessionHistory",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:textWidth",
         "//typescript/apps/ui/src/lib/state:thoughtSummary",
         "//typescript/apps/ui/src/lib/state:timeTicks",
         "//typescript/apps/ui/src/lib/state:toolImages",

@@ -15,19 +15,30 @@
 // sees it — so the two exemptions are asserted rather than trusted to the markup.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
-import { buildStepTimeline, playheadFraction, turnScale } from "$lib/state/stepTimeline.ts";
-/* From the component, the way statusNote.test.mjs reads statusKind() out of
-   TranscriptPanel: the rule belongs where it is used, and a copy of it here would
-   pass forever while the real one rotted. */
+import { scaleScenario } from "$lib/mock/scaleScenarios.ts";
 import {
+  buildStepTimeline,
+  denseLanes,
+  indexAtFraction,
+  playheadFraction,
+  spanNear,
+  turnScale
+} from "$lib/state/stepTimeline.ts";
+/* From the component: the rule belongs where it is used, and a copy of it here would
+   pass forever while the real one rotted. */
+import LatencyWaterfall, {
+  axisTicks,
   COLLAPSE_THRESHOLD,
   turnExpanded,
   turnHeldOpen,
   turnWorthDrawing
 } from "./LatencyWaterfall.svelte";
 
+const source = readFileSync(new URL("./LatencyWaterfall.svelte", import.meta.url), "utf8");
 let clock = 0;
 const frame = (event, data) => ({
   event,
@@ -108,6 +119,19 @@ describe("the latency waterfall", () => {
     const [turn] = timeline.turns;
     assert.equal(turn.laneCount, 1, "a model-only turn is one row, not three empty swimlanes");
     assert.equal(turn.spans[0].lane, 0, "and that row is the top one");
+  });
+
+  it("projects callback waits through the approval lane", () => {
+    clock = 0;
+    const timeline = buildStepTimeline([
+      frame("turn_started", { user_message: "go" }),
+      frame("callback_requested", { tool_id: "callback", tool_name: "ask_user", tool_input: {} }),
+      ((clock = 12), frame("callback_resolved", { tool_id: "callback", tool_name: "ask_user", result: {} }))
+    ]);
+    const wait = timeline.turns[0].spans[0];
+    assert.equal(wait.kind, "approval");
+    assert.equal(wait.label, "callback · ask_user");
+    assert.equal(wait.durationSeconds, 12);
   });
 
   // --- per-turn scale ----------------------------------------------------------------------------
@@ -206,6 +230,148 @@ describe("the latency waterfall", () => {
       playheadFraction({ ...turn, spans: [], subagentTurns: [] }, 1),
       null,
       "and a turn with no measured spans has nothing to map through"
+    );
+  });
+
+  it("maps a row's wall-clock back to its event index", () => {
+    const span = {
+      id: "inverse",
+      turnNumber: 1,
+      kind: "model",
+      label: "model",
+      tone: "done",
+      startTs: 10,
+      endTs: 50,
+      durationSeconds: 40,
+      startIndex: 3,
+      endIndex: 7,
+      lane: 0,
+      ongoing: false
+    };
+    const turn = {
+      role: "parent",
+      turnNumber: 1,
+      startTs: 10,
+      endTs: 50,
+      durationSeconds: 40,
+      preview: "",
+      spans: [span],
+      laneCount: 1,
+      subagentTurns: [],
+      historyGap: false
+    };
+
+    for (let index = span.startIndex; index <= span.endIndex; index += 1) {
+      assert.equal(indexAtFraction(turn, playheadFraction(turn, index)), index);
+    }
+    assert.equal(indexAtFraction(turn, -1), span.startIndex, "fractions before the row clamp left");
+    assert.equal(indexAtFraction(turn, 2), span.endIndex, "fractions after the row clamp right");
+
+    const zero = {
+      ...turn,
+      endTs: 10,
+      durationSeconds: 0,
+      spans: [{ ...span, startTs: 10, endTs: 10, durationSeconds: 0 }]
+    };
+    assert.equal(indexAtFraction(zero, 0), span.startIndex, "a zero-duration row starts at its first event");
+    assert.equal(indexAtFraction(zero, 1), span.endIndex, "and its far edge reaches its last event");
+  });
+
+  /* A stroke here boxed every concurrent span in white, and because `.bar.active`
+     outranks the global :focus-visible ring, a focused active bar lost its ring too. */
+  it("marks the span at the cursor with the selection tint, leaving outline to focus", () => {
+    const rule = source.match(/\.bar\.active\s*\{([^}]*)\}/)?.[1] ?? "";
+    assert.match(rule, /box-shadow:[^;]*var\(--selected-bg\)/, "the active span is tinted");
+    assert.doesNotMatch(rule, /outline|border/, "and never stroked, which would also hide the focus ring");
+  });
+
+  it("wires pointer capture scrubbing to every ruler and track", () => {
+    assert.equal(
+      source.match(/onpointerdown=\{\(event\) => startScrub\(event, (?:turn|track\.turn)\)\}/g)?.length,
+      2,
+      "the ruler and shared parent/subagent track both start the same scrub gesture"
+    );
+    for (const handler of ["onpointermove={moveScrub}", "onpointerup={stopScrub}", "onpointercancel={stopScrub}"]) {
+      assert.equal(source.split(handler).length - 1, 2, `${handler} stays on both scrub surfaces`);
+    }
+    assert.match(source, /element\.setPointerCapture\(event\.pointerId\)/);
+    assert.match(source, /element\.releasePointerCapture\(event\.pointerId\)/);
+    assert.match(
+      source,
+      /\.axis,\s*\.track\s*\{\s*direction: ltr;/,
+      "a row's wall-clock still runs left to right inside an RTL page"
+    );
+  });
+
+  it("draws one playhead through the ruler, parent lanes, and subagent lanes", () => {
+    clock = 0;
+    const timeline = buildStepTimeline([
+      { frame: frame("turn_started", { user_message: "delegate" }), role: "parent" },
+      { frame: frame("model_interaction_started", { model: "gpt-5.1" }), role: "parent" },
+      ((clock = 2),
+      {
+        frame: frame("tool_start", { tool_id: "s1", tool_name: "search" }),
+        role: "subagent",
+        workflowId: "child",
+        label: "Child",
+        parentTurnNumber: 1
+      }),
+      ((clock = 8),
+      {
+        frame: frame("tool_end", { tool_id: "s1" }),
+        role: "subagent",
+        workflowId: "child",
+        label: "Child",
+        parentTurnNumber: 1
+      }),
+      ((clock = 10),
+      { frame: frame("model_interaction_ended", {}), role: "parent" })
+    ]);
+    const [turn] = timeline.turns;
+    const cursor = turn.spans[0].startIndex;
+    const html = render(LatencyWaterfall, {
+      props: { timeline, viewIndex: cursor, onScrub() {} }
+    }).body;
+
+    assert.equal(turn.subagentTurns.length, 1, "sanity: the row has parent and subagent tracks");
+    assert.equal(
+      html.match(/class="playhead(?:\s|")/g)?.length,
+      1,
+      "the whole turn row shares one line"
+    );
+    assert.match(
+      html,
+      new RegExp(`left: calc\\(18px \\+ \\(100% - 18px\\) \\* ${playheadFraction(turn, cursor)}\\)`),
+      "the shared line keeps the turn's existing playhead position"
+    );
+  });
+
+  it("marks a turn's cues at their playhead positions", () => {
+    const timeline = overlappingTurn();
+    const [turn] = timeline.turns;
+    const cue = {
+      id: "marker-approval",
+      index: turn.spans.find((span) => span.kind === "approval").startIndex,
+      turnNumber: turn.turnNumber,
+      tone: "approval",
+      label: "Approval requested"
+    };
+    const html = render(LatencyWaterfall, {
+      props: {
+        timeline,
+        viewIndex: cue.index,
+        anomalyMarkers: [cue],
+        onScrub() {}
+      }
+    }).body;
+
+    assert.match(
+      html,
+      new RegExp(
+        `class="cue approval [^"]+" style="--at: ${playheadFraction(turn, cue.index)}" ` +
+          `aria-label="Jump to Approval requested, turn ${turn.turnNumber}"`
+      ),
+      "the cue button keeps the lane's name and sits at its event's wall-clock fraction"
     );
   });
 
@@ -469,6 +635,145 @@ describe("the latency waterfall", () => {
         [16],
         "and it is the only row held open — the rest of the run stays folded"
       );
+    });
+  });
+
+  // --- at scale: rows in view, and a strip where a lane is too crowded for bars --------------------
+  describe("at scale", () => {
+    const draw = (timeline, viewIndex = 0) =>
+      render(LatencyWaterfall, { props: { timeline, viewIndex, onScrub() {} } }).body;
+
+    it("draws a screenful of a 12,500-turn run, each row placed in the whole", () => {
+      const timeline = buildStepTimeline(scaleScenario("frames100k").frames);
+      const html = draw(timeline);
+      const drawn = html.match(/class="turn-row/g)?.length ?? 0;
+      assert.ok(timeline.turns.length > 12_000, "sanity: the fixture is long");
+      assert.ok(drawn > 0 && drawn < 40, `drew ${drawn} of ${timeline.turns.length} rows`);
+      assert.match(html, /role="feed"/, "the rows are a feed");
+      assert.match(html, /aria-setsize="12500"/, "and each says how many turns the run holds");
+    });
+
+    it("draws a crowded lane as one strip, keeping the cursor's spans as bars", () => {
+      const timeline = buildStepTimeline(scaleScenario("dense5k").frames);
+      const dense = timeline.turns.find((turn) => turn.spans.length > 4_000);
+      const cursor = dense.spans[2_000].startIndex;
+      const html = draw(timeline, cursor);
+      const strips = html.match(/class="strip /g)?.length ?? 0;
+      const bars = html.match(/class="bar /g)?.length ?? 0;
+      assert.ok(strips >= 2, `the model and tool lanes are strips (got ${strips})`);
+      assert.ok(bars > 0 && bars < 20, `${dense.spans.length} spans drew ${bars} bars`);
+      assert.match(html, /class="bar [^"]*active[^"]*over-strip/, "the span at the cursor is still drawn as itself");
+      const future = Number(html.match(/--future: ([\d.]+)%/)?.[1]);
+      assert.ok(future > 0 && future < 100, `and the strip fades past the cursor, from ${future}%`);
+    });
+
+    /* Unisolated, an Arabic tool name pulled its own duration into its run and read "0 · name",
+       and in a right-to-left page an emoji name read "run · 1s_👩🏽‍💻". */
+    it("isolates a span's name from its duration, whichever way the name runs", () => {
+      clock = 0;
+      const html = draw(
+        buildStepTimeline([
+          frame("turn_started", { user_message: "go" }),
+          frame("tool_start", { tool_id: "a", tool_name: "قراءة_الملف" }),
+          ((clock = 3), frame("tool_end", { tool_id: "a" })),
+          frame("tool_start", { tool_id: "b", tool_name: "👩🏽‍💻_run" }),
+          ((clock = 5), frame("tool_end", { tool_id: "b" }))
+        ])
+      );
+      assert.match(html, /<bdi>قراءة_الملف<\/bdi> · \d/);
+      assert.match(html, /<bdi>👩🏽‍💻_run<\/bdi> · \d/);
+    });
+
+    it("bins a crowded lane per pixel, and points at the longest span under the pointer", () => {
+      const span = (i, startTs, endTs, extra = {}) => ({
+        id: `s${i}`, turnNumber: 1, kind: "tool", label: "t", tone: "done", startTs, endTs,
+        durationSeconds: endTs - startTs, startIndex: i, endIndex: i, lane: 1, ongoing: false, ...extra
+      });
+      const lane = Array.from({ length: 1_000 }, (_, i) =>
+        span(i, i, i + 1, i === 500 ? { tone: "error" } : i === 999 ? { ongoing: true } : {})
+      );
+      const model = span(-1, 0, 1_000, { kind: "model", lane: 0 });
+      const [strip, ...rest] = denseLanes([model, ...lane], 0, 1_000, 200);
+      assert.equal(rest.length, 0, "only the crowded lane is binned");
+      assert.equal(strip.lane, 1);
+      assert.equal(strip.fill, "M0 0h200v20h-200z", "back-to-back spans paint one run");
+      assert.equal(strip.error, "M100 0h1v20h-1z", "the failure keeps its own pixel");
+      assert.equal(strip.ongoing, "M199 0h1v20h-1z", "and so does the span still running");
+      assert.equal(denseLanes([model, ...lane], 0, 1_000, 3_000).length, 1, "bars under 4px wide are still a strip");
+      assert.equal(denseLanes([model, ...lane], 0, 1_000, 4_000).length, 0, "with room, every lane keeps its bars");
+
+      const sparse = [span(0, 0, 1), span(1, 1, 4), span(2, 4, 5), span(3, 10, 11)];
+      assert.equal(spanNear(sparse, 0.5, 4.5)?.id, "s1", "the longest span under the pointer wins");
+      assert.equal(spanNear(sparse, 10.2, 10.3)?.id, "s3");
+      assert.equal(spanNear(sparse, 6, 9), null, "and empty track points at nothing");
+    });
+  });
+
+  /* At a 320px pane a hidden overflow label made `.turns` 12,091px wide, the subagent label
+     column pushed each subagent track off its parent's time axis, and five ticks a row
+     printed "2h 00m 00s3h 00m 00s". */
+  describe("at the minimum pane width", () => {
+    const rule = (selector) =>
+      [...source.matchAll(new RegExp(`\\n\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`, "g"))]
+        .map((match) => match[1])
+        .join("\n");
+
+    it("keeps every overflow label inside its track", () => {
+      assert.match(rule(".track"), /overflow-x: clip;/, "an opacity-0 label is still layout");
+      assert.match(rule(".bar.unlabelled .bar-text"), /max-width: min\([^)]*cqi\)/);
+    });
+
+    it("lets the track take the row below the Timeline's breakpoint", () => {
+      assert.match(rule(".waterfall"), /container: waterfall \/ inline-size;/);
+      assert.match(
+        source,
+        /@container waterfall \(max-width: 559px\)\s*\{\s*\.turn-row\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/
+      );
+    });
+
+    it("puts no px floor beside a subagent track, so it shares its parent's x range", () => {
+      for (const selector of [".subagent-stack", ".subagent-row", ".subagent-label"]) {
+        assert.doesNotMatch(rule(selector), /minmax\(\d+px|min-width: [1-9]|padding-left|border-left/, selector);
+      }
+      assert.match(rule(".subagent-row"), /min-width: 0;/);
+      assert.match(rule(".subagent-label"), /min-width: 0;/);
+      assert.match(rule(".track-wrap"), /grid-template-columns: 16px minmax\(0, 1fr\);/);
+      assert.match(rule(".turn-body"), /min-width: 0;/);
+    });
+
+    it("positions a subagent's band in percent of the parent turn's scale", () => {
+      clock = 0;
+      const timeline = buildStepTimeline([
+        { frame: frame("turn_started", { user_message: "delegate" }), role: "parent" },
+        { frame: frame("model_interaction_started", { model: "gpt-5.1" }), role: "parent" },
+        ((clock = 25),
+        { frame: frame("tool_start", { tool_id: "s1", tool_name: "search" }), role: "subagent", workflowId: "child", label: "Child", parentTurnNumber: 1 }),
+        ((clock = 75),
+        { frame: frame("tool_end", { tool_id: "s1" }), role: "subagent", workflowId: "child", label: "Child", parentTurnNumber: 1 }),
+        ((clock = 100), { frame: frame("model_interaction_ended", {}), role: "parent" })
+      ]);
+      const html = render(LatencyWaterfall, { props: { timeline, viewIndex: 0, onScrub() {} } }).body;
+      assert.match(html, /class="subagent-band[^"]*" style="left: 25%; width: 50%"/);
+    });
+
+    it("thins the ruler to the track's width with the Timeline's tick rule", () => {
+      const width = (tick) => `${tick}`.length * 40;
+      const wide = axisTicks(3_600, 1_200, () => 60);
+      const narrow = axisTicks(3_600, 256, () => 60);
+      assert.ok(narrow.ticks.length < wide.ticks.length, "a narrower track draws fewer ticks");
+      assert.equal(narrow.ticks.at(-1), 3_600, "and still ends at the row's own duration");
+      for (const ticks of [axisTicks(12_250, 256, width).ticks, axisTicks(1_334, 256, width).ticks]) {
+        const scale = ticks.at(-1);
+        const boxes = ticks.map((tick, i) => {
+          const x = (tick / scale) * 256;
+          const w = width(tick);
+          const left = i === 0 ? x : i === ticks.length - 1 ? x - w : x - w / 2;
+          return [left, left + w];
+        });
+        for (let i = 1; i < boxes.length; i++) assert.ok(boxes[i][0] >= boxes[i - 1][1], `tick ${i} clears tick ${i - 1}`);
+      }
+      assert.equal(axisTicks(100, 1_000, () => 30).gap, 10, "guides sit on the nice step, not the end tick");
+      assert.doesNotMatch(source, /niceTimeTicks\(scale, 5\)/, "no fixed tick count per row");
     });
   });
 });

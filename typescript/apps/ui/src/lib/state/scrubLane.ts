@@ -22,6 +22,7 @@ export interface TurnMark {
 
 /** One chapter of the bar: where it starts, how wide it is, how full. */
 export interface TurnSegment {
+  index: number;
   turnNumber: number;
   leftPct: number;
   widthPct: number;
@@ -65,7 +66,13 @@ export function laneCues(markers: ReplayMarker[], scale: number): ReplayMarker[]
 /**
  * The chapters of the track, one per turn, each filling across its own span so
  * the bar reads as a sequence rather than one undifferentiated line. They
- * partition the lane exactly and the last one reaches the end.
+ * partition the lane exactly: the first starts at its left edge and the last
+ * reaches the end.
+ *
+ * Events a run publishes before its first turn — state an agent registers in
+ * `@workflow.init` — get a chapter 0 of their own. Starting at turn 1 instead
+ * left that stretch as bare bar, a dark notch at the start of every such run,
+ * and a run with no turns at all had no track to fill.
  *
  * A run with no events has no track to place them on, and a turn with no events
  * of its own has no span to divide by — both would otherwise reach the DOM as
@@ -77,12 +84,15 @@ export function laneSegments(
   scale: number
 ): TurnSegment[] {
   if (scale === 0) return [];
-  return turnMarks.map((mark, position) => {
+  const chapters =
+    (turnMarks[0]?.index ?? scale) > 0 ? [{ index: 0, turnNumber: 0 }, ...turnMarks] : turnMarks;
+  return chapters.map((mark, position) => {
     const startIndex = mark.index;
-    const endIndex = position + 1 < turnMarks.length ? turnMarks[position + 1].index : scale;
+    const endIndex = position + 1 < chapters.length ? chapters[position + 1].index : scale;
     const length = Math.max(endIndex - startIndex, 0);
     const filled = length === 0 ? 0 : (viewIndex - startIndex) / length;
     return {
+      index: startIndex,
       turnNumber: mark.turnNumber,
       leftPct: (startIndex / scale) * 100,
       widthPct: (length / scale) * 100,

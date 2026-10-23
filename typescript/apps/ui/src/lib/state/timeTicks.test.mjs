@@ -101,4 +101,10 @@ describe("niceTimeTicks", () => {
       );
     }
   });
+
+  it("coarsens the step instead of stopping short when the target asks for too many", () => {
+    const ticks = niceTimeTicks(10_800, 650);
+    assertEvenlySpaced(ticks, "zoomed three-hour span");
+    assert.ok(ticks.at(-1) > 10_800 - (ticks[1] - ticks[0]), "the last tick reaches the span's end");
+  });
 });

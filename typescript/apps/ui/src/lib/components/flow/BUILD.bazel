@@ -84,6 +84,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:historyGap",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:textWidth",
     ],
 )
 

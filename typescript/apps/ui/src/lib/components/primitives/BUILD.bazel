@@ -215,6 +215,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",
         "//typescript/apps/ui/src/lib/cost:pricing",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:textWidth",
     ],
 )
 
