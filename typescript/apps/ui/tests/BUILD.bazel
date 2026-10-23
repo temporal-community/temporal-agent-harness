@@ -11,6 +11,19 @@ vitest_test(
 )
 
 vitest_test(
+    name = "deep-nesting_test",
+    src = "deep-nesting.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:FileViewerDialog",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
+        "//typescript/apps/ui/src/lib/components/primitives:nest",
+    ],
+)
+
+vitest_test(
     name = "drawer-default_test",
     src = "drawer-default.test.mjs",
     deps = [

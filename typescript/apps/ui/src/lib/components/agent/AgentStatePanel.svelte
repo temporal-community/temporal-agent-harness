@@ -1,10 +1,85 @@
+<script lang="ts" module>
+  import type { JsonValue } from "$lib/api/types";
+  import type { StateChange } from "$lib/state/agentState";
+  import { escapeToken } from "$lib/state/jsonPatch";
+
+  /**
+   * One printed line of the document: a scalar or an empty container with its key, or the
+   * line opening or closing a container's subtree. An opening line counts the lines of its
+   * whole block, closing line included.
+   */
+  export interface DocLine {
+    kind: "value" | "open" | "close";
+    pointer: string;
+    depth: number;
+    label: string | null;
+    value: JsonValue;
+    last: boolean;
+    lines: number;
+  }
+
+  function entriesOf(value: JsonValue[] | Record<string, JsonValue>): Array<[string, JsonValue]> {
+    return Array.isArray(value)
+      ? value.map((item, index) => [String(index), item])
+      : Object.entries(value);
+  }
+
+  /** The document as the lines it prints, so a long one can be drawn a window at a time. */
+  export function docLines(root: JsonValue): DocLine[] {
+    const out: DocLine[] = [];
+    const walk = (value: JsonValue, pointer: string, label: string | null, last: boolean, depth: number) => {
+      const entries = value !== null && typeof value === "object" ? entriesOf(value) : [];
+      if (entries.length === 0) {
+        out.push({ kind: "value", pointer, depth, label, value, last, lines: 1 });
+        return;
+      }
+      const array = Array.isArray(value);
+      const open: DocLine = { kind: "open", pointer, depth, label, value, last, lines: 1 };
+      const at = out.push(open);
+      entries.forEach(([key, child], index) =>
+        walk(child, `${pointer}/${escapeToken(key)}`, array ? null : key, index === entries.length - 1, depth + 1)
+      );
+      out.push({ kind: "close", pointer, depth, label, value, last, lines: 1 });
+      open.lines = out.length - at + 1;
+    };
+    walk(root, "", null, true, 0);
+    return out;
+  }
+
+  /**
+   * The marked containers a line is part of, outermost first, and which part of each
+   * container's ring it carries: the opening line its top, the closing line its foot, the
+   * lines between its sides. Drawn line by line, the segments make the one ring the
+   * container used to wear as a single box.
+   */
+  export function ringsOf(
+    line: DocLine,
+    marks: ReadonlyMap<string, StateChange["op"]>
+  ): Array<{ depth: number; op: StateChange["op"]; edge: "top" | "side" | "foot" }> {
+    if (marks.size === 0) return [];
+    const tokens = line.pointer === "" ? [] : line.pointer.slice(1).split("/");
+    const rings = [];
+    let pointer = "";
+    for (let depth = 0; depth <= tokens.length; depth += 1) {
+      if (depth > 0) pointer += `/${tokens[depth - 1]}`;
+      const own = depth === tokens.length;
+      if (own && line.kind === "value") break;
+      const op = marks.get(pointer);
+      if (op) rings.push({ depth, op, edge: own ? (line.kind === "open" ? "top" : "foot") : "side" } as const);
+    }
+    return rings;
+  }
+</script>
+
 <script lang="ts">
   import Chip from "$lib/components/primitives/Chip.svelte";
-  import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
+  import Reading from "$lib/components/primitives/Reading.svelte";
+  import { NEST_CAP } from "$lib/components/primitives/nest";
   import type { Metric } from "$lib/components/primitives/metrics";
-  import type { JsonValue } from "$lib/api/types";
-  import type { AgentStateDoc, StateChange } from "$lib/state/agentState";
-  import { escapeToken } from "$lib/state/jsonPatch";
+  import WindowedRows from "$lib/components/primitives/WindowedRows.svelte";
+  import type { AgentStateDoc } from "$lib/state/agentState";
   import { scrollFollower } from "$lib/state/followScroll";
 
   /**
@@ -29,9 +104,17 @@
   let { states }: Props = $props();
 
   const FIRST_CHANGE_ID = "agent-state-first-change";
+  /**
+   * A document line that does not wrap: 12px code at a 1.55 line height, as layout lays it
+   * out on its 1/64px grid. Exact, because a line that measures what was estimated costs
+   * the list nothing, and a page of lines that each differ by a sliver re-renders it.
+   */
+  const LINE_HEIGHT = 18.59375;
 
   let chosenKey = $state<string | null>(null);
   let docElement = $state<HTMLElement | null>(null);
+  let changesElement = $state<HTMLElement | null>(null);
+  let docRows = $state<{ scrollToIndex(index: number, align?: "auto" | "start"): void } | null>(null);
 
   /* Falls back rather than holding a key that is gone: switching sessions
      replaces every state in the run, and a panel pinned to a document that no
@@ -40,11 +123,12 @@
     states.find((doc) => doc.key === chosenKey) ?? states[0] ?? null
   );
 
-  /* One state is a label, not a choice. The bar is a switch between documents,
-     and most runs declare exactly one — so with nothing to switch to the chip
-     renders as a plain chip rather than a button that answers a click with
-     nothing. */
+  /* One state is a label, not a choice. The tabs switch between documents, and
+     most runs declare exactly one — so with nothing to switch to there are no
+     tabs, and the state's name is in the reading's kicker instead. The agent
+     name is not: the console header already shows it. */
   const selectable = $derived(states.length > 1);
+  const tabsId = $props.id();
 
   /**
    * Where the commit at the cursor landed, as pointers the document can be asked for.
@@ -65,14 +149,26 @@
     return byPath;
   });
 
-  const metrics: Metric[] = $derived(
+  const count = new Intl.NumberFormat("en-US");
+  const figure = (value: number) => (Number.isFinite(value) ? count.format(value) : "—");
+
+  const headline: Metric[] = $derived(
     current
       ? [
-          { label: "version", value: `v${current.version}`, tone: "strong" },
-          { label: "commits", value: String(current.commits) },
+          Number.isFinite(current.version)
+            ? { label: "version", value: `v${figure(current.version)}`, tone: "strong" }
+            : { label: "version", value: "—" }
+        ]
+      : []
+  );
+
+  const breakdown: Metric[] = $derived(
+    current
+      ? [
+          { label: "commits", value: figure(current.commits) },
           {
             label: "this step",
-            value: `${current.changed.length} op${current.changed.length === 1 ? "" : "s"}`
+            value: `${figure(current.changed.length)} op${current.changed.length === 1 ? "" : "s"}`
           }
         ]
       : []
@@ -86,164 +182,189 @@
   }
 
   function leafKind(value: JsonValue): string {
-    if (value === null) return "nil";
-    if (typeof value === "string") return "str";
-    if (typeof value === "number") return "num";
-    return "bool";
+    if (typeof value === "string") return "md-syntax-string";
+    if (typeof value === "number") return "md-syntax-number";
+    return "md-syntax-literal";
   }
 
-  function entriesOf(value: JsonValue[] | Record<string, JsonValue>): Array<[string, JsonValue]> {
-    return Array.isArray(value)
-      ? value.map((item, index) => [String(index), item])
-      : Object.entries(value);
-  }
-
+  /* A plan of 3,000 steps printed 12,000 lines; only the lines in view are drawn. */
+  const lines = $derived(current?.value == null ? [] : docLines(current.value));
   const firstChanged = $derived(current?.changed[0]?.path ?? null);
+  const firstChangedLine = $derived(
+    firstChanged == null ? -1 : lines.findIndex((line) => line.kind !== "close" && line.pointer === firstChanged)
+  );
   const follower = scrollFollower(() => docElement);
 
   /**
    * Bring the first changed value into view when the commit at the cursor moves,
    * inside the document's own scroller — see followScroll.ts for why not
    * `scrollIntoView`. A mark already on screen is left where it is.
+   *
+   * One outside the drawn window is drawn by scrolling the list to where the follower
+   * would leave it — a block's last line at the foot of the view, or its first at the top
+   * when it is taller than the view — so the list settles its row heights there and the
+   * follower has nothing left to move.
    */
   $effect(() => {
     /* Read so the effect re-runs on a commit that touched the same path twice. */
     void current?.version;
-    if (firstChanged != null) follower.to(FIRST_CHANGE_ID);
+    const index = firstChangedLine;
+    if (index < 0) return;
+    follower.to(FIRST_CHANGE_ID, () => {
+      const block = lines[index]!.lines;
+      const tall = block * LINE_HEIGHT > (docElement?.clientHeight ?? 0);
+      docRows?.scrollToIndex(tall ? index : index + block - 1, tall ? "start" : "auto");
+    });
   });
 </script>
 
-{#snippet jsonNode(value: JsonValue, pointer: string, label: string | null, last: boolean)}
-  {#snippet key()}
-    {#if label !== null}<span class="key">"{label}"</span><span class="punc colon">:</span>{/if}
-  {/snippet}
-  {#if value !== null && typeof value === "object"}
-    {@const entries = entriesOf(value)}
-    {@const array = Array.isArray(value)}
-    {#if entries.length === 0}
-      <div class="line">
-        {@render key()}<span
-          class="node hollow"
-          id={pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
-          data-path={pointer}
-          data-change={marks.get(pointer)}>{array ? "[]" : "{}"}</span
-        >{#if !last}<span class="punc">,</span>{/if}
-      </div>
-    {:else}
-      <!-- The container is a block and its OPENING bracket shares the key's line, rather than
-           the container being an inline-block that wraps whole the moment its subtree is wider
-           than what is left of the row. That wrapping is what put `[` under its key with the
-           trailing comma stranded at the far right of an otherwise empty line. -->
-      <div
-        class="node"
-        id={pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
-        data-path={pointer}
-        data-change={marks.get(pointer)}
-      >
-        <div class="line">{@render key()}<span class="punc">{array ? "[" : "{"}</span></div>
-        <div class="children">
-          {#each entries as [childKey, child], index (childKey)}
-            {@render jsonNode(
-              child,
-              `${pointer}/${escapeToken(childKey)}`,
-              array ? null : childKey,
-              index === entries.length - 1
-            )}
-          {/each}
-        </div>
-        <div class="line">
-          <span class="punc">{array ? "]" : "}"}</span>{#if !last}<span class="punc">,</span>{/if}
-        </div>
-      </div>
-    {/if}
-  {:else}
-    <div class="line">
-      {@render key()}<span
-        class={`node leaf ${leafKind(value)}`}
-        id={pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
-        data-path={pointer}
-        data-change={marks.get(pointer)}>{JSON.stringify(value)}</span
-      >{#if !last}<span class="punc">,</span>{/if}
-    </div>
-  {/if}
+{#snippet docLine(line: DocLine)}
+  {@const array = Array.isArray(line.value)}
+  {@const id = line.kind !== "close" && line.pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
+  <!-- Inline parts abut, tag to tag: a line break between them would print as a space. -->
+  <div
+    class="line"
+    style:--depth={Math.min(line.depth, NEST_CAP)}
+    data-path={line.kind === "open" ? line.pointer : undefined}
+  >
+    {#if line.kind === "open" && id}<span class="extent" {id} style:--lines={line.lines}></span>{/if}{#each ringsOf(line, marks) as ring (ring.depth)}<span
+        class={["ring", ring.edge]}
+        style:--at={Math.min(ring.depth, NEST_CAP)}
+        data-change={ring.op}
+      ></span>{/each}{#if line.kind !== "close" && line.depth > NEST_CAP}<span class="nest-depth"
+        >{line.depth}<span class="visually-hidden"> levels deep</span></span
+      >{/if}{#if line.kind !== "close" && line.label !== null}<span class="md-syntax-property"
+        >"{line.label}"</span
+      ><span class="punc colon">:</span>{/if}{#if line.kind === "open"}<span class="punc"
+        >{array ? "[" : "{"}</span
+      >{:else if line.kind === "close"}<span class="punc">{array ? "]" : "}"}</span>{:else}<span
+        class={line.value !== null && typeof line.value === "object" ? "node hollow" : `node leaf ${leafKind(line.value)}`}
+        {id}
+        data-path={line.pointer}
+        data-change={marks.get(line.pointer)}
+        >{line.value !== null && typeof line.value === "object"
+          ? array
+            ? "[]"
+            : "{}"
+          : JSON.stringify(line.value)}</span
+      >{/if}{#if !line.last && line.kind !== "open"}<span class="punc">,</span>{/if}
+  </div>
 {/snippet}
 
-<section class="agent-state" aria-label="Agent state">
+<section class="agent-state" class:empty={!current} aria-label="Agent state">
   {#if !current}
     <!-- Not an error and not a loading state: most agents declare none. The line
          that would make this pane say something is short enough to print, so it
          is printed rather than described. -->
-    <div class="empty">
-      <p>No agent in this run has published observable state.</p>
-      <p class="empty-note">
+    <EmptyState
+      title="No agent in this run has published observable state."
+      language="python"
+      code='self._plan = self._runner.state("plan", PlanState())'
+    >
+      <p>
         A workflow author opts in with one call, and the harness streams every change
         to it from then on:
       </p>
-      <pre data-language="python">self._plan = self._runner.state("plan", PlanState())</pre>
-    </div>
+    </EmptyState>
   {:else}
-    <div class="state-bar" role="group" aria-label="Registered state">
-      {#each states as doc (doc.key)}
-        <Chip
-          label={doc.stateId}
-          tone="accent"
-          size="xs"
-          fill="quiet"
-          active={doc.key === current.key}
-          aria-pressed={selectable ? doc.key === current.key : undefined}
-          data-tip={`${doc.label} · v${doc.version}`}
-          onclick={selectable ? () => (chosenKey = doc.key) : undefined}
-        />
-      {/each}
-    </div>
-
-    <div class="reading">
-      <!-- Every figure here is as of the playhead, not as of the run. The same
-           sentence the token pane uses, for the same reason: scrubbing moves them. -->
-      <p class="kicker owner">{current.label} · at cursor</p>
-      <MetricStrip {metrics} dense />
-    </div>
-
-    {#if current.problem}
-      <p class="problem">{current.problem}</p>
-    {/if}
-
-    {#if current.changed.length > 0}
-      <ul class="changes" aria-label="What this commit changed">
-        <!-- Deliberately unkeyed. One commit can carry two ops at the SAME path: the state
-             layer records an op per write and never coalesces per path, so `d.x = 1; d.x = 2`,
-             two `pop(0)`s draining a list head, and a `sort()` followed by a `reverse()` all
-             emit two ops with one pointer between them — the last two without the author
-             writing anything twice. A key built from the op and the path collides on every one
-             of those, and Svelte throws `each_key_duplicate` in production as well as in dev,
-             which with no boundary around this pane took the whole console down. These rows
-             hold no component state and no transition, and the list is rebuilt whenever the
-             cursor moves, so their position is all the identity they have to have. -->
-        {#each current.changed as change}
-          <li class={`change ${change.op}`}>
-            <span class="kicker op">{change.op}</span>
-            <span class="path">{change.path || "/ (whole document)"}</span>
-            <span class="delta">
-              {#if change.op === "remove"}
-                <span class="was">{preview(change.before)}</span>
-              {:else if change.before !== undefined}
-                <span class="was">{preview(change.before)}</span>
-                <span class="arrow">→</span>
-                <span class="now">{preview(change.value)}</span>
-              {:else}
-                <span class="now">{preview(change.value)}</span>
-              {/if}
-            </span>
-          </li>
+    {#if selectable}
+      <!-- Each tab is its own Tab stop rather than one stop with arrow keys between them:
+           moving focus from script is what followScroll.test.mjs keeps out of this pane. -->
+      <div class="state-tabs" role="tablist" aria-label="Registered state">
+        {#each states as doc, index (doc.key)}
+          {@const selected = doc.key === current.key}
+          <Chip
+            label={doc.stateId}
+            tone="accent"
+            size="xs"
+            fill="quiet"
+            active={selected}
+            role="tab"
+            id={`${tabsId}-${index}`}
+            aria-selected={selected}
+            data-tip={`${doc.label} · v${doc.version}`}
+            data-tip-below
+            data-tip-align="start"
+            onclick={() => (chosenKey = doc.key)}
+          />
         {/each}
-      </ul>
-    {/if}
-
-    {#if current.value !== null}
-      <div class="doc" bind:this={docElement} onscroll={follower.handleScroll}>
-        {@render jsonNode(current.value, "", null, true)}
       </div>
     {/if}
+
+    <div
+      class="state-view"
+      role={selectable ? "tabpanel" : undefined}
+      aria-labelledby={selectable ? `${tabsId}-${states.indexOf(current)}` : undefined}
+    >
+      <!-- Every figure here is as of the playhead, not as of the run. The same
+           sentence the token pane uses, for the same reason: scrubbing moves them. -->
+      <Reading label={`${current.stateId} · at cursor`} {headline} {breakdown} />
+
+      {#if current.problem}
+        <p class="callout-warning">{current.problem}</p>
+      {/if}
+
+      {#if current.changed.length > 0}
+        <div class="changes" role="list" aria-label="What this commit changed" bind:this={changesElement}>
+          <!-- Keyed by position. One commit can carry two ops at the SAME path: the state
+               layer records an op per write and never coalesces per path, so `d.x = 1; d.x = 2`,
+               two `pop(0)`s draining a list head, and a `sort()` followed by a `reverse()` all
+               emit two ops with one pointer between them — the last two without the author
+               writing anything twice. A key built from the op and the path collides on every one
+               of those, and Svelte throws `each_key_duplicate` in production as well as in dev,
+               which with no boundary around this pane took the whole console down. These rows
+               hold no component state and no transition, and the list is rebuilt whenever the
+               cursor moves, so their position is all the identity they have to have. -->
+          <WindowedRows items={current.changed} getKey={(_, index) => index} scroller={changesElement} start={0} estimateSize={37} gap={2}>
+            {#snippet children(change)}
+              <div class={`change ${change.op}`} role="listitem">
+                <span class="kicker op">{change.op}</span>
+                <span class="path">{change.path || "/ (whole document)"}</span>
+                <span class="delta">
+                  {#if change.op === "remove"}
+                    <span class="was">{preview(change.before)}</span>
+                  {:else if change.before !== undefined}
+                    <span class="was">{preview(change.before)}</span>
+                    <span class="arrow">→</span>
+                    <span class="now">{preview(change.value)}</span>
+                  {:else}
+                    <span class="now">{preview(change.value)}</span>
+                  {/if}
+                </span>
+              </div>
+            {/snippet}
+          </WindowedRows>
+        </div>
+      {/if}
+
+      {#if current.value !== null}
+        <Copyable block value={JSON.stringify(current.value, null, 2)} label="Copy state">
+          <!-- LTR whatever the page is: an Arabic key would otherwise swap places with its
+               value. Focusable because it is a scroller a keyboard must reach. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div
+            class="doc"
+            dir="ltr"
+            role="region"
+            aria-label="State document"
+            tabindex="0"
+            bind:this={docElement}
+            onscroll={follower.handleScroll}
+          >
+            <WindowedRows
+              items={lines}
+              getKey={(line) => (line.kind === "close" ? `${line.pointer}\u0000` : line.pointer)}
+              scroller={docElement}
+              start={0}
+              estimateSize={LINE_HEIGHT}
+              bind:this={docRows}
+            >
+              {#snippet children(line)}{@render docLine(line)}{/snippet}
+            </WindowedRows>
+          </div>
+        </Copyable>
+      {/if}
+    </div>
   {/if}
 </section>
 
@@ -258,58 +379,48 @@
     gap: var(--gutter-tight);
     min-width: 0;
     height: 100%;
+    padding: var(--pane-inset);
     /* The document is the only scroller. A second one around the whole panel
        would swallow the rail's wheel, which is the trap PANE_META's
        viewport/document note is about. */
     overflow: hidden;
   }
 
-  .state-bar {
+  .agent-state.empty {
+    overflow: auto;
+  }
+
+  .state-tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--gap-sm);
+    gap: var(--gap-xs);
     min-width: 0;
   }
 
-  .reading {
-    display: grid;
-    gap: var(--gap-sm);
-    padding: var(--gutter-tight);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
+  .state-view,
+  .state-view > :global(.copyable.block) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    flex: 1 1 auto;
     min-width: 0;
+    min-height: 0;
   }
 
-  .owner {
-    margin: 0;
-  }
-
-  /* Says the document is not to be trusted, and why, without taking it away —
-     the value above the break is a state the agent really passed through. */
-  .problem {
-    margin: 0;
-    padding: var(--gutter-tight);
-    border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-    background: color-mix(in srgb, var(--warning) 8%, var(--surface-2));
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.45;
+  .state-view {
+    gap: var(--gutter-tight);
   }
 
   /* The ops themselves, and the only place a `remove` can be seen at all: the
      node it names is gone from the document by the time the panel draws it. */
   .changes {
-    display: grid;
-    gap: var(--gap-2xs);
+    position: relative;
     flex: 0 0 auto;
-    margin: 0;
-    padding: 0;
     /* About seven rows. A commit can carry dozens of ops, and a summary that can
        grow without limit stops being a summary and starts being the document —
        which is directly underneath it, with the values in place. */
     max-height: 170px;
     overflow: auto;
-    list-style: none;
   }
 
   .change {
@@ -318,21 +429,8 @@
     align-items: baseline;
     gap: var(--gap-sm);
     padding: var(--gap-xs) var(--gap-sm);
-    border-left: 2px solid var(--border-strong);
-    background: var(--surface-1);
+    background: var(--selected-bg);
     min-width: 0;
-  }
-
-  .change.add {
-    border-left-color: var(--success);
-  }
-
-  .change.replace {
-    border-left-color: var(--accent);
-  }
-
-  .change.remove {
-    border-left-color: var(--error);
   }
 
   .op {
@@ -380,6 +478,7 @@
   }
 
   .doc {
+    position: relative;
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
@@ -397,20 +496,48 @@
      the thing it names. */
   .line {
     min-width: 0;
+    /* One ch of the mono face per level, plus the bracket's own column, so the
+       indent lines up under the key rather than under an average glyph. */
+    padding-left: calc(var(--depth) * 2ch);
   }
 
   .colon {
     padding-right: 0.5ch;
   }
 
-  .children {
-    /* One ch of the mono face per level, plus the bracket's own column, so the
-       indent lines up under the key rather than under an average glyph. */
-    padding-left: 2ch;
+  /* A marked container's ring, one line's share of it at a time: the line is all
+     that is drawn, so the box the ring used to go round is not there to wear it. */
+  .ring {
+    position: absolute;
+    inset-block: 0;
+    left: calc(var(--at) * 2ch);
+    right: 0;
+    pointer-events: none;
   }
 
-  .key {
-    color: var(--text-3);
+  .ring.top {
+    clip-path: inset(-1px -1px 0 -1px);
+  }
+
+  .ring.side {
+    clip-path: inset(0 -1px);
+  }
+
+  .ring.foot {
+    clip-path: inset(0 -1px -1px -1px);
+  }
+
+  /* The changed container's whole block, for the follower to bring into view as it did
+     the block itself: one line-height a line, so a block whose lines wrap measures short
+     by the wrapped part. */
+  .extent {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: calc(var(--lines) * 1lh);
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .punc,
@@ -422,19 +549,6 @@
 
   .leaf {
     overflow-wrap: anywhere;
-  }
-
-  .str {
-    color: var(--syntax-string);
-  }
-
-  .num {
-    color: var(--syntax-number);
-  }
-
-  .bool,
-  .nil {
-    color: var(--syntax-literal);
   }
 
   /* The mark. It stays put while the cursor does, rather than flashing on
@@ -459,45 +573,5 @@
      says the same thing at the size of the thing that changed. */
   .leaf[data-change] {
     background: color-mix(in srgb, var(--mark) 22%, transparent);
-  }
-
-  .empty {
-    display: grid;
-    gap: var(--gutter-tight);
-    align-content: start;
-    padding: var(--gutter);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.5;
-  }
-
-  .empty p {
-    margin: 0;
-  }
-
-  .empty-note {
-    color: var(--text-3);
-  }
-
-  .empty pre {
-    position: relative;
-    margin: 0;
-    /* Room above for the language tag, which app.css draws and every host has to
-       place — the markdown blocks put it in the same corner. */
-    padding: 30px var(--gutter-tight) var(--gutter-tight);
-    border: 1px solid var(--code-block-border);
-    background: var(--code-block-bg);
-    color: var(--code-block-text);
-    font-family: var(--font-mono);
-    font-size: var(--font-code);
-    overflow-x: auto;
-  }
-
-  .empty pre[data-language]::before {
-    position: absolute;
-    top: 7px;
-    right: 8px;
   }
 </style>

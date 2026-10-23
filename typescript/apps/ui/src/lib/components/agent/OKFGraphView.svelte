@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import type { Attachment } from "svelte/attachments";
+  import { prefersReducedMotion } from "svelte/motion";
   import {
     forceCollide,
     forceLink,
@@ -15,6 +17,7 @@
   import {
     colorOf,
     graphElements,
+    graphShape,
     matches,
     seededRandom,
     type GraphEdge,
@@ -26,7 +29,10 @@
    * edges, and a ghost node for each link to a concept that doesn't exist yet.
    *
    * The simulation runs outside Svelte's reactive state: it moves plain node objects, and
-   * each tick bumps one counter that redraws. Positions are kept by concept id, so when the
+   * each tick schedules one frame that writes the new positions straight onto the elements
+   * already drawn, a transform per node and one path per look of edge. Svelte redraws only when what is drawn changes — the graph, a filter,
+   * the selection — never per tick: re-rendering 10,000 nodes and their edges through it
+   * on every tick was most of the frame. Positions are kept by concept id, so when the
    * bundle grows the new concepts settle in beside the ones already placed, and nothing
    * jumps. Before the simulation starts (and in a server render) nodes sit on a fixed
    * spiral, so a given bundle always starts the same way.
@@ -58,10 +64,11 @@
   const WIDTH = 800;
   const HEIGHT = 560;
 
-  // Not reactive: the simulation mutates these in place, and `frame` says when to redraw.
+  // Not reactive: the simulation mutates these in place, and `draw` copies them to the DOM.
   const placed = new Map<string, SimNode>();
   let simulation: Simulation<SimNode, SimLink> | null = null;
-  let frame = $state(0);
+  /** The node and edge ids the simulation was last started on. */
+  let shape = "";
 
   const elements = $derived(graphElements(graph));
 
@@ -110,7 +117,7 @@
         .force("collide", forceCollide<SimNode>((d) => d.node.radius + 14))
         .force("x", forceX<SimNode>(0).strength(0.045))
         .force("y", forceY<SimNode>(0).strength(0.06))
-        .on("tick", () => (frame += 1));
+        .on("tick", scheduleDraw);
     }
     simulation.nodes(nodes);
     simulation.force(
@@ -120,17 +127,32 @@
         .distance(105)
         .strength(0.35)
     );
+    /* A re-walk that found the same concepts and links is new data, not a new layout:
+       restarting would shake a settled graph every time its mount's state moved. d3
+       stops the timer by itself once alpha falls under alphaMin. */
+    const next = graphShape(elements);
+    if (next === shape) return;
+    shape = next;
     // Warm restart: what was already placed barely moves; new nodes settle in.
-    simulation.alpha(Math.max(simulation.alpha(), 0.35)).restart();
+    simulation.alpha(Math.max(simulation.alpha(), 0.35));
+    /* Settled off screen and drawn once, where the layout must not move by itself. 300 ticks
+       is d3's own run from alpha 1 down to alphaMin. */
+    if (prefersReducedMotion.current) {
+      simulation.stop().tick(300);
+      scheduleDraw();
+    } else simulation.restart();
   });
 
-  onDestroy(() => simulation?.stop());
+  onDestroy(() => {
+    simulation?.stop();
+    /* Guarded because a server render runs onDestroy too, and has no frames to cancel. */
+    if (pending !== 0) cancelAnimationFrame(pending);
+  });
 
   const hidden = $derived(new Set(hiddenTypes));
 
-  /** What is drawn this frame. */
+  /** What is drawn, with the simulation's nodes to read positions from; not per tick. */
   const drawn = $derived.by(() => {
-    void frame;
     const at = new Map(simNodes.map((n) => [n.id, n]));
     const visible = simNodes.filter((n) => !hidden.has(n.node.type));
     const shown = new Set(visible.map((n) => n.id));
@@ -143,8 +165,7 @@
     return {
       nodes: visible.map((n) => ({
         ...n.node,
-        x: n.x ?? 0,
-        y: n.y ?? 0,
+        sim: n,
         dim: !matches(n.node, query),
         selected: n.id === focus,
         neighbor: neighbors.has(n.id)
@@ -153,14 +174,94 @@
         .filter((e) => shown.has(e.source) && shown.has(e.target))
         .map((e) => ({
           ...e,
-          x1: at.get(e.source)?.x ?? 0,
-          y1: at.get(e.source)?.y ?? 0,
-          x2: at.get(e.target)?.x ?? 0,
-          y2: at.get(e.target)?.y ?? 0,
+          from: at.get(e.source)!,
+          to: at.get(e.target)!,
           lit: e.source === focus || e.target === focus
         }))
     };
   });
+
+  type DrawnEdge = (typeof drawn.edges)[number];
+
+  function translate(node: SimNode): string {
+    return `translate(${node.x ?? 0} ${node.y ?? 0})`;
+  }
+
+  /* Edges are drawn as one path per look rather than a line each: a tick is then two writes
+     per look instead of four per edge, which at 4,000 edges was most of the draw. Lit last,
+     so the selection's edges sit on top. */
+  const EDGE_LOOKS = ["plain", "dangling", "lit"] as const;
+  type EdgeLook = (typeof EDGE_LOOKS)[number];
+
+  /* The arrowhead's length and half-width, in graph units. */
+  const ARROW = 7;
+  const ARROW_HALF = 3.5;
+
+  const round = (value: number) => Math.round(value * 10) / 10;
+
+  /**
+   * Every edge as path data, by look: a segment from its source's center to just short of
+   * its target's rim, and a filled arrowhead with its tip there.
+   */
+  function edgePaths(edges: DrawnEdge[]): Record<EdgeLook, { line: string; arrow: string }> {
+    const paths = {
+      plain: { line: "", arrow: "" },
+      dangling: { line: "", arrow: "" },
+      lit: { line: "", arrow: "" }
+    };
+    for (const edge of edges) {
+      const x1 = edge.from.x ?? 0;
+      const y1 = edge.from.y ?? 0;
+      const dx = (edge.to.x ?? 0) - x1;
+      const dy = (edge.to.y ?? 0) - y1;
+      const length = Math.hypot(dx, dy) || 1;
+      const ux = dx / length;
+      const uy = dy / length;
+      const inset = edge.to.node.radius + 3;
+      const x2 = x1 + dx - ux * inset;
+      const y2 = y1 + dy - uy * inset;
+      const bx = x2 - ux * ARROW;
+      const by = y2 - uy * ARROW;
+      const path = paths[edge.lit ? "lit" : edge.dangling ? "dangling" : "plain"];
+      path.line += `M${round(x1)} ${round(y1)}L${round(x2)} ${round(y2)}`;
+      path.arrow +=
+        `M${round(x2)} ${round(y2)}L${round(bx - uy * ARROW_HALF)} ${round(by + ux * ARROW_HALF)}` +
+        `L${round(bx + uy * ARROW_HALF)} ${round(by - ux * ARROW_HALF)}Z`;
+    }
+    return paths;
+  }
+
+  const edgeData = $derived(edgePaths(drawn.edges));
+
+  /* The elements drawn for each node and each look of edge, so a tick can move them without Svelte. */
+  const nodeElements = new Map<string, Element>();
+  const edgeElements = new Map<string, Element>();
+
+  function keep(elements: Map<string, Element>, id: string): Attachment<Element> {
+    return (element) => {
+      elements.set(id, element);
+      return () => {
+        if (elements.get(id) === element) elements.delete(id);
+      };
+    };
+  }
+
+  let pending = 0;
+
+  /* One write per frame however many ticks land in it. */
+  function scheduleDraw(): void {
+    if (pending === 0) pending = requestAnimationFrame(draw);
+  }
+
+  function draw(): void {
+    pending = 0;
+    for (const node of drawn.nodes) nodeElements.get(node.id)?.setAttribute("transform", translate(node.sim));
+    const paths = edgePaths(drawn.edges);
+    for (const look of EDGE_LOOKS) {
+      edgeElements.get(`${look}:line`)?.setAttribute("d", paths[look].line);
+      edgeElements.get(`${look}:arrow`)?.setAttribute("d", paths[look].arrow);
+    }
+  }
 
   // ---------------------------------------------------------------- pan, zoom, drag
 
@@ -265,28 +366,10 @@
   onpointercancel={onUp}
   onwheel={onWheel}
 >
-  <defs>
-    <marker id="okf-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" class="arrow" />
-    </marker>
-  </defs>
   <g bind:this={layer} transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-    {#each drawn.edges as edge (edge.id)}
-      {@const dx = edge.x2 - edge.x1}
-      {@const dy = edge.y2 - edge.y1}
-      {@const length = Math.hypot(dx, dy) || 1}
-      {@const target = drawn.nodes.find((n) => n.id === edge.target)}
-      {@const inset = (target?.radius ?? 8) + 3}
-      <line
-        class="edge"
-        class:lit={edge.lit}
-        class:dangling={edge.dangling}
-        x1={edge.x1}
-        y1={edge.y1}
-        x2={edge.x2 - (dx / length) * inset}
-        y2={edge.y2 - (dy / length) * inset}
-        marker-end="url(#okf-arrow)"
-      />
+    {#each EDGE_LOOKS as look (look)}
+      <path class={`edges ${look}`} d={edgeData[look].line} {@attach keep(edgeElements, `${look}:line`)} />
+      <path class={`arrows ${look}`} d={edgeData[look].arrow} {@attach keep(edgeElements, `${look}:arrow`)} />
     {/each}
     {#each drawn.nodes as node (node.id)}
       <g
@@ -298,7 +381,8 @@
         class:deprecated={node.concept?.status === "deprecated"}
         class:draft={node.concept?.status === "draft"}
         data-concept={node.id}
-        transform={`translate(${node.x} ${node.y})`}
+        transform={translate(node.sim)}
+        {@attach keep(nodeElements, node.id)}
         role="button"
         tabindex="0"
         aria-label={`${node.label} (${node.ghost ? "not written yet" : node.type})`}
@@ -351,23 +435,29 @@
     cursor: grabbing;
   }
 
-  .arrow {
-    fill: var(--border-strong);
-  }
-
-  .edge {
+  .edges {
+    fill: none;
     stroke: var(--border-strong);
     stroke-width: 1.2;
     opacity: 0.75;
   }
 
-  .edge.dangling {
+  .edges.dangling {
     stroke-dasharray: 3 3;
   }
 
-  .edge.lit {
+  .edges.lit {
     stroke: var(--accent);
     stroke-width: 2;
+    opacity: 1;
+  }
+
+  .arrows {
+    fill: var(--border-strong);
+    opacity: 0.75;
+  }
+
+  .arrows.lit {
     opacity: 1;
   }
 
@@ -444,5 +534,11 @@
   .node.selected .label {
     fill: var(--text-1);
     font-weight: 650;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot {
+      transition: none;
+    }
   }
 </style>

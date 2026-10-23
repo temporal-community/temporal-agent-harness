@@ -83,6 +83,8 @@ export function graphElements(graph: OKFGraph): { nodes: GraphNode[]; edges: Gra
   }));
   const known = new Set(nodes.map((n) => n.id));
   const edges: GraphEdge[] = [];
+  /* A concept that links to another twice is one edge; two would share a key and the view would throw. */
+  const drawn = new Set<string>();
   for (const link of graph.links) {
     if (!known.has(link.target)) {
       known.add(link.target);
@@ -95,9 +97,11 @@ export function graphElements(graph: OKFGraph): { nodes: GraphNode[]; edges: Gra
         radius: 7
       });
     }
-    if (!known.has(link.source) || link.source === link.target) continue;
+    const id = `${link.source}\u0000${link.target}`;
+    if (!known.has(link.source) || link.source === link.target || drawn.has(id)) continue;
+    drawn.add(id);
     edges.push({
-      id: `${link.source}\u0000${link.target}`,
+      id,
       source: link.source,
       target: link.target,
       dangling: link.dangling
@@ -157,4 +161,9 @@ export function seededRandom(seed = 1): () => number {
     state = (state * 1664525 + 1013904223) >>> 0;
     return state / 4294967296;
   };
+}
+
+/** The ids of a graph's nodes and edges in order: two walks with the same shape lay out the same. */
+export function graphShape({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }): string {
+  return `${nodes.map((n) => n.id).join("\n")}\n\n${edges.map((e) => e.id).join("\n")}`;
 }

@@ -99,6 +99,21 @@ describe("modal surfaces", () => {
     );
   });
 
+  /* The file viewer and the graph wore a 20px wrapping title and a boxed close: a 2,000-character
+     file name took 742px of an 860px dialog. And showModal() put focus on the graph's Reload,
+     which the walk then disabled, leaving an open modal with focus on <body>. */
+  it("head the file and graph dialogs like the others, and choose where focus starts", () => {
+    for (const name of ["FileViewerDialog", "OKFGraphDialog"]) {
+      const { source } = components.find(({ short }) => short === `components/agent/${name}.svelte`);
+      assert.match(source, /<header class="surface-head">[\s\S]*?<h2 class="head-title" title=/, `${name}: one ellipsized title line`);
+      assert.match(source, /class="head-button"[\s\S]*?aria-label="Close (file|graph)"[\s\S]*?<X size=\{14\}/, `${name}: the quiet close`);
+      assert.doesNotMatch(source, /IconButton|tone="live"/, `${name}: no boxed buttons, no --live status chip`);
+      assert.match(source, /dialog\.showModal\(\);\s*\n\s*(searchInput\?\.focus\(\)|const focusOpenFile)/, `${name}: focus is set after showModal()`);
+    }
+    const graph = components.find(({ short }) => short === "components/agent/OKFGraphDialog.svelte").source;
+    assert.match(graph, /aria-label="Reload graph"\s*aria-disabled=\{loading\}[\s\S]*?disabled=\{!mount\.source\}/, "Reload never disables mid-walk");
+  });
+
   it("paint their scrim on ::backdrop and nowhere else", () => {
     let backdrops = 0;
 

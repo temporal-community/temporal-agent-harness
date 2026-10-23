@@ -1,8 +1,8 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { RefreshCw, X } from "@lucide/svelte";
+  import { formatTimestamp, plural } from "$lib/state/replayLog";
+  import { RefreshCw, Search, X } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
-  import IconButton from "$lib/components/primitives/IconButton.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import OKFGraphView from "./OKFGraphView.svelte";
   import type { FileChunk, FileViewRequest, OKFGraph, OKFGraphRequest } from "$lib/api/types";
@@ -54,8 +54,12 @@
   }: Props = $props();
 
   let dialog = $state<HTMLDialogElement | null>(null);
+  let searchInput = $state<HTMLInputElement | null>(null);
+  /* The search takes focus, not Reload, the first button, which showModal() would give it to. */
   $effect(() => {
-    if (dialog && !dialog.open) dialog.showModal();
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    searchInput?.focus();
   });
 
   // ---------------------------------------------------------------- the graph
@@ -164,49 +168,58 @@
     if (event.target === dialog) dialog?.close();
   }}
 >
+  <header class="surface-head">
+    <div class="head-name">
+      <h2 class="head-title" title={`${mount.mount} knowledge graph`}>{mount.mount} knowledge graph</h2>
+      <p class="head-subtitle">
+        {#if graph}
+          {plural(graph.concepts.length, "concept")} · {plural(graph.links.length, "link")}
+          {#if graph.truncated}<span class="truncated"> · Only part of the bundle: it is larger than the graph reads.</span>{/if}
+        {:else if loading}
+          Reading the bundle…
+        {/if}
+      </p>
+    </div>
+    <!-- Never `disabled` mid-walk: a disabled button drops its focus to <body>, inside an open
+         modal. It says it is busy instead, and a press while it is does nothing. -->
+    <button
+      type="button"
+      class="head-button"
+      aria-label="Reload graph"
+      aria-disabled={loading}
+      data-tip="Walk the bundle again"
+      data-tip-below
+      data-tip-align="end"
+      disabled={!mount.source}
+      onclick={() => void walk()}
+    ><RefreshCw size={13} aria-hidden="true" /></button>
+    <button
+      type="button"
+      class="head-button"
+      aria-label="Close graph"
+      data-tip="Close graph"
+      data-tip-below
+      data-tip-align="end"
+      onclick={() => dialog?.close()}
+    ><X size={14} aria-hidden="true" /></button>
+  </header>
+
   <div class="graph-body">
-    <header class="graph-header">
-      <div class="heading">
-        <h2>{mount.mount} knowledge graph</h2>
-        <p>
-          {#if graph}
-            <span>{graph.concepts.length} concepts · {graph.links.length} links</span>
-            {#if graph.truncated}<span class="truncated">Only part of the bundle: it is larger than the graph reads.</span>{/if}
-          {:else if loading}
-            <span>Reading the bundle…</span>
-          {/if}
-        </p>
-      </div>
-      <div class="actions">
-        <Chip label="Live" tone="live" size="sm" pip ring />
-        <IconButton
-          label="Reload graph"
-          tip="Walk the bundle again"
-          disabled={!mount.source || loading}
-          onclick={() => void walk()}
-        >
-          <RefreshCw size={16} />
-        </IconButton>
-        <IconButton label="Close graph" onclick={() => dialog?.close()}>
-          <X size={16} />
-        </IconButton>
-      </div>
-    </header>
 
     <p class="provenance">
       The whole bundle as it is in its store <strong>now</strong>{graph
-        ? `, read at ${new Date(graph.walked_at * 1000).toLocaleTimeString()}`
+        ? `, read at ${formatTimestamp(graph.walked_at)}`
         : ""}: every concept, not only the ones this session touched, and not as of this point
       in the session.
     </p>
     {#if !live}
-      <div class="scrubbed" role="note">
+      <div class="scrubbed callout-warning" role="note">
         <p>
           You're looking at an earlier point in the session. The graph is current, so it may
           hold memories the agent hadn't written yet at this point.
         </p>
         {#if onJumpToLive}
-          <button type="button" class="jump" onclick={onJumpToLive}>Jump to latest step</button>
+          <Chip label="Jump to latest step" tone="accent" size="xs" onclick={onJumpToLive} />
         {/if}
       </div>
     {/if}
@@ -214,37 +227,36 @@
     <div class="columns">
       <section class="canvas" aria-label="Graph">
         <div class="filters">
-          <input
-            class="search"
-            type="search"
-            placeholder="Search titles, ids, tags"
-            aria-label="Search concepts"
-            bind:value={query}
-          />
+          <label class="field">
+            <Search size={14} aria-hidden="true" />
+            <input
+              bind:this={searchInput}
+              type="search"
+              placeholder="Search titles, ids, tags"
+              aria-label="Search concepts"
+              bind:value={query}
+            />
+          </label>
           <div class="types" role="group" aria-label="Concept types">
             {#each types as { type, count } (type)}
-              <button
-                type="button"
-                class="type"
-                class:off={hiddenTypes.includes(type)}
-                aria-pressed={!hiddenTypes.includes(type)}
-                onclick={() => toggleType(type)}
-              >
-                <span class="swatch" style={`--node: ${colorOf(colors, type)}`}></span>
-                {type}
-                <span class="count">{count}</span>
-              </button>
+              {@const shown = !hiddenTypes.includes(type)}
+              <Chip fill="quiet" size="xs" active={shown} aria-pressed={shown} onclick={() => toggleType(type)}>
+                {#snippet lead()}<span class="swatch" style={`--node: ${colorOf(colors, type)}`}></span>{/snippet}
+                {type}&nbsp;<span class="count">{count}</span>
+              </Chip>
             {/each}
           </div>
         </div>
         <div class="stage">
           {#if graphError}
-            <p class="problem">{graphError}</p>
+            <p class="callout-warning">{graphError}</p>
           {:else if !mount.source}
             <p class="hint">
               The graph is available once this session has used the mount: that is when the
               console learns where the bundle is stored.
             </p>
+          {:else if loading && !graph}
+            <p class="hint">Reading the bundle…</p>
           {:else if graph && graph.concepts.length === 0}
             <p class="hint">The bundle has no concepts yet.</p>
           {:else if graph}
@@ -271,12 +283,12 @@
             {#if concept.stale}<Chip label="Stale" size="sm" fill="quiet" />{/if}
             <Chip label={tierLabel[concept.trust_tier]} size="sm" fill="quiet" />
           </div>
-          {#if concept.description}<p class="description">{concept.description}</p>{/if}
+          {#if concept.description}<div class="description"><MarkdownMessage text={concept.description} compact /></div>{/if}
           {#if concept.tags.length > 0}
             <p class="tags">{#each concept.tags as tag, i (i)}<span class="tag">{tag}</span>{/each}</p>
           {/if}
           {#if concept.problem}
-            <p class="problem">{concept.problem}</p>
+            <p class="callout-warning">{concept.problem}</p>
           {/if}
 
           {#if related && (related.linksTo.length > 0 || related.citedBy.length > 0)}
@@ -310,7 +322,7 @@
 
           <div class="contents">
             {#if bodyError}
-              <p class="problem">{bodyError}</p>
+              <p class="callout-warning">{bodyError}</p>
             {:else if !body || body.path !== concept.path}
               <p class="hint">Reading…</p>
             {:else if body.text === null}
@@ -341,7 +353,9 @@
 
 <style>
   .okf-graph {
+    container: okf-graph / inline-size;
     display: flex;
+    flex-direction: column;
     width: min(1320px, calc(100% - var(--gutter) * 4));
     height: min(880px, calc(100% - var(--gutter) * 4));
     padding: 0;
@@ -366,38 +380,18 @@
     padding: var(--gutter);
   }
 
-  .graph-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--gutter);
-  }
-
-  .heading h2 {
+  .head-title {
+    max-width: 60%;
     margin: 0;
-    font-size: var(--font-title);
-    line-height: 1.2;
-    letter-spacing: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .heading p {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--gap-sm);
-    margin: var(--gap-xs) 0 0;
-    color: var(--text-3);
-    font-size: var(--font-sm);
   }
 
   .truncated {
     color: var(--warning);
   }
 
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--gap-md);
+  .head-button[aria-disabled="true"] {
+    opacity: var(--disabled-opacity);
+    cursor: default;
   }
 
   .provenance {
@@ -411,11 +405,6 @@
     display: grid;
     gap: var(--gap-sm);
     justify-items: start;
-    padding: var(--gutter-tight);
-    border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-    background: color-mix(in srgb, var(--warning) 8%, var(--surface-2));
-    color: var(--text-2);
-    font-size: var(--font-sm);
   }
 
   .scrubbed p {
@@ -445,16 +434,9 @@
     gap: var(--gap-sm);
   }
 
-  .search {
+  .filters > .field {
     flex: 0 1 240px;
     min-width: 140px;
-    height: var(--control-height);
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-1);
-    font-size: var(--font-sm);
   }
 
   .types {
@@ -463,25 +445,8 @@
     gap: var(--gap-xs);
   }
 
-  .type {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: var(--control-height-xs);
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-chip);
-    background: var(--surface-1);
-    color: var(--text-2);
-    font-size: var(--font-xs);
-    cursor: pointer;
-  }
-
-  .type.off {
-    opacity: 0.45;
-  }
-
   .swatch {
+    display: block;
     width: 9px;
     height: 9px;
     border-radius: 50%;
@@ -506,7 +471,7 @@
   }
 
   .stage > .hint,
-  .stage > .problem {
+  .stage > .callout-warning {
     margin: var(--gutter-tight);
   }
 
@@ -518,6 +483,20 @@
     gap: var(--gap-sm);
     padding-left: var(--gutter-tight);
     border-left: 1px solid var(--border);
+  }
+
+  /* A phone can't hold the graph beside a 280px reading column: stack them. */
+  @container okf-graph (max-width: 40rem) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .concept {
+      padding-left: 0;
+      border-left: 0;
+      border-top: 1px solid var(--border);
+    }
   }
 
   .concept h3 {
@@ -603,25 +582,5 @@
     margin: 0;
     color: var(--text-3);
     font-size: var(--font-sm);
-  }
-
-  .problem {
-    margin: 0;
-    padding: var(--gutter-tight);
-    border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-    background: color-mix(in srgb, var(--warning) 8%, var(--surface-2));
-    color: var(--text-2);
-    font-size: var(--font-sm);
-  }
-
-  .jump {
-    padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
-    border-radius: var(--radius-chip);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    color: var(--text-1);
-    font-size: var(--font-sm);
-    font-weight: 650;
-    cursor: pointer;
   }
 </style>

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { formatTimestamp } from "$lib/state/replayLog";
   import { X } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
-  import IconButton from "$lib/components/primitives/IconButton.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
-  import MountTrees from "./MountTrees.svelte";
+  import MountTrees, { nameParts } from "./MountTrees.svelte";
   import type { FileChunk, FileViewRequest } from "$lib/api/types";
   import {
     contentBytes,
@@ -12,6 +12,7 @@
     fileView,
     findNode,
     formatSize,
+    splitFrontMatter,
     type MountView
   } from "$lib/state/fileMounts";
 
@@ -42,9 +43,17 @@
   let dialog = $state<HTMLDialogElement | null>(null);
 
   /* showModal() for the top layer's focus trap, Escape and ::backdrop, as the node
-     inspector does. */
+     inspector does. Focus goes to the open file's row in the tree once the tree has drawn
+     it, rather than to Close, the first button, where showModal() would put it. */
   $effect(() => {
-    if (dialog && !dialog.open) dialog.showModal();
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    const focusOpenFile = (node: HTMLDialogElement, tries = 10) => {
+      const row = node.querySelector<HTMLElement>('.trees [aria-current="true"]');
+      if (row) row.focus();
+      else if (tries > 0) requestAnimationFrame(() => focusOpenFile(node, tries - 1));
+    };
+    focusOpenFile(dialog);
   });
 
   const mount = $derived(
@@ -52,6 +61,7 @@
   );
   const node = $derived(mount && selected ? findNode(mount.root, selected.path) : null);
   const name = $derived(selected ? (selected.path.split("/").pop() ?? selected.path) : "");
+  const [titleStem, titleTail] = $derived(nameParts(name, "."));
   const view = $derived(selected ? fileView(selected.path) : { mode: "text" as const });
 
   interface Fetched {
@@ -144,26 +154,26 @@
       if (event.target === dialog) dialog?.close();
     }}
   >
+    <header class="surface-head">
+      <div class="head-name">
+        <h2 class="head-title" title={name}><span class="stem">{titleStem}</span><span class="tail">{titleTail}</span></h2>
+        <p class="head-subtitle" title={`${mount.mount}/${selected.path}`}>
+          <span class="path">{mount.mount}/{selected.path}</span>
+          {#if shown}<span class="size">{formatSize(shown.size)}</span>{/if}
+        </p>
+      </div>
+      <button
+        type="button"
+        class="head-button"
+        aria-label="Close file"
+        data-tip="Close file"
+        data-tip-below
+        data-tip-align="end"
+        onclick={() => dialog?.close()}
+      ><X size={14} aria-hidden="true" /></button>
+    </header>
+
     <div class="viewer-body">
-      <header class="viewer-header">
-        <div class="heading">
-          <h2>{name}</h2>
-          <p>
-            <span class="path">{mount.mount}/{selected.path}</span>
-            {#if shown}<span class="size">{formatSize(shown.size)}</span>{/if}
-          </p>
-        </div>
-        <div class="actions">
-          {#if mount.kind === "tree"}
-            <Chip label="As of cursor" tone="accent" size="sm" />
-          {:else if mount.source}
-            <Chip label="Live" tone="live" size="sm" pip ring />
-          {/if}
-          <IconButton label="Close file" onclick={() => dialog?.close()}>
-            <X size={16} />
-          </IconButton>
-        </div>
-      </header>
 
       <div class="columns">
         <nav class="trees" aria-label="Files">
@@ -183,21 +193,19 @@
           {:else if mount.source}
             <p class="provenance">
               Read from the store {fetched?.readAt
-                ? `at ${fetched.readAt.toLocaleTimeString()}`
+                ? `at ${formatTimestamp(fetched.readAt.getTime() / 1000)}`
                 : "when opened"}: the file as it is <strong>now</strong>, not as of this point
               in the session.
             </p>
             {#if !live}
-              <div class="scrubbed" role="note">
+              <div class="scrubbed callout-warning" role="note">
                 <p>
                   You're looking at an earlier point in the session. The tree is as of the
                   cursor, but these contents are current, so they may differ from what the
                   agent saw then.
                 </p>
                 {#if onJumpToLive}
-                  <button type="button" class="jump" onclick={onJumpToLive}>
-                    Jump to latest step
-                  </button>
+                  <Chip label="Jump to latest step" tone="accent" size="xs" onclick={onJumpToLive} />
                 {/if}
               </div>
             {/if}
@@ -211,30 +219,33 @@
                 Only this mount's tree is tracked; its contents can't be read from the console.
               </p>
             {:else if fetchError}
-              <p class="problem">{fetchError}</p>
+              <p class="callout-warning">{fetchError}</p>
             {:else if !shown}
               <p class="hint">{loading ? "Reading…" : "No contents."}</p>
             {:else if shown.text === null}
               <p class="hint">Binary file ({formatSize(shown.size)}); no preview.</p>
             {:else}
               {#if view.mode === "markdown"}
-                <MarkdownMessage text={shown.text} />
+                {@const doc = splitFrontMatter(shown.text)}
+                {#if doc.frontMatter !== null}
+                  <MarkdownMessage text={doc.frontMatter} language="yaml" />
+                {/if}
+                <MarkdownMessage text={doc.body} />
               {:else if view.mode === "code"}
                 <MarkdownMessage text={shown.text} language={view.language} />
               {:else}
                 <pre class="plain">{shown.text}</pre>
               {/if}
               {#if !shown.complete && fetched && fetchToken}
-                <button
-                  type="button"
-                  class="jump"
-                  disabled={loading}
-                  onclick={() => read(fetchToken!, fetched!.bytes.length)}
-                >
-                  {loading
+                <Chip
+                  label={loading
                     ? "Reading…"
                     : `Load more (${formatSize(fetched.bytes.length)} of ${formatSize(shown.size)})`}
-                </button>
+                  tone="accent"
+                  size="xs"
+                  disabled={loading}
+                  onclick={() => read(fetchToken!, fetched!.bytes.length)}
+                />
               {/if}
             {/if}
           </div>
@@ -248,7 +259,9 @@
   /* Centred by the UA's own :modal rule, like the node inspector, and larger: a file
      wants the room. */
   .file-viewer {
+    container: file-viewer / inline-size;
     display: flex;
+    flex-direction: column;
     width: min(1200px, calc(100% - var(--gutter) * 4));
     height: min(860px, calc(100% - var(--gutter) * 4));
     padding: 0;
@@ -273,51 +286,32 @@
     padding: var(--gutter);
   }
 
-  .viewer-header {
+  /* One line however long the name: it gives way in the middle, keeping its extension, and
+     leaves the path beside it room. The whole name is the title's tip. */
+  .head-title {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--gutter);
-    min-width: 0;
-  }
-
-  .heading {
-    min-width: 0;
-  }
-
-  .heading h2 {
+    max-width: 60%;
     margin: 0;
-    font-size: var(--font-title);
-    line-height: 1.2;
-    letter-spacing: 0;
-    overflow-wrap: anywhere;
   }
 
-  .heading p {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--gap-sm);
-    margin: var(--gap-xs) 0 0;
+  .stem {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tail {
+    flex: none;
   }
 
   .path {
-    color: var(--text-2);
     font-family: var(--font-mono);
-    font-size: var(--font-sm);
-    overflow-wrap: anywhere;
   }
 
   .size {
+    margin-inline-start: var(--gap-sm);
     color: var(--text-4);
     font-size: var(--font-2xs);
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--gap-md);
-    flex: 0 0 auto;
   }
 
   /* The trees and the file each scroll themselves; the dialog never does. */
@@ -334,6 +328,20 @@
     overflow: auto;
     padding-right: var(--gutter-tight);
     border-right: 1px solid var(--border);
+  }
+
+  /* A phone can't hold a 200px tree column beside the file: stack them. */
+  @container file-viewer (max-width: 40rem) {
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
+    }
+
+    .trees {
+      padding-right: 0;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
   }
 
   .file {
@@ -356,12 +364,6 @@
     display: grid;
     gap: var(--gap-sm);
     justify-items: start;
-    padding: var(--gutter-tight);
-    border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-    background: color-mix(in srgb, var(--warning) 8%, var(--surface-2));
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.45;
   }
 
   .scrubbed p {
@@ -380,6 +382,10 @@
     background: var(--surface-0);
   }
 
+  .contents > :global(.chip) {
+    justify-self: start;
+  }
+
   .hint {
     margin: 0;
     color: var(--text-3);
@@ -393,31 +399,5 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     color: var(--text-1);
-  }
-
-  .problem {
-    margin: 0;
-    padding: var(--gutter-tight);
-    border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-    background: color-mix(in srgb, var(--warning) 8%, var(--surface-2));
-    color: var(--text-2);
-    font-size: var(--font-sm);
-  }
-
-  .jump {
-    justify-self: start;
-    padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
-    border-radius: var(--radius-chip);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    color: var(--text-1);
-    font-size: var(--font-sm);
-    font-weight: 650;
-    cursor: pointer;
-  }
-
-  .jump:disabled {
-    cursor: default;
-    opacity: 0.6;
   }
 </style>

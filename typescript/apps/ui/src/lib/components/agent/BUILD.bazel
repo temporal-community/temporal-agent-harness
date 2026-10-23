@@ -363,6 +363,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "OKFGraphView_test",
+    src = "OKFGraphView.test.mjs",
+    deps = [
+        ":OKFGraphView",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:okfGraph",
+    ],
+)
+
+vitest_test(
     name = "PendingBannerStack_test",
     src = "PendingBannerStack.test.mjs",
     deps = [

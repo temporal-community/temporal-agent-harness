@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { FilePen, FilePlus, FileX } from "@lucide/svelte";
   import FileViewerDialog from "./FileViewerDialog.svelte";
   import MountTrees from "./MountTrees.svelte";
   import OKFGraphDialog from "./OKFGraphDialog.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
+  import type { Metric } from "$lib/components/primitives/metrics";
+  import Reading from "$lib/components/primitives/Reading.svelte";
   import type { FileChunk, FileViewRequest, OKFGraph, OKFGraphRequest } from "$lib/api/types";
   import type { MountView } from "$lib/state/fileMounts";
   import type { WalkedGraph } from "$lib/state/okfGraph";
@@ -41,27 +45,71 @@
   // Each OKF mount's last walk, so reopening its graph doesn't walk the bundle again unless
   // the mount has changed since.
   let walkedGraphs = $state<Record<string, WalkedGraph>>({});
+
+  /* What the tree is a reading of, said once for the pane rather than once per mount. */
+  const allIndexed = $derived(mounts.every((m) => m.kind === "index"));
+  const allInMemory = $derived(mounts.every((m) => m.kind === "tree"));
+  const nothingYet = $derived(mounts.every((m) => m.root.children.length === 0));
+  const fileTotal = $derived(mounts.reduce((sum, m) => sum + m.fileCount, 0));
+  const readingLabel = $derived(
+    allIndexed ? "Touched this session · at cursor" : allInMemory ? "In memory · at cursor" : "At cursor"
+  );
+  const INDEXED_SCOPE =
+    "An indexed mount lists only the paths this session's scripts looked up, listed, read or wrote, not everything in the store.";
+  const MEMORY_SCOPE = "An in-memory mount lists every file it holds, as of the cursor.";
+  const CHANGE_METRICS = [
+    { change: "added", label: "Added", icon: FilePlus, hue: "--success" },
+    { change: "modified", label: "Changed", icon: FilePen, hue: "--warning" },
+    { change: "removed", label: "Removed", icon: FileX, hue: "--error" }
+  ] as const;
+  const headline = $derived<Metric[]>([
+    {
+      label: "Files",
+      value: fileTotal.toLocaleString("en-US"),
+      note: allIndexed ? INDEXED_SCOPE : allInMemory ? MEMORY_SCOPE : `${INDEXED_SCOPE} ${MEMORY_SCOPE}`
+    },
+    ...CHANGE_METRICS.map(({ change, label, icon, hue }) => ({
+      label,
+      icon,
+      hue,
+      value: mounts.reduce((sum, m) => sum + m.changes[change], 0)
+    }))
+      .filter((metric) => metric.value > 0)
+      .map((metric) => ({ ...metric, value: metric.value.toLocaleString("en-US") }))
+  ]);
+
+  const MOUNT_EXAMPLE = `workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem, description="...")
+memory = agent.vfs_mount("/memory", LocalDisk, description="...")
+
+mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]`;
 </script>
 
-<section class="files" aria-label="VFS File Mounts">
+<section class="files" class:empty={mounts.length === 0} aria-label="VFS File Mounts">
   {#if mounts.length === 0}
-    <div class="empty">
-      <p>No agent in this run tracks a filesystem mount.</p>
-      <p class="empty-note">
+    <EmptyState
+      title="No agent in this run tracks a filesystem mount."
+      language="python"
+      code={MOUNT_EXAMPLE}
+    >
+      <p>
         Track a Code Mode mount by declaring it on the agent class, then bind it in
         <code>@agent.init</code>. An in-memory filesystem keeps its files, contents included;
         an activity-backed one keeps an index of its tree:
       </p>
-      <pre data-language="python">workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem, description="...")
-memory = agent.vfs_mount("/memory", LocalDisk, description="...")
-
-mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]</pre>
-    </div>
+    </EmptyState>
   {:else}
+    {#if nothingYet}
+      <EmptyState
+        title={allIndexed ? "This session hasn't touched a file in any mount yet." : "No mount holds a file yet."}
+      />
+    {:else}
+      <Reading label={readingLabel} {headline} />
+    {/if}
     <div class="trees">
       <MountTrees
         {mounts}
         {selected}
+        graphKey={graphMountKey}
         onOpen={(mountKey, path) => (selected = { mountKey, path })}
         onGraph={onOkfGraph ? (mountKey) => (graphMountKey = mountKey) : undefined}
       />
@@ -90,41 +138,22 @@ mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]<
   .files {
     display: flex;
     flex-direction: column;
+    gap: var(--gutter);
     min-width: 0;
     height: 100%;
+    padding: var(--pane-inset);
     overflow: hidden;
   }
 
+  /* Into the pane's end inset by the tree's track, which then is that inset. */
   .trees {
     flex: 1;
     min-height: 0;
+    margin-inline-end: calc(-1 * var(--scrollbar-size));
     overflow: auto;
   }
 
-  .empty {
-    display: grid;
-    gap: var(--gap-sm);
-    padding: var(--gutter-tight);
-    background: var(--surface-2);
-  }
-
-  .empty p {
-    margin: 0;
-  }
-
-  .empty-note {
-    color: var(--text-3);
-    font-size: var(--font-sm);
-  }
-
-  .empty-note code {
-    font-family: var(--font-mono);
-  }
-
-  .empty pre {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--font-code);
-    white-space: pre-wrap;
+  .files.empty {
+    overflow: auto;
   }
 </style>
