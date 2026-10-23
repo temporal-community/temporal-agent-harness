@@ -50,7 +50,7 @@ The examples are the fastest path to something running, and they are **not shipp
 package** — they live only in this repo. So even if you'll ultimately install from PyPI, it's
 worth cloning once to watch the whole stack work.
 
-### Try it — run the example agents
+### Try the example agents
 
 Clone at a release tag. You need [just](https://just.systems/),
 [Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, and the
@@ -62,15 +62,11 @@ cd temporal-agent-harness
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
 
-Then run [`python/examples/monty`](python/examples/monty) — a conversational Code Mode travel agent — with one
-recipe per terminal:
+Then run two commands in seperate terminals to get going with all example agents: 
 
 ```bash
-cd python/examples/monty
-just temporal          # 1. local Temporal dev server (needs the `temporal` CLI)
-just session-manager   # 2. worker hosting the packaged SessionManagerWorkflow
-just server            # 3. browser UI + JSON API on :8000
-just worker            # 4. this example's agent worker
+just temporal       # 1. local Temporal dev server (needs the `temporal` CLI)
+just dev            # 2. session-manager, harness server and all example agent workers
 ```
 
 Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
@@ -84,6 +80,8 @@ the tag rather than on a branch. Later, move to a newer release with
 `git diff 0.6.0 0.7.0`.
 
 ### Build with it — install from PyPI
+
+Use this path to build your own agents in your own project. You don’t need to clone this repository.
 
 The harness is published to
 [PyPI](https://pypi.org/project/temporal-agent-harness/). In a
@@ -1016,7 +1014,6 @@ Each example runs on its own from its directory — [`python/examples/monty`](py
 conversational Code Mode travel agent + a subagent variant) is the best starting point:
 
 ```bash
-cd python/examples/monty
 just temporal          # local Temporal dev server; skip if you bring your own
 just session-manager   # worker hosting the packaged SessionManagerWorkflow
 just server            # serves the Svelte UI + /api on :8000 (this example's agents only)
@@ -1035,14 +1032,9 @@ each in its own terminal:
 
 ```bash
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
-just session-manager   # shared session-manager worker
-just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all ten agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just dev               # starts the session manager, the server, and all ten workers in one terminal; Ctrl-C stops them all
 ```
 
-Or, against a running Temporal, `just dev` starts the session manager, the server, and all ten
-workers in one terminal: one build, then all in parallel, each output line labelled with the
-program it came from; Ctrl-C stops them all.
 
 `server`, `workers`, and `dev` also take example names (the directory under `python/examples/`, e.g.
 `monty` or `wiki_agent`) to run only those: `just dev monty wiki_agent` serves just their agents and
