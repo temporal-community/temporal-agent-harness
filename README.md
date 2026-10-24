@@ -71,7 +71,7 @@ just dev            # 2. session-manager, harness server and all example agent w
 
 Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
 Bazel, which fetches dependencies on first run. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all ten behind
+[Run the examples](#run-the-examples) for the rest of them, including running all eight behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
@@ -1033,12 +1033,12 @@ each in its own terminal:
 
 ```bash
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
-just dev               # starts the session manager, the server, and all ten workers in one terminal; Ctrl-C stops them all
+just dev               # starts the session manager, the server, and all eight workers in one terminal; Ctrl-C stops them all
 ```
 
 
 `server`, `workers`, and `dev` also take example names (the directory under `python/examples/`, e.g.
-`monty` or `wiki_agent`) to run only those: `just dev monty wiki_agent` serves just their agents and
+`monty` or `auto_mode`) to run only those: `just dev monty auto_mode` serves just their agents and
 starts just their workers, and `just workers tictactoe` adds one more worker beside a running
 stack. From an example's own directory, `just dev` does the same for that example. Switching the
 set of agents you serve is a registry change, so `just reset-manager` first (see the gotcha below).
@@ -1050,12 +1050,10 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](python/examples/auto_mode/README.md)); chat directly in the UI |
-| Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
+| Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI, or `just tictactoe-play` for its board |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](python/examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
-| Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client`** (wiki in `python/examples/callback_tools/wiki_agent/wiki`; `--wiki-dir` moves it) — required, or its tool calls hang |
-| Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
 | Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](python/examples/code_mode_memory/README.md)); chat directly in the UI |
-| Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](python/examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
+| Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](python/examples/agent_dag/README.md)); best in its own UI, **`just agent-dag-studio`** |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
 workflow with the registry on first start and reuses the existing one after that. So when you switch

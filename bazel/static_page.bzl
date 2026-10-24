@@ -39,7 +39,8 @@ static_page = macro(
 
     `<name>_files` is the page's directory: `srcs` at its root and each of `packages` (an
     `npm_package`, laid out as npm publishes it) under its directory name. `bazel run :<name>`
-    serves it on http://127.0.0.1:<port>/ (bazel/static_page_server.mjs).
+    serves it on http://127.0.0.1:<port>/ (bazel/static_page_server.mjs), or on the port given
+    after `--` (`bazel run :<name> -- 5174`).
 
     `<name>_imports_resolve_test` checks that every module the page loads is there
     (bazel/static_page_imports_test.mjs): each local path index.html's import map names, each
@@ -49,6 +50,6 @@ static_page = macro(
     attrs = {
         "srcs": attr.label_list(mandatory = True, allow_files = True, configurable = False, doc = "The page's own files: index.html and what it loads."),
         "packages": attr.label_keyed_string_dict(configurable = False, doc = "npm_package targets, each to the directory it is served from."),
-        "port": attr.int(default = 5173, configurable = False, doc = "The port `bazel run` serves on."),
+        "port": attr.int(default = 5173, configurable = False, doc = "The port `bazel run` serves on unless given one."),
     },
 )

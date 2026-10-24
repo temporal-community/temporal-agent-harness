@@ -4,8 +4,6 @@ load("//bazel:dev.bzl", "harness_dev")
 EXAMPLES = [
     "agent_dag",
     "auto_mode",
-    "callback_tools/coding_agent",
-    "callback_tools/wiki_agent",
     "code_mode_memory",
     "monty",
     "openai_hello",

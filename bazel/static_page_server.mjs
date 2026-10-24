@@ -1,11 +1,12 @@
-// static_page_server.mjs <directory> <port>: serves a static_page target's files
-// (bazel/static_page.bzl) on 127.0.0.1, for `bazel run`.
+// static_page_server.mjs <directory> <port> [port]: serves a static_page target's files
+// (bazel/static_page.bzl) on 127.0.0.1, for `bazel run`. The target passes the first two; a port
+// given after `bazel run <target> --` overrides its default.
 
 import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 
-const [directory, port] = process.argv.slice(2);
+const [directory, defaultPort, port = defaultPort] = process.argv.slice(2);
 const root = resolve(directory);
 
 const types = {
