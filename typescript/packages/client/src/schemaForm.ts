@@ -10,7 +10,8 @@
 //   * `$ref` into `$defs` for nested models and `Literal`s
 //   * `enum` for a `Literal[...]` of one type, `anyOf` of `const`s for a mixed one
 //   * `anyOf: [X, {type: "null"}]` for `X | None`
-//   * `title` on every property (pydantic generates it from the field name)
+//   * `title` on every property (pydantic generates it from the field name; a schema without one,
+//     like a TypeScript agent's, gets the same title from `fieldTitle`)
 
 import type { JsonRecord } from "./frames.ts";
 
@@ -111,6 +112,21 @@ function enumChoices(schema: Schema): string[] | null {
   return null;
 }
 
+/**
+ * The title pydantic gives a field it isn't told one for, `name.title().replace("_", " ")`, for a
+ * schema that has none (a TypeScript agent's): "memory_dir" → "Memory Dir".
+ */
+export function fieldTitle(name: string): string {
+  let out = "";
+  let afterCased = false;
+  for (const ch of name) {
+    const cased = ch.toLowerCase() !== ch.toUpperCase();
+    out += cased ? (afterCased ? ch.toLowerCase() : ch.toUpperCase()) : ch;
+    afterCased = cased;
+  }
+  return out.replaceAll("_", " ").trim();
+}
+
 function describeField(
   name: string,
   raw: Schema,
@@ -127,7 +143,7 @@ function describeField(
     typeof schema[key] === "number" ? (schema[key] as number) : undefined;
   const base = {
     name,
-    title: text(annotation("title")) ?? name,
+    title: text(annotation("title")) ?? fieldTitle(name),
     description: text(annotation("description")),
     required,
     default: annotation("default"),

@@ -16,7 +16,7 @@ export interface RunAgentWorkerOptions {
   taskQueue: string;
   /** Activity-tool bodies (`toolActivities(...)`) and any other activities. */
   activities?: object;
-  /** Integration plugins, e.g. `...aiSdk(openai)`. AgentHarnessPlugin is added after them. */
+  /** Worker plugins, such as a model integration's. AgentHarnessPlugin is added after them. */
   plugins?: NonNullable<WorkerOptions["plugins"]>;
   bundlerOptions?: WorkerOptions["bundlerOptions"];
   /** Env vars the agents need; the worker exits with a message when one is unset. */

@@ -34,6 +34,7 @@ published_npm_package(
         "package.json",
         "//typescript/packages/worker/src:index",
         "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/src/harness:agent-schema",
         "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
         "//typescript/packages/worker/src/utils:s3",
         "//typescript/packages/worker/src/web:client",

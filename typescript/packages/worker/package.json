@@ -28,6 +28,9 @@
       "default": "./dist/src/web/client.js"
     }
   },
+  "bin": {
+    "agent-harness-schema": "./dist/src/harness/agent-schema.js"
+  },
   "files": [
     "dist/src"
   ],

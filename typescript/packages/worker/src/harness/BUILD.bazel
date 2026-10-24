@@ -19,6 +19,17 @@ ts_project(
 )
 
 ts_project(
+    name = "agent-schema",
+    srcs = ["agent-schema.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+    ],
+)
+
+ts_project(
     name = "agent-workflow",
     srcs = ["agent-workflow.ts"],
     declaration = True,

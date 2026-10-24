@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { buildPayload, describeSchema, resultForm, validate } from "../src/schemaForm.ts";
+import { buildPayload, describeSchema, fieldTitle, resultForm, validate } from "../src/schemaForm.ts";
 
 const travelers = resultForm({
   type: "array",
@@ -36,9 +36,21 @@ describe("schema form fields", () => {
     assert.equal(choice?.default, "b");
   });
 
-  test("falls back to the property name for a blank title", () => {
-    const [field] = describeSchema({ type: "object", properties: { city: { type: "string", title: "  " } } });
-    assert.equal(field?.title, "city");
+  test("titles a field without one as pydantic would, from its name", () => {
+    const [blank, untitled] = describeSchema({
+      type: "object",
+      properties: { city: { type: "string", title: "  " }, memory_dir: { type: "string" } }
+    });
+    assert.equal(blank?.title, "City");
+    assert.equal(untitled?.title, "Memory Dir");
+  });
+
+  test("derives a title with Python's str.title() rules, underscores read as spaces", () => {
+    assert.equal(fieldTitle("memory_dir"), "Memory Dir");
+    assert.equal(fieldTitle("playerName"), "Playername");
+    assert.equal(fieldTitle("a1b_c"), "A1B C");
+    assert.equal(fieldTitle("_private"), "Private");
+    assert.equal(fieldTitle("max_tokens_2"), "Max Tokens 2");
   });
 
   test("sends a boolean only as a real true", () => {

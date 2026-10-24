@@ -142,17 +142,20 @@ async def scripted_worker() -> AsyncIterator[tuple[Client, str]]:
 
 
 @asynccontextmanager
-async def external_worker(command: Sequence[str]) -> AsyncIterator[tuple[Client, str]]:
-    """A local Temporal server and another SDK's worker program hosting the scripted agent.
+async def external_worker(
+    command: Sequence[str], *, task_queue: str | None = None
+) -> AsyncIterator[tuple[Client, str]]:
+    """A local Temporal server and another SDK's worker program (for conformance, one hosting
+    the scripted agent).
 
     The program is run as ``command --address HOST:PORT --namespace NS --task-queue QUEUE`` and
-    must serve until it gets SIGTERM."""
+    must serve until it gets SIGTERM. ``task_queue`` defaults to a fresh one."""
     env = await WorkflowEnvironment.start_local(
         data_converter=pydantic_data_converter,
         dev_server_existing_path=os.environ.get("TEMPORAL_CLI_PATH"),
     )
     try:
-        task_queue = f"conformance-{uuid.uuid4()}"
+        task_queue = task_queue or f"conformance-{uuid.uuid4()}"
         worker = subprocess.Popen(
             [
                 *command,

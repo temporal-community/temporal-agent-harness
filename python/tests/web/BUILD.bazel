@@ -143,3 +143,25 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+# Serves the TypeScript agent in //typescript/packages/worker/test/serving from its worker and
+# committed registry.
+harness_pytest_test(
+    name = "test_typescript_agents",
+    srcs = ["test_typescript_agents.py"],
+    data = [
+        "//typescript/packages/worker/test/serving:registry_files",
+        "//typescript/packages/worker/test/serving:worker",
+    ],
+    env = {"TYPESCRIPT_SERVING_WORKER": "$(rootpath //typescript/packages/worker/test/serving:worker)"},
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/tests:conftest",
+        "//python/tests/conformance:driver",
+        "@pypi//httpx",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+    ],
+)

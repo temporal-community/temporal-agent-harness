@@ -34,3 +34,27 @@ js_test(
     data = [":agent-client.test"],
     entry_point = "agent-client.test.js",
 )
+
+# agent-harness-schema (src/harness/agent-schema.ts), the bin this package publishes. One test runs
+# it on a TypeScript source, as a user would, so agents.ts is a runfile too.
+ts_project(
+    name = "agent-schema.test",
+    testonly = True,
+    srcs = ["agent-schema.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker/src/harness:agent-schema",
+        "//typescript/packages/worker/test/serving:agents",
+    ],
+)
+
+js_test(
+    name = "agent-schema_test",
+    data = [
+        ":agent-schema.test",
+        "//typescript/packages/worker/test/serving:agents_source",
+    ],
+    entry_point = "agent-schema.test.js",
+)

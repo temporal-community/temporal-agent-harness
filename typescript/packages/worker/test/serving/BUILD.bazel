@@ -1,0 +1,69 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:agents.bzl", "harness_agent_registry", "harness_ts_agent")
+
+# A TypeScript agent and worker the Python server serves: //python/tests/web:test_typescript_agents
+# starts :worker and serves :registry, whose schema agent-harness-schema writes.
+
+# The source too, for agent-harness-schema's test of running on TypeScript as a user would.
+js_library(
+    name = "agents_source",
+    srcs = ["agents.ts"],
+    visibility = ["//typescript/packages/worker/test/harness:__pkg__"],
+)
+
+# The worker bundles the compiled agents.js, so it and the node_modules it imports are runfiles of
+# :worker.
+ts_project(
+    name = "agents",
+    srcs = ["agents.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//typescript/packages/worker/test/harness:__pkg__"],
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "worker_main",
+    srcs = ["worker.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":agents",
+        "//typescript/packages/worker/src:index",
+    ],
+)
+
+# worker --address HOST:PORT --namespace NS --task-queue QUEUE (or TEMPORAL_ADDRESS,
+# TEMPORAL_NAMESPACE, TEMPORAL_TASK_QUEUE): a worker hosting agents.ts until SIGTERM.
+js_binary(
+    name = "worker",
+    data = [":worker_main"],
+    entry_point = "worker.js",
+    visibility = ["//python/tests/web:__pkg__"],
+)
+
+harness_ts_agent(
+    name = "BriefedTsAgent",
+    description = "A TypeScript agent that takes a brief to start and answers about it.",
+    export = "BriefedTsAgent",
+    key = "briefed-ts",
+    label = "Briefed (TypeScript)",
+    module = "agents.js",
+    task_queue = "briefed-ts-agent-task-queue",
+    deps = [":agents"],
+)
+
+harness_agent_registry(
+    name = "registry",
+    srcs = [
+        "BriefedTsAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":BriefedTsAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)

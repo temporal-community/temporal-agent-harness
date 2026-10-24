@@ -118,7 +118,7 @@ describe("composer choice buttons", () => {
     const untitled = handler("set_effort", { reasoning_effort: { type: "string", enum: ["low", "high"] } }, ["reasoning_effort"]);
     const body = composer([generate, travelPolicy, setModel, untitled], [accepted("set_model", { model: "gemini-3.8-flash" })]);
 
-    assert.deepEqual(names(body), ["Policy: not set", "Model: gemini-3.8-flash", "Reasoning effort: not set"]);
+    assert.deepEqual(names(body), ["Policy: not set", "Model: gemini-3.8-flash", "Reasoning Effort: not set"]);
     assert.doesNotMatch(body, /Posture/, "not in the button, its name, or its tip");
     const icons = buttons(body).map((button) => [...button.matchAll(/lucide-([a-z-]+)"/g)].map((m) => m[1]));
     assert.deepEqual(icons, [["shield-check"], ["cpu"], ["sliders-horizontal"]], "one icon each, no chevron");

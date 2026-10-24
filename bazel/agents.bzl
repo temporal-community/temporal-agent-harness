@@ -1,11 +1,13 @@
 """Agents' schema documents and the agents.toml registries that point at them, generated.
 
-harness_agent writes one agent's schema with the temporal-agent-harness CLI;
+harness_agent writes a Python agent's schema with the temporal-agent-harness CLI, and
+harness_ts_agent a TypeScript agent's with the worker package's agent-harness-schema;
 harness_agent_registry writes an agents.toml for a package's agents and keeps it and their
 schemas committed beside the BUILD file, so `temporal-agent-harness serve` reads the agents'
 start interfaces without importing their code.
 """
 
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
 load("//bazel:binary.bzl", "harness_module_binary")
 load("//bazel:committed_files.bzl", "committed_files")
 
@@ -122,6 +124,93 @@ harness_agent = macro(
     },
 )
 
+_TS_CLI = Label("//typescript/packages/worker/src/harness:agent-schema.js")
+
+def _harness_ts_agent_rule_impl(ctx):
+    # agent-harness-schema is a js_binary: it runs from the output root, so paths are relative to it.
+    out = ctx.actions.declare_file(ctx.label.name + ".generated.schema.json")
+
+    # The module and what it imports, node_modules included, are read from the output tree.
+    inputs = depset([ctx.file.module], transitive = [
+        dep[DefaultInfo].default_runfiles.files
+        for dep in ctx.attr.deps
+    ])
+    ctx.actions.run(
+        inputs = inputs,
+        outputs = [out],
+        executable = ctx.executable.tool,
+        arguments = ["%s#%s" % (ctx.file.module.short_path, ctx.attr.export), "-o", out.short_path],
+        env = {"BAZEL_BINDIR": ctx.bin_dir.path},
+        mnemonic = "HarnessSchema",
+        progress_message = "Writing the schema for %{label}",
+    )
+    return [
+        DefaultInfo(files = depset([out])),
+        AgentInfo(
+            description = ctx.attr.description,
+            key = ctx.attr.key,
+            label = ctx.attr.agent_label,
+            schema = out,
+            task_queue = ctx.attr.task_queue,
+        ),
+    ]
+
+_harness_ts_agent_rule = rule(
+    implementation = _harness_ts_agent_rule_impl,
+    attrs = {
+        "agent_label": attr.string(),
+        "deps": attr.label_list(mandatory = True),
+        "description": attr.string(),
+        "export": attr.string(mandatory = True),
+        "key": attr.string(),
+        "module": attr.label(mandatory = True, allow_single_file = [".js"]),
+        "task_queue": attr.string(),
+        "tool": attr.label(mandatory = True, executable = True, cfg = "exec"),
+    },
+)
+
+def _harness_ts_agent_impl(name, visibility, module, export, deps, key, task_queue, label, description):
+    entry = [key, task_queue, label, description]
+    if any(entry) and not all(entry):
+        fail("harness_ts_agent: set all of key, task_queue, label, and description (a registry entry), or none")
+
+    # The published CLI, able to import this agent: only the schema is written with it.
+    js_binary(
+        name = name + "_schema_tool",
+        entry_point = _TS_CLI,
+        data = [Label("//typescript/packages/worker/src/harness:agent-schema")] + deps,
+    )
+    _harness_ts_agent_rule(
+        name = name,
+        visibility = visibility,
+        module = module,
+        export = export,
+        deps = deps,
+        agent_label = label or "",
+        description = description or "",
+        key = key or "",
+        task_queue = task_queue or "",
+        tool = ":" + name + "_schema_tool",
+    )
+
+harness_ts_agent = macro(
+    doc = """One TypeScript agent: its schema document (`agent-harness-schema <module>#<export>`,
+    the bin @temporalio/agent-harness-worker publishes), which a harness_agent_registry commits as
+    `<name>.schema.json`, and, for an agent a registry lists, its entry's fields. The entry's
+    workflow_type is the workflow the schema describes.
+    """,
+    implementation = _harness_ts_agent_impl,
+    attrs = {
+        "module": attr.label(mandatory = True, configurable = False, doc = "The compiled module that exports the agent, e.g. `:agents.js`."),
+        "export": attr.string(mandatory = True, configurable = False, doc = "The name the module exports the agent as (`defineAgent`'s result)."),
+        "deps": attr.label_list(mandatory = True, configurable = False, doc = "The ts_project that compiles the module, which brings its imports."),
+        "key": attr.string(configurable = False, doc = "The registry key."),
+        "task_queue": attr.string(configurable = False, doc = "The task queue its worker polls."),
+        "label": attr.string(configurable = False, doc = "The name the UI shows."),
+        "description": attr.string(configurable = False, doc = "What the agent does, for the UI."),
+    },
+)
+
 def _registry_rule_impl(ctx):
     agents = [agent[AgentInfo] for agent in ctx.attr.agents]
     for target, agent in zip(ctx.attr.agents, agents):
@@ -194,7 +283,7 @@ harness_agent_registry = macro(
     """,
     implementation = _harness_agent_registry_impl,
     attrs = {
-        "agents": attr.label_list(mandatory = True, configurable = False, doc = "harness_agent targets, in the order of their entries."),
+        "agents": attr.label_list(mandatory = True, configurable = False, doc = "harness_agent or harness_ts_agent targets, in the order of their entries."),
         "srcs": attr.label_list(mandatory = True, allow_files = True, configurable = False, doc = "The committed agents.toml and each agent's schema document."),
     },
 )

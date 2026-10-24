@@ -1,0 +1,68 @@
+{
+  "agent": "BriefedTsAgent",
+  "source": "typescript/packages/worker/test/serving/agents.js#BriefedTsAgent",
+  "init_data": {
+    "data": {
+      "$ref": "#/$defs/Brief"
+    },
+    "required": true
+  },
+  "handlers": {
+    "ask": {
+      "description": "Ask about the topic.",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "Brief": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "What the agent works on."
+        }
+      },
+      "required": [
+        "topic"
+      ],
+      "title": "Brief",
+      "description": "What this session is about."
+    },
+    "TextMessage": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "title": "Text"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler)."
+    },
+    "TextReply": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "title": "Text"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "title": "TextReply",
+      "description": "A free-form natural-language reply (the output of a plain chat handler)."
+    }
+  }
+}

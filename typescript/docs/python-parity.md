@@ -18,7 +18,7 @@ Paths are under `python/temporal_agent_harness/`, `typescript/packages/core/src/
 | `harness/agent_workflow.py` | core `harness/agent-workflow.ts`, `harness/agent-workflow/{errors,types}.ts`; worker `harness/agent-workflow.ts` (activity tools) |
 | `harness/agent_client.py` | worker `harness/agent-client.ts` |
 | `harness/agent_protocol/` | core `harness/agent-protocol/`; the protocol types come from `@temporalio/agent-harness-client` |
-| `harness/agent_schema.py` | core `harness/agent-schema.ts` |
+| `harness/agent_schema.py` | core `harness/agent-schema.ts` (the document); worker `harness/agent-schema.ts` (loading an agent and writing it: the `agent-harness-schema <module>#<export>` bin, the TypeScript half of `temporal-agent-harness schema`) |
 | `harness/stream_context.py` | core `harness/stream-context.ts` |
 | `harness/subagent_toolset.py` | core `harness/subagent-toolset.ts` |
 | `harness/subagent_activities.py` | worker `harness/subagent-activities.ts` |
@@ -33,7 +33,7 @@ Paths are under `python/temporal_agent_harness/`, `typescript/packages/core/src/
 | `ai_sdks/jev/evaluator.py` | core and worker `ai-sdks/jev/evaluator.ts` |
 | `ai_sdks/integration_helpers/` | core `ai-sdks/integration-helpers/raw-events.ts` (model streams translated in the workflow) |
 | `web/client.py` | worker `web/client.ts` |
-| the rest of `web/`, `ui/` | None: the server, session manager, registry, CLI and console have one implementation, which serves agents written with either SDK |
+| the rest of `web/`, `ui/` | None: the server, session manager, registry, the rest of the CLI and the console have one implementation, which serves agents written with either SDK |
 | `ai_sdks/openai_agents*`, `ai_sdks/google_genai_plugin/` | Stage 5's integrations PR (`openai-agents`, `gemini`, plus `ai-sdk`) |
 | `ai_sdks/pydantic_ai_harness.py` | None: Pydantic AI is Python-only |
 | `ai_sdks/typesafe_harness.py` | Not ported yet |
