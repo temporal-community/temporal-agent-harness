@@ -2,6 +2,7 @@
 // its own task queue.
 
 import {
+  CancellationScope,
   condition,
   defineQuery,
   defineSignal,
@@ -295,6 +296,22 @@ export const JevApprovalProbeAgent = defineAgent({
   },
 });
 
+/** Jev with only its start-to-close timeout overridden; the rest is the evaluator's defaults. */
+export const JevTimeoutProbeAgent = defineAgent({
+  name: "JevTimeoutProbeAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.autoMode(),
+  autoApprovalCriteriaDefault: AutoApprovalCriteria.parse({
+    sets: { financial: { approve_when: ["the amount is under 50"] } },
+  }),
+  autoModeEvaluator: jevEvaluator({ activityOptions: { startToCloseTimeout: "10 seconds" } }),
+  handlers: { act },
+  create: ({ runner }) => ({
+    act: async ({ text }) => ({
+      text: await runner.runTool("r1", refundCustomer, { amount: Number(text) }).catch(denied),
+    }),
+  }),
+});
+
 // -- callback tools -----------------------------------------------------------------------------
 
 const echoTool = tool({
@@ -454,6 +471,7 @@ export const MidTurnProbeAgent = defineAgent({
     setHandler(releaseSignal, (which) => void released.add(which));
     setHandler(defineQuery<boolean[]>("joined"), () => joined);
     setHandler(defineQuery<boolean>("published_after_sibling"), () => publishedAfterSibling);
+    setHandler(defineQuery<boolean>("closed"), () => runner.closed);
     return {
       async work({ text }) {
         await condition(() => released.has("work"));
@@ -611,38 +629,6 @@ export const VfsProbeAgent = defineAgent({
   },
 });
 
-const vaultLookup = tool({
-  name: "vault_lookup",
-  description: "Read a vault entry.",
-  inputSchema: z.object({ key: z.string() }),
-  outputSchema: z.string(),
-  callers: ["code_mode"],
-  execute: async ({ key }) => `secret:${key}`,
-});
-
-/** Reports what a TurnHost over a code-mode-only tool exposes, then runs the message as a script. */
-export const CallersProbeAgent = defineAgent({
-  name: "CallersProbeAgent",
-  approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
-  handlers: {
-    run: handler({ description: "Run a Code Mode script.", input: TextMessage, output: TextReply }),
-  },
-  create: ({ runner }) => {
-    const codeTool = codeModeTool([searchItems, vaultLookup], { name: "run_code" });
-    return {
-      run: async ({ text }) => {
-        const host = runner.turnHost([codeTool, searchItems, vaultLookup]);
-        const direct = await host.runTool("vault_lookup", { key: "k" }).then(
-          () => "ran",
-          (e: Error) => e.message,
-        );
-        const result = await host.runTool("run_code", { script: text }, { toolId: "code-1" });
-        return { text: JSON.stringify({ tools: host.tools.map((t) => t.name), direct, result }) };
-      },
-    };
-  },
-});
-
 // -- subagents ----------------------------------------------------------------------------------
 
 export const EchoChildAgent = defineAgent({
@@ -654,6 +640,7 @@ export const EchoChildAgent = defineAgent({
       input: TextMessage,
       output: TextReply,
       midTurn: MidTurn.ENQUEUE,
+      inputName: "request",
     }),
     fail: handler({
       description: "Always fails.",
@@ -693,10 +680,15 @@ export const SubagentParentAgent = defineAgent({
         const handle = (await runner.runTool("start", tool("start_echo"), {})) as string;
         let reply: string;
         try {
+          // echo takes its input as `request`, fail under the default `message`.
+          const input =
+            text === "fail"
+              ? { subagent: handle, message: { text } }
+              : { subagent: handle, request: { text } };
           const out = (await runner.runTool(
             "send",
             tool(text === "fail" ? "echo_fail" : "echo_echo"),
-            { subagent: handle, message: { text } },
+            input,
           )) as { text: string };
           reply = out.text;
         } catch (e) {
@@ -709,11 +701,18 @@ export const SubagentParentAgent = defineAgent({
   },
 });
 
-/** Delegates to an ApprovalProbeAgent child (human approval by default) started with the policy the text names. */
-export const ApprovalParentAgent = defineAgent({
-  name: "ApprovalParentAgent",
+/** An ApprovalProbeAgent whose own policy lets its gated tool run, so it runs as a subagent. */
+export const AllowedToolProbeAgent = defineAgent({
+  name: "AllowedToolProbeAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.allowTools(["gated_activity_tool"]),
+  handlers: { act },
+  create: ({ runner }) => approvalProbe(runner),
+});
+
+/** Runs an AllowedToolProbeAgent child's gated tool and leaves the child running. */
+export const ToolChildParentAgent = defineAgent({
+  name: "ToolChildParentAgent",
   approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
-  autoModeEvaluator: approveGatedActivityTool,
   handlers: {
     delegate: handler({
       description: "Run the child's gated tool.",
@@ -722,17 +721,37 @@ export const ApprovalParentAgent = defineAgent({
     }),
   },
   create: ({ runner }) => ({
-    async delegate({ text }) {
-      const approvalPolicy =
-        text === "inherit" ? "inherit" : ToolApprovalPolicy.allowTools(["gated_activity_tool"]);
-      const [start, act] = subagentToolset(ApprovalProbeAgent, {
+    async delegate() {
+      const [start, act] = subagentToolset(AllowedToolProbeAgent, {
         key: "probe",
         taskQueue: workflowInfo().taskQueue,
-        approvalPolicy,
       });
       const handle = (await runner.runTool("start", start!, {})) as string;
       return (await runner.runTool("send", act!, { subagent: handle, message: { text: "x" } })) as {
         text: string;
+      };
+    },
+  }),
+});
+
+/** Starts a BriefedAgent child whose initData callback returns null. */
+export const NullBriefParentAgent = defineAgent({
+  name: "NullBriefParentAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+  handlers: {
+    delegate: handler({ description: "Start the child.", input: TextMessage, output: TextReply }),
+  },
+  create: ({ runner }) => ({
+    async delegate() {
+      const [start] = subagentToolset(BriefedAgent, {
+        key: "brief",
+        taskQueue: workflowInfo().taskQueue,
+        initData: () => null,
+      });
+      return {
+        text: await runner
+          .runTool("start", start!, {})
+          .then(String, (e: unknown) => `${(e as Error).name}:${(e as Error).message}`),
       };
     },
   }),
@@ -943,18 +962,81 @@ export const heartbeatTool = activityTool({
   },
 });
 
+/** heartbeat_tool's body (2.5 s) under a start-to-close timeout it cannot finish within. */
+const timingOutTool = activityTool({
+  name: "heartbeat_tool",
+  description: "Runs for longer than its start-to-close timeout.",
+  inputSchema: TextInput,
+  outputSchema: z.string(),
+  inherentlySafe: true,
+  activityOptions: {
+    startToCloseTimeout: "1 second",
+    heartbeatTimeout: "500 milliseconds",
+    retry: { maximumAttempts: 1 },
+  },
+});
+
 export const ToolRetryAgent = defineAgent({
   name: "ToolRetryAgent",
   approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
   handlers: { act },
   create: ({ runner }) => ({
     async act({ text }) {
-      const tool = text === "slow" ? heartbeatTool : failingTool;
+      const tool =
+        text === "slow" ? heartbeatTool : text === "timeout" ? timingOutTool : failingTool;
       return {
         text: await runner
           .runTool("t1", tool, { text })
           .catch((e: unknown) => `caught:${e instanceof Error ? e.name : String(e)}`),
       };
+    },
+  }),
+});
+
+// -- cancellation inside a handler ---------------------------------------------------------------
+
+const parkedInline = tool({
+  name: "parked_inline",
+  description: "Waits until cancelled.",
+  inputSchema: z.object({}),
+  outputSchema: z.string(),
+  inherentlySafe: true,
+  execute: async () => {
+    await condition(() => false);
+    return "never";
+  },
+});
+
+const chainedFailure = tool({
+  name: "chained_failure",
+  description: "Throws an error with a cause.",
+  inputSchema: z.object({}),
+  outputSchema: z.string(),
+  inherentlySafe: true,
+  execute: async () => {
+    throw new Error("outer", { cause: new Error("inner") });
+  },
+});
+
+/** Handlers that cancel their own work: a timeout of their own, a tool call their scope cancels. */
+export const CancellationProbeAgent = defineAgent({
+  name: "CancellationProbeAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
+  handlers: { act },
+  create: ({ runner }) => ({
+    async act({ text }) {
+      const withinTimeout = <T>(fn: () => Promise<T>) => CancellationScope.withTimeout(50, fn);
+      if (text === "own-timeout") await withinTimeout(() => condition(() => false));
+      if (text === "activity")
+        await withinTimeout(() => runner.runTool("t1", heartbeatTool, { text }));
+      if (text === "chained") await runner.runTool("t1", chainedFailure, {});
+      if (text === "inline") {
+        const caught = await withinTimeout(() => runner.runTool("t1", parkedInline, {})).catch(
+          (e: unknown) => `caught:${(e as Error).name}`,
+        );
+        return { text: caught };
+      }
+      return { text: "done" };
     },
   }),
 });

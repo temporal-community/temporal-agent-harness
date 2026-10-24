@@ -2,7 +2,7 @@
 // the workflow only renders concepts.
 
 import { parse } from "yaml";
-import { FsError, type FileStat } from "@temporalio/agent-harness";
+import type { FileStat } from "@temporalio/agent-harness";
 import {
   MAX_OKF_CONCEPTS,
   MAX_OKF_FILE_BYTES,
@@ -16,6 +16,7 @@ import {
   type OKFGraph,
   type OKFLink,
 } from "@temporalio/agent-harness/harness/code-mode/okf";
+import { osFailureOf } from "./os-error.ts";
 
 export interface OkfReadable {
   stat(path: string): Promise<FileStat | null>;
@@ -31,6 +32,12 @@ export interface OkfLimits {
 
 const utf8 = new TextDecoder("utf-8", { fatal: false });
 
+/**
+ * Every concept under `options.prefix`, read through `fs`, and the links between them when
+ * `options.links` is set. As in Python, a directory that can't be listed or an entry that can't be
+ * stat'ed (an `FsError` or a Node fs error) is skipped, and a concept that can't be read is listed
+ * with the problem.
+ */
 export async function buildOkfGraph(
   fs: OkfReadable,
   options: { prefix: string; links: boolean; now: Date; limits?: Partial<OkfLimits> },
@@ -62,10 +69,9 @@ export async function buildOkfGraph(
           data = await fs.read(path, 0, budget);
       }
     } catch (e) {
-      if (!(e instanceof FsError)) throw e;
-      concepts.push(
-        unknownConcept(conceptId, path, size, `unreadable: ${e.strerror || e.message}`),
-      );
+      const os = osFailureOf(e);
+      if (os === null) throw e;
+      concepts.push(unknownConcept(conceptId, path, size, `unreadable: ${os.strerror}`));
       return;
     }
     total += data.length;
@@ -79,7 +85,7 @@ export async function buildOkfGraph(
     try {
       names = [...(await fs.list(directory))].sort();
     } catch (e) {
-      if (e instanceof FsError) return;
+      if (osFailureOf(e) !== null) return;
       throw e;
     }
     for (const name of names) {
@@ -89,7 +95,7 @@ export async function buildOkfGraph(
       try {
         found = await fs.stat(path);
       } catch (e) {
-        if (e instanceof FsError) continue;
+        if (osFailureOf(e) !== null) continue;
         throw e;
       }
       if (found === null) continue;

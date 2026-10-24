@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 
@@ -182,8 +183,9 @@ class _Merge:
             skip_until_turn_id=skip_until_turn_id,
         )
         try:
-            async for item in self._drive():
-                yield item
+            async with contextlib.aclosing(self._drive()) as items:
+                async for item in items:
+                    yield item
         finally:
             await self._teardown()
 
@@ -486,9 +488,13 @@ async def merge_stream(
         should_stop=should_stop,
         stall_grace_seconds=stall_grace_seconds,
     )
-    async for item in engine.run(
-        root_workflow_id=root_workflow_id,
-        root_from_offset=root_from_offset,
-        skip_until_turn_id=skip_until_turn_id,
-    ):
-        yield item
+    # Closing this generator must reach the engine's teardown, which closes every cursor.
+    async with contextlib.aclosing(
+        engine.run(
+            root_workflow_id=root_workflow_id,
+            root_from_offset=root_from_offset,
+            skip_until_turn_id=skip_until_turn_id,
+        )
+    ) as items:
+        async for item in items:
+            yield item

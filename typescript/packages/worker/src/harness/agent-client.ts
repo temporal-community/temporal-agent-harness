@@ -258,6 +258,9 @@ export class AgentClient<A = unknown> {
     timeoutSeconds: number | null,
     stallGraceSeconds: number | undefined,
   ) {
+    // Aborting ends the merge even while it waits on a poll, so a timeout or an early exit by the
+    // consumer always closes its subscriptions.
+    const abort = new AbortController();
     const merged = mergeStream({
       client: this.temporal,
       rootWorkflowId: this.workflowId,
@@ -267,40 +270,50 @@ export class AgentClient<A = unknown> {
       shouldStop: async (cursor: Cursor, ev: AgentEvent) =>
         !cursor.isChild && ev.turn_id === reply.turn_id && ev.event.type === "turn_end",
       ...(stallGraceSeconds === undefined ? {} : { stallGraceSeconds }),
+      signal: abort.signal,
     });
     const deadline = timeoutSeconds === null ? Infinity : Date.now() + timeoutSeconds * 1000;
     const timedOut = Symbol("timeout");
-    while (true) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const remaining = deadline - Date.now();
-      const next = await Promise.race([
-        merged.next(),
-        ...(Number.isFinite(deadline)
-          ? [
-              new Promise<typeof timedOut>(
-                (r) => (timer = setTimeout(() => r(timedOut), Math.max(0, remaining))),
-              ),
-            ]
-          : []),
-      ]);
-      clearTimeout(timer);
-      if (next === timedOut) {
-        void merged.return(undefined);
-        yield [
-          new AgentTurnTimeout(
-            `turn ${reply.turn_number} did not complete within ${timeoutSeconds}s`,
-          ),
-          -1,
-        ] as const;
-        return;
+    try {
+      while (true) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const remaining = deadline - Date.now();
+        const next = await Promise.race([
+          merged.next(),
+          ...(Number.isFinite(deadline)
+            ? [
+                new Promise<typeof timedOut>(
+                  (r) => (timer = setTimeout(() => r(timedOut), Math.max(0, remaining))),
+                ),
+              ]
+            : []),
+        ]);
+        clearTimeout(timer);
+        if (next === timedOut) {
+          abort.abort();
+          await merged.return(undefined);
+          yield [
+            new AgentTurnTimeout(
+              `turn ${reply.turn_number} did not complete within ${timeoutSeconds}s`,
+            ),
+            -1,
+          ] as const;
+          return;
+        }
+        if (next.done) return;
+        const [ev, resumeOffset] = next.value;
+        if (ev.message_id === reply.message_id && ev.event.type === "message_handler_error") {
+          yield [
+            new AgentTurnError(ev.event.message || "agent turn failed"),
+            resumeOffset,
+          ] as const;
+        } else {
+          yield [ev, resumeOffset] as const;
+        }
       }
-      if (next.done) return;
-      const [ev, resumeOffset] = next.value;
-      if (ev.message_id === reply.message_id && ev.event.type === "message_handler_error") {
-        yield [new AgentTurnError(ev.event.message || "agent turn failed"), resumeOffset] as const;
-      } else {
-        yield [ev, resumeOffset] as const;
-      }
+    } finally {
+      abort.abort();
+      await merged.return(undefined);
     }
   }
 

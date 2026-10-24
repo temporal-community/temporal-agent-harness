@@ -163,6 +163,22 @@ describe("the builtin Jev evaluator", () => {
     assert.equal(replyText(events), "refunded:20");
   });
 
+  it("activityOptions merge over the defaults, so the retry cap and summary stay", async () => {
+    answer("approve", 0.95, 0.1);
+    const h = await env.start("JevTimeoutProbeAgent");
+    await send(h, "act", { text: "20" });
+    assert.equal(replyText(await collect(env.client, h.workflowId)), "refunded:20");
+    const scheduled = (await h.fetchHistory()).events!.flatMap((e) => {
+      const a = e.activityTaskScheduledEventAttributes;
+      return a?.activityType?.name === "jev_tool_approval" ? [{ a, e }] : [];
+    });
+    assert.equal(scheduled.length, 1);
+    const { a, e } = scheduled[0]!;
+    assert.equal(a.retryPolicy?.maximumAttempts, 3);
+    assert.equal(Number(a.startToCloseTimeout?.seconds), 10);
+    assert.match(Buffer.from(e.userMetadata!.summary!.data!).toString(), /jev_approval/);
+  });
+
   for (const [name, config] of [
     ["auto mode off", { approval_policy: ToolApprovalPolicy.alwaysRequireHumanApproval() }],
     ["no criteria", { auto_approval_criteria: {} }],

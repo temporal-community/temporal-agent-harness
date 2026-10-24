@@ -22,6 +22,7 @@ import {
   MontyError,
   MontyFileHandle,
   MontyRuntimeError,
+  MontySyntaxError,
   MontyTypingError,
   type ResourceLimits,
   type Snapshot,
@@ -39,7 +40,6 @@ import {
   type ResumeBatchInput,
   type TypeCheckStubs,
 } from "@temporalio/agent-harness/harness/code-mode";
-import { onWorkerShutdown } from "../../index.ts";
 import { continuationSecret } from "./secret.ts";
 import {
   FILE_OPERATIONS,
@@ -55,21 +55,23 @@ export const STEP_TIME_LIMIT_SECS = 1;
  */
 export const DEFAULT_CODE_MODE_LIMITS: ResourceLimits = { maxTurnDurationSecs: STEP_TIME_LIMIT_SECS };
 
-// One worker-process pool shared by every Code Mode activity; Monty recycles crashed workers.
-// AgentHarnessPlugin closes it, killing its processes, when the worker shuts down.
+/** How long `codeTypeCheck` lets a clean script run before discarding it, as in Python. */
+export const TYPE_CHECK_RUN_LIMIT_SECS = 0.05;
+
+// One worker-process pool for the whole process, created on first use and shared by every Code
+// Mode activity of every worker in it; Monty recycles crashed workers. It is never closed: its
+// processes end with this one, as Python's pool does at exit. A failed creation is not kept, so
+// the next step tries again.
 let pool: Promise<Monty> | undefined;
 function montyPool(): Promise<Monty> {
   if (pool === undefined) {
-    pool = Monty.create();
-    onWorkerShutdown(closeMontyPool);
+    const created = Monty.create();
+    pool = created;
+    created.catch(() => {
+      if (pool === created) pool = undefined;
+    });
   }
   return pool;
-}
-
-export async function closeMontyPool(): Promise<void> {
-  const closing = pool;
-  pool = undefined;
-  await (await closing)?.close();
 }
 
 /**
@@ -101,9 +103,10 @@ function scriptFailure(stdout: CollectString, e: unknown): CodeBatchStep {
   return failed(stdout, e);
 }
 
+// As Python's `f"{type(e).__name__}: {e}"`: a typing error's whole report, a syntax error's message.
 const errorText = (e: unknown) =>
-  e instanceof MontyTypingError
-    ? `${e.name}: ${e.display().trim()}`
+  e instanceof MontyTypingError || e instanceof MontySyntaxError
+    ? `${e.name}: ${e.display()}`
     : e instanceof Error
       ? `${e.name}: ${e.message}`
       : String(e);
@@ -334,11 +337,8 @@ async function driveToBatch(
         error: null,
       };
     }
-    throw ApplicationFailure.create({
-      type: "UnsupportedMontySuspension",
-      nonRetryable: true,
-      message: `unsupported Monty suspension: ${snap.constructor.name}`,
-    });
+    // NameLookupSnapshot: leave the name undefined, so the script raises NameError, as in Python.
+    snap = await snap.resume();
   }
 }
 
@@ -360,13 +360,28 @@ const osPolicy = (clock: HostClock) =>
     randomStart: { seed: clock.seed },
   }) as const;
 
+/**
+ * Type-check `script` and run it to its first awaited batch (or a file operation, with `files`).
+ * Paused scripts are sealed with `secret`, checked as `codeModeActivities` checks it.
+ */
 export async function codeStartBatch(
   script: string,
   stubs: TypeCheckStubs | null,
   limits: ResourceLimits,
   clock: HostClock,
-  secret = process.env.RUN_CONTINUATION_SECRET ?? "",
+  secret = process.env.RUN_CONTINUATION_SECRET,
   files = false,
+): Promise<CodeBatchStep> {
+  return startBatch(script, stubs, limits, clock, continuationSecret(secret, "Code Mode"), files);
+}
+
+async function startBatch(
+  script: string,
+  stubs: TypeCheckStubs | null,
+  limits: ResourceLimits,
+  clock: HostClock,
+  secret: string,
+  files: boolean,
 ): Promise<CodeBatchStep> {
   log.info(
     `code_start_batch: compiling + starting (script_len=${script.length}, type_check=${stubs !== null})`,
@@ -393,10 +408,19 @@ export async function codeStartBatch(
   }
 }
 
+/** Resume a paused script with its batch's results; `secret` is checked as in `codeStartBatch`. */
 export async function codeResumeBatch(
   input: ResumeBatchInput,
   limits = DEFAULT_CODE_MODE_LIMITS,
-  secret = process.env.RUN_CONTINUATION_SECRET ?? "",
+  secret = process.env.RUN_CONTINUATION_SECRET,
+): Promise<CodeBatchStep> {
+  return resumeBatch(input, limits, continuationSecret(secret, "Code Mode"));
+}
+
+async function resumeBatch(
+  input: ResumeBatchInput,
+  limits: ResourceLimits,
+  secret: string,
 ): Promise<CodeBatchStep> {
   const binding = bindingOf(input.type_names);
   const dump = openSnapshot(secret, input.snapshot, binding);
@@ -464,9 +488,12 @@ export async function codeResumeBatch(
 }
 
 /**
- * The checker's report for `script` against `stubs`, or "" when clean. Monty's JS API has no
- * check-only entry point, so this feeds the script and abandons it at its first suspension: the
- * type check runs first, and no host call is ever made (only sandboxed, time-limited compute).
+ * The checker's syntax or type errors for `script` against `stubs`, or "" when it is clean.
+ * Monty has no check-only entry point, but it checks a script before running any of it, so a
+ * clean script is started and then discarded: it runs only until its first suspension (or a brief
+ * time limit), with the clock, entropy and sleeps routed to the host as in a step, so nothing
+ * sleeps and no host call is answered. How far it got is never looked at, so a script that raises
+ * or loops is clean. A crashed sandbox worker says nothing about the script and is thrown.
  */
 export async function codeTypeCheck(script: string, stubs: TypeCheckStubs): Promise<string> {
   await using session = await (
@@ -474,15 +501,16 @@ export async function codeTypeCheck(script: string, stubs: TypeCheckStubs): Prom
   ).checkout({
     typeCheck: true,
     typeCheckStubs: stubs.source,
-    limits: { maxFeedDurationSecs: 5 },
+    limits: { maxTurnDurationSecs: TYPE_CHECK_RUN_LIMIT_SECS },
+    osPolicy: osPolicy({ now: 0, seed: 0 }),
   });
   try {
     await session.feedStart(script, { printCallback: new CollectString() });
-    return "";
   } catch (e) {
-    if (e instanceof MontyError) return errorText(e);
-    throw e;
+    if (e instanceof MontySyntaxError || e instanceof MontyTypingError) return errorText(e);
+    if (e instanceof MontyCrashedError || !(e instanceof MontyError)) throw e;
   }
+  return "";
 }
 
 /**
@@ -501,8 +529,8 @@ export function codeModeActivities({
       stubs: TypeCheckStubs | null,
       clock: HostClock,
       files?: boolean,
-    ) => codeStartBatch(script, stubs, limits, clock, key, files),
-    [CODE_RESUME_BATCH_ACTIVITY]: (input: ResumeBatchInput) => codeResumeBatch(input, limits, key),
+    ) => startBatch(script, stubs, limits, clock, key, files ?? false),
+    [CODE_RESUME_BATCH_ACTIVITY]: (input: ResumeBatchInput) => resumeBatch(input, limits, key),
     [CODE_TYPE_CHECK_ACTIVITY]: codeTypeCheck,
   } as CodeModeActivities;
 }

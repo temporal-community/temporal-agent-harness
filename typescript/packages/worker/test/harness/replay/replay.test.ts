@@ -118,7 +118,7 @@ describe("the current code replays its own histories", () => {
     [
       "a failed call caught in the script",
       py('try:\n    await failing_tool(text="x")\nexcept Exception as e:\n    return str(e)'),
-      "result: 'Error: tool broke'",
+      "result: 'ApplicationError: tool broke'",
     ],
     [
       "a runaway step",

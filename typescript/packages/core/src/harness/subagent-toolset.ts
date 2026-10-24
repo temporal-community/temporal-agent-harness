@@ -3,9 +3,8 @@
 // `stop_<key>`.
 
 import { z } from "zod";
-import { ToolApprovalPolicy, type AgentConfig } from "./agent-protocol/index.ts";
-import { AgentWorkflowRunner, currentToolCall } from "./agent-workflow.ts";
-import { tool, type AgentDefinition, type AgentWorkflow, type AnyHarnessTool } from "./agent.ts";
+import { currentToolCall } from "./agent-workflow.ts";
+import { tool, type AgentWorkflow, type AnyHarnessTool } from "./agent.ts";
 
 export const SubagentToolPolicy = {
   /** Every handler its author marked model_callable (the default). */
@@ -23,12 +22,8 @@ export type SubagentToolPolicy = ReturnType<typeof SubagentToolPolicy.allowModel
 
 /**
  * Tools that let a model start, message, and stop instances of another agent as subagents:
- * `start_<key>`, one `<key>_<handler>` per selected handler, and `stop_<key>`.
- *
- * Nobody watches a child's approval gate, so a gated call inside it waits forever under the
- * child's own `approvalPolicyDefault`. `approvalPolicy: "inherit"` starts each child with the
- * parent's live policy and criteria (auto mode dropped if the child has no evaluator, which it
- * could not start with); a policy starts it with that one. Omitted: the child's default.
+ * `start_<key>`, one `<key>_<handler>` per selected handler, and `stop_<key>`. Each send tool takes
+ * the handle as `subagent` and the handler's input under its `inputName`.
  */
 export function subagentToolset(
   agent: AgentWorkflow,
@@ -38,7 +33,6 @@ export function subagentToolset(
     workflowType?: string;
     tools?: SubagentToolPolicy;
     initData?: () => unknown;
-    approvalPolicy?: "inherit" | ToolApprovalPolicy;
   },
 ): AnyHarnessTool[] {
   const def = agent.definition;
@@ -63,6 +57,12 @@ export function subagentToolset(
       `${def.name} exposes no handlers under the given SubagentToolPolicy, so it has no callable surface.`,
     );
   }
+  for (const [name, h] of selected) {
+    if (h.inputName === "subagent")
+      throw new TypeError(
+        `${def.name}.${name} names its input 'subagent', which its send tool uses for the handle.`,
+      );
+  }
   const start = tool({
     name: `start_${key}`,
     description:
@@ -76,10 +76,9 @@ export function subagentToolset(
       let data = options.initData?.();
       if (def.initData !== undefined && data !== undefined && data !== null)
         data = def.initData.schema.parse(data);
-      return runner.startSubagent(key, workflowType, taskQueue, {
-        config: childApprovalConfig(runner, def, options.approvalPolicy),
-        data: data ?? undefined,
-      });
+      else if (def.initData?.required)
+        throw new TypeError(`initData returned ${data}, but the ${key} subagent requires data.`);
+      return runner.startSubagent(key, workflowType, taskQueue, { data: data ?? undefined });
     },
   });
   const sends = selected.map(([name, h]) =>
@@ -89,11 +88,12 @@ export function subagentToolset(
         `${h.description}\n\nSends this to the ${key} subagent identified by \`subagent\` (the handle returned by ` +
         `start_${key}) and returns its reply. Send several messages to the same handle to have that instance expand on ` +
         `or clarify its earlier work.`,
-      inputSchema: z.object({ subagent: z.string(), message: h.input }),
+      inputSchema: z.object({ subagent: z.string(), [h.inputName]: h.input }),
       outputSchema: h.output,
-      execute: async ({ subagent, message }) => {
+      execute: async (input) => {
         const { runner } = currentToolCall(`${key}_${name}`);
-        const payload = jsonClone(h.input.parse(message)) as Record<string, unknown>;
+        const subagent = input.subagent as string;
+        const payload = jsonClone(h.input.parse(input[h.inputName])) as Record<string, unknown>;
         return h.output.parse(await runner.runSubagentTurn(subagent, name, payload));
       },
     }),
@@ -109,23 +109,6 @@ export function subagentToolset(
     },
   });
   return [start, ...sends, stop] as AnyHarnessTool[];
-}
-
-function childApprovalConfig(
-  runner: AgentWorkflowRunner,
-  child: AgentDefinition,
-  policy: "inherit" | ToolApprovalPolicy | undefined,
-): Partial<AgentConfig> {
-  if (policy === undefined) return {};
-  if (policy !== "inherit") return { approval_policy: policy };
-  const live = runner.approvalPolicy;
-  return {
-    approval_policy:
-      child.autoModeEvaluator === undefined && live.auto_mode_enabled
-        ? ToolApprovalPolicy.withAutoMode(live, false)
-        : live,
-    auto_approval_criteria: runner.autoApprovalCriteria,
-  };
 }
 
 const jsonClone = (value: unknown): unknown => JSON.parse(JSON.stringify(value));

@@ -1,7 +1,7 @@
 // The workflow half of an activity-backed filesystem. The worker builds the activities
 // (`filesystemActivities`); here a mount only calls them by name, so this module stays sandbox-safe.
 
-import { ActivityFailure, ApplicationFailure, proxyActivities } from "@temporalio/workflow";
+import { proxyActivities } from "@temporalio/workflow";
 import type { z } from "zod";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import type { FileStat, FileSystem } from "./vfs.ts";
@@ -121,12 +121,9 @@ export class ActivityBackend implements FileSystem {
       startToCloseTimeout: this.#timeout,
       retry: RETRY,
     });
-    try {
-      return await activities[activityName(this.source.filesystem, operation)]!(arg);
-    } catch (e) {
-      if (e instanceof ActivityFailure && e.cause instanceof ApplicationFailure) throw e.cause;
-      throw e;
-    }
+    // A failure stays an ActivityFailure, as in Python: the driver gives the script an OS error
+    // as its built-in, and any other as the activity's failure.
+    return activities[activityName(this.source.filesystem, operation)]!(arg);
   }
 
   protected do(operation: string, extra: Record<string, unknown>): Promise<void> {

@@ -235,6 +235,7 @@ harness_pytest_test(
     srcs = ["test_stream_merge.py"],
     imports = ["../.."],
     deps = [
+        "//python/temporal_agent_harness/harness:agent_client",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/temporal_agent_harness/harness/stream_merge:__init__",
         "//python/temporal_agent_harness/harness/stream_merge:cursor",

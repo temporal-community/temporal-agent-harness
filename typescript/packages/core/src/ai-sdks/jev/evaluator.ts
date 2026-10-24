@@ -34,7 +34,8 @@ export type ExtraState =
   | Record<string, unknown>
   | ((ctx: AutoApprovalContext) => Record<string, unknown>);
 
-const DEFAULT_ACTIVITY_OPTIONS: ActivityOptions = {
+/** The jev_tool_approval activity's options; `jevEvaluator({activityOptions})` merges over them. */
+export const DEFAULT_ACTIVITY_OPTIONS: ActivityOptions = {
   startToCloseTimeout: "30 seconds",
   retry: { maximumAttempts: 3 },
   summary: "jev_approval",
@@ -43,17 +44,18 @@ const DEFAULT_ACTIVITY_OPTIONS: ActivityOptions = {
 export function jevEvaluator({
   model = DEFAULT_JEV_MODEL,
   extraState,
-  activityOptions = DEFAULT_ACTIVITY_OPTIONS,
+  activityOptions,
 }: {
   model?: string | null;
   extraState?: ExtraState;
   activityOptions?: ActivityOptions;
 } = {}): AutoModeEvaluator {
+  const options: ActivityOptions = { ...DEFAULT_ACTIVITY_OPTIONS, ...activityOptions };
   const approve: AutoModeEvaluator = async (ctx) => {
     const extra = typeof extraState === "function" ? extraState(ctx) : extraState;
     const { jev_tool_approval } = proxyActivities<{
       jev_tool_approval(r: JevApprovalRequest): Promise<JevApprovalAnswer>;
-    }>(activityOptions);
+    }>(options);
     const answer = await jev_tool_approval(buildRequest(ctx, { model, extraState: extra }));
     const [minConfidence, irreversibleCeiling] = ctx.thresholds;
     return decide(answer, {

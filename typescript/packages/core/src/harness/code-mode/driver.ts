@@ -18,6 +18,8 @@ import {
   ActivityFailure,
   ApplicationFailure,
   CancellationScope,
+  ChildWorkflowFailure,
+  TemporalFailure,
   isCancellation,
   log,
   proxyActivities,
@@ -126,23 +128,58 @@ const PYTHON_EXCEPTIONS = new Set([
   "ZeroDivisionError",
 ]);
 
+// The errors a filesystem raises across a Temporal boundary as an ApplicationFailure of that type,
+// which the script sees as the built-in exception of that name.
+const OS_ERRORS = new Set([
+  "OSError",
+  "FileNotFoundError",
+  "FileExistsError",
+  "IsADirectoryError",
+  "NotADirectoryError",
+  "PermissionError",
+]);
+
+type ScriptError = Pick<CallResult, "error" | "error_type">;
+
 /**
- * What a failed host call is to a Python script, as in the Python harness: a failed activity is
- * unwrapped to its cause, which carries the tool's own message; a built-in exception keeps its
- * type, and anything else arrives as `Exception("TypeName: message")`.
+ * What a failed host call is to a script, as in the Python harness: a failed activity is unwrapped
+ * to its cause, which carries the tool's own message. A Python built-in keeps its type: an error
+ * named for one, or an ApplicationFailure of that type raised in workflow code (Python raises the
+ * built-in itself there). Anything else, an activity's failure included, arrives as
+ * `Exception("TypeName: message")` under its Python SDK name (`ApplicationError`, ...).
  */
-function scriptError(e: unknown): { error: string; error_type: string } {
-  const cause = e instanceof ActivityFailure && e.cause ? e.cause : e;
-  const type =
-    cause instanceof ApplicationFailure
-      ? (cause.type ?? "Error")
-      : cause instanceof Error
-        ? cause.name
-        : "Error";
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return PYTHON_EXCEPTIONS.has(type)
-    ? { error: message, error_type: type }
-    : { error: `${type}: ${message}`, error_type: "Exception" };
+function scriptError(e: unknown): ScriptError {
+  const fromActivity = e instanceof ActivityFailure && e.cause !== undefined;
+  const error = fromActivity ? e.cause : e;
+  if (!(error instanceof Error)) return { error: String(error), error_type: "Exception" };
+  const builtin =
+    error instanceof ApplicationFailure
+      ? fromActivity
+        ? undefined
+        : error.type
+      : error instanceof TemporalFailure
+        ? undefined
+        : error.name;
+  if (builtin && PYTHON_EXCEPTIONS.has(builtin))
+    return { error: error.message, error_type: builtin };
+  // Temporal's failures are Python's `*Error`s: ApplicationFailure is ApplicationError.
+  const name =
+    error instanceof TemporalFailure ? error.name.replace(/Failure$/, "Error") : error.name;
+  return { error: `${name}: ${error.message}`, error_type: "Exception" };
+}
+
+/**
+ * A failed file operation as the script sees it: an OS error its filesystem raised across an
+ * activity or child workflow boundary is the built-in of that name, as in Python; anything else
+ * is any host call's failure.
+ */
+function fileOpError(e: unknown): ScriptError {
+  let cause: unknown = e;
+  while (cause instanceof ActivityFailure || cause instanceof ChildWorkflowFailure)
+    cause = cause.cause;
+  if (cause instanceof ApplicationFailure && OS_ERRORS.has(cause.type ?? ""))
+    return { error: cause.message, error_type: cause.type! };
+  return scriptError(e);
 }
 
 /** A host call's positional and keyword arguments, bound to the tool's parameter names. */
@@ -276,15 +313,17 @@ export class CodeModeDriver {
       await sleep(Number(call.args[0]) * 1000);
       return { call_id: call.call_id, return_value: null };
     }
-    const target = this.#toolsByName.get(call.function_name);
-    if (target === undefined) {
-      throw ApplicationFailure.create({
-        type: "UnknownHostFunction",
-        nonRetryable: true,
-        message: `script called unknown host function '${call.function_name}'`,
-      });
-    }
     try {
+      const target = this.#toolsByName.get(call.function_name);
+      if (target === undefined) {
+        // Type-checking against the stubs should already reject an unknown name; if not, the
+        // script sees the failure at its await, as in Python.
+        throw ApplicationFailure.create({
+          type: "UnknownHostFunction",
+          nonRetryable: true,
+          message: `script called unknown host function ${pyRepr(call.function_name)}`,
+        });
+      }
       const result = await this.#runner.runTool(
         uuid4(),
         target as HarnessTool<Record<string, unknown>, unknown>,
@@ -311,7 +350,7 @@ export class CodeModeDriver {
       return { call_id: op.call_id, return_value: value };
     } catch (e) {
       if (isCancellation(e)) throw e;
-      return { call_id: op.call_id, return_value: null, ...scriptError(e) };
+      return { call_id: op.call_id, return_value: null, ...fileOpError(e) };
     }
   }
 }

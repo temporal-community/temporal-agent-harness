@@ -3,10 +3,7 @@
 
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import {
-  ToolApprovalPolicy,
-  type AgentEvent,
-} from "@temporalio/agent-harness/harness/agent-protocol";
+import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
 import type { AgentStreamOutput } from "../../../src/harness/agent-client.ts";
 import { assertMatch } from "../../match.ts";
 import { collect, one, replyText, send, startEnv, type TestEnv } from "../../support.ts";
@@ -64,12 +61,12 @@ describe("subagents", () => {
   });
 
   // A child the parent stops in the same turn may complete before the merge reaches it, and a
-  // completed workflow's stream cannot be read; ApprovalParentAgent leaves its child running.
+  // completed workflow's stream cannot be read; ToolChildParentAgent leaves its child running.
   it("sendMessage merges the child's turn inside its message_sent / reply_received bracket", async () => {
-    const h = await env.start("ApprovalParentAgent");
+    const h = await env.start("ToolChildParentAgent");
     const items: AgentStreamOutput[] = [];
     for await (const [item] of await agentClient(env, h).sendMessage("delegate", {
-      text: "allow",
+      text: "",
     }))
       items.push(item);
     assert.ok(items.every((m) => "event" in m));
@@ -106,25 +103,18 @@ describe("subagents", () => {
     await assert.rejects(env.client.workflow.getHandle(childId).result());
   });
 
-  const parentAuto = ToolApprovalPolicy.autoMode({
-    preApprovedTools: ["start_probe", "probe_act", "gated_activity_tool"],
+  it("a required initData callback that returns null fails the start tool before any child starts", async () => {
+    const h = await env.start("NullBriefParentAgent");
+    await send(h, "delegate", { text: "" });
+    const events = await collect(env.client, h.workflowId);
+    const message = "initData returned null, but the brief subagent requires data.";
+    assert.equal(replyText(events), `TypeError:${message}`);
+    assert.equal(one(events, "tool_error").message, message);
+    assert.ok(!events.some((e) => e.event.type === "subagent_started"));
+    assert.deepStrictEqual((await status(h)).subagents, []);
+    const children = (await h.fetchHistory()).events!.filter(
+      (e) => e.startChildWorkflowExecutionInitiatedEventAttributes,
+    );
+    assert.deepStrictEqual(children, []);
   });
-  for (const [mode, config, policy] of [
-    ["inherit", {}, { dangerously_skip_all_approvals: true }],
-    // The child has no evaluator, so it inherits the policy with auto mode off.
-    ["inherit", { approval_policy: parentAuto }, { ...parentAuto, auto_mode_enabled: false }],
-    [
-      "allow",
-      {},
-      { dangerously_skip_all_approvals: false, auto_approve_tools: ["gated_activity_tool"] },
-    ],
-  ] as const)
-    it(`a child started with approvalPolicy ${mode} (parent config ${JSON.stringify(config)}) runs its gated tool instead of waiting on a gate nobody sees`, async () => {
-      const h = await env.start("ApprovalParentAgent", [config]);
-      await send(h, "delegate", { text: mode });
-      const events = await collect(env.client, h.workflowId);
-      assert.equal(replyText(events), "act:S");
-      const child = env.client.workflow.getHandle(one(events, "subagent_started").workflow_id);
-      assertMatch((await status(child)).approval_policy, policy);
-    });
 });

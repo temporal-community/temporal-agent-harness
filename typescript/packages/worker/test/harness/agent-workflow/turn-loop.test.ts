@@ -11,15 +11,21 @@ import {
   type AcceptedFunction,
 } from "@temporalio/agent-harness/harness/agent-protocol";
 import {
+  AgentTurnError,
+  AgentTurnTimeout,
+  type AgentStreamOutput,
+} from "../../../src/harness/agent-client.ts";
+import {
   collect,
   eventually,
   one,
   replyText,
   send,
   startEnv,
+  typesFor,
   type TestEnv,
 } from "../../support.ts";
-import { rejection, status, updateFailure } from "./helpers.ts";
+import { agentClient, rejection, status, updateFailure } from "./helpers.ts";
 
 let env: TestEnv;
 before(async () => {
@@ -108,14 +114,21 @@ describe("the turn loop", () => {
     );
   });
 
-  it("an activity tool that keeps failing stops after its attempts and publishes one tool_error", async () => {
+  it("an activity tool that keeps failing publishes tool_start and tool_error on each of its attempts", async () => {
     const h = await env.start("ToolRetryAgent");
     await send(h, "act", { text: "x" });
     const events = await collect(env.client, h.workflowId);
     assert.equal(replyText(events), "caught:ActivityFailure");
-    const errors = events.filter((e) => e.event.type === "tool_error");
-    assert.equal(errors.length, 1);
-    assert.equal((errors[0]!.event as { message: string }).message, "tool broke");
+    assert.deepStrictEqual(typesFor(events, "t1"), [
+      "tool_start",
+      "tool_error",
+      "tool_start",
+      "tool_error",
+      "tool_start",
+      "tool_error",
+    ]);
+    for (const e of events.filter((e) => e.event.type === "tool_error"))
+      assert.equal((e.event as { message: string }).message, "tool broke");
     const started = (await h.fetchHistory()).events!.flatMap((e) =>
       e.activityTaskStartedEventAttributes ? [e.activityTaskStartedEventAttributes.attempt] : [],
     );
@@ -126,6 +139,62 @@ describe("the turn loop", () => {
     const h = await env.start("ToolRetryAgent");
     await send(h, "act", { text: "slow" });
     assert.equal(replyText(await collect(env.client, h.workflowId)), "slow:slow");
+  });
+
+  it("an activity tool that times out publishes no tool_error and no tool_end", async () => {
+    const h = await env.start("ToolRetryAgent");
+    await send(h, "act", { text: "timeout" });
+    const events = await collect(env.client, h.workflowId);
+    assert.equal(replyText(events), "caught:ActivityFailure");
+    assert.deepStrictEqual(typesFor(events, "t1"), ["tool_start"]);
+  });
+
+  for (const scenario of ["own-timeout", "activity"])
+    it(`a cancellation the handler observes (${scenario}) publishes message_handler_error and turn_end`, async () => {
+      const h = await env.start("CancellationProbeAgent");
+      await send(h, "act", { text: scenario });
+      const types = (await collect(env.client, h.workflowId)).map((e) => e.event.type);
+      assert.deepStrictEqual(types.slice(-2), ["message_handler_error", "turn_end"]);
+      assert.equal((await h.describe()).status.name, "RUNNING");
+    });
+
+  it("an inline tool its caller's scope cancels publishes no tool_error", async () => {
+    const h = await env.start("CancellationProbeAgent");
+    await send(h, "act", { text: "inline" });
+    const events = await collect(env.client, h.workflowId);
+    assert.equal(replyText(events), "caught:CancelledFailure");
+    assert.deepStrictEqual(typesFor(events, "t1"), ["tool_start"]);
+  });
+
+  it("tool_error and message_handler_error carry the error's own message, not its causes", async () => {
+    const h = await env.start("CancellationProbeAgent");
+    await send(h, "act", { text: "chained" });
+    const events = await collect(env.client, h.workflowId);
+    assert.equal(one(events, "tool_error").message, "outer");
+    assert.equal(one(events, "message_handler_error").message, "outer");
+  });
+
+  it("sendMessage yields AgentTurnError for a handler error", async () => {
+    const h = await env.start("TypedProbeAgent");
+    const items: AgentStreamOutput[] = [];
+    for await (const [item] of await agentClient(env, h).sendMessage("boom", { text: "x" }))
+      items.push(item);
+    const errors = items.filter((i) => i instanceof AgentTurnError);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0]!.message, "boom: x");
+  });
+
+  it("sendMessage yields AgentTurnTimeout when the turn outlasts its timeout", async () => {
+    const h = await env.start("MidTurnProbeAgent");
+    const items: AgentStreamOutput[] = [];
+    for await (const [item] of await agentClient(env, h).sendMessage(
+      "work",
+      { text: "long" },
+      { timeoutSeconds: 1 },
+    ))
+      items.push(item);
+    assert.ok(items.at(-1) instanceof AgentTurnTimeout);
+    assert.equal((await status(h)).turn_active, true);
   });
 
   it("a handler error publishes message_handler_error and the loop survives", async () => {

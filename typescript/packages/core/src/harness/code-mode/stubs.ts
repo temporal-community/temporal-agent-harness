@@ -118,16 +118,7 @@ class StubBuilder {
     ];
     const outSchema = toJsonSchema(tool.outputSchema, "output");
     const signature = `async def ${tool.name}(${params.join(", ")}) -> ${this.#type(outSchema, outSchema, `${tool.name} return`)}`;
-    const examples = tool.inputExamples.map(
-      ({ input }) =>
-        `    await ${tool.name}(${Object.entries(input)
-          .map(([k, v]) => `${k}=${pyRepr(v)}`)
-          .join(", ")})`,
-    );
-    const text = [tool.description.trim(), ...(examples.length ? ["Examples:", ...examples] : [])]
-      .filter(Boolean)
-      .join("\n")
-      .replaceAll('"""', '\\"\\"\\"');
+    const text = tool.description.trim().replaceAll('"""', '\\"\\"\\"');
     if (!withDoc || !text) return `${signature}: ...`;
     const doc = text
       .split("\n")

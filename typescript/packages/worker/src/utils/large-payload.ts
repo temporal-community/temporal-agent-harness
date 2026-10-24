@@ -8,7 +8,8 @@
 // Payload protobuf, named by its SHA-256) and claim keys, so both harnesses on one host read each
 // other's offloaded payloads. It only spans processes that share the filesystem: every client,
 // worker and server of a deployment must use the same backend, so use `s3PayloadStorage` (from
-// `@temporalio/agent-harness-worker/s3`) for anything multi-host. Nothing deletes offloaded files.
+// `@temporalio/agent-harness-worker/utils/s3`) for anything multi-host. Nothing deletes offloaded
+// files.
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";

@@ -1,7 +1,22 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
 
 # One target per test file (and per compile-time type check, *.types.ts), depending on the files it
 # imports.
+ts_project(
+    name = "agent-client.test",
+    testonly = True,
+    srcs = ["agent-client.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow-streams",
+        "//typescript/packages/worker/src/harness:agent-client",
+    ],
+)
+
 ts_project(
     name = "agent-client.types",
     testonly = True,
@@ -12,4 +27,10 @@ ts_project(
         "//typescript/packages/worker/src/harness:agent-client",
         "//typescript/packages/worker/test/fixtures:workflows",
     ],
+)
+
+js_test(
+    name = "agent-client_test",
+    data = [":agent-client.test"],
+    entry_point = "agent-client.test.js",
 )

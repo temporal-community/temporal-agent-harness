@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import { z } from "zod";
 import {
   ToolApprovalPolicy,
   defineAgent,
   handler,
   subagentToolset,
-  tool as harnessTool,
   type AnyHarnessTool,
 } from "@temporalio/agent-harness";
 import {
@@ -14,15 +13,12 @@ import {
   renderHostInterface,
   renderTypeCheckStubs,
 } from "@temporalio/agent-harness/harness/code-mode";
-import { closeMontyPool, codeTypeCheck } from "../../../src/harness/code-mode/monty-stepper.ts";
 import { searchItems } from "../../fixtures/workflows.ts";
 import { beta, pack, stubTool as tool } from "./tools.ts";
 
 const stub = (...tools: AnyHarnessTool[]) => renderTypeCheckStubs(tools).source;
 const classNames = (src: string) =>
   [...src.matchAll(/^class (\w+)\(TypedDict\):/gm)].map((m) => m[1]);
-
-after(closeMontyPool);
 
 describe("stubs from JSON Schema", () => {
   it("renders primitives with no TypedDicts", () => {
@@ -160,32 +156,6 @@ describe("stubs from JSON Schema", () => {
     assert.equal(
       pyRepr(["a\tb\r\n", `it's "q"`, "c:\\d"]),
       `['a\\tb\\r\\n', 'it\\'s "q"', 'c:\\\\d']`,
-    );
-  });
-});
-
-describe("input examples in the host interface", () => {
-  const Leg = z.object({ origin: z.string(), to: z.string() }).meta({ title: "Leg" });
-  const plan = harnessTool({
-    name: "plan",
-    description: "Plan a trip.",
-    inputSchema: z.object({ leg: Leg, budget: z.number(), note: z.string().optional() }),
-    outputSchema: z.object({ total: z.number() }),
-    inputExamples: [
-      { input: { leg: { origin: "SFO", to: "JFK" }, budget: 500, note: "it's */ fine" } },
-    ],
-    execute: async () => ({ total: 0 }),
-  }) as unknown as AnyHarnessTool;
-
-  it("renders each as a call in the Python docstring that type-checks as written", async () => {
-    const iface = renderHostInterface([plan]);
-    const call = `await plan(leg={'origin': 'SFO', 'to': 'JFK'}, budget=500, note="it's */ fine")`;
-    assert.ok(iface.includes(`    Plan a trip.\n    Examples:\n        ${call}\n    """`));
-    const script = `import asyncio\nasync def main():\n    q = ${call}\n    return q["total"]\nasyncio.run(main())\n`;
-    assert.equal(await codeTypeCheck(script, renderTypeCheckStubs([plan])), "");
-    assert.equal(
-      await codeTypeCheck(script, { source: iface, type_names: ["Leg", "PlanResult"] }),
-      "",
     );
   });
 });

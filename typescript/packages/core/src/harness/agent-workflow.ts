@@ -88,7 +88,9 @@ import {
   ToolApprovalDenied,
   assertAutoModeHasEvaluator,
   assertPortableJson,
+  errorMessage,
   errorText,
+  isOwnCancellation,
 } from "./agent-workflow/errors.ts";
 import type {
   Admission,
@@ -116,6 +118,23 @@ export type {
   SubagentInstance,
   TurnHost,
 };
+
+/**
+ * The child's accepted turn number, which the run_subagent_turn activity threads through the
+ * failure's details; its absence is a protocol violation, not something to guess around.
+ */
+function acceptedTurnFromError(e: ApplicationFailure): number {
+  for (const detail of e.details ?? []) {
+    if (detail !== null && typeof detail === "object" && "subagent_turn" in detail)
+      return Number(detail.subagent_turn);
+  }
+  throw ApplicationFailure.create({
+    type: "SubagentProtocolError",
+    nonRetryable: true,
+    message: `${e.type} error from run_subagent_turn carried no 'subagent_turn' detail`,
+    cause: e,
+  });
+}
 
 // The workflow-local context a tool or handler reads: the runner and tool call it runs under, and
 // the message it serves.
@@ -345,10 +364,9 @@ export class AgentWorkflowRunner {
 
   /** The surface an SDK integration drives one turn through: these tools, this runner. */
   turnHost(
-    all: readonly AnyHarnessTool[],
+    tools: readonly AnyHarnessTool[],
     { injections = {} }: { injections?: Record<string, unknown> } = {},
   ): TurnHost {
-    const tools = all.filter((t) => t.callers.includes("direct"));
     const byName = new Map(tools.map((t) => [t.name, t]));
     return {
       tools,
@@ -488,11 +506,13 @@ export class AgentWorkflowRunner {
           output: output.data as Record<string, unknown>,
         });
       } catch (e) {
-        if (isCancellation(e)) {
+        // Only the workflow's own cancellation abandons the turn silently; a cancellation the
+        // handler observed (its own timeout, a cancelled activity) is a failure like any other.
+        if (isOwnCancellation(e)) {
           this.#leaveTurn();
           return;
         }
-        this.pub(turn_id, turn_number, { type: "message_handler_error", message: errorText(e) });
+        this.pub(turn_id, turn_number, { type: "message_handler_error", message: errorMessage(e) });
       }
       if (this.#leaveTurn()) {
         this.pub(turn_id, turn_number, { type: "turn_end" }, null);
@@ -1074,8 +1094,7 @@ export class AgentWorkflowRunner {
           cause instanceof ApplicationFailure &&
           (cause.type === "SubagentTurnError" || cause.type === "SubagentNoReply")
         ) {
-          const detail = cause.details?.[0] as { subagent_turn?: number } | undefined;
-          this.#publishReplyReceived(inst, msgType, detail?.subagent_turn ?? 0, "error");
+          this.#publishReplyReceived(inst, msgType, acceptedTurnFromError(cause), "error");
         }
         throw e;
       }

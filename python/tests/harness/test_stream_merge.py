@@ -21,11 +21,14 @@ import pytest
 from temporalio.contrib.workflow_streams import WorkflowStreamItem
 
 import temporal_agent_harness.harness.stream_merge.cursor as cursor_mod
+from temporal_agent_harness.harness.agent_client import AgentClient, AgentTurnTimeout
 from temporal_agent_harness.harness.agent_protocol import (
     TURN_EVENTS_TOPIC,
     AgentEvent,
     AgentEventType,
+    AgentMessageReply,
     AgentStateSnapshot,
+    MessageDisposition,
     MessageHandlerEnd,
     SubagentMessageSent,
     SubagentReplyReceived,
@@ -1025,3 +1028,73 @@ async def test_redispatched_given_up_child_reenables_its_close_gate():
     open_i, close_i = ms_positions[-1], rr_positions[-1]
     child_pos = [i for i, m in enumerate(merged) if m.agent_id == "C"]
     assert child_pos and all(open_i < i < close_i for i in child_pos)
+
+
+# ---------------------------------------------------------------------------
+# AgentClient's merged streams close the merge when the consumer stops early
+# ---------------------------------------------------------------------------
+
+
+def _live_root_turn() -> dict[str, list[AgentEvent]]:
+    # The root's turn is still running: it never reaches turn_end, so the merge stays open on a
+    # live-tail poll until something closes it.
+    return {"P": [_ts("P", 1), _tool("P", 1, "t1", start=True)]}
+
+
+async def _first_then_close(stream: AsyncIterator[Any]) -> None:
+    await anext(stream)
+    await stream.aclose()  # type: ignore[attr-defined]
+
+
+async def test_closing_send_message_stream_early_closes_the_merge():
+    closes: list[str] = []
+    fake = _FakeStreams(_live_root_turn(), closes=closes, live_tail_workflows={"P"})
+    client = AgentClient(None, "P")  # type: ignore[arg-type]
+    reply = AgentMessageReply(
+        turn_number=1,
+        turn_id="P-t1",
+        message_id="m1",
+        disposition=MessageDisposition.OPENED,
+    )
+    with patch.object(cursor_mod, "WorkflowStreamClient", fake):
+        stream = client._merged_turn(
+            reply, on_item=lambda item, _offset: item, timeout=None, stall_grace_seconds=5.0
+        )
+        await _first_then_close(stream)
+        assert closes == ["P"]
+
+
+async def test_closing_attach_stream_early_closes_the_merge():
+    closes: list[str] = []
+    fake = _FakeStreams(_live_root_turn(), closes=closes, live_tail_workflows={"P"})
+    client = AgentClient(None, "P")  # type: ignore[arg-type]
+    with patch.object(cursor_mod, "WorkflowStreamClient", fake):
+        stream = client._merged_attach(
+            on_item=lambda item, _offset: item,
+            from_offset=0,
+            stop_at_root_offset=2,
+            stall_grace_seconds=5.0,
+        )
+        await _first_then_close(stream)
+        assert closes == ["P"]
+
+
+async def test_send_message_timeout_closes_the_merge_and_yields_the_timeout():
+    closes: list[str] = []
+    fake = _FakeStreams(_live_root_turn(), closes=closes, live_tail_workflows={"P"})
+    client = AgentClient(None, "P")  # type: ignore[arg-type]
+    reply = AgentMessageReply(
+        turn_number=1,
+        turn_id="P-t1",
+        message_id="m1",
+        disposition=MessageDisposition.OPENED,
+    )
+    with patch.object(cursor_mod, "WorkflowStreamClient", fake):
+        items = [
+            item
+            async for item in client._merged_turn(
+                reply, on_item=lambda item, _offset: item, timeout=0.2, stall_grace_seconds=5.0
+            )
+        ]
+    assert isinstance(items[-1], AgentTurnTimeout)
+    assert closes == ["P"]

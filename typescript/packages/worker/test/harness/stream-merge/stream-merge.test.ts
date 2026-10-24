@@ -107,6 +107,15 @@ function fakeStreams(
   });
 }
 
+/** A client whose calls cannot be aborted, recording each abort signal it is handed. */
+const fakeClient = (signals: AbortSignal[] = []) =>
+  ({
+    withAbortSignal: (signal: AbortSignal, fn: () => unknown) => {
+      signals.push(signal);
+      return fn();
+    },
+  }) as unknown as Client;
+
 async function runMerge(
   streams: Record<string, AgentEvent[]>,
   {
@@ -129,7 +138,7 @@ async function runMerge(
   fakeStreams(streams, fake);
   const out: AgentEvent[] = [];
   for await (const [e, resume] of mergeStream({
-    client: {} as Client,
+    client: fakeClient(),
     rootWorkflowId: "P",
     rootFromOffset,
     skipUntilTurnId,
@@ -629,6 +638,49 @@ describe("mergeStream", () => {
   });
 });
 
+describe("closing the merge", () => {
+  const liveRoot = { P: [ts("P", 1), tool("P", 1, "p1", true)] };
+
+  it("an abort ends a merge waiting on a poll, aborting and closing every subscription", async () => {
+    const closes: string[] = [];
+    const signals: AbortSignal[] = [];
+    fakeStreams(liveRoot, { closes, liveTail: new Set(["P"]) });
+    const abort = new AbortController();
+    const merged = mergeStream({
+      client: fakeClient(signals),
+      rootWorkflowId: "P",
+      rootFromOffset: 0,
+      skipUntilTurnId: null,
+      select: selectLive,
+      shouldStop: async () => false,
+      signal: abort.signal,
+    });
+    assert.equal((await merged.next()).done, false);
+    assert.equal((await merged.next()).done, false);
+    const waiting = merged.next();
+    await sleep(20);
+    abort.abort();
+    assert.deepStrictEqual(await waiting, { done: true, value: undefined });
+    assert.deepStrictEqual(closes, ["P"]);
+    assert.ok(signals.length > 0 && signals.every((s) => s.aborted));
+  });
+
+  it("returning early closes every subscription", async () => {
+    const closes: string[] = [];
+    fakeStreams(liveRoot, { closes, liveTail: new Set(["P"]) });
+    for await (const _ of mergeStream({
+      client: fakeClient(),
+      rootWorkflowId: "P",
+      rootFromOffset: 0,
+      skipUntilTurnId: null,
+      select: selectLive,
+      shouldStop: async () => false,
+    }))
+      break;
+    assert.deepStrictEqual(closes, ["P"]);
+  });
+});
+
 describe("subscribe", () => {
   // What the server answers a poll delivered on a workflow task it then failed.
   const taskFailed = () =>
@@ -676,5 +728,24 @@ describe("subscribe", () => {
     );
     assert.deepStrictEqual(seen, ["a", "b", "c"]);
     assert.deepStrictEqual(froms, [0, 2, 2]);
+  });
+
+  it("an abort rejects a poll in flight with its reason and return does not wait for it", async () => {
+    mock.method(
+      WorkflowStreamClient,
+      "create",
+      () =>
+        ({
+          subscribe: async function* () {
+            await new Promise(() => {});
+          },
+        }) as unknown as WorkflowStreamClient,
+    );
+    const abort = new AbortController();
+    const items = subscribe<string>(fakeClient(), "wf", "t", 0, { signal: abort.signal });
+    const polled = items.next();
+    abort.abort(new Error("stop"));
+    await assert.rejects(polled, /stop/);
+    assert.deepStrictEqual(await items.return(undefined), { done: true, value: undefined });
   });
 });

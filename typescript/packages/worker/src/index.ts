@@ -1,8 +1,8 @@
 // Worker-side harness: publishing to an agent's turn stream from an activity, registering
 // activity-tool bodies, and the harness's own activities (the subagent turn, the Jev approver).
 // Register them with `new AgentHarnessPlugin()` on the worker, or spread `harnessActivities()`.
-// Code Mode's sandbox activities live in `@temporalio/agent-harness-worker/code-mode/worker`, so a worker
-// that does not run Code Mode never loads the Monty binary.
+// Code Mode's sandbox activities live in `@temporalio/agent-harness-worker/harness/code-mode/monty-stepper`,
+// so a worker that does not run Code Mode never loads the Monty binary.
 
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,7 +85,6 @@ export {
   AgentHarnessPlugin,
   CODE_MODE_MISSING_EXTRA_ERROR,
   harnessActivities,
-  onWorkerShutdown,
   rawTopicAttemptInterceptor,
 } from "./plugin.ts";
 export {

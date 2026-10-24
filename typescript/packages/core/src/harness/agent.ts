@@ -7,7 +7,6 @@
 // read an agent's handlers and init data without running it, exactly as Python reads its class.
 
 import {
-  ActivityFailure,
   ApplicationFailure,
   CancellationScope,
   isCancellation,
@@ -33,20 +32,15 @@ import {
 import {
   AgentWorkflowRunner,
   currentToolCall,
-  errorText,
   type HandlerDecl,
   type HandlerImpl,
 } from "./agent-workflow.ts";
+import { errorMessage, isOwnCancellation } from "./agent-workflow/errors.ts";
 import { pyRepr } from "./py-repr.ts";
 import type { StateDecl, StateRef } from "./state/index.ts";
-import type {
-  AnyHarnessTool,
-  HarnessTool,
-  ObjectSchema,
-  ToolCaller,
-} from "./agent-workflow/types.ts";
+import type { AnyHarnessTool, HarnessTool, ObjectSchema } from "./agent-workflow/types.ts";
 
-export type { AnyHarnessTool, HarnessTool, ToolCaller };
+export type { AnyHarnessTool, HarnessTool };
 
 // ---------------------------------------------------------------------------------------------
 // Handlers
@@ -58,10 +52,15 @@ export function handler<I extends z.ZodType, O extends z.ZodType>(decl: {
   output: O;
   midTurn?: MidTurn;
   modelCallable?: boolean;
+  /**
+   * The input's parameter name (a Python handler's own parameter name): a parent's subagent send
+   * tool takes the input under it. Defaults to "message".
+   */
+  inputName?: string;
 }): HandlerDecl<I, O> {
   if (!decl.description.trim())
     throw new TypeError("handler(): a description is required (it is the tool description)");
-  return { midTurn: MidTurn.REJECT, modelCallable: true, ...decl };
+  return { midTurn: MidTurn.REJECT, modelCallable: true, inputName: "message", ...decl };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -83,10 +82,6 @@ interface ToolOptions<I extends ObjectSchema, O extends Schema | undefined, J> {
   inherentlySafe?: boolean;
   autoApprovalCriteria?: string;
   injected?: J;
-  /** Defaults to both. `["code_mode"]` keeps the tool out of every TurnHost; it still runs its approval gate. */
-  callers?: readonly ToolCaller[];
-  /** Example inputs, as in the AI SDK's `tool()`; Code Mode renders them as example calls. */
-  inputExamples?: readonly { readonly input: InferInput<I> }[];
 }
 
 type Output<O> = O extends Schema ? InferOutput<O> : unknown;
@@ -152,8 +147,6 @@ function baseTool<I extends ObjectSchema, O extends Schema | undefined, J>(
     inherentlySafe: options.inherentlySafe ?? false,
     autoApprovalCriteria: options.autoApprovalCriteria ?? null,
     injected: injectedNames,
-    callers: options.callers ?? ["direct", "code_mode"],
-    inputExamples: (options.inputExamples ?? []) as HarnessTool["inputExamples"],
     parameters: toJsonSchema(options.inputSchema),
     async invoke(raw) {
       const { runner, toolId, injections } = currentToolCall(`tool '${options.name}'`);
@@ -187,12 +180,13 @@ function baseTool<I extends ObjectSchema, O extends Schema | undefined, J>(
       try {
         result = await body(input, values, toolId, runner);
       } catch (e) {
-        runner.pub(ctx.turn_id, ctx.turn_number, {
-          type: "tool_error",
-          tool_id: toolId,
-          tool_name: options.name,
-          message: errorText(e),
-        });
+        if (!isOwnCancellation(e))
+          runner.pub(ctx.turn_id, ctx.turn_number, {
+            type: "tool_error",
+            tool_id: toolId,
+            tool_name: options.name,
+            message: errorMessage(e),
+          });
         throw e;
       }
       runner.pub(ctx.turn_id, ctx.turn_number, {
@@ -271,11 +265,12 @@ export function tool(
 /**
  * A durable, activity-backed tool. This is the workflow-side declaration; register its body on a
  * worker with `toolActivity(tool, impl)` from `@temporalio/agent-harness-worker`, which also
- * publishes the call's tool_start/tool_end from the activity and heartbeats while it runs.
+ * publishes the call's tool_start and its tool_end or tool_error from the activity, once per
+ * attempt, and heartbeats while it runs.
  *
  * Runs with a 30 s start-to-close timeout and the default retry policy unless `activityOptions`
- * replaces them (its `summary` defaults to "tool_call"). The body runs at least once and may run again after a crash or timeout, so make side effects idempotent (key
- * them on `ctx.tool_id`). A call that fails for good publishes one tool_error.
+ * replaces them (its `summary` defaults to "tool_call"). The body runs at least once and may run
+ * again after a crash or timeout, so make side effects idempotent (key them on `ctx.tool_id`).
  */
 export function activityTool<
   I extends ObjectSchema,
@@ -300,19 +295,7 @@ export function activityTool<
       };
       const activities =
         proxyActivities<Record<string, (...args: unknown[]) => Promise<unknown>>>(activityOptions);
-      try {
-        return await activities[options.name]!(input, values, ctx);
-      } catch (e) {
-        const { turn_id, turn_number } = ctx.stream_context;
-        if (!isCancellation(e))
-          runner.pub(turn_id, turn_number, {
-            type: "tool_error",
-            tool_id: toolId,
-            tool_name: options.name,
-            message: errorText(e instanceof ActivityFailure ? (e.cause ?? e) : e),
-          });
-        throw e;
-      }
+      return activities[options.name]!(input, values, ctx);
     },
     false,
   );

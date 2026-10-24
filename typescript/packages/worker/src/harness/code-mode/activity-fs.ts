@@ -9,8 +9,10 @@ import {
   activityName,
   type ActivityFilesystem,
 } from "@temporalio/agent-harness";
+import { pyRepr } from "@temporalio/agent-harness/harness/code-mode";
 import { ZodError, z } from "zod";
 import { buildOkfGraph, type OkfReadable } from "./okf.ts";
+import { isBadArgument, osFailureOf, type OsFailure } from "./os-error.ts";
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -182,24 +184,24 @@ function parseCall<S extends z.ZodType>(schema: S, input: unknown, name: string)
   return parsed.data;
 }
 
+/**
+ * Build an instance from the call's config and run `op` on it and the call's path, as Python does:
+ * an OS error (an `FsError` or a Node fs error) is a non-retryable failure named for its built-in,
+ * and a rejected config or argument a non-retryable `ValueError`. Anything else is retried.
+ */
 async function run<C, T>(
   fs: ActivityFilesystem<C>,
   Impl: new (config: C) => FilesystemOps,
   call: { config: Record<string, unknown>; path: string },
   op: (disk: FilesystemOps, path: string) => Promise<T>,
 ): Promise<T> {
-  let disk: FilesystemOps;
   try {
-    disk = new Impl(fs.configSchema.parse(call.config));
+    return await op(new Impl(fs.configSchema.parse(call.config)), call.path);
   } catch (e) {
-    if (e instanceof ZodError || e instanceof ConfigError) throw valueError(fs.name, e);
-    throw e;
-  }
-  try {
-    return await op(disk, call.path);
-  } catch (e) {
-    if (e instanceof FsError) throw osFailure(e);
-    if (e instanceof ConfigError) throw valueError(fs.name, e);
+    const os = osFailureOf(e);
+    if (os !== null) throw osFailure(os, call.path, e);
+    if (e instanceof ZodError || e instanceof ConfigError || isBadArgument(e))
+      throw valueError(fs.name, e);
     throw e;
   }
 }
@@ -212,11 +214,16 @@ function valueError(name: string, error: Error): ApplicationFailure {
   });
 }
 
-function osFailure(error: FsError): ApplicationFailure {
+function osFailure(
+  { type, errno, strerror }: OsFailure,
+  path: string,
+  cause: unknown,
+): ApplicationFailure {
   return ApplicationFailure.create({
-    type: error.fsType,
+    type,
     nonRetryable: true,
-    message: `${error.strerror}: '${error.path}'`,
-    details: [{ errno: error.errno, strerror: error.strerror, path: error.path }],
+    message: `${strerror}: ${pyRepr(path)}`,
+    details: [{ errno, strerror, path }],
+    ...(cause instanceof Error ? { cause } : {}),
   });
 }

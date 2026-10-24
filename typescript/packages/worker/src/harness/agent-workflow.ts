@@ -1,4 +1,4 @@
-import { Context, ApplicationFailure } from "@temporalio/activity";
+import { Context, ApplicationFailure, CancelledFailure } from "@temporalio/activity";
 import { WorkflowStreamClient } from "@temporalio/workflow-streams/client";
 import type { Duration } from "@temporalio/common";
 import type { AgentToolContext, HarnessTool } from "@temporalio/agent-harness";
@@ -66,10 +66,11 @@ export interface ToolActivityContext extends AgentToolContext {
 
 /**
  * The activity body of an `activityTool` tool, keyed by the tool's name for a worker's
- * `activities`. Publishes tool_start / tool_end / tool_error from the activity itself, so
- * tool_start marks when the call actually began executing on a worker. The body's third argument
- * carries the call's `tool_id` (key idempotent side effects on it) and `publish` (e.g. for
- * `tool_progress_delta`).
+ * `activities`. Publishes tool_start and then tool_end or tool_error from the activity itself, on
+ * every attempt, so tool_start marks when an attempt actually began executing on a worker. A
+ * cancelled attempt (its timeout included) publishes neither: it ends at the cancellation, as
+ * Python's does. The body's third argument carries the call's `tool_id` (key idempotent side
+ * effects on it) and `publish` (e.g. for `tool_progress_delta`).
  */
 export function toolActivity<
   T extends HarnessTool<never, unknown> & { readonly __activity?: unknown },
@@ -87,14 +88,6 @@ export function toolActivity<
     );
   return {
     async [tool.name](input: unknown, injected: unknown, ctx: AgentToolContext) {
-      const toolInput = input as Record<string, unknown>;
-      await using pub = publisherFromActivity(ctx.stream_context);
-      pub.publish({
-        type: "tool_start",
-        tool_id: ctx.tool_id,
-        tool_name: tool.name,
-        tool_input: toolInput,
-      });
       const parsed = validate(tool.inputSchema, input);
       if (!parsed.ok)
         throw ApplicationFailure.create({
@@ -102,19 +95,41 @@ export function toolActivity<
           nonRetryable: true,
           message: `Payload for tool '${tool.name}' does not match its schema: ${parsed.message}`,
         });
-      // The workflow publishes tool_error once the call fails for good, not on every attempt.
+      await using pub = publisherFromActivity(ctx.stream_context);
+      pub.publish({
+        type: "tool_start",
+        tool_id: ctx.tool_id,
+        tool_name: tool.name,
+        tool_input: input as Record<string, unknown>,
+      });
       const toolCtx: ToolActivityContext = {
         stream_context: ctx.stream_context,
         tool_id: ctx.tool_id,
         publish: (event) => pub.publish(event),
       };
-      const result = await heartbeating(() =>
-        impl(
-          parsed.value as ActivityToolTypes<T>["input"],
-          (injected ?? {}) as ActivityToolTypes<T>["injected"],
-          toolCtx,
-        ),
-      );
+      const activity = Context.current();
+      let result: ActivityToolTypes<T>["output"];
+      try {
+        result = await heartbeating(() =>
+          Promise.race([
+            impl(
+              parsed.value as ActivityToolTypes<T>["input"],
+              (injected ?? {}) as ActivityToolTypes<T>["injected"],
+              toolCtx,
+            ),
+            activity.cancelled,
+          ]),
+        );
+      } catch (e) {
+        if (!(e instanceof CancelledFailure) && !activity.cancellationSignal.aborted)
+          pub.publish({
+            type: "tool_error",
+            tool_id: ctx.tool_id,
+            tool_name: tool.name,
+            message: e instanceof Error ? e.message : String(e),
+          });
+        throw e;
+      }
       pub.publish({
         type: "tool_end",
         tool_id: ctx.tool_id,

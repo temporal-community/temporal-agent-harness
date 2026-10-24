@@ -58,7 +58,7 @@ const codeModeUnavailable = Object.fromEntries(
         nonRetryable: true,
         message:
           `Code Mode (${name}) ran on a worker without its sandbox. Register codeModeActivities() from ` +
-          "@temporalio/agent-harness-worker/code-mode/worker on this worker and redeploy it.",
+          "@temporalio/agent-harness-worker/harness/code-mode/monty-stepper on this worker and redeploy it.",
       });
     },
   ]),
@@ -71,13 +71,6 @@ const codeModeUnavailable = Object.fromEntries(
  * first-one-wins, as in Python: an activity or external storage the worker configures itself is
  * never displaced by the plugin's.
  */
-const shutdownHooks = new Set<() => Promise<void>>();
-
-/** Run `hook` after a worker with AgentHarnessPlugin stops (each hook once per shutdown). */
-export function onWorkerShutdown(hook: () => Promise<void>): void {
-  shutdownHooks.add(hook);
-}
-
 export class AgentHarnessPlugin extends SimplePlugin {
   constructor({
     extraActivities = {},
@@ -101,15 +94,6 @@ export class AgentHarnessPlugin extends SimplePlugin {
       }),
       workerInterceptors: {
         activity: [rawTopicAttemptInterceptor],
-      },
-      runContext: async (next) => {
-        try {
-          await next();
-        } finally {
-          const hooks = [...shutdownHooks];
-          shutdownHooks.clear();
-          await Promise.allSettled(hooks.map((hook) => hook()));
-        }
       },
       ...(largePayloadOffload
         ? {

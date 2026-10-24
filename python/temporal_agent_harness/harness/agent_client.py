@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
@@ -516,6 +517,8 @@ class AgentClient:
                 and ev.event.type == AgentEventType.TURN_END
             )
 
+        # ``aclosing`` closes the merge (and its open subscriptions) as soon as this generator is
+        # closed or times out, rather than whenever asyncio finalizes the abandoned generator.
         merged = merge_stream(
             client=self._temporal,
             root_workflow_id=self._workflow_id,
@@ -526,7 +529,7 @@ class AgentClient:
             stall_grace_seconds=stall_grace_seconds,
         )
         try:
-            async with asyncio.timeout(timeout):
+            async with contextlib.aclosing(merged), asyncio.timeout(timeout):
                 # ``resume_offset`` is the merge's ROOT-stream resume cursor; for a single
                 # send_message turn it isn't used to resume (the chat path reattaches via ``attach``),
                 # but we pass it through uniformly so the consumer's bookkeeping stays consistent.
@@ -686,5 +689,6 @@ class AgentClient:
             should_stop=should_stop,
             stall_grace_seconds=stall_grace_seconds,
         )
-        async for ev, resume_offset in merged:
-            yield on_item(ev, resume_offset)
+        async with contextlib.aclosing(merged):
+            async for ev, resume_offset in merged:
+                yield on_item(ev, resume_offset)

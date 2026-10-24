@@ -10,6 +10,8 @@ export interface HandlerDecl<I extends z.ZodType = z.ZodType, O extends z.ZodTyp
   readonly output: O;
   readonly midTurn: MidTurn;
   readonly modelCallable: boolean;
+  /** The input's parameter name (Python's handler parameter); a subagent send tool's argument. */
+  readonly inputName: string;
 }
 
 export type HandlerImpl<D extends HandlerDecl> = (
@@ -118,8 +120,6 @@ export interface HarnessTool<I = Record<string, unknown>, O = unknown> {
   readonly inherentlySafe: boolean;
   readonly autoApprovalCriteria: string | null;
   readonly injected: readonly string[];
-  readonly callers: readonly ToolCaller[];
-  readonly inputExamples: readonly { readonly input: Record<string, unknown> }[];
   /** The model-facing JSON schema of the arguments (injected parameters are not in it). */
   readonly parameters: Record<string, unknown>;
   /** Run the call. Only valid inside `runner.runTool(...)`. */
@@ -127,6 +127,3 @@ export interface HarnessTool<I = Record<string, unknown>, O = unknown> {
 }
 
 export type AnyHarnessTool = HarnessTool<never, unknown>;
-
-/** Who may call a tool: the model directly (through a TurnHost), or a Code Mode script. */
-export type ToolCaller = "direct" | "code_mode";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import { MockActivityEnvironment } from "@temporalio/testing";
 import {
   renderTypeCheckStubs,
@@ -8,8 +8,8 @@ import {
 } from "@temporalio/agent-harness/harness/code-mode";
 import {
   DEFAULT_CODE_MODE_LIMITS,
+  STEP_TIME_LIMIT_SECS,
   TIMED_OUT_ERROR,
-  closeMontyPool,
   codeModeActivities,
   codeResumeBatch,
   codeStartBatch,
@@ -37,8 +37,6 @@ const resume = (
   env: MockActivityEnvironment,
   input: Parameters<typeof codeResumeBatch>[0],
 ): Promise<CodeBatchStep> => env.run(codeResumeBatch, input, DEFAULT_CODE_MODE_LIMITS, SECRET);
-
-after(closeMontyPool);
 
 describe("the Monty sandbox", () => {
   it("type-checks a good script, and reports a bad key or a wrong argument type without running it", async () => {
@@ -117,15 +115,14 @@ describe("the Monty sandbox", () => {
       "while True:\n    try:\n        while True:\n            pass\n    except TimeoutError:\n        pass\n",
     ],
   ]) {
-    it(`${name} is stopped at the step time limit and ends the script with a TimeoutError`, async () => {
+    it(`${name} is stopped at the step time limit, not the activity's, and ends the script with a TimeoutError`, async () => {
+      // An hour's start-to-close would let the step run for 48 minutes; the 1 s step limit stops
+      // it orders of magnitude sooner on any machine.
+      const startToCloseTimeoutMs = 3_600_000;
       const started = Date.now();
-      const step = await start(
-        new MockActivityEnvironment({ startToCloseTimeoutMs: 30_000 }),
-        src!,
-        null,
-      );
+      const step = await start(new MockActivityEnvironment({ startToCloseTimeoutMs }), src!, null);
       assertMatch(step, { done: true, error: TIMED_OUT_ERROR });
-      assert.ok(Date.now() - started < 5_000);
+      assert.ok(Date.now() - started < (startToCloseTimeoutMs * 0.8) / 20);
     });
   }
 
@@ -267,5 +264,63 @@ describe("the Monty sandbox", () => {
     const step = await start(new MockActivityEnvironment(), "Box(1)\n", loose);
     assert.equal(step.done, true);
     assert.ok(step.error?.includes("TypeError"));
+  });
+
+  it("an undefined name raises NameError inside the script, which can catch it", async () => {
+    const step = await start(
+      new MockActivityEnvironment(),
+      "try:\n    nope\nexcept NameError as e:\n    caught = str(e)\ncaught\n",
+      null,
+    );
+    assertMatch(step, { done: true, error: null });
+    assert.equal(JSON.parse(step.output_json!), "name 'nope' is not defined");
+  });
+
+  it("refuses to run a step directly with a missing or short continuation secret", async () => {
+    const env = new MockActivityEnvironment();
+    for (const secret of ["", "short"])
+      await assert.rejects(
+        env.run(codeStartBatch, "1", null, DEFAULT_CODE_MODE_LIMITS, CLOCK, secret),
+        /at least 32 bytes/,
+      );
+    await assert.rejects(
+      env.run(
+        codeResumeBatch,
+        { snapshot: "msig1.x.y", results: [], type_names: [], clock: CLOCK },
+        DEFAULT_CODE_MODE_LIMITS,
+        "",
+      ),
+      /at least 32 bytes/,
+    );
+  });
+});
+
+describe("the type check", () => {
+  const none = { source: "", type_names: [] };
+
+  it("passes a clean script that raises, loops, sleeps or reads the clock, without waiting on it", async () => {
+    await codeTypeCheck("1\n", none);
+    const started = Date.now();
+    for (const body of [
+      "raise ValueError('at run time')",
+      "while True:\n    pass",
+      "import time\ntime.sleep(3600)",
+      "import asyncio\nasyncio.run(asyncio.sleep(3600))",
+      "from datetime import datetime\nimport random\nprint(datetime.now(), random.random())",
+    ])
+      assert.equal(await codeTypeCheck(`${body}\n`, none), "", body);
+    // Cut short by the type check's own budget, well inside one step's.
+    assert.ok(Date.now() - started < STEP_TIME_LIMIT_SECS * 1000);
+  });
+
+  it("reports a type error or a syntax error with the checker's whole report, as Python does", async () => {
+    assert.equal(
+      await codeTypeCheck('x: int = "a"\n', none),
+      'MontyTypingError: error[invalid-assignment]: Object of type `Literal["a"]` is not assignable to `int`\n --> main.py:1:10\n  |\n1 | x: int = "a"\n  |    ---   ^^^ Incompatible value of type `Literal["a"]`\n  |    |\n  |    Declared type\n\n',
+    );
+    assert.equal(
+      await codeTypeCheck("x = (", none),
+      "MontyTypingError: error[invalid-syntax]: unexpected EOF while parsing\n --> main.py:1:6\n  |\n1 | x = (\n  |      ^\n\n",
+    );
   });
 });

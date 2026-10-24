@@ -28,7 +28,6 @@ import {
 } from "@temporalio/agent-harness/harness/agent-protocol";
 import {
   DEFAULT_CODE_MODE_LIMITS,
-  closeMontyPool,
   codeResumeBatch,
   codeStartBatch,
 } from "../../../src/harness/code-mode/monty-stepper.ts";
@@ -88,8 +87,6 @@ const op = (
   args: unknown[] = [],
   kwargs: Record<string, unknown> = {},
 ) => ({ call_id: 1, operation, path, args, kwargs });
-
-after(closeMontyPool);
 
 describe("InMemoryFileSystem", () => {
   it("writes, reads, lists, renames directories whole, and deletes", async () => {

@@ -2,7 +2,15 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SubagentToolPolicy, subagentToolset } from "@temporalio/agent-harness";
+import {
+  SubagentToolPolicy,
+  TextMessage,
+  TextReply,
+  ToolApprovalPolicy,
+  defineAgent,
+  handler,
+  subagentToolset,
+} from "@temporalio/agent-harness";
 import {
   BriefedAgent,
   EchoChildAgent,
@@ -49,6 +57,33 @@ describe("subagentToolset", () => {
         message: { properties: { name: { type: "string" } }, required: ["name"] },
       },
     });
+  });
+
+  it("a send tool takes the input under the handler's inputName", () => {
+    const echo = subagentToolset(EchoChildAgent, { key: "e", taskQueue: "q" }).find(
+      (t) => t.name === "e_echo",
+    )!;
+    assert.deepStrictEqual(Object.keys(echo.parameters.properties as object), [
+      "subagent",
+      "request",
+    ]);
+  });
+
+  it("rejects a handler whose input is named subagent", () => {
+    const child = defineAgent({
+      name: "Clashing",
+      approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+      handlers: {
+        ask: handler({
+          description: "Ask.",
+          input: TextMessage,
+          output: TextReply,
+          inputName: "subagent",
+        }),
+      },
+      create: () => ({ ask: async ({ text }) => ({ text }) }),
+    });
+    assert.throws(() => subagentToolset(child, { key: "c", taskQueue: "q" }), /'subagent'/);
   });
 
   it("a child with required init data needs a callback", () => {

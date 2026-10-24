@@ -6,19 +6,26 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import { ApplicationFailure } from "@temporalio/common";
-import { MockActivityEnvironment } from "@temporalio/testing";
-import { NativeConnection, Worker, type WorkerOptions } from "@temporalio/worker";
-import { AgentClient } from "../src/harness/agent-client.ts";
-import type { CodeBatchStep } from "@temporalio/agent-harness/harness/code-mode";
 import {
-  DEFAULT_CODE_MODE_LIMITS,
-  codeModeActivities,
-  codeStartBatch,
-} from "../src/harness/code-mode/monty-stepper.ts";
+  NativeConnection,
+  Worker,
+  bundleWorkflowCode,
+  type WorkerOptions,
+} from "@temporalio/worker";
+import { AgentClient } from "../src/harness/agent-client.ts";
+import { codeModeActivities } from "../src/harness/code-mode/monty-stepper.ts";
 import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
 import { AgentHarnessPlugin, CODE_MODE_MISSING_EXTRA_ERROR } from "../src/index.ts";
 import { assertMatch } from "./match.ts";
-import { FIXTURES, TEST_CONTINUATION_SECRET, startEnv, type TestEnv } from "./support.ts";
+import {
+  FIXTURES,
+  TEST_CONTINUATION_SECRET,
+  collect,
+  replyText,
+  send,
+  startEnv,
+  type TestEnv,
+} from "./support.ts";
 
 const CODE_MODE = ["code_start_batch", "code_resume_batch", "code_type_check"];
 const HARNESS = ["run_subagent_turn", "jev_tool_approval", ...CODE_MODE];
@@ -112,7 +119,7 @@ describe("a Code Mode call on a worker without Code Mode", () => {
     });
   });
 
-  it("worker shutdown closes the Monty pool, so no sandbox process outlives it", async () => {
+  it("a worker stopping leaves the process's Monty pool open, so Code Mode still runs on another worker", async () => {
     const montyChildren = () => {
       try {
         return execFileSync("pgrep", ["-P", String(process.pid), "-f", "monty"], {
@@ -124,25 +131,42 @@ describe("a Code Mode call on a worker without Code Mode", () => {
         return [];
       }
     };
-    const own = await Worker.create({
-      connection,
-      namespace: env.namespace,
-      taskQueue: `plugin-shutdown-${randomUUID()}`,
-      activities: codeModeActivities({ continuationSecret: TEST_CONTINUATION_SECRET }),
-      plugins: [new AgentHarnessPlugin()],
-    });
-    const run = own.run();
-    const step: CodeBatchStep = await new MockActivityEnvironment().run(
-      codeStartBatch,
-      "1 + 1",
-      null,
-      DEFAULT_CODE_MODE_LIMITS,
-      { now: 0, seed: 0 },
-    );
-    assert.equal(step.output_json, "2");
-    assert.ok(montyChildren().length > 0);
-    own.shutdown();
-    await run;
-    assert.deepStrictEqual(montyChildren(), []);
+    const workflowBundle = await bundleWorkflowCode({ workflowsPath: FIXTURES });
+    const codeModeWorker = async () => {
+      const taskQueue = `plugin-pool-${randomUUID()}`;
+      const worker = await Worker.create({
+        connection,
+        namespace: env.namespace,
+        taskQueue,
+        workflowBundle,
+        activities: codeModeActivities({ continuationSecret: TEST_CONTINUATION_SECRET }),
+        plugins: [new AgentHarnessPlugin()],
+      });
+      return { taskQueue, worker, running: worker.run() };
+    };
+    const runCode = async (taskQueue: string) => {
+      const workflowId = `code-mode-pool-${randomUUID()}`;
+      const handle = await env.client.workflow.start("CodeModeProbeAgent", {
+        taskQueue,
+        workflowId,
+        args: [{}],
+      });
+      env.started.push(workflowId);
+      await send(handle, "run", { text: "1 + 1" });
+      return replyText(await collect(env.client, workflowId));
+    };
+    const first = await codeModeWorker();
+    const second = await codeModeWorker();
+    try {
+      assert.equal(await runCode(first.taskQueue), "result: 2");
+      first.worker.shutdown();
+      await first.running;
+      assert.ok(montyChildren().length > 0);
+      assert.equal(await runCode(second.taskQueue), "result: 2");
+    } finally {
+      if (first.worker.getState() === "RUNNING") first.worker.shutdown();
+      second.worker.shutdown();
+      await Promise.allSettled([first.running, second.running]);
+    }
   });
 });

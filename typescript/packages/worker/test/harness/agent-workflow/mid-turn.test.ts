@@ -198,8 +198,9 @@ describe("mid-turn admission", () => {
     await send(h, "outlive", { text: "drain me" });
     await release(h, "work");
     await h.signal("close");
-    await new Promise((r) => setTimeout(r, 300));
-    assert.equal((await status(h)).turn_active, true);
+    await eventually(() => h.query<boolean>("closed"));
+    assertMatch(await status(h), { turn_active: true, turn_participants: 1 });
+    assert.equal((await h.describe()).status.name, "RUNNING");
     await release(h, "outlive");
     await h.result();
     assert.equal(await h.query<boolean>("published_after_sibling"), true);

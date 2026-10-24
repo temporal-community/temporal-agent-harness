@@ -10,6 +10,7 @@ ts_project(
     visibility = ["//visibility:public"],
     deps = [
         ":okf",
+        ":os-error",
         "//typescript/packages/worker:node_modules/@temporalio/activity",
         "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
         "//typescript/packages/worker:node_modules/zod",
@@ -27,7 +28,6 @@ ts_project(
         "//typescript/packages/worker:node_modules/@pydantic/monty",
         "//typescript/packages/worker:node_modules/@temporalio/activity",
         "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
-        "//typescript/packages/worker/src:index",
     ],
 )
 
@@ -38,8 +38,20 @@ ts_project(
     tsconfig = "//typescript/packages/worker:tsconfig",
     visibility = ["//visibility:public"],
     deps = [
+        ":os-error",
         "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
         "//typescript/packages/worker:node_modules/yaml",
+    ],
+)
+
+ts_project(
+    name = "os-error",
+    srcs = ["os-error.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
     ],
 )
 

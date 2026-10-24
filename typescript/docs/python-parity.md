@@ -57,6 +57,10 @@ change, or adds a row here saying which SDK has it and why.
 | Ambient context | `contextvars` | `AsyncLocalStorage` | Language |
 | Schemas | pydantic models | Any Standard Schema that renders JSON Schema (zod 4); rendered in zod's own input and output modes, so documents are equivalent to Python's but not byte-identical | Language |
 | Starting a worker | A `Worker` with `AgentHarnessPlugin` | `runAgentWorker`, which also bundles the agents module as the workflows module | The TypeScript worker bundles workflow code |
+| A subagent send tool's input key | The child handler's own parameter name, read from its signature | The handler's `inputName` (default `message`) | A JavaScript function's parameter names can't be read reliably |
+| A Code Mode script's Monty crash (not a timeout) | A fixed crash message | `MontyCrashedError: <message>` from the Node binding | The two Monty bindings report a crash differently |
+| File errors from an in-workflow VFS mount | Python's `OSError` wording | `[Errno n] … '<virtual path>'`; activity-backed mounts give Python's wording | The in-workflow filesystem formats its own errors |
+| Cancelling a stream poll from a worker | The RPC is cancelled | The poll is abandoned and ends when the server answers; the worker's native connection ignores abort signals | `@temporalio/worker`'s `NativeConnection` doesn't support aborting a call |
 
 ### In TypeScript first, Python to follow
 
@@ -64,6 +68,8 @@ change, or adds a row here saying which SDK has it and why.
 | --- | --- | --- |
 | Activity tools with a heartbeat timeout | The activity never heartbeats, so a long tool call fails its heartbeat timeout | The activity heartbeats at half the timeout while the tool runs |
 | Stream polls parked when a run completes | Left unanswered; the run completes with the poll update still in flight | Answered with the last events, `turn_end` included (`detachPollers`), before the run completes |
+| A failed subagent turn | `subagent_message_sent` is never closed: the runner catches `ApplicationError`, but a failed activity raises `ActivityError` wrapping it | `subagent_reply_received` with `outcome: "error"` closes the bracket |
+| A tool approval sent after `close` | Accepted, so the call can still run | Rejected with `AgentClosed` |
 
 ### Not yet the same
 

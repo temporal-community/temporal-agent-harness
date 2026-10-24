@@ -42,10 +42,6 @@ async function submit(client: Client, req: RunSubagentTurnInput): Promise<TurnPr
   } catch (e) {
     if (e instanceof WorkflowUpdateFailedError) {
       const cause = e.cause as { type?: string; message?: string } | undefined;
-      // The server rejects an update a worker completed a task without seeing
-      // (e.g. across a worker restart). Rejections aren't persisted, so the
-      // activity's retry can resend the same update id.
-      if (cause?.type === "UnprocessedUpdate") throw e;
       throw ApplicationFailure.create({
         type: cause?.type ?? "SubagentSendRejected",
         nonRetryable: true,
@@ -59,9 +55,10 @@ async function submit(client: Client, req: RunSubagentTurnInput): Promise<TurnPr
 export async function runSubagentTurn(req: RunSubagentTurnInput): Promise<SubagentTurnResult> {
   const ctx = Context.current();
   const client = ctx.client;
+  // A cancellation (from a heartbeat or worker shutdown) ends every wait below and is rethrown.
   let progress = (ctx.info.heartbeatDetails as TurnProgress | undefined) ?? null;
   if (progress === null) {
-    progress = await submit(client, req);
+    progress = await Promise.race([submit(client, req), ctx.cancelled]);
     await using pub = publisherFromActivity(req.parent_stream_context);
     pub.publish({
       type: "subagent_message_sent",
@@ -84,7 +81,7 @@ export async function runSubagentTurn(req: RunSubagentTurnInput): Promise<Subage
       req.child_workflow_id,
       TURN_EVENTS_TOPIC,
       progress.consumed_offset,
-      { pollCooldown: "10 milliseconds" },
+      { pollCooldown: "10 milliseconds", signal: ctx.cancellationSignal },
     );
     for await (const item of items) {
       progress.consumed_offset = item.offset + 1;

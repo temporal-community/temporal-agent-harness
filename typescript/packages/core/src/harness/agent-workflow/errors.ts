@@ -1,4 +1,4 @@
-import { ApplicationFailure } from "@temporalio/workflow";
+import { ApplicationFailure, CancellationScope, isCancellation } from "@temporalio/workflow";
 import type { AutoModeEvaluator, ToolApprovalPolicy } from "../agent-protocol/index.ts";
 import { portabilityProblem } from "../state/index.ts";
 
@@ -22,6 +22,20 @@ export class CallbackToolError extends Error {
     this.toolName = toolName;
     this.reason = reason;
   }
+}
+
+/** What Python's `str(e)` gives for an exception: its message alone. */
+export function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Whether `e` is the cancellation of the scope this code runs in (Python's CancelledError, which
+ * `except Exception` lets through), not a cancellation it observed from an inner scope, such as an
+ * author's own timeout, which is a failure like any other.
+ */
+export function isOwnCancellation(e: unknown): boolean {
+  return isCancellation(e) && CancellationScope.current().consideredCancelled;
 }
 
 /** An error and its causes, deduplicated: an ActivityFailure's own message says only "Activity task failed". */

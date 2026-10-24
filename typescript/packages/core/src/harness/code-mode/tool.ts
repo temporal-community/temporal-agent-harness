@@ -63,10 +63,6 @@ function validateTools(tools: readonly AnyHarnessTool[]): Map<string, AnyHarness
   for (const tool of tools) {
     if (byName.has(tool.name))
       throw new TypeError(`duplicate host-function name '${tool.name}' in this codeModeTool.`);
-    if (!tool.callers.includes("code_mode"))
-      throw new TypeError(
-        `tool '${tool.name}' is not callable from Code Mode (its callers are ${tool.callers.join(", ")}).`,
-      );
     byName.set(tool.name, tool);
   }
   return byName;

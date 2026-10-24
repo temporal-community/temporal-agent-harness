@@ -7,7 +7,7 @@ import {
   TOOL_APPROVAL_UPDATE,
   type AgentEvent,
 } from "@temporalio/agent-harness/harness/agent-protocol";
-import { TIMED_OUT_ERROR, closeMontyPool } from "../../../src/harness/code-mode/monty-stepper.ts";
+import { TIMED_OUT_ERROR } from "../../../src/harness/code-mode/monty-stepper.ts";
 import { collect, replyText, send, startEnv, typesFor, type TestEnv } from "../../support.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -32,7 +32,6 @@ describe("Code Mode on a running agent", () => {
   });
   after(async () => {
     await env.stop();
-    await closeMontyPool();
   });
 
   const answer =
@@ -141,7 +140,20 @@ describe("Code Mode on a running agent", () => {
     });
     assert.equal(
       replyText(await collect(env.client, h.workflowId)),
-      "Script error (MontyRuntimeError: Exception: Error: tool broke)",
+      "Script error (MontyRuntimeError: Exception: ApplicationError: tool broke)",
+    );
+  });
+
+  it("a failed activity tool raises Exception('ApplicationError: <message>') in the script, as in Python", async () => {
+    const h = await env.start("CodeModeProbeAgent");
+    await send(h, "run", {
+      text: py(
+        'try:\n    await failing_tool(text="x")\nexcept Exception as e:\n    return [type(e).__name__, str(e)]',
+      ),
+    });
+    assert.equal(
+      replyText(await collect(env.client, h.workflowId)),
+      "result: ['Exception', 'ApplicationError: tool broke']",
     );
   });
 
