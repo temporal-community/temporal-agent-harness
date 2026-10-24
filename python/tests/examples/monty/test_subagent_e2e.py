@@ -416,10 +416,19 @@ async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queu
     # cannot read a completed workflow's stream, so the merge cannot mount the stopped child on
     # replay — it must DEGRADE rather than wedge: release the child's close gate so the parent renders
     # to its turn_end, and surface a non-fatal subagent_stream_unavailable marker for the child.
+    # Once a completed workflow's stream can be read, the merge replays the child instead and this
+    # test fails on the missing marker: rewrite it to assert the child's turns merge inside the
+    # parent's brackets, and cover the marker with a child whose reads fail.
     client, task_queue = client_and_queue
-    parent_id, _live = await _merged_send(
+    parent_id, live = await _merged_send(
         client, task_queue, [_const_script(42), _const_script(99)], stop=True
     )
+    # The parent's turn ends once it has asked the child to stop, not once the child's workflow has
+    # completed; until then its stream is still readable, so wait for the completion.
+    (child_workflow_id,) = {
+        e.event.workflow_id for e in live if e.event.type == AgentEventType.SUBAGENT_STARTED
+    }
+    await client.get_workflow_handle(child_workflow_id).result()
 
     # Reattach from the start: the parent's backlog still references the now-completed subagent.
     agent_client = AgentClient(client, parent_id)

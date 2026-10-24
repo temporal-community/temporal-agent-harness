@@ -78,8 +78,52 @@ export function splitFrontmatter(text: string): [string | null, string, string |
 }
 
 const FENCE = /^\s{0,3}(```|~~~)/;
-const LINK = /\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+const SPACE = /\s/;
+const TARGET_END = /[)\s>]/;
+
+/**
+ * The targets of the `](target "title")` links in `line`, exactly as
+ * `/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g` finds them, in one pass: that regex retries at
+ * every `](`, which is quadratic in a long line of them.
+ */
+function linkTargetsIn(line: string): string[] {
+  const found: string[] = [];
+  const skipSpace = (at: number) => {
+    while (at < line.length && SPACE.test(line[at]!)) at++;
+    return at;
+  };
+  for (let open = line.indexOf("]("); open >= 0; ) {
+    let at = skipSpace(open + 2);
+    const angle = line[at] === "<";
+    if (angle) at++;
+    let start = at;
+    while (at < line.length && !TARGET_END.test(line[at]!)) at++;
+    // A `<` with nothing after it is the target itself.
+    if (at === start && angle) start--;
+    let end = -1;
+    if (at > start) {
+      const afterTarget = line[at] === ">" ? at + 1 : at;
+      const titleAt = skipSpace(afterTarget);
+      if (titleAt > afterTarget && line[titleAt] === '"') {
+        const close = line.indexOf('"', titleAt + 1);
+        if (close >= 0) {
+          const paren = skipSpace(close + 1);
+          if (line[paren] === ")") end = paren + 1;
+        }
+      }
+      if (end < 0) {
+        const paren = skipSpace(afterTarget);
+        if (line[paren] === ")") end = paren + 1;
+      }
+    }
+    if (end >= 0) found.push(line.slice(start, at));
+    // After a failed `](`, every later one whose target starts inside this target ends where it
+    // did and fails too; the next to try is the one that ends just before that end.
+    open = line.indexOf("](", end >= 0 ? end : Math.max(open + 1, at - 2));
+  }
+  return found;
+}
 
 /**
  * Concept ids `body` links to, in order, without repeats. Relative targets resolve against
@@ -98,8 +142,7 @@ export function linkTargets(body: string, conceptPath: string): string[] {
       continue;
     }
     if (fence) continue;
-    for (const match of line.matchAll(LINK)) {
-      const raw = match[1]!;
+    for (const raw of linkTargetsIn(line)) {
       const target = resolveLink(decodePercent(raw), here);
       if (target !== null && !found.includes(target)) found.push(target);
     }

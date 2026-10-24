@@ -204,8 +204,57 @@ def _first_line(error: Exception) -> str:
 # ---------------------------------------------------------------- links
 
 _FENCE = re.compile(r"^\s{0,3}(```|~~~)")
-_LINK = re.compile(r"\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+_SPACE = re.compile(r"\s")
+_TARGET_END = re.compile(r"[)\s>]")
+
+
+def _link_targets_in(line: str) -> list[str]:
+    """The targets of the ``](target "title")`` links in ``line``, exactly as
+    ``\\]\\(\\s*<?([^)\\s>]+)>?(?:\\s+"[^"]*")?\\s*\\)`` finds them, in one pass: that regex
+    retries at every ``](``, which is quadratic in a long line of them."""
+    found: list[str] = []
+
+    def skip_space(at: int) -> int:
+        while at < len(line) and _SPACE.match(line[at]):
+            at += 1
+        return at
+
+    def at_char(at: int) -> str:
+        return line[at] if at < len(line) else ""
+
+    opening = line.find("](")
+    while opening >= 0:
+        at = skip_space(opening + 2)
+        angle = at_char(at) == "<"
+        if angle:
+            at += 1
+        start = at
+        while at < len(line) and not _TARGET_END.match(line[at]):
+            at += 1
+        # A `<` with nothing after it is the target itself.
+        if at == start and angle:
+            start -= 1
+        end = -1
+        if at > start:
+            after_target = at + 1 if at_char(at) == ">" else at
+            title_at = skip_space(after_target)
+            if title_at > after_target and at_char(title_at) == '"':
+                close = line.find('"', title_at + 1)
+                if close >= 0:
+                    paren = skip_space(close + 1)
+                    if at_char(paren) == ")":
+                        end = paren + 1
+            if end < 0:
+                paren = skip_space(after_target)
+                if at_char(paren) == ")":
+                    end = paren + 1
+        if end >= 0:
+            found.append(line[start:at])
+        # After a failed `](`, every later one whose target starts inside this target ends where
+        # it did and fails too; the next to try is the one that ends just before that end.
+        opening = line.find("](", end if end >= 0 else max(opening + 1, at - 2))
+    return found
 
 
 def link_targets(body: str, concept_path: str) -> list[str]:
@@ -224,8 +273,8 @@ def link_targets(body: str, concept_path: str) -> list[str]:
             continue
         if fence:
             continue
-        for match in _LINK.finditer(line):
-            target = _resolve(unquote(match.group(1)), here)
+        for raw in _link_targets_in(line):
+            target = _resolve(unquote(raw), here)
             if target is not None and target not in found:
                 found.append(target)
     self_id = concept_path.removesuffix(".md")

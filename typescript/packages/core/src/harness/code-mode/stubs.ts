@@ -21,8 +21,42 @@ export class CodeModeStubError extends Error {
 }
 
 export type Schema = Record<string, unknown>;
-const pascal = (s: string) =>
-  s.replace(/(^|[_\-\s(). ]+)(\w)/g, (_m, _p, c: string) => c.toUpperCase()).replace(/\W/g, "");
+const SEPARATOR = /[_\-\s(). ]/;
+const WORD = /\w/;
+
+/**
+ * `s` in PascalCase without non-word characters: what
+ * `s.replace(/(^|[_\-\s(). ]+)(\w)/g, upper).replace(/\W/g, "")` makes, in one pass (that regex
+ * retries inside every run of separators, which is quadratic).
+ */
+function pascal(s: string): string {
+  let out = "";
+  let i = 0;
+  if (s.length > 0 && WORD.test(s[0]!)) out += s[i++]!.toUpperCase();
+  while (i < s.length) {
+    let run = i;
+    while (run < s.length && SEPARATOR.test(s[run]!)) run++;
+    if (run === i) {
+      out += s[i++];
+    } else if (run < s.length && WORD.test(s[run]!)) {
+      out += s[run]!.toUpperCase();
+      i = run + 1;
+    } else {
+      // No word follows the run: the regex backs off to the run's last `_` after its first
+      // character, which is a word character too, and replaces the span with it.
+      let underscore = run - 1;
+      while (underscore > i && s[underscore] !== "_") underscore--;
+      if (underscore > i) {
+        out += "_";
+        i = underscore + 1;
+      } else {
+        out += s.slice(i, run);
+        i = run;
+      }
+    }
+  }
+  return out.replace(/\W/g, "");
+}
 const pyLiteral = (v: unknown) =>
   typeof v === "string"
     ? JSON.stringify(v)

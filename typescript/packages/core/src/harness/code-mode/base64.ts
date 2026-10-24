@@ -17,7 +17,9 @@ export function encodeBase64(bytes: Uint8Array): string {
 }
 
 export function decodeBase64(value: string): Uint8Array {
-  const clean = value.replace(/=+$/, "");
+  let length = value.length;
+  while (length > 0 && value[length - 1] === "=") length--;
+  const clean = value.slice(0, length);
   if (clean.length % 4 === 1) throw new Error("invalid base64");
   const out = new Uint8Array((clean.length * 3) >> 2);
   let n = 0;
