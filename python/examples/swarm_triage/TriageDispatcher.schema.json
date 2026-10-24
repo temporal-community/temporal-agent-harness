@@ -1,0 +1,200 @@
+{
+  "agent": "TriageDispatcher",
+  "source": "examples.swarm_triage.triage_agents:TriageDispatcher",
+  "init_data": null,
+  "handlers": {
+    "triage": {
+      "description": "Triage a synthetic backlog: post it to the swarm board, then start specialists,\nreviewers and one lead per team, and reply once every team has run out of issues.",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/TriageRun"
+      },
+      "output": {
+        "$ref": "#/$defs/TriageReport"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "Simulation": {
+      "description": "How the scripted agents behave. Every agent draws from these with ``workflow.random()``,\nso a run is replayable even though it looks noisy.",
+      "properties": {
+        "think_seconds": {
+          "default": [
+            2.0,
+            8.0
+          ],
+          "description": "How long a worker 'thinks' about one issue, uniformly between the two.",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Think Seconds",
+          "type": "array"
+        },
+        "consult_rate": {
+          "default": 0.35,
+          "description": "How often a worker consults a specialist.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Consult Rate",
+          "type": "number"
+        },
+        "review_rate": {
+          "default": 0.5,
+          "description": "How often a worker asks a reviewer to check.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Review Rate",
+          "type": "number"
+        },
+        "rework_rate": {
+          "default": 0.25,
+          "description": "How often a reviewer sends an issue back to be reworked once.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Rework Rate",
+          "type": "number"
+        },
+        "error_rate": {
+          "default": 0.05,
+          "description": "How often a specialist fails, so the worker releases its issue to the board for another try.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Error Rate",
+          "type": "number"
+        },
+        "approval_rate": {
+          "default": 0.0,
+          "description": "How often a worker wants to close an issue as won't-fix, a gated call that waits for a human to approve it in the console. Each one blocks the run until it is answered, so this is off unless you want to watch a bottleneck form.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Approval Rate",
+          "type": "number"
+        }
+      },
+      "title": "Simulation",
+      "type": "object"
+    },
+    "TriageReport": {
+      "description": "How a triage run went.",
+      "properties": {
+        "swarm_id": {
+          "title": "Swarm Id",
+          "type": "string"
+        },
+        "issues": {
+          "title": "Issues",
+          "type": "integer"
+        },
+        "done": {
+          "description": "Issues completed on the board.",
+          "title": "Done",
+          "type": "integer"
+        },
+        "agents_started": {
+          "description": "Every agent the run started, retired ones included.",
+          "title": "Agents Started",
+          "type": "integer"
+        },
+        "releases": {
+          "description": "Times a worker handed an issue back to the board.",
+          "title": "Releases",
+          "type": "integer"
+        },
+        "consults": {
+          "title": "Consults",
+          "type": "integer"
+        },
+        "reviews": {
+          "title": "Reviews",
+          "type": "integer"
+        },
+        "reworks": {
+          "title": "Reworks",
+          "type": "integer"
+        },
+        "wont_fix": {
+          "title": "Wont Fix",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "swarm_id",
+        "issues",
+        "done",
+        "agents_started",
+        "releases",
+        "consults",
+        "reviews",
+        "reworks",
+        "wont_fix"
+      ],
+      "title": "TriageReport",
+      "type": "object"
+    },
+    "TriageRun": {
+      "description": "Triage a synthetic backlog with a swarm of agents.",
+      "properties": {
+        "issues": {
+          "default": 400,
+          "description": "Issues to post to the board.",
+          "maximum": 5000,
+          "minimum": 1,
+          "title": "Issues",
+          "type": "integer"
+        },
+        "teams": {
+          "default": 8,
+          "description": "Teams, one lead each.",
+          "maximum": 26,
+          "minimum": 1,
+          "title": "Teams",
+          "type": "integer"
+        },
+        "workers_per_team": {
+          "default": 16,
+          "description": "Workers each lead keeps busy at once.",
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Workers Per Team",
+          "type": "integer"
+        },
+        "items_per_worker": {
+          "default": 4,
+          "description": "Issues a worker handles before it retires and its lead starts a fresh one.",
+          "minimum": 1,
+          "title": "Items Per Worker",
+          "type": "integer"
+        },
+        "specialists": {
+          "default": 6,
+          "description": "Specialists workers consult.",
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Specialists",
+          "type": "integer"
+        },
+        "reviewers": {
+          "default": 6,
+          "description": "Reviewers workers ask to check.",
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Reviewers",
+          "type": "integer"
+        },
+        "simulation": {
+          "$ref": "#/$defs/Simulation"
+        }
+      },
+      "title": "TriageRun",
+      "type": "object"
+    }
+  }
+}

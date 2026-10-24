@@ -8,7 +8,8 @@ export type PaneKind =
   | "usage"
   | "state"
   | "files"
-  | "script";
+  | "script"
+  | "swarm";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -153,6 +154,19 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     content: "viewport",
     titleNames: "kind",
     optIn: true
+  },
+  swarm: {
+    kindLabel: "Swarm",
+    /* --reasoning, the hue the pane gives agents waiting on each other: most of a busy swarm. */
+    accent: "--reasoning",
+    /* Wide: a graph of hundreds of members beside a details column. */
+    defaultSize: 820,
+    minSize: 480,
+    content: "viewport",
+    flexible: true,
+    titleNames: "kind",
+    /* Only a session in a swarm has one; the pane says so for any other. */
+    optIn: true
   }
 };
 
@@ -183,7 +197,8 @@ const SINGLETON_KINDS = new Set<PaneKind>([
   "usage",
   "state",
   "files",
-  "script"
+  "script",
+  "swarm"
 ]);
 
 export function isSingletonKind(kind: PaneKind): boolean {

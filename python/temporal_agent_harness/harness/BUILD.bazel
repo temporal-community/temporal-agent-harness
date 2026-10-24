@@ -19,6 +19,7 @@ py_library(
     deps = [
         ":agent_workflow",
         ":subagent_toolset",
+        ":swarm",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/temporal_agent_harness/harness/code_mode:__init__",
         "//python/temporal_agent_harness/harness/state:decl",
@@ -61,6 +62,7 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":stream_context",
+        ":swarm_attributes",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/temporal_agent_harness/harness/state:__init__",
         "//python/temporal_agent_harness/harness/state:decl",
@@ -101,6 +103,43 @@ py_library(
         ":agent_workflow",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "swarm",
+    srcs = ["swarm.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "swarm_activities",
+    srcs = ["swarm_activities.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":swarm_attributes",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "swarm_attributes",
+    srcs = ["swarm_attributes.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "@pypi//temporalio",
     ],
 )

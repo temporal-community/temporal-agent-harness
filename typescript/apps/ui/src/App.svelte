@@ -19,6 +19,7 @@
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel, { verdictTone } from "$lib/components/agent/ApprovalDecisionPanel.svelte";
   import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
+  import SwarmPanel from "$lib/components/agent/SwarmPanel.svelte";
   import FilesPanel from "$lib/components/agent/FilesPanel.svelte";
   import ScriptWorkspace from "$lib/components/agent/ScriptWorkspace.svelte";
   import PaneRail, {
@@ -359,6 +360,8 @@
             : null,
           statusTone: null
         };
+      case "swarm":
+        return { title: PANE_META.swarm.kindLabel };
       default: {
         const _exhaustive: never = pane.kind;
         throw new Error(`unhandled pane kind: ${_exhaustive}`);
@@ -972,6 +975,14 @@
           decisions={run.approvalDecisions}
           ahead={run.approvalDecisionsAhead}
           onJumpToLive={() => run.jumpToLive()}
+        />
+      {:else if pane.kind === "swarm"}
+        <!-- Live, not a fold to the playhead: it reads the swarm from visibility as it is now,
+             so scrubbing this session's run does not move it. -->
+        <SwarmPanel
+          sessionId={run.session?.workflow_id ?? null}
+          loadMembership={(id) => run.sessionSwarm(id)}
+          loadTopology={(id, options) => run.swarmTopology(id, options)}
         />
       {:else if pane.kind === "logs"}
         <TranscriptPanel

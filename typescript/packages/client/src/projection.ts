@@ -345,6 +345,10 @@ export class AgentProjection {
       case "subagent_started":
       case "subagent_stopped":
       case "subagent_stream_unavailable":
+      // Peer turns are edges between swarm members, drawn by a swarm view; the peer's reply
+      // already reaches this conversation as the calling handler's or tool's own output.
+      case "peer_message_sent":
+      case "peer_reply_received":
         return;
       case "state_snapshot": {
         const d = frame.data;

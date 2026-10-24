@@ -222,6 +222,23 @@ js_library(
 )
 
 js_library(
+    name = "swarmLayout",
+    srcs = ["swarmLayout.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":okfGraph",
+        ":swarmView",
+        "//typescript/apps/ui:node_modules/d3-force",
+    ],
+)
+
+js_library(
+    name = "swarmView",
+    srcs = ["swarmView.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "paneStack.svelte",
     srcs = ["paneStack.svelte.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -709,6 +726,22 @@ vitest_test(
     name = "okfGraph_test",
     src = "okfGraph.test.mjs",
     deps = [":okfGraph"],
+)
+
+vitest_test(
+    name = "swarmLayout_test",
+    src = "swarmLayout.test.mjs",
+    deps = [
+        ":swarmLayout",
+        ":swarmView",
+        "//typescript/apps/ui/src/lib/mock:swarmScenario",
+    ],
+)
+
+vitest_test(
+    name = "swarmView_test",
+    src = "swarmView.test.mjs",
+    deps = [":swarmView"],
 )
 
 vitest_test(

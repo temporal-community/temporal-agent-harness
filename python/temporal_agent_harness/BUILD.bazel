@@ -14,6 +14,8 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//python/temporal_agent_harness/harness:subagent_activities",
+        "//python/temporal_agent_harness/harness:swarm",
+        "//python/temporal_agent_harness/harness:swarm_activities",
         "//python/temporal_agent_harness/harness/code_mode:__init__",
         "//python/temporal_agent_harness/harness/code_mode:activity_fs",
         "//python/temporal_agent_harness/utils:large_payload",

@@ -1,0 +1,18 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_swarm_triage",
+    srcs = ["test_swarm_triage.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/swarm_triage:models",
+        "//python/examples/swarm_triage:triage_agents",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:swarm_attributes",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

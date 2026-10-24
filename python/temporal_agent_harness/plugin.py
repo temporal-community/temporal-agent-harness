@@ -155,6 +155,11 @@ class AgentHarnessPlugin(SimplePlugin):
       hand-passed ``data_converter=`` both survive.
     * **Subagent activity** — ``run_subagent_turn``, bound to the worker's own ``Client`` so it
       can drive child agents. Every agent built with ``agent.subagent_toolset(...)`` needs it.
+    * **Swarm activities and board** — ``run_peer_turn`` (``runner.ask_peer`` /
+      ``agent.peer_toolset``) and ``swarm_board_update`` (``agent.SwarmBoard`` /
+      ``agent.board_toolset``), both client-bound like ``run_subagent_turn``, plus the
+      ``SwarmBoard`` workflow itself: a board is created on first use on the task queue of the
+      worker that reached it, so every harness worker hosts it.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
     * **Filesystem activities** — the ``vfs.<name>.*`` activities of each
@@ -221,11 +226,19 @@ class AgentHarnessPlugin(SimplePlugin):
         from temporal_agent_harness.harness.subagent_activities import (
             SubagentActivities,
         )
+        from temporal_agent_harness.harness.swarm import SwarmBoardWorkflow
+        from temporal_agent_harness.harness.swarm_activities import SwarmActivities
 
+        subagents = SubagentActivities(client)
         config["activities"] = _merge_activities(
             config.get("activities"),
-            [SubagentActivities(client).run_subagent_turn],
+            [
+                subagents.run_subagent_turn,
+                subagents.run_peer_turn,
+                SwarmActivities(client).swarm_board_update,
+            ],
         )
+        config["workflows"] = _merge_workflows(config.get("workflows"), [SwarmBoardWorkflow])
         return config
 
     def _append_activities(
@@ -254,6 +267,23 @@ def _merge_activities(
         if name is not None:
             seen.add(name)
         merged.append(fn)
+    return merged
+
+
+def _merge_workflows(
+    existing: Sequence[type] | None, added: Sequence[type]
+) -> list[type]:
+    """``existing`` plus the workflows of ``added`` whose registered names aren't already
+    present — the workflow counterpart of :func:`_merge_activities`."""
+    from temporalio import workflow
+
+    def name(cls: type) -> str | None:
+        defn = workflow._Definition.from_class(cls)
+        return defn.name if defn is not None else None
+
+    merged = list(existing or [])
+    seen = {name(cls) for cls in merged}
+    merged.extend(cls for cls in added if name(cls) not in seen)
     return merged
 
 

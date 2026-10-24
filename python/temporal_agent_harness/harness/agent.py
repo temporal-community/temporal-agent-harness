@@ -122,8 +122,10 @@ from temporal_agent_harness.harness.code_mode import (
 from temporal_agent_harness.harness.state.decl import StateDecl, state
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
+    peer_toolset,
     subagent_toolset,
 )
+from temporal_agent_harness.harness.swarm import SwarmBoard, board_toolset
 
 __all__ = [
     "AgentToolContext",
@@ -157,6 +159,9 @@ __all__ = [
     "init",
     "StateDecl",
     "SubagentToolPolicy",
+    "SwarmBoard",
+    "board_toolset",
+    "peer_toolset",
     "state",
     "setup",
     "subagent_toolset",

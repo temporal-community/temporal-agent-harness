@@ -66,6 +66,7 @@ from temporal_agent_harness.web.session_manager import (
     Session,
     SessionManagerWorkflow,
 )
+from temporal_agent_harness.web.swarm import session_swarm, swarm_topology
 from temporal_agent_harness.web.task_queue_status import describe_task_queue_workers
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
@@ -273,6 +274,33 @@ def create_agent_harness_app(
             result_type=Session,
         )
         return await _session_with_execution_state(app.state.temporal, session)
+
+    @app.get("/api/sessions/{session_id}/swarm")
+    async def get_session_swarm(session_id: str):
+        """The swarm this session's workflow belongs to (``swarm_id: null`` for none), read from
+        its own search attributes. A console asks this before offering a swarm view."""
+        try:
+            membership = await session_swarm(app.state.temporal, session_id)
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return JSONResponse(
+                status_code=404,
+                content={"error": "workflow_not_found", "message": exc.message},
+            )
+        return JSONResponse(
+            content=membership.model_dump(mode="json"), headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/api/swarms/{swarm_id}/topology")
+    async def get_swarm_topology(swarm_id: str, board: bool = False):
+        """Every member of the swarm, with its role, parent, live phase and the peers it is
+        waiting on, from one visibility query; ``board=true`` adds each board lane's counts and
+        who claimed from it. Visibility lags by about a second, so this is a recent picture."""
+        topology = await swarm_topology(app.state.temporal, swarm_id, include_board=board)
+        return JSONResponse(
+            content=topology.model_dump(mode="json"), headers={"Cache-Control": "no-store"}
+        )
 
     @app.get("/api/workflow-status/{workflow_id}")
     async def workflow_status(workflow_id: str):

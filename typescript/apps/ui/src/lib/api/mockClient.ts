@@ -15,6 +15,8 @@ import type {
   OKFGraphRequest,
   Session,
   SubmitMessageResponse,
+  SwarmMembership,
+  SwarmTopology,
   ToolApprovalRequest,
   ToolApprovalResponse,
   WorkflowExecutionState,
@@ -22,6 +24,7 @@ import type {
 } from "./types";
 import type { AgentApi } from "./client";
 import { frame, meta, realisticQaScenario, type MockScenario } from "$lib/mock/scenarios";
+import { mockSwarmTopology } from "$lib/mock/swarmScenario";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -329,5 +332,18 @@ export class MockAgentApi implements AgentApi {
       truncated: false,
       walked_at: Date.now() / 1000
     };
+  }
+
+  /** Every mock session founds a swarm named after itself, so the swarm pane has one to draw. */
+  async sessionSwarm(sessionId: WorkflowId): Promise<SwarmMembership> {
+    await sleep(60);
+    return { workflow_id: sessionId, swarm_id: sessionId, role: "dispatcher" };
+  }
+
+  #swarmReads = 0;
+
+  async swarmTopology(swarmId: string, options: { board?: boolean } = {}): Promise<SwarmTopology> {
+    await sleep(60);
+    return mockSwarmTopology(swarmId, this.#swarmReads++, options);
   }
 }

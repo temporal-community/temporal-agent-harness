@@ -133,6 +133,7 @@ harness_pytest_test(
         "//python/examples/openai_hello:agents_files",
         "//python/examples/pydantic_ai_hello:agents_files",
         "//python/examples/react_agent:agents_files",
+        "//python/examples/swarm_triage:agents_files",
         "//python/examples/tictactoe:agents_files",
     ],
     imports = ["../.."],
@@ -141,5 +142,25 @@ harness_pytest_test(
         "//python/tests:conftest",
         "@pypi//jsonschema",
         "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_swarm_routes",
+    srcs = ["test_swarm_routes.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/examples/swarm_triage:models",
+        "//python/examples/swarm_triage:triage_agents",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:swarm_attributes",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/web:app",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//httpx",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
     ],
 )

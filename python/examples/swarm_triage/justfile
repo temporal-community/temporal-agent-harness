@@ -1,0 +1,46 @@
+# Scoped justfile for the swarm triage example (examples/swarm_triage).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server, with the swarm search attributes
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + console on :8000
+#   just worker            # 4. this example's worker (all five agents)
+#
+# Then start a "Swarm Triage" session in the console and send `triage`. No API key is needed.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../../scripts/untagged-notice.just'
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Start a local Temporal dev server with the swarm search attributes registered (the root recipe).
+temporal:
+    just --justfile "{{root}}/justfile" temporal
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    bazel run //python/temporal_agent_harness/web:cli -- session-manager
+
+# Serve the harness API (and the generic console) on http://localhost:8000 for this registry.
+server:
+    bazel run //python/temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the worker for all five agents.
+worker:
+    bazel run //python/examples/swarm_triage:worker
+
+# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
+# temporal`). Ctrl-C stops them all.
+#
+# Run this example's local stack.
+dev:
+    just --justfile "{{root}}/justfile" dev swarm_triage

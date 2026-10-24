@@ -9,6 +9,7 @@ py_library(
         ":agent_interface",
         ":events",
         ":subagent_interface",
+        ":swarm_interface",
     ],
 )
 
@@ -17,7 +18,10 @@ py_library(
     srcs = ["agent_interface.py"],
     imports = ["../../.."],
     visibility = ["//:__subpackages__"],
-    deps = ["@pypi//pydantic"],
+    deps = [
+        ":swarm_interface",
+        "@pypi//pydantic",
+    ],
 )
 
 py_library(
@@ -36,6 +40,17 @@ py_library(
     srcs = ["subagent_interface.py"],
     imports = ["../../.."],
     visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:stream_context",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "swarm_interface",
+    srcs = ["swarm_interface.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
     deps = [
         "//python/temporal_agent_harness/harness:stream_context",
         "@pypi//pydantic",

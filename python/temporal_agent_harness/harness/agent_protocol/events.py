@@ -319,6 +319,24 @@ class AgentEventType(StrEnum):
     UI). A drill-in UI keys off the carried ``subagent_id`` to mark that subagent's view degraded.
     See :class:`SubagentStreamUnavailable`."""
 
+    PEER_MESSAGE_SENT = "peer_message_sent"
+    """This agent sent a message (one turn) to a PEER — another agent it did not start, addressed
+    by its ``workflow_id`` (a swarm member, typically found through the swarm's board). The peer
+    counterpart of SUBAGENT_MESSAGE_SENT, published by the ``run_peer_turn`` activity when it
+    actually sends, and carrying the ``peer_turn`` it starts on the peer.
+
+    Deliberately a DIFFERENT event, not a SUBAGENT_MESSAGE_SENT: a stream merge mounts the target
+    of a subagent dispatch and gates its turns on this stream's brackets, which is only sound for
+    a child this agent alone drives. A peer takes turns from many senders, so its stream is never
+    merged into this one; the pair is an edge between two agents, for a swarm view to draw.
+    See :class:`PeerMessageSent`."""
+
+    PEER_REPLY_RECEIVED = "peer_reply_received"
+    """This agent received a peer's reply for one turn it sent — the close of PEER_MESSAGE_SENT,
+    published in-workflow once the agent holds the reply. ``outcome`` is ``ok`` or ``error`` (an
+    accepted turn that errored or produced no reply); never published for a pre-acceptance
+    rejection. See :class:`PeerReplyReceived`."""
+
     REPLY_DELTA = "reply_delta"
     """An incremental text chunk (word/token) of the agent's reply. See
     :class:`ReplyDelta`."""
@@ -952,6 +970,40 @@ class SubagentStreamUnavailable(StreamEvent[Literal[AgentEventType.SUBAGENT_STRE
     )
 
 
+class PeerMessageSent(StreamEvent[Literal[AgentEventType.PEER_MESSAGE_SENT]]):
+    """This agent dispatched one message (a turn) to a peer agent it did not start."""
+
+    type: Literal[AgentEventType.PEER_MESSAGE_SENT] = AgentEventType.PEER_MESSAGE_SENT
+    peer_workflow_id: str = Field(description="The workflow id of the peer being messaged.")
+    handler: str = Field(
+        description="The ``@agent.accepts`` handler on the peer this message is addressed to."
+    )
+    peer_turn: int = Field(
+        description="The turn number ON THE PEER that this message runs in — distinct from the "
+        "enclosing envelope's ``turn_number``, which is this (the sender's) turn."
+    )
+    from_offset: int = Field(
+        default=0,
+        description="The offset in the PEER's own stream at which its turn's events begin.",
+    )
+
+
+class PeerReplyReceived(StreamEvent[Literal[AgentEventType.PEER_REPLY_RECEIVED]]):
+    """This agent received a peer's reply for one turn it sent (closes :class:`PeerMessageSent`).
+
+    Carries no reply payload: that rides the peer's own ``message_handler_end`` and the sending
+    tool's ``tool_end``."""
+
+    type: Literal[AgentEventType.PEER_REPLY_RECEIVED] = AgentEventType.PEER_REPLY_RECEIVED
+    peer_workflow_id: str = Field(description="The workflow id of the peer that replied.")
+    handler: str = Field(description="The handler this reply answers.")
+    peer_turn: int = Field(description="The turn number ON THE PEER this reply closes.")
+    outcome: Literal["ok", "error"] = Field(
+        description="'ok' if the peer's turn produced a reply; 'error' if it was accepted but "
+        "then errored or produced no reply."
+    )
+
+
 class ReplyDelta(StreamEvent[Literal[AgentEventType.REPLY_DELTA]]):
     """An incremental text chunk of the agent's reply."""
 
@@ -1092,6 +1144,8 @@ AgentStreamItem = Annotated[
     | SubagentMessageSent
     | SubagentReplyReceived
     | SubagentStreamUnavailable
+    | PeerMessageSent
+    | PeerReplyReceived
     | ReplyDelta
     | ThoughtSummaryDelta
     | TextAnnotationDelta

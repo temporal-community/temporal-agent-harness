@@ -32,6 +32,7 @@ py_library(
         ":file_view",
         ":registry",
         ":session_manager",
+        ":swarm",
         ":task_queue_status",
         "//python/temporal_agent_harness:plugin",
         "//python/temporal_agent_harness/harness:agent_client",
@@ -140,4 +141,17 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "swarm",
+    srcs = ["swarm.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:swarm_attributes",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
 )

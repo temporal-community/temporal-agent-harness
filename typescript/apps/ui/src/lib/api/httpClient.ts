@@ -14,6 +14,8 @@ import type {
   OKFGraphRequest,
   Session,
   SubmitMessageResponse,
+  SwarmMembership,
+  SwarmTopology,
   ToolApprovalRequest,
   ToolApprovalResponse,
   WorkflowExecutionState,
@@ -252,5 +254,13 @@ export class HttpAgentApi implements AgentApi {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)
     });
+  }
+  async sessionSwarm(sessionId: WorkflowId): Promise<SwarmMembership> {
+    return json<SwarmMembership>(apiPath(`sessions/${encodeURIComponent(sessionId)}/swarm`));
+  }
+
+  async swarmTopology(swarmId: string, options: { board?: boolean } = {}): Promise<SwarmTopology> {
+    const query = options.board ? "?board=true" : "";
+    return json<SwarmTopology>(apiPath(`swarms/${encodeURIComponent(swarmId)}/topology${query}`));
   }
 }

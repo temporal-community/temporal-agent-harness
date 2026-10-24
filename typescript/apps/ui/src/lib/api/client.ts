@@ -14,6 +14,8 @@ import type {
   OKFGraphRequest,
   Session,
   SubmitMessageResponse,
+  SwarmMembership,
+  SwarmTopology,
   ToolApprovalRequest,
   ToolApprovalResponse,
   WorkflowExecutionState,
@@ -46,4 +48,11 @@ export interface AgentApi {
   viewFile(request: FileViewRequest): Promise<FileChunk>;
   /** An OKF bundle mount's whole graph, walked from its store as it is now. */
   okfGraph(request: OKFGraphRequest): Promise<OKFGraph>;
+  /** The swarm this session's workflow belongs to, read from its search attributes. */
+  sessionSwarm(sessionId: WorkflowId): Promise<SwarmMembership>;
+  /**
+   * Every member of a swarm and the edges between them, from one visibility read. With
+   * `board`, each board lane's counts and who claimed from it as well.
+   */
+  swarmTopology(swarmId: string, options?: { board?: boolean }): Promise<SwarmTopology>;
 }

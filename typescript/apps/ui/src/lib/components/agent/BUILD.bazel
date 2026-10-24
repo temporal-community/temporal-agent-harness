@@ -172,6 +172,43 @@ js_library(
 )
 
 js_library(
+    name = "SwarmGraph",
+    srcs = ["SwarmGraph.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/d3-force",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:okfGraph",
+        "//typescript/apps/ui/src/lib/state:swarmView",
+    ],
+)
+
+js_library(
+    name = "SwarmScene",
+    srcs = ["SwarmScene.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui:node_modules/three",
+        "//typescript/apps/ui/src/lib/state:swarmLayout",
+        "//typescript/apps/ui/src/lib/state:swarmView",
+    ],
+)
+
+js_library(
+    name = "SwarmPanel",
+    srcs = ["SwarmPanel.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":SwarmGraph",
+        ":SwarmScene",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/state:swarmView",
+    ],
+)
+
+js_library(
     name = "PendingBannerStack",
     srcs = ["PendingBannerStack.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -362,6 +399,19 @@ vitest_test(
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/state:fileMounts",
         "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "SwarmGraph_test",
+    src = "SwarmGraph.test.mjs",
+    deps = [
+        ":SwarmGraph",
+        ":SwarmPanel",
+        ":SwarmScene",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/mock:swarmScenario",
+        "//typescript/apps/ui/src/lib/state:swarmView",
     ],
 )
 

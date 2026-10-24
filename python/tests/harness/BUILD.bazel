@@ -267,7 +267,6 @@ harness_pytest_test(
     deps = [
         "//python/temporal_agent_harness/harness:agent",
         "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness:stream_context",
         "//python/temporal_agent_harness/harness:subagent_activities",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/tests:conftest",
@@ -304,5 +303,37 @@ harness_pytest_test(
         "//python/tests:conftest",
         "@pypi//pydantic",
         "@pypi//pytest",
+    ],
+)
+
+py_library(
+    name = "_swarm_agents",
+    srcs = ["_swarm_agents.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_swarm",
+    srcs = ["test_swarm.py"],
+    imports = ["../.."],
+    deps = [
+        ":_swarm_agents",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:swarm",
+        "//python/temporal_agent_harness/harness:swarm_attributes",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
     ],
 )

@@ -82,6 +82,12 @@
       "$ref": "#/$defs/SubagentStreamUnavailable"
     },
     {
+      "$ref": "#/$defs/PeerMessageSent"
+    },
+    {
+      "$ref": "#/$defs/PeerReplyReceived"
+    },
+    {
       "$ref": "#/$defs/ReplyDelta"
     },
     {
@@ -150,6 +156,8 @@
               "message_handler_start": "#/$defs/MessageHandlerStart",
               "model_interaction_ended": "#/$defs/ModelInteractionEnded",
               "model_interaction_started": "#/$defs/ModelInteractionStarted",
+              "peer_message_sent": "#/$defs/PeerMessageSent",
+              "peer_reply_received": "#/$defs/PeerReplyReceived",
               "reply_delta": "#/$defs/ReplyDelta",
               "state_patch": "#/$defs/AgentStatePatch",
               "state_snapshot": "#/$defs/AgentStateSnapshot",
@@ -250,6 +258,12 @@
             },
             {
               "$ref": "#/$defs/SubagentStreamUnavailable"
+            },
+            {
+              "$ref": "#/$defs/PeerMessageSent"
+            },
+            {
+              "$ref": "#/$defs/PeerReplyReceived"
             },
             {
               "$ref": "#/$defs/ReplyDelta"
@@ -840,6 +854,91 @@
         "model"
       ],
       "title": "ModelInteractionStarted",
+      "type": "object"
+    },
+    "PeerMessageSent": {
+      "description": "This agent dispatched one message (a turn) to a peer agent it did not start.",
+      "properties": {
+        "type": {
+          "const": "peer_message_sent",
+          "default": "peer_message_sent",
+          "title": "Type",
+          "type": "string"
+        },
+        "peer_workflow_id": {
+          "description": "The workflow id of the peer being messaged.",
+          "title": "Peer Workflow Id",
+          "type": "string"
+        },
+        "handler": {
+          "description": "The ``@agent.accepts`` handler on the peer this message is addressed to.",
+          "title": "Handler",
+          "type": "string"
+        },
+        "peer_turn": {
+          "description": "The turn number ON THE PEER that this message runs in — distinct from the enclosing envelope's ``turn_number``, which is this (the sender's) turn.",
+          "title": "Peer Turn",
+          "type": "integer"
+        },
+        "from_offset": {
+          "default": 0,
+          "description": "The offset in the PEER's own stream at which its turn's events begin.",
+          "title": "From Offset",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "peer_workflow_id",
+        "handler",
+        "peer_turn",
+        "from_offset"
+      ],
+      "title": "PeerMessageSent",
+      "type": "object"
+    },
+    "PeerReplyReceived": {
+      "description": "This agent received a peer's reply for one turn it sent (closes :class:`PeerMessageSent`).\n\nCarries no reply payload: that rides the peer's own ``message_handler_end`` and the sending\ntool's ``tool_end``.",
+      "properties": {
+        "type": {
+          "const": "peer_reply_received",
+          "default": "peer_reply_received",
+          "title": "Type",
+          "type": "string"
+        },
+        "peer_workflow_id": {
+          "description": "The workflow id of the peer that replied.",
+          "title": "Peer Workflow Id",
+          "type": "string"
+        },
+        "handler": {
+          "description": "The handler this reply answers.",
+          "title": "Handler",
+          "type": "string"
+        },
+        "peer_turn": {
+          "description": "The turn number ON THE PEER this reply closes.",
+          "title": "Peer Turn",
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "'ok' if the peer's turn produced a reply; 'error' if it was accepted but then errored or produced no reply.",
+          "enum": [
+            "ok",
+            "error"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "peer_workflow_id",
+        "handler",
+        "peer_turn",
+        "outcome"
+      ],
+      "title": "PeerReplyReceived",
       "type": "object"
     },
     "ReplyDelta": {

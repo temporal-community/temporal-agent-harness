@@ -18,7 +18,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     MessageHandlerEnd,
     MessageHandlerError,
-    RunSubagentTurnInput,
     SubagentMessageSent,
     SubagentStarted,
     SubagentStopped,
@@ -31,7 +30,6 @@ from temporal_agent_harness.harness.subagent_activities import (
     SubagentActivities,
     _TurnProgress,
 )
-from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 
 # A minimal child agent for exercising the toolset generator. No @workflow.defn is needed —
@@ -428,16 +426,6 @@ def _consume(items: list[_FakeItem], monkeypatch):
         "WorkflowStreamClient",
         SimpleNamespace(create=lambda _client, _wf: _FakeStream(items)),
     )
-    req = RunSubagentTurnInput(
-        child_workflow_id="child-wf",
-        type="ask",
-        payload={},
-        handle="aaaaaa-bbbbbb",
-        agent_key="sample",
-        parent_stream_context=TurnStreamContext(
-            turn_id="parent-turn-1", turn_number=1, agent_id="aaaaaa"
-        ),
-    )
     progress = _TurnProgress(
         sent=True,
         turn_id="child-turn-4",
@@ -445,7 +433,7 @@ def _consume(items: list[_FakeItem], monkeypatch):
         message_id="ours",
         consumed_offset=0,
     )
-    return asyncio.run(activities._consume_child_turn(req, progress))
+    return asyncio.run(activities._consume_child_turn("child-wf", progress))
 
 
 def test_shared_child_turn_returns_our_reply_not_the_last_one(monkeypatch):

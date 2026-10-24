@@ -104,6 +104,8 @@ export interface AgentEvent {
     | SubagentMessageSent
     | SubagentReplyReceived
     | SubagentStreamUnavailable
+    | PeerMessageSent
+    | PeerReplyReceived
     | ReplyDelta
     | ThoughtSummaryDelta
     | TextAnnotationDelta
@@ -422,6 +424,53 @@ export interface ModelInteractionStarted {
    * The model the call was issued against (the requested id), when the producer knows it — None otherwise.
    */
   model: string | null;
+}
+/**
+ * This agent dispatched one message (a turn) to a peer agent it did not start.
+ */
+export interface PeerMessageSent {
+  type: "peer_message_sent";
+  /**
+   * The workflow id of the peer being messaged.
+   */
+  peer_workflow_id: string;
+  /**
+   * The `@agent.accepts` handler on the peer this message is addressed to.
+   */
+  handler: string;
+  /**
+   * The turn number ON THE PEER that this message runs in — distinct from the enclosing envelope's `turn_number`, which is this (the sender's) turn.
+   */
+  peer_turn: number;
+  /**
+   * The offset in the PEER's own stream at which its turn's events begin.
+   */
+  from_offset: number;
+}
+/**
+ * This agent received a peer's reply for one turn it sent (closes `PeerMessageSent`).
+ *
+ * Carries no reply payload: that rides the peer's own `message_handler_end` and the sending
+ * tool's `tool_end`.
+ */
+export interface PeerReplyReceived {
+  type: "peer_reply_received";
+  /**
+   * The workflow id of the peer that replied.
+   */
+  peer_workflow_id: string;
+  /**
+   * The handler this reply answers.
+   */
+  handler: string;
+  /**
+   * The turn number ON THE PEER this reply closes.
+   */
+  peer_turn: number;
+  /**
+   * 'ok' if the peer's turn produced a reply; 'error' if it was accepted but then errored or produced no reply.
+   */
+  outcome: "ok" | "error";
 }
 /**
  * An incremental text chunk of the agent's reply.
@@ -838,6 +887,8 @@ export type AgentStreamItem =
   | SubagentMessageSent
   | SubagentReplyReceived
   | SubagentStreamUnavailable
+  | PeerMessageSent
+  | PeerReplyReceived
   | ReplyDelta
   | ThoughtSummaryDelta
   | TextAnnotationDelta

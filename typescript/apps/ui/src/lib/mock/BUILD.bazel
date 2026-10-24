@@ -20,3 +20,10 @@ js_library(
     srcs = ["scenarios.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
+
+js_library(
+    name = "swarmScenario",
+    srcs = ["swarmScenario.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/state:okfGraph"],
+)

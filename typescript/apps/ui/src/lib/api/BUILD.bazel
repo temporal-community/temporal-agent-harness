@@ -30,7 +30,10 @@ js_library(
     name = "mockClient",
     srcs = ["mockClient.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui/src/lib/mock:scenarios"],
+    deps = [
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/src/lib/mock:swarmScenario",
+    ],
 )
 
 js_library(

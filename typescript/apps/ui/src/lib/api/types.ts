@@ -491,3 +491,67 @@ export function isClientSideStreamError(
 ): event is ClientSideStreamErrorEvent {
   return "kind" in event && !("type" in event);
 }
+
+/** The swarm a session's workflow belongs to (`GET /api/sessions/{id}/swarm`). */
+export interface SwarmMembership {
+  workflow_id: WorkflowId;
+  /** Null when the workflow is not a swarm member. */
+  swarm_id: string | null;
+  role: string | null;
+}
+
+/** A swarm member's live phase, as the harness publishes it; see harness AgentPhase. */
+export type SwarmPhase =
+  | "awaiting_approval"
+  | "awaiting_callback"
+  | "awaiting_agent"
+  | "tool"
+  | "working"
+  | "idle";
+
+/** One member of a swarm, as its own search attributes describe it. */
+export interface SwarmNode {
+  workflow_id: WorkflowId;
+  workflow_type: string;
+  role: string | null;
+  parent_id: WorkflowId | null;
+  /** Null for a member that publishes none (a board lane). */
+  phase: SwarmPhase | null;
+  status: string;
+  closed: boolean;
+  start_time: number;
+  close_time: number | null;
+  last_active: number | null;
+}
+
+/**
+ * `parent`: the target is the source's subagent. `peer`: the source has a turn in flight to the
+ * target now. `board`: the source claimed `weight` items from the board lane that is the target.
+ */
+export interface SwarmEdge {
+  source: WorkflowId;
+  target: WorkflowId;
+  kind: "parent" | "peer" | "board";
+  weight: number;
+}
+
+export interface BoardLane {
+  workflow_id: WorkflowId;
+  lane: string;
+  counts: Record<"open" | "claimed" | "done", number>;
+}
+
+/** A swarm's members and edges, from one visibility read (`GET /api/swarms/{id}/topology`). */
+export interface SwarmTopology {
+  swarm_id: string;
+  /** When it was read, epoch seconds. Visibility lags by about a second. */
+  as_of: number;
+  truncated: boolean;
+  nodes: SwarmNode[];
+  edges: SwarmEdge[];
+  lanes: BoardLane[];
+  /** Running members per phase ("none" for those without one). */
+  phases: Record<string, number>;
+  /** Members per role, running or not. */
+  roles: Record<string, number>;
+}

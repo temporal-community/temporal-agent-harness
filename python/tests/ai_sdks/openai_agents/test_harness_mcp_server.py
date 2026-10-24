@@ -49,13 +49,19 @@ requires_nexus_mcp = pytest.mark.skipif(
 class _FakeRunner:
     """The bits of AgentWorkflowRunner the wrapper touches.
 
-    ``run_tool`` borrows the real implementation, which only parks the ambient tool id /
-    runner / injections -- so the test sees exactly the funnel the wrapper relies on.
+    ``run_tool`` borrows the real implementation, which parks the ambient tool id / runner /
+    injections and counts the call for the swarm phase -- so the test sees exactly the funnel
+    the wrapper relies on. Not a swarm member, so the count never upserts anything.
     """
+
+    _counting = AgentWorkflowRunner._counting
+    _sync_phase = AgentWorkflowRunner._sync_phase
 
     def __init__(self) -> None:
         self.published: list[Any] = []
         self.run_tool_ids: list[str] = []
+        self._swarm = None
+        self._tools_in_flight = 0
 
     def publish(self, event: Any) -> None:
         self.published.append(event)

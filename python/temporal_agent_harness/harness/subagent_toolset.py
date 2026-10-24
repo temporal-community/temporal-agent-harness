@@ -32,6 +32,10 @@
 # parent model:
 # ``start_<key>`` takes no arguments, and the data comes only from the developer's
 # ``init_data`` callback.
+#
+# ``peer_toolset`` is the swarm counterpart: tools for messaging agents that ALREADY run (other
+# swarm members, addressed by workflow id) through ``runner.ask_peer``. It has no start or stop
+# tool, because a peer's lifecycle belongs to whoever started it.
 
 from __future__ import annotations
 
@@ -355,3 +359,80 @@ def subagent_toolset(
     )
     tools.append(_make_stop_tool(key=key))
     return tools
+
+
+def _make_peer_send_tool(
+    *, key: str, handler: _AcceptedHandler
+) -> Callable[..., Awaitable[BaseModel]]:
+    """Build a ``<key>_<fn>`` peer tool for one of the peer's ``@agent.accepts`` handlers.
+
+    The peer counterpart of :func:`_make_send_tool`: the same real input/output models in the
+    signature, but the first parameter is ``peer`` — the peer agent's workflow id, which the
+    model learns from wherever the swarm advertises its members (typically a board item) —
+    and the body calls :meth:`AgentWorkflowRunner.ask_peer`."""
+    fn_name = handler.name
+    input_type = handler.input_type
+    output_type = handler.output_type
+    param_name = _handler_param_name(handler)
+
+    async def _ask(peer: str, **model_kwargs: Any) -> BaseModel:
+        payload = input_type.model_validate(model_kwargs.get(param_name, {}))
+        output = await _current_runner().ask_peer(
+            peer, fn_name, payload.model_dump(mode="json")
+        )
+        return output_type.model_validate(output)
+
+    _ask.__name__ = f"{key}_{fn_name}"
+    _ask.__qualname__ = _ask.__name__
+    _ask.__doc__ = (
+        f"{handler.description}\n\n"
+        f"Sends this to the running {key} agent whose workflow id is `peer` and returns its "
+        f"reply. The peer is not yours to start or stop; it may be answering other agents too."
+    )
+    _ask.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [
+            inspect.Parameter("peer", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=str),
+            inspect.Parameter(
+                param_name,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=input_type,
+            ),
+        ],
+        return_annotation=output_type,
+    )
+    _ask.__annotations__ = {"peer": str, param_name: input_type, "return": output_type}
+    return tool_defn()(_ask)
+
+
+def peer_toolset(
+    agent_cls: type,
+    *,
+    key: str,
+    tools: SubagentToolPolicy | None = None,
+) -> list[Callable[..., Awaitable[Any]]]:
+    """Convert a harness agent type into tools for messaging RUNNING instances of it as peers.
+
+    Where :func:`subagent_toolset` lets a parent start, drive and stop children it owns, this
+    addresses agents that already exist — other members of a swarm — by workflow id. It returns
+    one ``<key>_<fn>(peer, <param>)`` tool per selected handler and no start or stop tool, since
+    a peer's lifecycle is not the caller's. Each reads ``agent_cls``'s handlers statically and
+    reaches the live runner through ``_current_runner()`` at call time, exactly as the subagent
+    tools do, so it inherits approval gating and the tool lifecycle events.
+
+    Args:
+        agent_cls: the peer agent's ``@agent.defn`` class (only its handlers are read).
+        key: namespace for the tool names (``<key>_<fn>``). Pick one that does not collide with
+            a subagent toolset wired on the same parent.
+        tools: which of the peer's handlers become tools; defaults to honoring their
+            ``model_callable`` hints, as for :func:`subagent_toolset`.
+    """
+    policy = tools if tools is not None else SubagentToolPolicy.allow_model_callable()
+    declared = agent_handlers(agent_cls)
+    handlers = [handler for handler in declared.values() if policy.selects(handler)]
+    if not handlers:
+        raise TypeError(
+            f"{agent_cls.__name__} exposes no handlers under the given SubagentToolPolicy, "
+            f"so it has no callable surface to wire as a peer toolset. It declares "
+            f"{sorted(declared)}."
+        )
+    return [_make_peer_send_tool(key=key, handler=handler) for handler in handlers]

@@ -57,8 +57,14 @@ buildifier:
 
 # Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
 # Start this fresh, or run `just reset-manager` before `server`, so the merged registry takes effect.
+# Registers the swarm search attributes (harness/swarm_attributes.py), which swarm members need.
 temporal:
-    temporal server start-dev
+    temporal server start-dev \
+        --search-attribute SwarmId=Keyword \
+        --search-attribute AgentRole=Keyword \
+        --search-attribute AgentPhase=Keyword \
+        --search-attribute AgentLastActive=Datetime \
+        --search-attribute AgentPeers=KeywordList
 
 # Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
 session-manager: (_run "//python/temporal_agent_harness/web:cli" "session-manager")

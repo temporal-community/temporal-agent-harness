@@ -21,8 +21,16 @@ import functools
 import inspect
 import textwrap
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
@@ -40,14 +48,14 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from temporalio import activity, workflow
-from temporalio.common import VersioningBehavior
+from temporalio.common import TypedSearchAttributes, VersioningBehavior
 from temporalio.contrib.workflow_streams import (
     TopicHandle,
     WorkflowStream,
     WorkflowStreamClient,
     WorkflowTopicHandle,
 )
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness.state import StateRef
@@ -61,6 +69,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     PROVIDE_CALLBACK_RESULT_UPDATE,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
+    RUN_PEER_TURN_ACTIVITY,
     RUN_SUBAGENT_TURN_ACTIVITY,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
@@ -69,6 +78,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
     AgentEvent,
     AgentMessage,
+    AgentPhase,
     AgentStatePatch,
     AgentStateSnapshot,
     AgentStatus,
@@ -89,12 +99,15 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingApproval,
     PendingCallback,
     PendingTurn,
+    PeerReplyReceived,
+    RunPeerTurnInput,
     RunSubagentTurnInput,
     SubagentInfo,
     SubagentReplyReceived,
     SubagentStarted,
     SubagentStopped,
     SubagentTurnResult,
+    SwarmMembership,
     AutoApprovalContext,
     AutoApprovalCriteria,
     ToolApprovalDecision,
@@ -113,6 +126,14 @@ from temporal_agent_harness.harness.agent_protocol import (
     TurnEnded,
     TurnStarted,
     AgentMessageReply,
+    derive_agent_phase,
+)
+from temporal_agent_harness.harness.swarm_attributes import (
+    AGENT_LAST_ACTIVE,
+    AGENT_PEERS,
+    AGENT_PHASE,
+    membership_pairs,
+    membership_updates,
 )
 
 # TurnStreamContext (the activity-side stream-publishing carrier this runner builds + consumes)
@@ -192,6 +213,19 @@ def _evaluator_label(evaluator: AutoModeEvaluator) -> str:
 # Deep enough for the wrappers a real failure accumulates (ActivityError → ApplicationError
 # → the original), short enough that one pathological chain cannot bloat an event.
 _MAX_CAUSE_DEPTH = 5
+
+
+def _application_error(e: BaseException) -> ApplicationError | None:
+    """The :class:`ApplicationError` an activity raised, from what ``execute_activity`` raised.
+
+    A failed activity surfaces in the workflow as an ``ActivityError`` whose ``cause`` is the
+    activity's own error; this unwraps that one level (and passes a bare ``ApplicationError``
+    through), or returns ``None`` when the failure was something else, such as a timeout."""
+    if isinstance(e, ApplicationError):
+        return e
+    if isinstance(e, ActivityError) and isinstance(e.cause, ApplicationError):
+        return e.cause
+    return None
 
 
 def _exception_text(e: BaseException) -> str:
@@ -1437,8 +1471,38 @@ class _CallbackOutcome:
     error: str | None = None
 
 
-@dataclass
-class _SubagentInstance:
+@dataclass(kw_only=True)
+class _TurnGate:
+    """A FIFO gate that serializes this agent's turns to ONE other agent, on the caller side.
+
+    When a handler issues several sends to the same agent at once (e.g. ``asyncio.gather``),
+    each takes a monotonically increasing ticket (synchronously, in call order) and waits until
+    it is the one being served. Only one turn runs at a time, so the stream offset read after
+    the wait is always the previous turn's end. Shared by :class:`_SubagentInstance` (a child)
+    and :class:`_PeerLink` (a peer)."""
+
+    # Tickets handed out in call order; the holder whose ticket == _serving runs.
+    _next_ticket: int = 0
+    _serving: int = 0
+
+    def take_ticket(self) -> int:
+        """Reserve the next gate position. MUST be called synchronously (before any await) so
+        gathered callers are ordered by the model's call order, not by await scheduling."""
+        ticket = self._next_ticket
+        self._next_ticket += 1
+        return ticket
+
+    def is_serving(self, ticket: int) -> bool:
+        """Whether ``ticket`` is the one currently allowed through the gate."""
+        return self._serving == ticket
+
+    def release_gate(self) -> None:
+        """Pass the gate to the next ticket. Called by the holder when its turn finishes."""
+        self._serving += 1
+
+
+@dataclass(kw_only=True)
+class _SubagentInstance(_TurnGate):
     """One running subagent this agent drives, keyed by its short model-facing ``handle``.
 
     ``handle`` is a short, tree-unique id the model uses to reference this subagent in
@@ -1465,24 +1529,19 @@ class _SubagentInstance:
     workflow_id: str
     agent_key: str
     last_consumed_offset: int = 0
-    # FIFO gate: tickets handed out in call order; the holder whose ticket == _serving runs.
-    _next_ticket: int = 0
-    _serving: int = 0
 
-    def take_ticket(self) -> int:
-        """Reserve the next gate position. MUST be called synchronously (before any await) so
-        gathered callers are ordered by the model's call order, not by await scheduling."""
-        ticket = self._next_ticket
-        self._next_ticket += 1
-        return ticket
 
-    def is_serving(self, ticket: int) -> bool:
-        """Whether ``ticket`` is the one currently allowed through the gate."""
-        return self._serving == ticket
+@dataclass(kw_only=True)
+class _PeerLink(_TurnGate):
+    """This agent's bookkeeping for one PEER it has messaged — an agent it did not start.
 
-    def release_gate(self) -> None:
-        """Pass the gate to the next ticket. Called by the holder when its turn finishes."""
-        self._serving += 1
+    Keyed by the peer's ``workflow_id`` (a peer has no parent-assigned handle). Holds the same
+    caller-side FIFO gate and stream-resume offset a subagent entry does, so this agent's own
+    turns to one peer run one at a time. It does NOT serialize the peer: other agents message it
+    concurrently, and the peer's handlers' ``mid_turn`` decide what happens then."""
+
+    workflow_id: str
+    last_consumed_offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -1562,6 +1621,9 @@ class _WorkflowStatus:
         self._callbacks: dict[str, _CallbackEntry] = {}
         # Subagents this agent is driving, keyed by child ``subagent_id``.
         self._subagents: dict[str, _SubagentInstance] = {}
+        # Peers this agent has messaged, keyed by the peer's workflow id. Never removed: a
+        # peer is not this agent's to stop, and the entry is what keeps the resume offset.
+        self._peers: dict[str, _PeerLink] = {}
 
     @property
     def current_turn(self) -> int:
@@ -1895,6 +1957,23 @@ class _WorkflowStatus:
         """Drop a subagent from the registry (after it is stopped). Idempotent."""
         self._subagents.pop(handle, None)
 
+    def peer_link(self, workflow_id: str) -> _PeerLink:
+        """The bookkeeping for peer ``workflow_id``, created on first contact."""
+        link = self._peers.get(workflow_id)
+        if link is None:
+            link = self._peers[workflow_id] = _PeerLink(workflow_id=workflow_id)
+        return link
+
+    @property
+    def has_pending_approval(self) -> bool:
+        """Whether any gated tool call is still awaiting a decision."""
+        return any(e.status is _ApprovalStatus.PENDING for e in self._approvals.values())
+
+    @property
+    def has_pending_callback(self) -> bool:
+        """Whether any callback tool call is still awaiting its client's result."""
+        return any(e.status is _CallbackStatus.PENDING for e in self._callbacks.values())
+
     def active_subagents(self) -> list[SubagentInfo]:
         """The active subagents projected for the ``agent_status`` query.
 
@@ -1959,6 +2038,7 @@ class AgentWorkflowRunner:
         approval_policy_default: ToolApprovalPolicy,
         auto_approval_criteria_default: AutoApprovalCriteria | None = None,
         auto_mode_evaluator: AutoModeEvaluator | None = None,
+        swarm_default: SwarmMembership | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@agent.init``::
 
@@ -1982,6 +2062,11 @@ class AgentWorkflowRunner:
         on every later ``set_approval_policy``), since it would report a machine deciding
         while none was; with the switch off or no criteria for a tool, gated calls simply
         reach the human gate exactly as they would have.
+
+        ``swarm_default`` makes the agent a swarm member when its caller did not place it in a
+        swarm (``AgentConfig.swarm`` unset) — for an agent that COORDINATES a swarm and is
+        started like any other session, typically founding a swarm named after its own workflow
+        id. A caller's ``swarm`` still wins, as for every other ``*_default``.
 
         The accepted messages are NOT configured here — they are
         discovered from the agent's ``@agent.accepts`` handler methods, which also declare
@@ -2063,6 +2148,18 @@ class AgentWorkflowRunner:
         # Strong references to in-flight participant tasks. Held only so a spawned task is not
         # garbage-collected mid-flight; turn accounting lives in the refcount, not here.
         self._participant_tasks: set[asyncio.Future[None]] = set()
+        # Swarm membership, and what the phase search attribute needs that the status does not
+        # already hold: how many tool calls and agent-to-agent turns are in flight, and the
+        # phase last published (so an unchanged phase costs no upsert). See _sync_phase.
+        self._swarm: SwarmMembership | None = (
+            config.swarm if config.swarm is not None else swarm_default
+        )
+        self._tools_in_flight = 0
+        self._agent_turns_in_flight = 0
+        self._published_phase: AgentPhase | None = None
+        # Turns in flight to each peer, and the peer set last published as AgentPeers.
+        self._peer_turns: dict[str, int] = {}
+        self._published_peers: tuple[str, ...] = ()
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -2974,6 +3071,71 @@ class AgentWorkflowRunner:
     def _handle_close(self) -> None:
         self._closed = True
 
+    # -- Swarm --------------------------------------------------------------
+    #
+    # A swarm member (``AgentConfig.swarm`` set) advertises itself through search attributes —
+    # its swarm and role once, at the start of ``run``, and its ``AgentPhase`` whenever that
+    # changes — so one visibility query lists a whole swarm with its live state. Nothing here
+    # runs for an agent that is not a member, so its workflow history is unchanged.
+
+    @property
+    def swarm(self) -> SwarmMembership | None:
+        """The swarm this agent belongs to, or ``None`` when it is not a swarm member."""
+        return self._swarm
+
+    def _sync_phase(self) -> None:
+        """Upsert the ``AgentPhase`` and ``AgentPeers`` search attributes if either changed.
+
+        Called after every in-workflow publish (the turn brackets and the approval and callback
+        gates all publish as they change state) and wherever a tool call or an agent-to-agent
+        turn starts or finishes. A no-op for an agent that is not a swarm member, and when
+        neither has changed, so a burst of events costs nothing beyond the derivation."""
+        if self._swarm is None:
+            return
+        phase = derive_agent_phase(
+            turn_active=self._status.turn_active,
+            pending_approvals=int(self._status.has_pending_approval),
+            pending_callbacks=int(self._status.has_pending_callback),
+            agent_turns_in_flight=self._agent_turns_in_flight,
+            tools_in_flight=self._tools_in_flight,
+        )
+        peers = tuple(sorted(self._peer_turns))
+        updates = []
+        if phase is not self._published_phase:
+            self._published_phase = phase
+            updates += [
+                AGENT_PHASE.value_set(phase.value),
+                AGENT_LAST_ACTIVE.value_set(workflow.now()),
+            ]
+        if peers != self._published_peers:
+            self._published_peers = peers
+            updates.append(AGENT_PEERS.value_set(list(peers)))
+        if updates:
+            workflow.upsert_search_attributes(updates)
+
+    @contextmanager
+    def _counting(
+        self, counter: Literal["_tools_in_flight", "_agent_turns_in_flight"]
+    ) -> Iterator[None]:
+        """Count one in-flight tool call or agent turn for the phase, for the ``with`` body.
+
+        On a ``GeneratorExit`` — the coroutine closed after the workflow was evicted — the count
+        is dropped without an upsert: workflow calls raise off the event loop, and the phase of a
+        discarded run does not matter."""
+        setattr(self, counter, getattr(self, counter) + 1)
+        self._sync_phase()
+        try:
+            yield
+        except GeneratorExit:
+            setattr(self, counter, getattr(self, counter) - 1)
+            raise
+        except BaseException:
+            setattr(self, counter, getattr(self, counter) - 1)
+            self._sync_phase()
+            raise
+        setattr(self, counter, getattr(self, counter) - 1)
+        self._sync_phase()
+
     # -- Turn loop ----------------------------------------------------------
 
     async def run(self, agent: object) -> None:
@@ -3002,6 +3164,11 @@ class AgentWorkflowRunner:
         On close, the loop waits for in-flight participants to finish before returning, so a
         joined handler's work is never silently discarded.
         """
+        if self._swarm is not None:
+            # A subagent was started with these already; a top-level member was not. Upserting
+            # them either way keeps one code path, at the cost of one event per member.
+            workflow.upsert_search_attributes(membership_updates(self._swarm))
+            self._sync_phase()
         while not self._closed:
             await workflow.wait_condition(
                 lambda: self._status.can_open_turn or bool(self._joining) or self._closed
@@ -3187,11 +3354,26 @@ class AgentWorkflowRunner:
         child_config = (config if config is not None else AgentConfig()).model_copy(
             update={"agent_id": handle}
         )
+        # A swarm member's subagents join its swarm, in the role of their key — unless the
+        # caller's config already placed the child somewhere.
+        if child_config.swarm is None and self._swarm is not None:
+            child_config = child_config.model_copy(
+                update={
+                    "swarm": SwarmMembership(swarm_id=self._swarm.swarm_id, role=agent_key)
+                }
+            )
         await workflow.start_child_workflow(
             workflow_type,
             args=[child_config] if data is None else [child_config, data],
             id=workflow_id,
             task_queue=task_queue,
+            # Started already tagged, so a swarm query sees the child before it first runs.
+            # ``None`` for a non-member keeps a non-swarm agent's start command as it was.
+            search_attributes=(
+                TypedSearchAttributes(membership_pairs(child_config.swarm))
+                if child_config.swarm is not None
+                else None
+            ),
             # EXPLICIT: a subagent is owned by its parent and must never outlive it. If the
             # parent closes for ANY reason (its own `close` signal, completion, failure,
             # cancellation, or termination) before `stop_subagent` was called, the Temporal
@@ -3257,6 +3439,15 @@ class AgentWorkflowRunner:
         (the tool layer renders them as an ``is_error`` result)."""
         inst = self._status.subagent(handle)  # raises UnknownSubagent
         ticket = inst.take_ticket()  # synchronous → FIFO admission in call order
+        with self._counting("_agent_turns_in_flight"):
+            return await self._gated_subagent_turn(inst, ticket, msg_type, payload)
+
+    async def _gated_subagent_turn(
+        self, inst: _SubagentInstance, ticket: int, msg_type: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The body of :meth:`run_subagent_turn` once its ticket is taken: wait for the gate,
+        run the turn's activity, and close the bracket on this agent's stream."""
+        handle = inst.handle
         await workflow.wait_condition(lambda: inst.is_serving(ticket) or self._closed)
         if not inst.is_serving(ticket):
             # Woke on agent close while still queued behind an earlier turn.
@@ -3296,18 +3487,20 @@ class AgentWorkflowRunner:
                     heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
                     result_type=SubagentTurnResult,
                 )
-            except ApplicationError as e:
+            except (ActivityError, ApplicationError) as e:
                 # A turn the child ACCEPTED but that then errored (or produced no reply) opened
                 # a bracket on our stream that must be closed. A pre-acceptance rejection ran
-                # no child turn, so there is nothing to close.
-                if e.type in ("SubagentTurnError", "SubagentNoReply"):
+                # no child turn, so there is nothing to close. The activity's error arrives
+                # wrapped in an ActivityError, so read its type from the unwrapped cause.
+                cause = _application_error(e)
+                if cause is not None and cause.type in ("SubagentTurnError", "SubagentNoReply"):
                     # Close the bracket on the child's ACTUAL accepted turn number, which the
                     # activity threads through the error details. The opening
                     # ``subagent_message_sent`` was published with that same number
                     # (``progress.turn_number``), and the close gate keys on
                     # ``(workflow_id, subagent_turn)``; using one source on both sides makes
                     # the key match by construction.
-                    accepted_turn = self._accepted_turn_from_error(e)
+                    accepted_turn = self._accepted_turn_from_error(cause)
                     # The child ran (and errored on) that turn — it still emitted its own
                     # turn_end — so we MUST close the [message_sent … reply_received] bracket on
                     # OUR stream, or a client merge would wedge waiting on a reply that never
@@ -3375,6 +3568,116 @@ class AgentWorkflowRunner:
                 outcome=outcome,
             )
         )
+
+    # -- Peers --------------------------------------------------------------
+    #
+    # A peer is an agent this one did not start — another swarm member, addressed by workflow
+    # id. Driving it reuses the subagent path's front door (the ``send_agent_message`` update and
+    # the peer's own stream, through the ``run_peer_turn`` activity), but not its brackets: a
+    # stream merge mounts a subagent and gates its turns on the parent's markers, which is only
+    # sound for a child this agent alone drives. A peer takes turns from many senders, so this
+    # agent records ``peer_message_sent`` / ``peer_reply_received`` instead — an edge for a
+    # swarm view, never a stream to merge.
+    #
+    # DEADLOCK: two agents asking each other at once each wait for the other's turn to end if
+    # both handlers queue mid-turn (``MidTurn.ENQUEUE``, the default). A handler peers may call
+    # while its agent is busy should declare ``mid_turn=MidTurn.ACCEPT``.
+
+    async def ask_peer(
+        self, peer_workflow_id: str, msg_type: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send one message to the peer agent ``peer_workflow_id`` and return its reply ``output``.
+
+        ``msg_type`` names the peer's ``@agent.accepts`` handler and ``payload`` is that
+        handler's input JSON, exactly as for :meth:`run_subagent_turn`. This agent's own turns
+        to one peer run one at a time, in call order; turns to different peers run concurrently.
+
+        Raises ``ApplicationError`` — ``PeerIsSelf`` for this agent's own workflow id (it would
+        wait on its own open turn), ``PeerNotFound`` for a peer that is not running, the peer's
+        own rejection type, or ``SubagentTurnError`` / ``SubagentNoReply`` for an accepted turn
+        that failed."""
+        if peer_workflow_id == workflow.info().workflow_id:
+            raise ApplicationError(
+                "an agent cannot message itself as a peer",
+                type="PeerIsSelf",
+                non_retryable=True,
+            )
+        link = self._status.peer_link(peer_workflow_id)
+        ticket = link.take_ticket()  # synchronous → FIFO admission in call order
+        # Counted before _counting's opening sync and dropped before its closing one, so each
+        # of those single upserts carries the peer edge's change along with the phase's.
+        self._peer_turns[peer_workflow_id] = self._peer_turns.get(peer_workflow_id, 0) + 1
+        with self._counting("_agent_turns_in_flight"):
+            try:
+                await workflow.wait_condition(lambda: link.is_serving(ticket) or self._closed)
+                if not link.is_serving(ticket):
+                    raise ApplicationError(
+                        f"agent closed before its turn to peer {peer_workflow_id!r} could run",
+                        type="AgentClosed",
+                        non_retryable=True,
+                    )
+                try:
+                    return await self._peer_turn(link, msg_type, payload)
+                finally:
+                    link.release_gate()
+            finally:
+                remaining = self._peer_turns[peer_workflow_id] - 1
+                if remaining:
+                    self._peer_turns[peer_workflow_id] = remaining
+                else:
+                    del self._peer_turns[peer_workflow_id]
+
+    async def _peer_turn(
+        self, link: _PeerLink, msg_type: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run one gated peer turn's activity and record the reply on this agent's stream."""
+        stream_context = self.current_stream_context
+        if stream_context is None:
+            raise ApplicationError(
+                "ask_peer called with no active turn to publish against",
+                type="NoActiveTurn",
+                non_retryable=True,
+            )
+        try:
+            result = await workflow.execute_activity(
+                RUN_PEER_TURN_ACTIVITY,
+                RunPeerTurnInput(
+                    peer_workflow_id=link.workflow_id,
+                    type=msg_type,
+                    payload=payload,
+                    from_offset=link.last_consumed_offset,
+                    sender_stream_context=stream_context,
+                ),
+                start_to_close_timeout=DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
+                heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
+                result_type=SubagentTurnResult,
+            )
+        except (ActivityError, ApplicationError) as e:
+            cause = _application_error(e)
+            if cause is not None and cause.type in ("SubagentTurnError", "SubagentNoReply"):
+                self.publish(
+                    PeerReplyReceived(
+                        peer_workflow_id=link.workflow_id,
+                        handler=msg_type,
+                        peer_turn=self._accepted_turn_from_error(cause),
+                        outcome="error",
+                    )
+                )
+            # Surface the activity's own error (its type and message), not the wrapper's
+            # "Activity task failed".
+            if cause is not None and cause is not e:
+                raise cause from e
+            raise
+        link.last_consumed_offset = result.consumed_offset
+        self.publish(
+            PeerReplyReceived(
+                peer_workflow_id=link.workflow_id,
+                handler=msg_type,
+                peer_turn=result.turn_number,
+                outcome="ok",
+            )
+        )
+        return result.output
 
     def publish(self, event: AgentStreamItem) -> None:
         """Publish an event against the in-flight turn (for custom intermediate events).
@@ -3487,7 +3790,8 @@ class AgentWorkflowRunner:
         injections_token = _CURRENT_TOOL_INJECTIONS.set(injections)
         closing = False
         try:
-            return await tool_callable(*args, **kwargs)
+            with self._counting("_tools_in_flight"):
+                return await tool_callable(*args, **kwargs)
         except GeneratorExit:
             # The coroutine is being closed after the workflow was evicted mid-call, from
             # another context: the tokens cannot be reset there (it raises ValueError, which
@@ -3536,6 +3840,7 @@ class AgentWorkflowRunner:
                 timestamp=workflow.time(),
             )
         )
+        self._sync_phase()
 
 
 # ---------------------------------------------------------------------------

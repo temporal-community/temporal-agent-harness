@@ -17,7 +17,9 @@ import type {
   JsonRecord,
   OKFGraph,
   OKFGraphRequest,
-  Session
+  Session,
+  SwarmMembership,
+  SwarmTopology
 } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi, workflowGone } from "$lib/api/httpClient";
@@ -1926,6 +1928,16 @@ export class AgentRunController {
   /** An OKF bundle mount's whole graph, walked from its store as it is now. */
   okfGraph(request: OKFGraphRequest): Promise<OKFGraph> {
     return this.#api.okfGraph(request);
+  }
+
+  /** The swarm a session's workflow belongs to. */
+  sessionSwarm(sessionId: string): Promise<SwarmMembership> {
+    return this.#api.sessionSwarm(sessionId);
+  }
+
+  /** A swarm's members and edges, read from visibility now. */
+  swarmTopology(swarmId: string, options: { board: boolean }): Promise<SwarmTopology> {
+    return this.#api.swarmTopology(swarmId, options);
   }
 
   /** Errors surface on the approval's own card, not the connection banner. */

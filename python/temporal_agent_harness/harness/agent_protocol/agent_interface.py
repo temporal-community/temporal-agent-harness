@@ -13,6 +13,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from temporal_agent_harness.harness.agent_protocol.swarm_interface import SwarmMembership
+
 # ---------------------------------------------------------------------------
 # Protocol constants — workflow must use these exact names
 # ---------------------------------------------------------------------------
@@ -686,11 +688,16 @@ class AgentConfig(BaseModel):
     id the parent (and a UI merging the streams) already knows it by. ``None`` → a top-level agent
     generates its own single-segment id. This is the one ``AgentConfig`` field a parent populates
     per-child rather than passing through unchanged.
+
+    ``swarm`` — the swarm this agent belongs to, and its role there (see
+    :class:`SwarmMembership`). ``None`` → not a swarm member, and the agent publishes no swarm
+    search attributes. A subagent started by a swarm member joins the parent's swarm.
     """
 
     approval_policy: ToolApprovalPolicy | None = None
     auto_approval_criteria: AutoApprovalCriteria | None = None
     agent_id: AgentId | None = None
+    swarm: SwarmMembership | None = None
 
 
 # ---------------------------------------------------------------------------

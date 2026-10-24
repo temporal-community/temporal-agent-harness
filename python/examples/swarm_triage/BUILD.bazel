@@ -1,0 +1,72 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "triage_agents",
+    srcs = ["triage_agents.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":issues",
+        ":models",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "issues",
+    srcs = ["issues.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":triage_agents",
+        "//python/temporal_agent_harness:plugin",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "TriageDispatcher",
+    agent = "examples.swarm_triage.triage_agents:TriageDispatcher",
+    description = """
+Triage a synthetic backlog with a swarm of hundreds of scripted agents (no model, no API key).
+Send `triage` (every field has a default) and the dispatcher posts the issues to a shared board,
+then starts specialists, reviewers and one lead per team; each lead keeps a set of workers
+claiming, consulting, reviewing and completing its team's issues, replacing each worker as it
+retires. Needs the swarm search attributes (the root `just temporal` registers them).""",
+    key = "swarm-triage",
+    label = "Swarm Triage",
+    task_queue = "swarm-triage",
+    deps = [":triage_agents"],
+)
+
+# agents.toml and the dispatcher's schema document. The other agents are started by a run, never
+# as sessions of their own, so the registry does not list them. `bazel test` fails when one is out
+# of date; `bazel run //python/examples.swarm_triage.triage_agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "TriageDispatcher.schema.json",
+        "agents.toml",
+    ],
+    agents = [":TriageDispatcher"],
+)

@@ -35,7 +35,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
@@ -43,6 +43,7 @@ from typing import Any
 from pydantic import BaseModel
 from temporalio import activity
 from temporalio.client import Client, WorkflowUpdateFailedError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
 
@@ -52,10 +53,13 @@ from temporal_agent_harness.harness.agent_client import (
 )
 from temporal_agent_harness.harness.agent_protocol import (
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
+    RUN_PEER_TURN_ACTIVITY,
     RUN_SUBAGENT_TURN_ACTIVITY,
     TURN_EVENTS_TOPIC,
     AgentEvent,
     AgentEventType,
+    PeerMessageSent,
+    RunPeerTurnInput,
     RunSubagentTurnInput,
     SubagentMessageSent,
     SubagentTurnResult,
@@ -121,7 +125,64 @@ class SubagentActivities:
         * the turn ended in an error (``SubagentTurnError``);
         * the turn ended with no reply (``SubagentNoReply``).
         """
-        client = AgentClient(self._client, req.child_workflow_id)
+        return await self._run_turn(
+            req.child_workflow_id,
+            req.type,
+            req.payload,
+            from_offset=req.from_offset,
+            update_id_prefix="subagent-turn",
+            not_found_type="SubagentNotFound",
+            publish_dispatch=lambda progress: self._publish_dispatch(req, progress),
+        )
+
+    @activity.defn(name=RUN_PEER_TURN_ACTIVITY)
+    async def run_peer_turn(self, req: RunPeerTurnInput) -> SubagentTurnResult:
+        """Send one message to a PEER agent and stream its reply to completion.
+
+        Identical to :meth:`run_subagent_turn` — the same front door, dedup memo, heartbeat and
+        reply selection — except for the marker it publishes on the sender's stream on the fresh
+        send: :class:`PeerMessageSent`, which a stream merge never mounts (see that event). A
+        peer that is not running fails the call as ``PeerNotFound``.
+        """
+
+        async def publish(progress: _TurnProgress) -> None:
+            async with AgentWorkflowRunner.publisher_from_activity(
+                req.sender_stream_context
+            ) as publisher:
+                publisher.publish(
+                    PeerMessageSent(
+                        peer_workflow_id=req.peer_workflow_id,
+                        handler=req.type,
+                        peer_turn=progress.turn_number,
+                        from_offset=req.from_offset,
+                    )
+                )
+
+        return await self._run_turn(
+            req.peer_workflow_id,
+            req.type,
+            req.payload,
+            from_offset=req.from_offset,
+            update_id_prefix="peer-turn",
+            not_found_type="PeerNotFound",
+            publish_dispatch=publish,
+        )
+
+    async def _run_turn(
+        self,
+        target_workflow_id: str,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        from_offset: int,
+        update_id_prefix: str,
+        not_found_type: str,
+        publish_dispatch: Callable[[_TurnProgress], Awaitable[None]],
+    ) -> SubagentTurnResult:
+        """Send one message to ``target_workflow_id`` and stream its reply — the body shared by
+        :meth:`run_subagent_turn` and :meth:`run_peer_turn`, which differ only in the dispatch
+        marker ``publish_dispatch`` puts on the sender's stream."""
+        client = AgentClient(self._client, target_workflow_id)
 
         # "Already sent?" memo: a retry that landed after the send resumes consuming from the
         # heartbeated offset instead of re-submitting the turn. The send itself is also
@@ -132,12 +193,19 @@ class SubagentActivities:
         # ``subagent_message_sent`` marker below, which only the memo dedupes.
         progress = self._resume_progress()
         if progress is None:
-            progress = await self._submit(client, req)
+            progress = await self._submit(
+                client,
+                msg_type,
+                payload,
+                from_offset=from_offset,
+                update_id_prefix=update_id_prefix,
+                not_found_type=not_found_type,
+            )
             # The send just happened — NOW publish the dispatch marker onto the PARENT's stream
             # (this is the accurate moment, vs. the parent's execute_activity dispatch time).
             # Only on the fresh-send branch: a heartbeat-resume retry skips both the re-send and
             # this publish, so the memo dedupes the event exactly as it dedupes the send.
-            await self._publish_dispatch(req, progress)
+            await publish_dispatch(progress)
         # Record/refresh the memo immediately (covers both the fresh-send and resume paths),
         # then let the background task keep it alive at a steady cadence.
         activity.heartbeat(progress)
@@ -145,7 +213,7 @@ class SubagentActivities:
         # Consume the CHILD's stream to capture OUR message's reply. The auto-heartbeat keeps the
         # dedup memo alive at a steady cadence while we wait (no consume timeout — see header).
         async with self._auto_heartbeat(progress):
-            output, got_reply = await self._consume_child_turn(req, progress)
+            output, got_reply = await self._consume_child_turn(target_workflow_id, progress)
 
         if not got_reply:
             # turn_end with no message_handler_end for OUR message — a turn that produced
@@ -168,7 +236,7 @@ class SubagentActivities:
         )
 
     async def _consume_child_turn(
-        self, req: RunSubagentTurnInput, progress: _TurnProgress
+        self, workflow_id: str, progress: _TurnProgress
     ) -> tuple[dict[str, Any], bool]:
         """Stream ONE child turn's events to completion; return ``(reply_output, got_reply)``.
 
@@ -197,7 +265,7 @@ class SubagentActivities:
         subagent streams into one logical view is a separate CLIENT-side concern (``stream_merge``);
         an activity that gated on a grandchild's ``turn_end`` (a turn it never mounts) would wedge.
         """
-        stream = WorkflowStreamClient.create(self._client, req.child_workflow_id)
+        stream = WorkflowStreamClient.create(self._client, workflow_id)
         output: dict[str, Any] = {}
         got_reply = False
         async for item in stream.subscribe(
@@ -267,7 +335,14 @@ class SubagentActivities:
                 pass
 
     async def _submit(
-        self, client: AgentClient, req: RunSubagentTurnInput
+        self,
+        client: AgentClient,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        from_offset: int,
+        update_id_prefix: str,
+        not_found_type: str,
     ) -> _TurnProgress:
         """Submit the message to the child via the shared front door, and build the resume memo.
 
@@ -275,8 +350,9 @@ class SubagentActivities:
         translates a rejection into a non-retryable :class:`ApplicationError` that preserves
         the child's error ``type`` (``MidTurnRejected`` / ``UnknownFunction`` /
         ``MalformedMessage``), so the calling tool can surface it verbatim. The memo seeds its
-        ``consumed_offset`` from the caller-supplied ``req.from_offset`` (the perf hint — see
-        :class:`RunSubagentTurnInput`); the stream then advances it from there.
+        ``consumed_offset`` from the caller-supplied ``from_offset`` (the perf hint — see
+        :class:`RunSubagentTurnInput`); the stream then advances it from there. A target that
+        is not running fails as ``not_found_type``, non-retryably: no retry will start it.
 
         The update is keyed on THIS activity's identity — the parent run + activity id, which
         every retry attempt shares — so a re-issued send after a lost reply is deduplicated by
@@ -284,11 +360,17 @@ class SubagentActivities:
         message.
         """
         info = activity.info()
-        update_id = f"subagent-turn:{info.workflow_run_id}:{info.activity_id}"
+        update_id = f"{update_id_prefix}:{info.workflow_run_id}:{info.activity_id}"
         try:
-            result = await client._submit_message(
-                req.type, req.payload, update_id=update_id
-            )
+            result = await client._submit_message(msg_type, payload, update_id=update_id)
+        except RPCError as e:
+            if e.status != RPCStatusCode.NOT_FOUND:
+                raise
+            raise ApplicationError(
+                f"agent {client.workflow_id!r} is not running: {e.message}",
+                type=not_found_type,
+                non_retryable=True,
+            ) from e
         except MidTurnRejectedError as e:
             raise ApplicationError(
                 str(e), type="MidTurnRejected", non_retryable=True
@@ -305,7 +387,7 @@ class SubagentActivities:
             turn_id=result.turn_id,
             turn_number=result.turn_number,
             message_id=result.message_id,
-            consumed_offset=req.from_offset,
+            consumed_offset=from_offset,
         )
 
     @staticmethod

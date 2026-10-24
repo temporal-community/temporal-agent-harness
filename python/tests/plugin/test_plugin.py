@@ -22,7 +22,12 @@ from temporalio.worker import Worker
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_protocol import RUN_SUBAGENT_TURN_ACTIVITY
+from temporal_agent_harness.harness.agent_protocol import (
+    RUN_PEER_TURN_ACTIVITY,
+    RUN_SUBAGENT_TURN_ACTIVITY,
+    SWARM_BOARD_UPDATE_ACTIVITY,
+    SWARM_BOARD_WORKFLOW,
+)
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.utils.large_payload import (
     DEFAULT_PAYLOAD_STORAGE,
@@ -59,6 +64,14 @@ class _StubWorkflow:
 
     @workflow.run
     async def run(self) -> None: ...
+
+
+# The client-bound activities the plugin adds to every worker it configures.
+_HARNESS_ACTIVITIES = (
+    RUN_SUBAGENT_TURN_ACTIVITY,
+    RUN_PEER_TURN_ACTIVITY,
+    SWARM_BOARD_UPDATE_ACTIVITY,
+)
 
 
 def _plugin_activity_names(plugin: AgentHarnessPlugin) -> set[str]:
@@ -178,7 +191,7 @@ async def test_worker_gets_every_harness_activity_from_the_plugin():
         )
         assert _registered_activity_names(worker) == {
             "durable_tool",
-            RUN_SUBAGENT_TURN_ACTIVITY,
+            *_HARNESS_ACTIVITIES,
         }
 
 
@@ -205,11 +218,34 @@ async def test_hand_registered_harness_activities_are_not_duplicated():
             plugins=[AgentHarnessPlugin(tools=[durable_tool])],
         )
         activities = worker.config(active_config=True)["activities"]
-        assert len(activities) == len(hand_written)
+        # One entry per name: the plugin skipped its own copies of the hand-written two.
+        assert len(activities) == len(_registered_activity_names(worker))
         assert _registered_activity_names(worker) == {
             "durable_tool",
-            RUN_SUBAGENT_TURN_ACTIVITY,
+            *_HARNESS_ACTIVITIES,
         }
+
+
+async def test_worker_hosts_the_swarm_board_workflow_once():
+    """Every harness worker hosts the board (it is started on the reaching worker's queue), and a
+    worker that already registers it is not given a second copy."""
+    from temporal_agent_harness.harness.swarm import SwarmBoardWorkflow
+
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    ) as env:
+        for i, workflows in enumerate(([_StubWorkflow], [_StubWorkflow, SwarmBoardWorkflow])):
+            worker = Worker(
+                env.client,
+                task_queue=f"plugin-board-{i}",
+                workflows=workflows,
+                plugins=[AgentHarnessPlugin()],
+            )
+            registered = [
+                workflow._Definition.must_from_class(cls).name
+                for cls in worker.config(active_config=True)["workflows"]
+            ]
+            assert registered.count(SWARM_BOARD_WORKFLOW) == 1
 
 
 async def test_unrelated_worker_activities_survive():
@@ -228,7 +264,7 @@ async def test_unrelated_worker_activities_survive():
         )
         assert _registered_activity_names(worker) == {
             "unrelated",
-            RUN_SUBAGENT_TURN_ACTIVITY,
+            *_HARNESS_ACTIVITIES,
         }
 
 
@@ -256,7 +292,7 @@ async def test_client_registered_plugin_reaches_the_worker():
         worker = Worker(env.client, task_queue="plugin-test", workflows=[_StubWorkflow])
         assert _registered_activity_names(worker) == {
             "durable_tool",
-            RUN_SUBAGENT_TURN_ACTIVITY,
+            *_HARNESS_ACTIVITIES,
         }
 
 
