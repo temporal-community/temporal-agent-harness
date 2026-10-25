@@ -24,7 +24,6 @@ ts_project(
     visibility = ["//visibility:public"],
     deps = [
         "//typescript/packages/core:node_modules/zod",
-        "//typescript/packages/core/src/ai-sdks/integration-helpers:raw-events",
         "//typescript/packages/core/src/harness/agent-protocol:index",
         "//typescript/packages/core/src/harness/state:index",
     ],

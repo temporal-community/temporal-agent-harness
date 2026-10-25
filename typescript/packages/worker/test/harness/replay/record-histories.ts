@@ -4,25 +4,18 @@
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { WorkflowUpdateStage, type WorkflowHandle } from "@temporalio/client";
-import { defaultPayloadConverter } from "@temporalio/common";
+import type { WorkflowHandle } from "@temporalio/client";
 import { historyToJSON } from "@temporalio/common/lib/proto-utils.js";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import {
-  encodePayloadWire,
-  workflowStreamPollUpdate,
-  workflowStreamPublishSignal,
-} from "@temporalio/workflow-streams/workflow";
-import { rawEventsTopic } from "@temporalio/agent-harness";
 import {
   PROVIDE_CALLBACK_RESULT_UPDATE,
   TOOL_APPROVAL_UPDATE,
   type AgentEvent,
 } from "@temporalio/agent-harness/harness/agent-protocol";
-import { codeModeActivities } from "../../../src/harness/code-mode/monty-stepper.ts";
-import { TEST_CONTINUATION_SECRET, collect, send, startEnv, type TestEnv } from "../../support.ts";
+import { AgentHarnessPlugin } from "../../../src/index.ts";
+import { collect, send, startEnv, type TestEnv } from "../../support.ts";
 import { BUNDLES, type Bundle } from "./bundles.ts";
-import { scriptedDemoActivities } from "./scripted-demo-activities.ts";
+import { scriptedDemoActivities, scriptedDemoTools } from "./scripted-demo-activities.ts";
 
 const PACKAGE_PATH = "typescript/packages/worker/test/harness/replay/histories";
 
@@ -43,10 +36,8 @@ async function recordScriptedDemo(env: TestEnv, out: string) {
     connection,
     namespace: env.namespace,
     taskQueue,
-    activities: {
-      ...scriptedDemoActivities,
-      ...codeModeActivities({ continuationSecret: TEST_CONTINUATION_SECRET }),
-    },
+    activities: scriptedDemoActivities,
+    plugins: [new AgentHarnessPlugin({ tools: scriptedDemoTools })],
   });
   // Answer every approval and callback the moment it is asked for.
   const answer = (h: WorkflowHandle) => async (e: AgentEvent) => {
@@ -96,49 +87,6 @@ async function recordScriptedDemo(env: TestEnv, out: string) {
   await connection.close();
 }
 
-/**
- * A raw-events publish and a poll from offset 0 in a run's first task: the publish is translated
- * there, so the poll parks instead of being answered at once.
- */
-async function recordFirstTaskPublish(env: TestEnv, out: string) {
-  const taskQueue = `${env.taskQueue}-held`;
-  const topic = rawEventsTopic(
-    "openai-agents",
-    { agent_id: "a", turn_id: "t", turn_number: 1, message_id: null },
-    null,
-    0,
-  );
-  const data = encodePayloadWire(
-    defaultPayloadConverter.toPayload({ type: "output_text_delta", delta: "" }),
-  );
-  const batch = { items: [{ topic, data }], publisher_id: "p", sequence: 1 };
-  const h = await env.client.workflow.signalWithStart("RawStreamProbeAgent", {
-    taskQueue,
-    workflowId: "first-task-publish",
-    args: [{}],
-    signal: workflowStreamPublishSignal,
-    signalArgs: [batch],
-  });
-  env.started.push(h.workflowId);
-  const poll = h.startUpdate(workflowStreamPollUpdate, {
-    args: [{ topics: [], from_offset: 0 }],
-    waitForStage: WorkflowUpdateStage.ACCEPTED,
-  });
-  // Both wait in the server until a worker takes the run's first task.
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-  await env.runWorker(taskQueue, async () => {
-    const parked = await poll;
-    // The poll stays parked (nothing reaches turn_events) until the run ends and releases it.
-    await h.signal("close");
-    await h.result();
-    await parked.result();
-  });
-  const events = (await h.fetchHistory()).events ?? [];
-  const firstTask = events.findIndex((e) => e.workflowTaskCompletedEventAttributes);
-  if (!events[firstTask + 1]?.workflowExecutionUpdateAcceptedEventAttributes)
-    throw new Error("the poll was not accepted in the run's first task");
-  await write(out, "fixtures", h);
-}
 
 async function main() {
   const workspace = process.env.BUILD_WORKSPACE_DIRECTORY;
@@ -152,7 +100,6 @@ async function main() {
   const env = await startEnv("record-histories");
   try {
     await recordScriptedDemo(env, out);
-    await recordFirstTaskPublish(env, out);
   } finally {
     await env.stop();
   }

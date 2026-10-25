@@ -13,13 +13,17 @@ import {
   type WorkerOptions,
 } from "@temporalio/worker";
 import { AgentClient } from "../src/harness/agent-client.ts";
-import { codeModeActivities } from "../src/harness/code-mode/monty-stepper.ts";
 import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentHarnessPlugin, CODE_MODE_MISSING_EXTRA_ERROR } from "../src/index.ts";
+import {
+  AgentHarnessPlugin,
+  CODE_MODE_MISSING_EXTRA_ERROR,
+  toolActivity,
+} from "../src/index.ts";
+import { codeModeUnavailable } from "../src/plugin.ts";
+import { safeActivityTool } from "./fixtures/workflows.ts";
 import { assertMatch } from "./match.ts";
 import {
   FIXTURES,
-  TEST_CONTINUATION_SECRET,
   collect,
   replyText,
   send,
@@ -49,25 +53,46 @@ describe("AgentHarnessPlugin", () => {
     assert.deepStrictEqual(Object.keys(activities).sort(), [...HARNESS].sort());
   });
 
-  it("keeps unrelated worker activities, and adds extraActivities", () => {
+  it("keeps unrelated worker activities, and adds each tool's activity under its name", () => {
     const unrelated = async () => undefined;
-    const extra = async () => undefined;
-    const activities = registered(
-      { unrelated },
-      new AgentHarnessPlugin({ extraActivities: { extra } }),
-    );
+    const body = toolActivity(safeActivityTool, async ({ text }) => text);
+    const activities = registered({ unrelated }, new AgentHarnessPlugin({ tools: [body] }));
     assert.deepStrictEqual(
       Object.keys(activities).sort(),
-      ["extra", "unrelated", ...HARNESS].sort(),
+      ["safe_activity_tool", "unrelated", ...HARNESS].sort(),
+    );
+    assert.equal(activities.safe_activity_tool, body.activity);
+  });
+
+  it("refuses a tool that is not a toolActivity, and two tools with one name", () => {
+    const body = toolActivity(safeActivityTool, async ({ text }) => text);
+    assert.throws(
+      () => new AgentHarnessPlugin({ tools: [safeActivityTool as never] }),
+      /is not a toolActivity/,
+    );
+    assert.throws(
+      () => new AgentHarnessPlugin({ tools: [body, body] }),
+      /two tools named 'safe_activity_tool'/,
     );
   });
 
-  it("registers Code Mode stubs that fail once, non-retryably, saying what to register", async () => {
-    const stub = registered().code_start_batch as () => Promise<never>;
-    const failure = await stub().catch((e: unknown) => e);
+  it("without @pydantic/monty, Code Mode's stubs fail once, non-retryably, saying what to install", async () => {
+    const failure = await (codeModeUnavailable.code_start_batch as () => Promise<never>)().catch(
+      (e: unknown) => e,
+    );
     assert.ok(failure instanceof ApplicationFailure);
     assertMatch(failure, { type: CODE_MODE_MISSING_EXTRA_ERROR, nonRetryable: true });
-    assert.ok((failure as Error).message.includes("codeModeActivities()"));
+    assert.ok((failure as Error).message.includes("Install @pydantic/monty"));
+  });
+
+  it("with @pydantic/monty installed, registers Code Mode activities backed by the sandbox", async () => {
+    const typeCheck = registered().code_type_check as (
+      script: string,
+      stubs: { source: string; type_names: string[] },
+    ) => Promise<string>;
+    const stubs = { source: "", type_names: [] };
+    assert.equal(await typeCheck("x: int = 1", stubs), "");
+    assert.notEqual(await typeCheck('x: int = "one"', stubs), "");
   });
 });
 
@@ -85,6 +110,8 @@ describe("a Code Mode call on a worker without Code Mode", () => {
       namespace: env.namespace,
       taskQueue,
       workflowsPath: FIXTURES,
+      // What the plugin registers on a worker without @pydantic/monty.
+      activities: codeModeUnavailable,
       plugins: [new AgentHarnessPlugin()],
     });
     running = worker.run();
@@ -139,7 +166,6 @@ describe("a Code Mode call on a worker without Code Mode", () => {
         namespace: env.namespace,
         taskQueue,
         workflowBundle,
-        activities: codeModeActivities({ continuationSecret: TEST_CONTINUATION_SECRET }),
         plugins: [new AgentHarnessPlugin()],
       });
       return { taskQueue, worker, running: worker.run() };

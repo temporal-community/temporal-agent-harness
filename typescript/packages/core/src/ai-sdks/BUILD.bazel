@@ -1,0 +1,21 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+
+ts_project(
+    name = "openai-agents-harness",
+    srcs = ["openai-agents-harness.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@openai/agents-core",
+        "//typescript/packages/core:node_modules/@temporalio/openai-agents",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core/src/harness:agent-workflow",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+        "//typescript/packages/core/src/harness/agent-workflow:errors",
+        "//typescript/packages/core/src/harness/agent-workflow:types",
+    ],
+)

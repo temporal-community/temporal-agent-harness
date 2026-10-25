@@ -19,7 +19,6 @@ import { searchItems } from "../../fixtures/workflows.ts";
 import { assertMatch } from "../../match.ts";
 import { pack } from "./tools.ts";
 
-const SECRET = "test-only-continuation-secret-0123456789";
 const CLOCK: HostClock = { now: 0, seed: 1 };
 const searchStubs = renderTypeCheckStubs([searchItems]);
 const script = (body: string) =>
@@ -31,12 +30,12 @@ const start = (
   stubs: Parameters<typeof codeStartBatch>[1],
   clock: HostClock = CLOCK,
 ): Promise<CodeBatchStep> =>
-  env.run(codeStartBatch, src, stubs, DEFAULT_CODE_MODE_LIMITS, clock, SECRET);
+  env.run(codeStartBatch, src, stubs, DEFAULT_CODE_MODE_LIMITS, clock);
 
 const resume = (
   env: MockActivityEnvironment,
   input: Parameters<typeof codeResumeBatch>[0],
-): Promise<CodeBatchStep> => env.run(codeResumeBatch, input, DEFAULT_CODE_MODE_LIMITS, SECRET);
+): Promise<CodeBatchStep> => env.run(codeResumeBatch, input, DEFAULT_CODE_MODE_LIMITS);
 
 describe("the Monty sandbox", () => {
   it("type-checks a good script, and reports a bad key or a wrong argument type without running it", async () => {
@@ -209,51 +208,24 @@ describe("the Monty sandbox", () => {
     assert.deepEqual(JSON.parse(step.output_json!), ["caught", "bad origin", "A-0"]);
   });
 
-  it("seals each paused script and refuses one tampered with, sealed under other stubs or another secret, or unsealed", async () => {
+  it("the activities pause a script at its awaited call and resume it from the snapshot", async () => {
     const env = new MockActivityEnvironment({ startToCloseTimeoutMs: 30_000 });
-    const acts = codeModeActivities({ continuationSecret: SECRET });
+    const acts = codeModeActivities();
     const paused: CodeBatchStep = await env.run(
       acts.code_start_batch,
       script('    r = await search(origin="SFO", n=1)\n    return r["items"][0]["id"]'),
       searchStubs,
       CLOCK,
     );
-    assert.match(paused.snapshot!, /^msig1\./);
-    const resumeWith = (
-      snapshot: string,
-      typeNames: string[] = searchStubs.type_names,
-      run = acts.code_resume_batch,
-    ): Promise<CodeBatchStep> =>
-      env.run(run, {
-        snapshot,
-        results: [
-          { call_id: paused.awaiting[0]!, return_value: { items: [{ id: "SFO-0", price: 1 }] } },
-        ],
-        type_names: typeNames,
-        clock: CLOCK,
-      });
-    assert.equal(JSON.parse((await resumeWith(paused.snapshot!)).output_json!), "SFO-0");
-
-    const [signature, body] = paused.snapshot!.slice("msig1.".length).split(".") as [
-      string,
-      string,
-    ];
-    const dump = Buffer.from(body, "base64");
-    dump.writeUInt8(dump.readUInt8(dump.length - 1) ^ 1, dump.length - 1);
-    const refusal = { type: "CodeModeSnapshotRefused", nonRetryable: true };
-    await assert.rejects(resumeWith(`msig1.${signature}.${dump.toString("base64")}`), refusal);
-    await assert.rejects(resumeWith(paused.snapshot!, ["SearchResp", "Other"]), refusal);
-    await assert.rejects(resumeWith(body), refusal);
-    await assert.rejects(
-      resumeWith(
-        paused.snapshot!,
-        searchStubs.type_names,
-        codeModeActivities({ continuationSecret: "another-secret-0123456789abcdefghij" })
-          .code_resume_batch,
-      ),
-      refusal,
-    );
-    assert.throws(() => codeModeActivities({ continuationSecret: "short" }), /at least 32 bytes/);
+    const resumed: CodeBatchStep = await env.run(acts.code_resume_batch, {
+      snapshot: paused.snapshot!,
+      results: [
+        { call_id: paused.awaiting[0]!, return_value: { items: [{ id: "SFO-0", price: 1 }] } },
+      ],
+      type_names: searchStubs.type_names,
+      clock: CLOCK,
+    });
+    assert.equal(JSON.parse(resumed.output_json!), "SFO-0");
   });
 
   it("bad arguments to a stub type are a script error", async () => {
@@ -274,24 +246,6 @@ describe("the Monty sandbox", () => {
     );
     assertMatch(step, { done: true, error: null });
     assert.equal(JSON.parse(step.output_json!), "name 'nope' is not defined");
-  });
-
-  it("refuses to run a step directly with a missing or short continuation secret", async () => {
-    const env = new MockActivityEnvironment();
-    for (const secret of ["", "short"])
-      await assert.rejects(
-        env.run(codeStartBatch, "1", null, DEFAULT_CODE_MODE_LIMITS, CLOCK, secret),
-        /at least 32 bytes/,
-      );
-    await assert.rejects(
-      env.run(
-        codeResumeBatch,
-        { snapshot: "msig1.x.y", results: [], type_names: [], clock: CLOCK },
-        DEFAULT_CODE_MODE_LIMITS,
-        "",
-      ),
-      /at least 32 bytes/,
-    );
   });
 });
 

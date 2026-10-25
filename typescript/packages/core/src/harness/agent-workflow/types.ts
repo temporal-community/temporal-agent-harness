@@ -1,6 +1,5 @@
 import type { z } from "zod";
-import type { RawFormat } from "../../ai-sdks/integration-helpers/raw-events.ts";
-import type { AgentMessage, AgentStreamItem, AutoApprovalCriteria, AutoModeEvaluator, MessageContext, MidTurn, Schema, ToolApprovalPolicy } from "../agent-protocol/index.ts";
+import type { AgentMessage, AutoApprovalCriteria, AutoModeEvaluator, MessageContext, MidTurn, Schema, ToolApprovalPolicy } from "../agent-protocol/index.ts";
 import type { StateDecl } from "../state/index.ts";
 
 /** One `@agent.accepts`-style handler declaration: the static half, discoverable without a run. */
@@ -19,28 +18,6 @@ export type HandlerImpl<D extends HandlerDecl> = (
   ctx: MessageContext,
 ) => Promise<z.input<D["output"]>>;
 
-/**
- * What an SDK integration (AI SDK, OpenAI Agents, Gemini, a hand-written loop) needs from the
- * harness inside the workflow: wrap each tool's `execute` with `runTool`, publish reply events
- * with `emit`, and run each model call through `modelCall` so its raw stream lands on the turn.
- */
-export interface TurnHost {
-  readonly tools: readonly AnyHarnessTool[];
-  /** Run one call by tool name: approval gate, callbacks and tool_* events included. */
-  runTool(name: string, input: unknown, options?: { toolId?: string }): Promise<unknown>;
-  emit(event: AgentStreamItem): void;
-  /**
-   * `call` gets the stream topic its raw model events must be published to. A `structuredOutput`
-   * call's text is a JSON document, not prose, so it streams no reply_delta: the handler's result
-   * is the reply.
-   */
-  modelCall<T>(
-    format: RawFormat,
-    model: string | null,
-    call: (streamingTopic: string) => Promise<T>,
-    options?: { structuredOutput?: boolean },
-  ): Promise<T>;
-}
 
 export interface Admission {
   message: AgentMessage;

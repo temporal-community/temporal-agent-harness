@@ -1,7 +1,7 @@
 # @temporalio/agent-harness-worker
 
-The worker side of the Temporal agent harness: `runAgentWorker`, `AgentHarnessPlugin` and the
-harness's activities, the agent client, Code Mode's Monty activities, and the
+The worker side of the Temporal agent harness: `AgentHarnessPlugin` and the harness's activities,
+the agent client, Code Mode's Monty activities, and the
 `agent-harness-schema` command. Agents themselves are written against
 [`@temporalio/agent-harness`](../core/README.md), which runs in the workflow.
 
@@ -37,13 +37,27 @@ export const BriefedAgent = defineAgent({
 Its worker, in `worker.ts`:
 
 ```ts
-import { runAgentWorker } from "@temporalio/agent-harness-worker";
+import { fileURLToPath } from "node:url";
+import { loadClientConnectConfig } from "@temporalio/envconfig";
+import { NativeConnection, Worker } from "@temporalio/worker";
+import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
 
-await runAgentWorker({
-  agents: new URL("./agents.ts", import.meta.url),
+const { connectionOptions, namespace } = loadClientConnectConfig();
+const worker = await Worker.create({
+  connection: await NativeConnection.connect(connectionOptions),
+  namespace: namespace ?? "default",
   taskQueue: "briefed-agent-task-queue",
+  workflowsPath: fileURLToPath(new URL("./agents.ts", import.meta.url)),
+  plugins: [new AgentHarnessPlugin()],
 });
+await worker.run();
 ```
+
+The worker is an ordinary Temporal worker, so it can host other workflows and activities too.
+`AgentHarnessPlugin` adds what harness agents need: the harness's own activities, payload offload,
+the bodies of your activity tools (`tools: [toolActivity(tool, impl), ...]`), and Code Mode when
+`@pydantic/monty` is installed. Add the plugin after any model integration's, such as
+`OpenAIAgentsPlugin` or `GoogleGenAIPlugin`.
 
 The registry the server reads, `agents.toml`:
 
@@ -86,8 +100,8 @@ uvx --from 'temporal-agent-harness[ui]' temporal-agent-harness serve ./agents.to
 node worker.ts
 ```
 
-`runAgentWorker` and both `temporal-agent-harness` commands resolve their Temporal connection from
-the same `TEMPORAL_*` environment variables and `temporal.toml` profiles, so they land on the same
-namespace; with nothing configured they use the dev server's `localhost:7233`. The registry format
-and the server are described in the
+`loadClientConnectConfig()` and both `temporal-agent-harness` commands resolve their Temporal
+connection from the same `TEMPORAL_*` environment variables and `temporal.toml` profiles, so they
+land on the same namespace; with nothing configured they use the dev server's `localhost:7233`.
+The registry format and the server are described in the
 [Python package's README](https://github.com/temporal-community/temporal-agent-harness#readme).

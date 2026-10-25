@@ -1,0 +1,236 @@
+{
+  "agent": "MontyChatAgentTs",
+  "source": "typescript/examples/monty/agents.js#MontyChatAgentTs",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the travel assistant. Describe the trip you want (flights, hotels,\ndates, traveler name) in plain text; the assistant converses, writes and runs Python\nscripts against a simulated travel backend as needed, and replies with the results.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "set_approval_policy": {
+      "description": "Update the agent's tool approval policy.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/PolicyUpdate"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "set_model": {
+      "description": "Set the model this session uses for subsequent turns. Takes effect on the next\nmodel call, so a turn already in flight finishes on the model it started with.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/SetModel"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "trip_board": {
+      "$ref": "#/$defs/TripBoard"
+    }
+  },
+  "$defs": {
+    "Booking": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "flight",
+            "hotel"
+          ]
+        },
+        "confirmation_code": {
+          "type": "string",
+          "description": "The code a `book_flight` / `book_hotel` host call returned. Never invented."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Human-readable: airline, times, hotel name, nights — whatever the reader needs."
+        },
+        "price_usd": {
+          "default": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "confirmation_code",
+        "detail",
+        "price_usd"
+      ],
+      "additionalProperties": false,
+      "title": "Booking",
+      "description": "A flight or hotel this trip has actually booked."
+    },
+    "PolicyUpdate": {
+      "type": "object",
+      "properties": {
+        "new_policy": {
+          "type": "string",
+          "enum": [
+            "allow_safe",
+            "strict",
+            "dangerously_skip_all"
+          ],
+          "title": "New Policy"
+        }
+      },
+      "required": [
+        "new_policy"
+      ],
+      "title": "PolicyUpdate",
+      "description": "Selected tool approval policy name."
+    },
+    "SetModel": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": [
+            "gemini-3.8-flash",
+            "gemini-3.1-flash-lite"
+          ],
+          "title": "Model"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SetModel",
+      "description": "Which model this Monty session should use for subsequent turns."
+    },
+    "TextMessage": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "title": "Text"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler)."
+    },
+    "TextReply": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "title": "Text"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "title": "TextReply",
+      "description": "A free-form natural-language reply (the output of a plain chat handler)."
+    },
+    "Trip": {
+      "type": "object",
+      "properties": {
+        "trip_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "traveler": {
+          "type": "string"
+        },
+        "status": {
+          "default": "collecting",
+          "type": "string",
+          "enum": [
+            "collecting",
+            "booked",
+            "cancelled"
+          ]
+        },
+        "flights": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Booking"
+          }
+        },
+        "hotels": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Booking"
+          }
+        },
+        "remaining": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TripTask"
+          }
+        }
+      },
+      "required": [
+        "trip_id",
+        "description",
+        "traveler",
+        "status",
+        "flights",
+        "hotels",
+        "remaining"
+      ],
+      "additionalProperties": false,
+      "title": "Trip",
+      "description": "One trip the agent is collecting."
+    },
+    "TripBoard": {
+      "type": "object",
+      "properties": {
+        "trips": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Trip"
+          }
+        }
+      },
+      "required": [
+        "trips"
+      ],
+      "additionalProperties": false,
+      "title": "TripBoard",
+      "description": "Every trip this session is working on, newest last."
+    },
+    "TripTask": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "done": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "done"
+      ],
+      "additionalProperties": false,
+      "title": "TripTask",
+      "description": "One thing the trip still needs, and whether it has been done."
+    }
+  }
+}

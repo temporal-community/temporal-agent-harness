@@ -35,13 +35,17 @@
       "types": "./dist/src/harness/code-mode/okf.d.ts",
       "default": "./dist/src/harness/code-mode/okf.js"
     },
-    "./ai-sdks/integration-helpers/raw-events": {
-      "types": "./dist/src/ai-sdks/integration-helpers/raw-events.d.ts",
-      "default": "./dist/src/ai-sdks/integration-helpers/raw-events.js"
+    "./ai-sdks/google-genai-plugin": {
+      "types": "./dist/src/ai-sdks/google-genai-plugin/index.d.ts",
+      "default": "./dist/src/ai-sdks/google-genai-plugin/index.js"
     },
     "./ai-sdks/jev/evaluator": {
       "types": "./dist/src/ai-sdks/jev/evaluator.d.ts",
       "default": "./dist/src/ai-sdks/jev/evaluator.js"
+    },
+    "./ai-sdks/openai-agents-harness": {
+      "types": "./dist/src/ai-sdks/openai-agents-harness.d.ts",
+      "default": "./dist/src/ai-sdks/openai-agents-harness.js"
     }
   },
   "files": [
@@ -60,7 +64,26 @@
     "immer": "^11.1.18",
     "zod": "^4.6.5"
   },
+  "peerDependencies": {
+    "@google/genai": "^2.31.0",
+    "@openai/agents-core": "~0.14.3",
+    "@temporalio/openai-agents": "^1.24.0"
+  },
+  "peerDependenciesMeta": {
+    "@google/genai": {
+      "optional": true
+    },
+    "@openai/agents-core": {
+      "optional": true
+    },
+    "@temporalio/openai-agents": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@google/genai": "^2.31.0",
+    "@openai/agents-core": "~0.14.3",
+    "@temporalio/openai-agents": "^1.24.0",
     "@types/node": "^22.20.4",
     "typescript": "^7.0.2"
   },

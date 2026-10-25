@@ -38,6 +38,7 @@ ts_project(
     tsconfig = "//typescript/packages/worker:tsconfig",
     deps = [
         ":scripted-agent",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
         "//typescript/packages/worker/src:index",
     ],
 )

@@ -301,7 +301,6 @@ with open('/workspace/out/report.md', 'w') as f:
     const codeTool = codeModeTool([], { name: "run_code", mounts });
     const env = new MockActivityEnvironment();
     const clock = { now: 0, seed: 1 };
-    const secret = "test-only-continuation-secret-0123456789";
     const operations: string[] = [];
     let step: CodeBatchStep = await env.run(
       codeStartBatch,
@@ -309,7 +308,6 @@ with open('/workspace/out/report.md', 'w') as f:
       codeTool.codeModeStubs,
       DEFAULT_CODE_MODE_LIMITS,
       clock,
-      secret,
       true,
     );
     while (!step.done) {
@@ -335,7 +333,6 @@ with open('/workspace/out/report.md', 'w') as f:
           files: true,
         },
         DEFAULT_CODE_MODE_LIMITS,
-        secret,
       );
     }
     assert.equal(step.error, null);

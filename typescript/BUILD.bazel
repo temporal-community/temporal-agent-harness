@@ -20,6 +20,8 @@ NODE_MODULES_DIRS = [
     "typescript",
     "typescript/apps/chat-server",
     "typescript/apps/ui",
+    "typescript/examples/monty",
+    "typescript/examples/openai_hello",
     "typescript/packages/client",
     "typescript/packages/codegen",
     "typescript/packages/core",

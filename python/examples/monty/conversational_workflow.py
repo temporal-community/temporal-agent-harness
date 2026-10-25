@@ -8,8 +8,9 @@ sandbox, where each tool is an async host function the script calls. Every host 
 durable, approval-gated activity, and the script can combine many with real control flow (loops,
 ``asyncio.gather`` concurrency).
 
-The conversational front end is a Gemini Interactions tool-calling loop exposing that one Code
-Mode tool. The workflow keeps the whole conversation and sends it on every call
+The conversational front end is a Gemini Interactions tool-calling loop exposing that Code Mode
+tool and ``ask_user``, a callback tool the model uses to ask the user something mid-turn. The
+workflow keeps the whole conversation and sends it on every call
 (``InteractionConversation``), so multi-turn conversation works. The Code Mode tool advertises the
 exact host-function signatures + result shapes in its own (generated) description, so the system
 prompt only needs to set the persona and point the model at the tool.
@@ -50,6 +51,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
     from examples.monty import activities, trip_board
+    from examples.monty.ask_user import ask_user
 
 
 TASK_QUEUE = "monty-dynamic-agent"
@@ -81,9 +83,11 @@ travel operations as async host functions your script calls. The tool's descript
 exact host-function signatures and result shapes — follow them; index results with normal Python.
 
 How to behave:
-- Converse naturally. Ask brief clarifying questions when you're missing something essential \
-(origin/destination, dates, traveler name) — don't interrogate; make reasonable assumptions \
-and state them.
+- Converse naturally. When you're missing something essential (origin/destination, dates, \
+traveler name) or need the user to choose between options, ask them with the `ask_user` tool \
+and carry on with their answers in the same turn. Ask ONE question per `ask_user` call; to ask \
+several things, make one call per question in the same reply. Don't interrogate; make \
+reasonable assumptions and state them.
 - When you have enough to make progress, WRITE A SCRIPT and call `run_travel_code`. Run \
 independent host calls concurrently with `asyncio.gather`; keep each script focused (search, or \
 book, or summarize) so you can react to results.
@@ -126,8 +130,9 @@ class MontyChatAgentWorkflow:
             # would mean a click between every step and the board that is supposed to be showing
             # the steps. Named rather than `allow_inherently_safe()`, which would also stop
             # gating the run-code tool itself and take the script review off the table.
+            # `ask_user` is allowed too: asking the user a question needs no approval.
             approval_policy_default=ToolApprovalPolicy.allow_tools(
-                trip_board.BOARD_TOOL_NAMES
+                [*trip_board.BOARD_TOOL_NAMES, ask_user.__name__]
             ),
         )
         self._model: str = DEFAULT_MODEL
@@ -147,6 +152,8 @@ class MontyChatAgentWorkflow:
             # trip, never the state it lives in.
             injections={"board": self.trip_board},
         )
+        # The model-facing tools: Code Mode, and asking the user mid-turn.
+        self._tools_by_name = {fn.__name__: fn for fn in (self._code_tool, ask_user)}
         # The Temporal-aware AsyncClient from the Gemini plugin; the runner is wired in so reply
         # text streams to the workflow stream as it is generated.
         self._gemini = google_genai_client(
@@ -194,12 +201,12 @@ class MontyChatAgentWorkflow:
     # ------------------------------------------------------------------ chat loop
 
     async def _handle_chat_turn(self, gemini: AsyncClient, user_text: str) -> str:
-        """Run one conversational turn: stream the model, dispatch any ``run_travel_code``
-        calls, feed results back, and loop until the model replies with no further calls.
+        """Run one conversational turn: stream the model, dispatch any tool calls, feed results
+        back, and loop until the model replies with no further calls.
 
         The whole conversation goes out as the input of every call; see
         ``InteractionConversation`` for why it is not chained by interaction id."""
-        tools = [function_param(self._code_tool)]
+        tools = [function_param(fn) for fn in self._tools_by_name.values()]
         self._conversation.add_user_text(user_text)
         while True:
             stream = await gemini.interactions.create(
@@ -217,16 +224,15 @@ class MontyChatAgentWorkflow:
             )
 
     async def _run_one_tool(self, call: FunctionCallStep) -> FunctionResultStepParam:
-        """Execute one ``run_travel_code`` call via ``run_tool`` and return its result.
+        """Execute one tool call via ``run_tool`` and return its result.
 
         ``run_tool`` parks the call id so the script's host calls and the tool's own
         lifecycle events correlate with the streaming activity's ``tool_requested``."""
+        tool = self._tools_by_name.get(call.name)
         try:
-            if call.name != self._code_tool.__name__:
+            if tool is None:
                 raise ValueError(f"unknown tool: {call.name!r}")
-            result = await self._runner.run_tool(
-                call.id, self._code_tool, injections=None, **call.arguments
-            )
+            result = await self._runner.run_tool(call.id, tool, injections=None, **call.arguments)
             response: FunctionResultStepParam = {
                 "type": "function_result",
                 "call_id": call.id,

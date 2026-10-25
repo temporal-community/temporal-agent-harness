@@ -10,13 +10,11 @@ ts_project(
     visibility = ["//visibility:public"],
     deps = [
         ":plugin",
-        "//typescript/packages/worker:node_modules/@temporalio/worker",
         "//typescript/packages/worker/src/ai-sdks/jev:evaluator",
         "//typescript/packages/worker/src/harness:agent-workflow",
         "//typescript/packages/worker/src/harness:subagent-activities",
         "//typescript/packages/worker/src/harness/code-mode:activity-fs",
         "//typescript/packages/worker/src/utils:large-payload",
-        "//typescript/packages/worker/src/web:client",
     ],
 )
 
@@ -33,8 +31,10 @@ ts_project(
         "//typescript/packages/worker:node_modules/@temporalio/plugin",
         "//typescript/packages/worker:node_modules/@temporalio/worker",
         "//typescript/packages/worker/src/ai-sdks/jev:evaluator",
+        "//typescript/packages/worker/src/harness:agent-workflow",
         "//typescript/packages/worker/src/harness:subagent-activities",
         "//typescript/packages/worker/src/harness/code-mode:activity-fs",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
         "//typescript/packages/worker/src/utils:large-payload",
     ],
 )

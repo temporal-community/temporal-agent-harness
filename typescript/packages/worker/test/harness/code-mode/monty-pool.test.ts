@@ -10,16 +10,11 @@ import {
   codeStartBatch,
 } from "../../../src/harness/code-mode/monty-stepper.ts";
 
-const SECRET = "test-only-continuation-secret-0123456789";
 const step = (): Promise<CodeBatchStep> =>
-  new MockActivityEnvironment().run(
-    codeStartBatch,
-    "1 + 1",
-    null,
-    DEFAULT_CODE_MODE_LIMITS,
-    { now: 0, seed: 0 },
-    SECRET,
-  );
+  new MockActivityEnvironment().run(codeStartBatch, "1 + 1", null, DEFAULT_CODE_MODE_LIMITS, {
+    now: 0,
+    seed: 0,
+  });
 
 describe("the Monty pool", () => {
   it("is created again on the next step after its creation fails, then kept", async () => {

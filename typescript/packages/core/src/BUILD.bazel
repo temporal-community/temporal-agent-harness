@@ -10,7 +10,6 @@ ts_project(
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],
     deps = [
-        "//typescript/packages/core/src/ai-sdks/integration-helpers:raw-events",
         "//typescript/packages/core/src/ai-sdks/jev:evaluator",
         "//typescript/packages/core/src/harness:agent",
         "//typescript/packages/core/src/harness:agent-workflow",

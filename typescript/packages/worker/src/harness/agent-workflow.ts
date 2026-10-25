@@ -64,9 +64,16 @@ export interface ToolActivityContext extends AgentToolContext {
   publish: TurnEventPublisher["publish"];
 }
 
+/** An `activityTool` tool's activity body, registered under the tool's name. */
+export interface ToolActivity {
+  readonly kind: "tool-activity";
+  readonly name: string;
+  readonly activity: (input: unknown, injected: unknown, ctx: AgentToolContext) => Promise<unknown>;
+}
+
 /**
- * The activity body of an `activityTool` tool, keyed by the tool's name for a worker's
- * `activities`. Publishes tool_start and then tool_end or tool_error from the activity itself, on
+ * The activity body of an `activityTool` tool, for `AgentHarnessPlugin({ tools })`. Publishes
+ * tool_start and then tool_end or tool_error from the activity itself, on
  * every attempt, so tool_start marks when an attempt actually began executing on a worker. A
  * cancelled attempt (its timeout included) publishes neither: it ends at the cancellation, as
  * Python's does. The body's third argument carries the call's `tool_id` (key idempotent side
@@ -81,13 +88,15 @@ export function toolActivity<
     injected: ActivityToolTypes<T>["injected"],
     ctx: ToolActivityContext,
   ) => Promise<ActivityToolTypes<T>["output"]>,
-): Record<string, (input: unknown, injected: unknown, ctx: AgentToolContext) => Promise<unknown>> {
+): ToolActivity {
   if (tool.kind !== "activity")
     throw new TypeError(
       `${tool.name} is not an activityTool tool, so it has no activity to register`,
     );
   return {
-    async [tool.name](input: unknown, injected: unknown, ctx: AgentToolContext) {
+    kind: "tool-activity",
+    name: tool.name,
+    async activity(input: unknown, injected: unknown, ctx: AgentToolContext) {
       const parsed = validate(tool.inputSchema, input);
       if (!parsed.ok)
         throw ApplicationFailure.create({
@@ -155,11 +164,6 @@ export async function heartbeating<T>(work: () => Promise<T>): Promise<T> {
     clearInterval(beat);
   }
 }
-
-/** Merge several `toolActivity(...)` registrations into one activities object. */
-export const toolActivities = (
-  ...registrations: Record<string, unknown>[]
-): Record<string, unknown> => Object.assign({}, ...registrations);
 
 /** A failure a tool body throws when retrying cannot help: a bad input, a missing key, a policy refusal. */
 export function nonRetryable(type: string, message: string): ApplicationFailure {

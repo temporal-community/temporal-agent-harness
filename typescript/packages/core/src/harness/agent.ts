@@ -313,15 +313,10 @@ type InitData<D> = D extends { schema: infer Z extends z.ZodType; required: infe
     : z.output<Z> | null
   : undefined;
 
-/**
- * An agent's init data. `serverOwned` names fields only a trusted starter may set (e.g. the task
- * queue its tools run on): the web API refuses them from clients, hides them from the published
- * schema, and takes them from `HarnessAppOptions.serverStartData` instead.
- */
+/** An agent's init data: what its workflow takes after its config, and whether it must be sent. */
 export type InitDataDecl = {
   schema: z.ZodType;
   required: boolean;
-  serverOwned?: readonly string[];
 };
 
 export interface AgentContext<S extends States, D> {
@@ -446,14 +441,5 @@ export function agentInitDataSchema(
 ): { required: boolean; schema: Record<string, unknown> } | null {
   const init = agent.definition.initData;
   if (init === undefined) return null;
-  const schema = toJsonSchema(init.schema);
-  const owned = new Set(init.serverOwned ?? []);
-  if (owned.size && schema.properties && typeof schema.properties === "object") {
-    schema.properties = Object.fromEntries(
-      Object.entries(schema.properties).filter(([k]) => !owned.has(k)),
-    );
-    if (Array.isArray(schema.required))
-      schema.required = schema.required.filter((k) => !owned.has(String(k)));
-  }
-  return { required: init.required, schema };
+  return { required: init.required, schema: toJsonSchema(init.schema) };
 }

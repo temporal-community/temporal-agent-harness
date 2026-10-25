@@ -24,22 +24,9 @@ ts_project(
         "//typescript/packages/worker:node_modules/@temporalio/common",
         "//typescript/packages/worker:node_modules/@temporalio/worker",
         "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src:plugin",
         "//typescript/packages/worker/src/harness:agent-client",
-        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
-    ],
-)
-
-ts_project(
-    name = "run-agent-worker.test",
-    testonly = True,
-    srcs = ["run-agent-worker.test.ts"],
-    declaration = True,
-    tsconfig = "//typescript/packages/worker:tsconfig",
-    deps = [
-        ":support",
-        "//typescript/packages/worker/src:index",
-        "//typescript/packages/worker/src/harness:agent-client",
-        "//typescript/packages/worker/src/web:client",
+        "//typescript/packages/worker/test/fixtures:workflows",
     ],
 )
 
@@ -59,7 +46,6 @@ ts_project(
         "//typescript/packages/worker:node_modules/@temporalio/workflow-streams",
         "//typescript/packages/worker/src:index",
         "//typescript/packages/worker/src/harness:agent-client",
-        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
         "//typescript/packages/worker/src/harness/stream-merge:index",
         "//typescript/packages/worker/src/utils:large-payload",
         "//typescript/packages/worker/test/fixtures:workflows",
@@ -70,10 +56,4 @@ harness_js_test(
     name = "plugin_test",
     data = [":plugin.test"],
     entry_point = "plugin.test.js",
-)
-
-harness_js_test(
-    name = "run-agent-worker_test",
-    data = [":run-agent-worker.test"],
-    entry_point = "run-agent-worker.test.js",
 )

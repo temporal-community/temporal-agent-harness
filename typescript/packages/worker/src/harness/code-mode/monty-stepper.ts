@@ -10,7 +10,7 @@
 // hands back every call the script made, not only the awaited ones, so the workflow can start
 // them at once and resolve one awaited in a later step.
 
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { ApplicationFailure, Context, log } from "@temporalio/activity";
 import {
   CollectString,
@@ -40,7 +40,6 @@ import {
   type ResumeBatchInput,
   type TypeCheckStubs,
 } from "@temporalio/agent-harness/harness/code-mode";
-import { continuationSecret } from "./secret.ts";
 import {
   FILE_OPERATIONS,
   encodeBytes,
@@ -177,54 +176,15 @@ function answerOs(
   return null;
 }
 
-// A paused interpreter crosses workflow history (and may be offloaded), and Monty restores only
-// what a trusted producer dumped: each snapshot is sealed with an HMAC over its bytes and what it
-// was dumped under (the stub type names), and opened only if it matches.
-const SNAPSHOT_TAG = "monty.snapshot.v1\0";
-const SEALED = "msig1.";
-
-function snapshotMac(secret: string, dump: Uint8Array, binding: string): Buffer {
-  return createHmac("sha256", secret)
-    .update(SNAPSHOT_TAG)
-    .update(binding)
-    .update("\0")
-    .update(dump)
-    .digest();
-}
-
-const bindingOf = (typeNames: readonly string[]) => JSON.stringify(typeNames);
-
-export function sealSnapshot(secret: string, dump: Uint8Array, binding: string): string {
-  return `${SEALED}${snapshotMac(secret, dump, binding).toString("base64url")}.${Buffer.from(dump).toString("base64")}`;
-}
-
-/** The dump inside `snapshot`, or a non-retryable failure if it was not sealed by `secret` under `binding`. */
-export function openSnapshot(secret: string, snapshot: string, binding: string): Buffer {
-  const refuse = (why: string) =>
-    ApplicationFailure.create({
-      type: "CodeModeSnapshotRefused",
-      nonRetryable: true,
-      message: `refusing to resume a Code Mode script: ${why}`,
-    });
-  if (!snapshot.startsWith(SEALED)) throw refuse("its snapshot is not sealed");
-  const [signature = "", body = ""] = snapshot.slice(SEALED.length).split(".");
-  const dump = Buffer.from(body, "base64");
-  const received = Buffer.from(signature, "base64url");
-  const expected = snapshotMac(secret, dump, binding);
-  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-    throw refuse(
-      "its snapshot's seal doesn't match (tampered, sealed under other stubs, or by another RUN_CONTINUATION_SECRET)",
-    );
-  }
-  return dump;
-}
+// A paused interpreter crosses workflow history as its dump, in base64.
+const encodeSnapshot = async (snap: FunctionSnapshot | FutureSnapshot) =>
+  Buffer.from(await snap.dump()).toString("base64");
 
 async function driveToBatch(
   start: Snapshot,
   stdout: CollectString,
   typeNames: readonly string[],
   clock: HostClock,
-  seal: (dump: Uint8Array) => string,
   files = false,
 ): Promise<CodeBatchStep> {
   const made = () => [...seen.values()].sort((a, b) => Number(a.call_id) - Number(b.call_id));
@@ -263,7 +223,7 @@ async function driveToBatch(
         return {
           done: false,
           stdout: stdout.output,
-          snapshot: seal(await snap.dump()),
+          snapshot: await encodeSnapshot(snap),
           calls: made(),
           awaiting: [snap.callId],
           file_op,
@@ -323,7 +283,7 @@ async function driveToBatch(
       continue;
     }
     if (snap instanceof FutureSnapshot) {
-      const snapshot = seal(await snap.dump());
+      const snapshot = await encodeSnapshot(snap);
       // Monty lists pending ids in an order that differs between processes; ids are assigned in
       // call order, so sorting runs a batch in the order the script made its calls.
       const awaiting = [...snap.pendingCallIds].sort((a, b) => a - b);
@@ -360,28 +320,13 @@ const osPolicy = (clock: HostClock) =>
     randomStart: { seed: clock.seed },
   }) as const;
 
-/**
- * Type-check `script` and run it to its first awaited batch (or a file operation, with `files`).
- * Paused scripts are sealed with `secret`, checked as `codeModeActivities` checks it.
- */
+/** Type-check `script` and run it to its first awaited batch (or a file operation, with `files`). */
 export async function codeStartBatch(
   script: string,
   stubs: TypeCheckStubs | null,
   limits: ResourceLimits,
   clock: HostClock,
-  secret = process.env.RUN_CONTINUATION_SECRET,
   files = false,
-): Promise<CodeBatchStep> {
-  return startBatch(script, stubs, limits, clock, continuationSecret(secret, "Code Mode"), files);
-}
-
-async function startBatch(
-  script: string,
-  stubs: TypeCheckStubs | null,
-  limits: ResourceLimits,
-  clock: HostClock,
-  secret: string,
-  files: boolean,
 ): Promise<CodeBatchStep> {
   log.info(
     `code_start_batch: compiling + starting (script_len=${script.length}, type_check=${stubs !== null})`,
@@ -393,14 +338,11 @@ async function startBatch(
     await montyPool()
   ).checkout({ limits: fitted, ...typeCheck, osPolicy: osPolicy(clock) });
   try {
-    const typeNames = stubs?.type_names ?? [];
-    const seal = (dump: Uint8Array) => sealSnapshot(secret, dump, bindingOf(typeNames));
     return await driveToBatch(
       await session.feedStart(script, { printCallback: stdout }),
       stdout,
-      typeNames,
+      stubs?.type_names ?? [],
       clock,
-      seal,
       files,
     );
   } catch (e) {
@@ -408,22 +350,12 @@ async function startBatch(
   }
 }
 
-/** Resume a paused script with its batch's results; `secret` is checked as in `codeStartBatch`. */
+/** Resume a paused script with its batch's results. */
 export async function codeResumeBatch(
   input: ResumeBatchInput,
   limits = DEFAULT_CODE_MODE_LIMITS,
-  secret = process.env.RUN_CONTINUATION_SECRET,
 ): Promise<CodeBatchStep> {
-  return resumeBatch(input, limits, continuationSecret(secret, "Code Mode"));
-}
-
-async function resumeBatch(
-  input: ResumeBatchInput,
-  limits: ResourceLimits,
-  secret: string,
-): Promise<CodeBatchStep> {
-  const binding = bindingOf(input.type_names);
-  const dump = openSnapshot(secret, input.snapshot, binding);
+  const dump = Buffer.from(input.snapshot, "base64");
   const stdout = new CollectString();
   const fitted = withinStep(limits);
   await using session = await (
@@ -479,7 +411,6 @@ async function resumeBatch(
       stdout,
       input.type_names,
       input.clock,
-      (next) => sealSnapshot(secret, next, binding),
       input.files,
     );
   } catch (e) {
@@ -513,24 +444,18 @@ export async function codeTypeCheck(script: string, stubs: TypeCheckStubs): Prom
   return "";
 }
 
-/**
- * The Code Mode activities. Paused scripts are sealed with `continuationSecret` (or
- * RUN_CONTINUATION_SECRET): every worker that runs them needs the same one, at least 32 bytes. The
- * published local-dev value is refused when NODE_ENV is production, and warned about otherwise.
- */
+/** The Code Mode activities. */
 export function codeModeActivities({
   limits = DEFAULT_CODE_MODE_LIMITS,
-  continuationSecret: secret = process.env.RUN_CONTINUATION_SECRET,
-}: { limits?: ResourceLimits; continuationSecret?: string | undefined } = {}): CodeModeActivities {
-  const key = continuationSecret(secret, "Code Mode");
+}: { limits?: ResourceLimits } = {}): CodeModeActivities {
   return {
     [CODE_START_BATCH_ACTIVITY]: (
       script: string,
       stubs: TypeCheckStubs | null,
       clock: HostClock,
       files?: boolean,
-    ) => startBatch(script, stubs, limits, clock, key, files ?? false),
-    [CODE_RESUME_BATCH_ACTIVITY]: (input: ResumeBatchInput) => resumeBatch(input, limits, key),
+    ) => codeStartBatch(script, stubs, limits, clock, files ?? false),
+    [CODE_RESUME_BATCH_ACTIVITY]: (input: ResumeBatchInput) => codeResumeBatch(input, limits),
     [CODE_TYPE_CHECK_ACTIVITY]: codeTypeCheck,
   } as CodeModeActivities;
 }

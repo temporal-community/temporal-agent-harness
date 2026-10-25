@@ -130,7 +130,7 @@ export function localPayloadStorage({
   return new ExternalStorage({ drivers: [localFileStorageDriver(baseDir)], payloadSizeThreshold });
 }
 
-/** The default backend of `AgentHarnessPlugin`, `connectClient` and the CLI's workers. */
+/** The default backend of `AgentHarnessPlugin`. */
 export const DEFAULT_PAYLOAD_STORAGE = localPayloadStorage();
 
 /** Throws the reason if a driver of `storage` that can check itself can't store. */

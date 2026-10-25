@@ -41,3 +41,18 @@ harness_pytest_test(
         "@pypi//temporalio",
     ],
 )
+
+harness_pytest_test(
+    name = "test_sdk_retries_off",
+    srcs = ["test_sdk_retries_off.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:_gemini_activity",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:_interactions_activity",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:_models",
+        "//python/tests:conftest",
+        "@pypi//google_genai",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)

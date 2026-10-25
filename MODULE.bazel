@@ -103,6 +103,8 @@ npm.npm_translate_lock(
         "//typescript:pnpm-workspace.yaml",
         "//typescript/apps/chat-server:package.json",
         "//typescript/apps/ui:package.json",
+        "//typescript/examples/monty:package.json",
+        "//typescript/examples/openai_hello:package.json",
         "//typescript/packages/client:package.json",
         "//typescript/packages/codegen:package.json",
         "//typescript/packages/core:package.json",
@@ -111,6 +113,18 @@ npm.npm_translate_lock(
         "//typescript/packages/worker:package.json",
     ],
     pnpm_lock = "//typescript:pnpm-lock.yaml",
+    # rules_js links a workspace package with its dependencies but not its optional peers, which
+    # pnpm resolves from the consumer. Node finds these at //typescript:node_modules, above the
+    # package store, as it would find them beside the package in a pnpm install, so code outside
+    # the SDK packages (typescript/examples) can load the SDKs' OpenAI integration and Code Mode's
+    # Monty sandbox.
+    public_hoist_packages = {
+        "@openai/agents-core": ["typescript"],
+        "@openai/agents-openai": ["typescript"],
+        "@pydantic/monty": ["typescript"],
+        "@temporalio/openai-agents": ["typescript"],
+        "openai": ["typescript"],
+    },
     # The update state is recorded under .aspect/rules/external_repository_action_cache.
     update_pnpm_lock = True,
 )
