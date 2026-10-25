@@ -26,7 +26,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from temporal_agent_harness.harness.agent_protocol import (
     BOARD_CLAIM_UPDATE,
@@ -356,18 +356,24 @@ class SwarmBoard:
         )
 
     async def _call(self, operation: BoardOperation, argument: BaseModel, result: type[_M]) -> _M:
-        output = await workflow.execute_activity(
-            SWARM_BOARD_UPDATE_ACTIVITY,
-            SwarmBoardUpdateInput(
-                swarm_id=self.swarm_id,
-                lane=self.lane,
-                operation=operation,
-                argument=argument.model_dump(mode="json"),
-            ),
-            start_to_close_timeout=self._timeout,
-            retry_policy=self._retry_policy,
-            result_type=dict,
-        )
+        try:
+            output = await workflow.execute_activity(
+                SWARM_BOARD_UPDATE_ACTIVITY,
+                SwarmBoardUpdateInput(
+                    swarm_id=self.swarm_id,
+                    lane=self.lane,
+                    operation=operation,
+                    argument=argument.model_dump(mode="json"),
+                ),
+                start_to_close_timeout=self._timeout,
+                retry_policy=self._retry_policy,
+                result_type=dict,
+            )
+        except ActivityError as e:
+            # The board's own error (e.g. BoardItemNotHeld), not "Activity task failed".
+            if isinstance(e.cause, ApplicationError):
+                raise e.cause from e
+            raise
         return result.model_validate(output)
 
 

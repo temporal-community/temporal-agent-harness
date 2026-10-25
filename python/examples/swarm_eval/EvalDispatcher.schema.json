@@ -1,0 +1,1216 @@
+{
+  "agent": "EvalDispatcher",
+  "source": "examples.swarm_eval.eval_agents:EvalDispatcher",
+  "init_data": null,
+  "handlers": {
+    "case": {
+      "description": "Show one case in full: its goal, the verdict per criterion, the conversation and every\ntool call the agent made.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/CaseRequest"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "evaluate": {
+      "description": "Evaluate the configured agent: write test cases (or reuse a saved suite), run every one\nas a live conversation with a fresh agent, grade each with a judge, and reply with the\nreport, compared against the suite's previous run.",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/EvalRun-Input"
+      },
+      "output": {
+        "$ref": "#/$defs/EvalReport"
+      }
+    },
+    "export": {
+      "description": "Export the complete run and its evaluation contract for the incubation CLI.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/ReportRequest"
+      },
+      "output": {
+        "$ref": "#/$defs/EvaluationEvidence"
+      }
+    },
+    "report": {
+      "description": "Show a run's report with every failure's evidence, regressions first.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/ReportRequest"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "suites": {
+      "description": "List the saved suites and the recent runs, from every session.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/ListSuites"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "progress": {
+      "$ref": "#/$defs/EvalProgress"
+    }
+  },
+  "$defs": {
+    "CaseRequest": {
+      "description": "Show everything about one case: its goal, verdict, conversation and tool calls.",
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "run_id": {
+          "default": "",
+          "description": "A run of this session; empty for the latest.",
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id"
+      ],
+      "title": "CaseRequest",
+      "type": "object"
+    },
+    "CaseResult": {
+      "description": "One graded case, as its tester reports it, with the evidence it was graded on.",
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "turns": {
+          "title": "Turns",
+          "type": "integer"
+        },
+        "target_workflow_id": {
+          "title": "Target Workflow Id",
+          "type": "string"
+        },
+        "seconds": {
+          "title": "Seconds",
+          "type": "number"
+        },
+        "conversation": {
+          "items": {
+            "$ref": "#/$defs/Exchange"
+          },
+          "title": "Conversation",
+          "type": "array"
+        },
+        "tool_calls": {
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          },
+          "title": "Tool Calls",
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        }
+      },
+      "required": [
+        "case_id",
+        "category",
+        "verdict",
+        "turns",
+        "target_workflow_id",
+        "seconds",
+        "conversation",
+        "tool_calls",
+        "error"
+      ],
+      "title": "CaseResult",
+      "type": "object"
+    },
+    "Category": {
+      "properties": {
+        "key": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Key",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "brief": {
+          "title": "Brief",
+          "type": "string"
+        },
+        "rubric": {
+          "title": "Rubric",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "brief",
+        "rubric"
+      ],
+      "title": "Category",
+      "type": "object"
+    },
+    "CategoryResult": {
+      "description": "Pass count for one category.",
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "integer"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "category",
+        "title",
+        "passed",
+        "total"
+      ],
+      "title": "CategoryResult",
+      "type": "object"
+    },
+    "Comparison": {
+      "description": "A run against the previous run of the same suite.",
+      "properties": {
+        "previous_run_id": {
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "previous_pass_rate": {
+          "title": "Previous Pass Rate",
+          "type": "number"
+        },
+        "pass_rate_delta": {
+          "title": "Pass Rate Delta",
+          "type": "number"
+        },
+        "fixed": {
+          "description": "Cases that failed before and pass now.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Fixed",
+          "type": "array"
+        },
+        "regressed": {
+          "description": "Cases that passed before and fail now.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Regressed",
+          "type": "array"
+        },
+        "still_failing": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Still Failing",
+          "type": "array"
+        }
+      },
+      "required": [
+        "previous_run_id",
+        "previous_pass_rate",
+        "pass_rate_delta",
+        "fixed",
+        "regressed",
+        "still_failing"
+      ],
+      "title": "Comparison",
+      "type": "object"
+    },
+    "CriterionResult": {
+      "description": "Whether one success criterion was met, and the evidence.",
+      "properties": {
+        "criterion": {
+          "title": "Criterion",
+          "type": "string"
+        },
+        "met": {
+          "title": "Met",
+          "type": "boolean"
+        },
+        "evidence": {
+          "description": "What in the tool calls or replies shows it.",
+          "title": "Evidence",
+          "type": "string"
+        }
+      },
+      "required": [
+        "criterion",
+        "met",
+        "evidence"
+      ],
+      "title": "CriterionResult",
+      "type": "object"
+    },
+    "EvalCase": {
+      "description": "A case as the swarm runs it: a draft with its id, category and turn budget.",
+      "properties": {
+        "persona": {
+          "description": "Who the user is, in a sentence.",
+          "title": "Persona",
+          "type": "string"
+        },
+        "goal": {
+          "description": "What the user wants, and every detail they know (names, airports, dates, preferences), including any they hold back until asked.",
+          "title": "Goal",
+          "type": "string"
+        },
+        "opening": {
+          "description": "The user's first message, in their voice.",
+          "title": "Opening",
+          "type": "string"
+        },
+        "success_criteria": {
+          "description": "Two to four concrete checks a judge can verify from the agent's tool calls and replies.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Criteria",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "max_turns": {
+          "title": "Max Turns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "persona",
+        "goal",
+        "opening",
+        "success_criteria",
+        "id",
+        "category",
+        "max_turns"
+      ],
+      "title": "EvalCase",
+      "type": "object"
+    },
+    "EvalProgress": {
+      "additionalProperties": false,
+      "description": "Where the run is: writing cases, running them, or done.",
+      "properties": {
+        "phase": {
+          "default": "writing",
+          "enum": [
+            "writing",
+            "running",
+            "done"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "cases_written": {
+          "default": 0,
+          "title": "Cases Written",
+          "type": "integer"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        }
+      },
+      "required": [
+        "phase",
+        "cases_written",
+        "categories"
+      ],
+      "title": "EvalProgress",
+      "type": "object"
+    },
+    "EvalReport": {
+      "description": "How the target did.",
+      "properties": {
+        "run_id": {
+          "description": "'<dispatcher workflow id>#<n>'; `report` and `case` take it.",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "suite": {
+          "description": "The suite this run's cases are saved as, to run again.",
+          "title": "Suite",
+          "type": "string"
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Comparison"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Against the previous run of the same suite, if there is one."
+        },
+        "swarm_id": {
+          "title": "Swarm Id",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "cases": {
+          "title": "Cases",
+          "type": "integer"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "integer"
+        },
+        "pass_rate": {
+          "title": "Pass Rate",
+          "type": "number"
+        },
+        "mean_score": {
+          "title": "Mean Score",
+          "type": "number"
+        },
+        "by_category": {
+          "items": {
+            "$ref": "#/$defs/CategoryResult"
+          },
+          "title": "By Category",
+          "type": "array"
+        },
+        "failure_modes": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Failure Modes",
+          "type": "object"
+        },
+        "failures": {
+          "description": "The lowest-scoring failures, worst first.",
+          "items": {
+            "$ref": "#/$defs/Failure"
+          },
+          "title": "Failures",
+          "type": "array"
+        },
+        "agents_started": {
+          "title": "Agents Started",
+          "type": "integer"
+        },
+        "seconds": {
+          "title": "Seconds",
+          "type": "number"
+        },
+        "failed_batches": {
+          "default": 0,
+          "description": "Batches of cases a writer failed to write.",
+          "title": "Failed Batches",
+          "type": "integer"
+        },
+        "markdown": {
+          "title": "Markdown",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "suite",
+        "comparison",
+        "swarm_id",
+        "target",
+        "cases",
+        "passed",
+        "pass_rate",
+        "mean_score",
+        "by_category",
+        "failure_modes",
+        "failures",
+        "agents_started",
+        "seconds",
+        "failed_batches",
+        "markdown"
+      ],
+      "title": "EvalReport",
+      "type": "object"
+    },
+    "EvalRun-Input": {
+      "description": "Evaluate a configured agent with a swarm: write cases, run each as a live conversation\nwith a fresh agent, and grade every one.",
+      "properties": {
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target-Input"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvaluationProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision": {
+          "default": "",
+          "description": "Evaluated source revision; supplied by the incubation CLI.",
+          "title": "Revision",
+          "type": "string"
+        },
+        "max_cases": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional cap, including when loading a saved suite.",
+          "title": "Max Cases"
+        },
+        "cases": {
+          "default": 16,
+          "description": "Test cases across all categories.",
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Cases",
+          "type": "integer"
+        },
+        "categories": {
+          "description": "Category keys to test (see categories.py); empty tests every category.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "concurrency": {
+          "default": 2,
+          "description": "Conversations in flight at once. At most this many target agents run, which is what bounds the request rate to the models.",
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "max_turns": {
+          "default": 3,
+          "description": "User messages per conversation.",
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "judges": {
+          "default": 1,
+          "description": "Judges the testers share.",
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Judges",
+          "type": "integer"
+        },
+        "cases_per_writer": {
+          "default": 10,
+          "maximum": 40,
+          "minimum": 1,
+          "title": "Cases Per Writer",
+          "type": "integer"
+        },
+        "models": {
+          "$ref": "#/$defs/Models-Input"
+        },
+        "suite": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Run this saved suite's cases instead of writing new ones (`cases` and `categories` are then ignored). Every run saves its cases as a suite; see `save_as`.",
+          "title": "Suite"
+        },
+        "save_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Save the cases this run writes as a suite with this name. Without it they are saved under the run's id. Ignored when `suite` is given.",
+          "title": "Save As"
+        },
+        "simulate": {
+          "default": false,
+          "description": "Script the writers, testers and judges instead of calling a model, and test the scripted target: a run with no API keys, for trying the swarm itself.",
+          "title": "Simulate",
+          "type": "boolean"
+        }
+      },
+      "title": "EvalRun",
+      "type": "object"
+    },
+    "EvalRun-Output": {
+      "description": "Evaluate a configured agent with a swarm: write cases, run each as a live conversation\nwith a fresh agent, and grade every one.",
+      "properties": {
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target-Output"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvaluationProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision": {
+          "default": "",
+          "description": "Evaluated source revision; supplied by the incubation CLI.",
+          "title": "Revision",
+          "type": "string"
+        },
+        "max_cases": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional cap, including when loading a saved suite.",
+          "title": "Max Cases"
+        },
+        "cases": {
+          "default": 16,
+          "description": "Test cases across all categories.",
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Cases",
+          "type": "integer"
+        },
+        "categories": {
+          "description": "Category keys to test (see categories.py); empty tests every category.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        },
+        "concurrency": {
+          "default": 2,
+          "description": "Conversations in flight at once. At most this many target agents run, which is what bounds the request rate to the models.",
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "max_turns": {
+          "default": 3,
+          "description": "User messages per conversation.",
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "judges": {
+          "default": 1,
+          "description": "Judges the testers share.",
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Judges",
+          "type": "integer"
+        },
+        "cases_per_writer": {
+          "default": 10,
+          "maximum": 40,
+          "minimum": 1,
+          "title": "Cases Per Writer",
+          "type": "integer"
+        },
+        "models": {
+          "$ref": "#/$defs/Models-Output"
+        },
+        "suite": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Run this saved suite's cases instead of writing new ones (`cases` and `categories` are then ignored). Every run saves its cases as a suite; see `save_as`.",
+          "title": "Suite"
+        },
+        "save_as": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Save the cases this run writes as a suite with this name. Without it they are saved under the run's id. Ignored when `suite` is given.",
+          "title": "Save As"
+        },
+        "simulate": {
+          "default": false,
+          "description": "Script the writers, testers and judges instead of calling a model, and test the scripted target: a run with no API keys, for trying the swarm itself.",
+          "title": "Simulate",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target",
+        "profile",
+        "revision",
+        "max_cases",
+        "cases",
+        "categories",
+        "concurrency",
+        "max_turns",
+        "judges",
+        "cases_per_writer",
+        "models",
+        "suite",
+        "save_as",
+        "simulate"
+      ],
+      "title": "EvalRun",
+      "type": "object"
+    },
+    "EvaluationEvidence": {
+      "description": "Full, exportable evidence. Simulation is explicitly recorded and never certifies readiness.",
+      "properties": {
+        "report": {
+          "$ref": "#/$defs/EvalReport"
+        },
+        "request": {
+          "$ref": "#/$defs/EvalRun-Output"
+        },
+        "target": {
+          "$ref": "#/$defs/Target-Output"
+        },
+        "profile": {
+          "$ref": "#/$defs/EvaluationProfile"
+        },
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/EvalCase"
+          },
+          "title": "Cases",
+          "type": "array"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/CaseResult"
+          },
+          "title": "Results",
+          "type": "array"
+        }
+      },
+      "required": [
+        "report",
+        "request",
+        "target",
+        "profile",
+        "cases",
+        "results"
+      ],
+      "title": "EvaluationEvidence",
+      "type": "object"
+    },
+    "EvaluationProfile": {
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "categories": {
+          "items": {
+            "$ref": "#/$defs/Category"
+          },
+          "minItems": 1,
+          "title": "Categories",
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "categories"
+      ],
+      "title": "EvaluationProfile",
+      "type": "object"
+    },
+    "Exchange": {
+      "description": "One user message and the agent's reply to it.",
+      "properties": {
+        "user": {
+          "title": "User",
+          "type": "string"
+        },
+        "agent": {
+          "title": "Agent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user",
+        "agent"
+      ],
+      "title": "Exchange",
+      "type": "object"
+    },
+    "Failure": {
+      "description": "One failed case, for the report.",
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "failure_mode": {
+          "enum": [
+            "none",
+            "hallucinated_result",
+            "ignored_constraint",
+            "wrong_action",
+            "no_action",
+            "did_not_ask",
+            "unsupported_claim",
+            "error"
+          ],
+          "title": "Failure Mode",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "target_workflow_id": {
+          "description": "The target agent that failed, to look at.",
+          "title": "Target Workflow Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "category",
+        "failure_mode",
+        "summary",
+        "target_workflow_id"
+      ],
+      "title": "Failure",
+      "type": "object"
+    },
+    "ListSuites": {
+      "description": "List the saved suites and the recent runs, across every session.",
+      "properties": {
+        "runs": {
+          "default": 10,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Runs",
+          "type": "integer"
+        }
+      },
+      "title": "ListSuites",
+      "type": "object"
+    },
+    "Models-Input": {
+      "description": "Model choices for each role. Defaults use Gemini for Monty and OpenAI for evaluators;\ncustom targets use the provider configured on their own worker.",
+      "properties": {
+        "target": {
+          "default": "gemini-3.1-flash-lite",
+          "description": "The target agent's model, set on each instance before its first turn.",
+          "title": "Target",
+          "type": "string"
+        },
+        "writer": {
+          "default": "gpt-6-luna",
+          "description": "Invents the test cases.",
+          "title": "Writer",
+          "type": "string"
+        },
+        "tester": {
+          "default": "gpt-6-luna",
+          "description": "Plays the user in each case.",
+          "title": "Tester",
+          "type": "string"
+        },
+        "judge": {
+          "default": "gpt-6.1-sol",
+          "description": "Grades each case against its rubric.",
+          "title": "Judge",
+          "type": "string"
+        }
+      },
+      "title": "Models",
+      "type": "object"
+    },
+    "Models-Output": {
+      "description": "Model choices for each role. Defaults use Gemini for Monty and OpenAI for evaluators;\ncustom targets use the provider configured on their own worker.",
+      "properties": {
+        "target": {
+          "default": "gemini-3.1-flash-lite",
+          "description": "The target agent's model, set on each instance before its first turn.",
+          "title": "Target",
+          "type": "string"
+        },
+        "writer": {
+          "default": "gpt-6-luna",
+          "description": "Invents the test cases.",
+          "title": "Writer",
+          "type": "string"
+        },
+        "tester": {
+          "default": "gpt-6-luna",
+          "description": "Plays the user in each case.",
+          "title": "Tester",
+          "type": "string"
+        },
+        "judge": {
+          "default": "gpt-6.1-sol",
+          "description": "Grades each case against its rubric.",
+          "title": "Judge",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "writer",
+        "tester",
+        "judge"
+      ],
+      "title": "Models",
+      "type": "object"
+    },
+    "ReportRequest": {
+      "description": "Show a run's report, with each failure's evidence.",
+      "properties": {
+        "run_id": {
+          "default": "",
+          "description": "A run of this session; empty for the latest.",
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "title": "ReportRequest",
+      "type": "object"
+    },
+    "Target-Input": {
+      "description": "The agent under test, and how to drive it.",
+      "properties": {
+        "workflow_type": {
+          "title": "Workflow Type",
+          "type": "string"
+        },
+        "task_queue": {
+          "title": "Task Queue",
+          "type": "string"
+        },
+        "handler": {
+          "default": "ask",
+          "title": "Handler",
+          "type": "string"
+        },
+        "input_field": {
+          "default": "text",
+          "title": "Input Field",
+          "type": "string"
+        },
+        "output_field": {
+          "default": "text",
+          "title": "Output Field",
+          "type": "string"
+        },
+        "init_data": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Init Data"
+        },
+        "model_handler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "set_model",
+          "title": "Model Handler"
+        }
+      },
+      "required": [
+        "workflow_type",
+        "task_queue"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "Target-Output": {
+      "description": "The agent under test, and how to drive it.",
+      "properties": {
+        "workflow_type": {
+          "title": "Workflow Type",
+          "type": "string"
+        },
+        "task_queue": {
+          "title": "Task Queue",
+          "type": "string"
+        },
+        "handler": {
+          "default": "ask",
+          "title": "Handler",
+          "type": "string"
+        },
+        "input_field": {
+          "default": "text",
+          "title": "Input Field",
+          "type": "string"
+        },
+        "output_field": {
+          "default": "text",
+          "title": "Output Field",
+          "type": "string"
+        },
+        "init_data": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Init Data"
+        },
+        "model_handler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "set_model",
+          "title": "Model Handler"
+        }
+      },
+      "required": [
+        "workflow_type",
+        "task_queue",
+        "handler",
+        "input_field",
+        "output_field",
+        "init_data",
+        "model_handler"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    },
+    "ToolCall": {
+      "description": "One tool call the target made, from its own event stream, preserved in full.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "input": {
+          "title": "Input",
+          "type": "string"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        }
+      },
+      "required": [
+        "name",
+        "input",
+        "output",
+        "error"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "A judge's grade for one case.",
+      "properties": {
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "score": {
+          "description": "5 is flawless, 1 is wrong or harmful.",
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Score",
+          "type": "integer"
+        },
+        "criteria": {
+          "items": {
+            "$ref": "#/$defs/CriterionResult"
+          },
+          "title": "Criteria",
+          "type": "array"
+        },
+        "failure_mode": {
+          "description": "The main way it failed; 'none' if it passed.",
+          "enum": [
+            "none",
+            "hallucinated_result",
+            "ignored_constraint",
+            "wrong_action",
+            "no_action",
+            "did_not_ask",
+            "unsupported_claim",
+            "error"
+          ],
+          "title": "Failure Mode",
+          "type": "string"
+        },
+        "summary": {
+          "description": "One sentence a developer can act on.",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "passed",
+        "score",
+        "criteria",
+        "failure_mode",
+        "summary"
+      ],
+      "title": "Verdict",
+      "type": "object"
+    }
+  }
+}

@@ -489,6 +489,31 @@ describe("a script message", () => {
 });
 
 describe("an assistant reply", () => {
+  it("renders a structured result's markdown report before collapsed, copyable JSON", () => {
+    const json = { cases: 16, passed: 15, markdown: "## Simulation result\n\n**15 of 16 passed.**\n\n| Category | Passed |\n| --- | --- |\n| Changes | 1/2 |" };
+    const data = articles(chat({ items: [user(1), reply(1, JSON.stringify(json), { data: true, json })] }))[1];
+    assert.match(data, /<h[2-6][^>]*>Simulation result<\/h[2-6]>/);
+    assert.match(data, /<strong>15 of 16 passed\.<\/strong>/);
+    assert.match(data, /<table/);
+    const disclosure = data.match(/<details\b[^>]*>[\s\S]*?<\/details>/)?.[0] ?? "";
+    assert.match(disclosure, /<summary[^>]*>View JSON<\/summary>/);
+    assert.doesNotMatch(disclosure.split(">", 1)[0], /\bopen\b/);
+    assert.match(disclosure, /aria-label="Copy JSON"/);
+    assert.ok(data.indexOf("Simulation result") < data.indexOf("<details"));
+  });
+
+  it("keeps ordinary data as JSON and sanitizes a supplied markdown report", () => {
+    for (const markdown of [undefined, "", "  ", 42]) {
+      const json = { records: [], markdown };
+      const data = articles(chat({ items: [user(1), reply(1, JSON.stringify(json), { data: true, json })] }))[1];
+      assert.match(data, /class="json-reply/);
+      assert.doesNotMatch(data, /View JSON/);
+    }
+    const json = { markdown: '<script>alert(1)</script>\n\n[click](javascript:alert(1))' };
+    const data = articles(chat({ items: [user(1), reply(1, JSON.stringify(json), { data: true, json })] }))[1];
+    assert.doesNotMatch(data, /<script|href="javascript:/);
+  });
+
   it("has no avatar: the bubble starts the message", () => {
     const body = chat({ items: [user(1), reply(1, "It retries every 30 minutes.")] });
     const [, assistant] = articles(body);

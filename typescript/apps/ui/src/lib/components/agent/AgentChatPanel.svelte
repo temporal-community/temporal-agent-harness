@@ -968,6 +968,12 @@
     return !(blocks.length === 1 && /^ {0,3}(`{3,}|~{3,})/.test(blocks[0]!));
   }
 
+  /** A structured result can provide a readable report while keeping its data inspectable. */
+  function reportMarkdown(output: unknown): string | null {
+    if (!output || typeof output !== "object" || Array.isArray(output) || !("markdown" in output)) return null;
+    return typeof output.markdown === "string" && output.markdown.trim() ? output.markdown : null;
+  }
+
   function scriptError(text: string): boolean {
     return /^Script error\s*\(/.test(text.trimStart());
   }
@@ -2055,7 +2061,18 @@
                 </LongContent>
               </TraceRow>
             {:else if message.data}
-              <JsonReply id={`message-${message.id}`} json={message.json} text={message.text} onResize={remeasureMessages} />
+              {@const report = reportMarkdown(message.json)}
+              {#if report}
+                <LongContent id={`message-${message.id}-report`} text={report} label="Report" onResize={remeasureMessages}>
+                  <MarkdownMessage text={report} />
+                </LongContent>
+                <details class="report-data" ontoggle={remeasureMessages}>
+                  <summary>View JSON</summary>
+                  <JsonReply id={`message-${message.id}`} json={message.json} onResize={remeasureMessages} />
+                </details>
+              {:else}
+                <JsonReply id={`message-${message.id}`} json={message.json} text={message.text} onResize={remeasureMessages} />
+              {/if}
             {:else}
               <LongContent
                 id={`message-${message.id}`}
@@ -2685,6 +2702,23 @@
 </section>
 
 <style>
+  .report-data {
+    margin-block-start: var(--gap-md);
+  }
+
+  .report-data > summary {
+    width: fit-content;
+    padding-block: var(--gap-sm);
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    cursor: pointer;
+  }
+
+  .report-data > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .agent-chat {
     container: agent-chat / inline-size;
     /* The messages' side inset, which the attention queue over them shares. */

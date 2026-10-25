@@ -126,6 +126,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
+        ":agent_client",
         ":swarm_attributes",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "@pypi//pydantic",

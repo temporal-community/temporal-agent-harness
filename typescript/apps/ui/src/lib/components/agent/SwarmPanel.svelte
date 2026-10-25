@@ -24,11 +24,13 @@
     sessionId: string | null;
     loadMembership: (sessionId: string) => Promise<SwarmMembership>;
     loadTopology: (swarmId: string, options: { board: boolean }) => Promise<SwarmTopology>;
+    /** Open a member's own session. Absent where the console cannot switch sessions. */
+    onOpenMember?: (workflowId: string) => void;
     /** How often to re-read the topology, in ms. */
     pollMs?: number;
   }
 
-  let { sessionId, loadMembership, loadTopology, pollMs = 2000 }: Props = $props();
+  let { sessionId, loadMembership, loadTopology, onOpenMember, pollMs = 2000 }: Props = $props();
 
   let membership = $state<SwarmMembership | null>(null);
   let topology = $state<SwarmTopology | null>(null);
@@ -187,6 +189,18 @@
               <dt>Last active</dt>
               <dd>{time(selected.last_active)}</dd>
             </dl>
+            <!-- A board lane is a workflow but not an agent: it has no session to open. -->
+            {#if onOpenMember && selected.role !== "board"}
+              <button type="button" class="open" onclick={() => onOpenMember(selected.workflow_id)}>
+                Open session
+              </button>
+              {#if selected.closed}
+                <p class="muted">
+                  It has closed: its own event stream cannot be replayed yet, so its session shows
+                  what the console has cached, if anything.
+                </p>
+              {/if}
+            {/if}
           </section>
         {/if}
         <section>
@@ -371,6 +385,21 @@
   li button:hover,
   li button:focus-visible {
     text-decoration: underline;
+  }
+
+  .open {
+    margin-top: 8px;
+    padding: 3px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-1);
+    color: var(--text-1);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .open:hover {
+    background: var(--surface-2, var(--surface-1));
   }
 
   .roles li {

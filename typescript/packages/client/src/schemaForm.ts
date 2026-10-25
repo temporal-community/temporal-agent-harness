@@ -120,7 +120,8 @@ function describeField(
   const schema = unwrap(raw, root);
   // Pydantic puts an optional field's title, description and default on the outer `anyOf`,
   // not on the branch `unwrap` returns.
-  const annotation = (key: string): unknown => raw[key] ?? schema[key];
+  const annotation = (key: string): unknown =>
+    Object.prototype.hasOwnProperty.call(raw, key) ? raw[key] : schema[key];
   const text = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value : undefined;
   const num = (key: string): number | undefined =>
@@ -242,6 +243,7 @@ export function emptyValue(field: SchemaField): unknown {
     case "array":
       return [];
     case "object":
+      if (!field.required) return null;
       return Object.fromEntries((field.fields ?? []).map((f) => [f.name, emptyValue(f)]));
     default:
       return "";
@@ -351,6 +353,8 @@ export function validate(
   for (const field of fields) {
     const key = fieldPath(path, field.name);
     const value = values[field.name];
+    // An omitted optional object must not require its children's fields.
+    if (!field.required && isBlank(value)) continue;
     const problem = fieldProblem(field, value);
     if (problem) problems[key] = problem;
     if (field.kind === "object" && field.fields) {

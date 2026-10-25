@@ -399,7 +399,8 @@ async def test_a_peer_turn_that_fails_closes_its_edge_with_an_error(env, task_qu
 async def test_a_subagent_turn_that_fails_closes_its_bracket(env, task_queue):
     parent = await _start(env.client, task_queue)
     events = await _turn(env.client, parent, "spawn_and_fail", {"task_queue": task_queue})
-    _error(events)
+    # The child's own failure, not the activity wrapper's "Activity task failed".
+    assert "failing on purpose: child" in _error(events)
     received = [
         e.event for e in events if e.event.type == AgentEventType.SUBAGENT_REPLY_RECEIVED
     ]
@@ -484,3 +485,27 @@ async def test_an_agent_founds_its_own_swarm_unless_its_caller_placed_it(env, ta
     await _turn(env.client, guest, "seed", {"lane": "a", "titles": ["z"]})
     attrs = await _attributes(env.client, guest)
     assert (attrs.get(SWARM_ID), attrs.get(AGENT_ROLE)) == (placed.swarm_id, "guest")
+
+
+async def test_stopping_a_subagent_that_already_closed_succeeds(env, task_queue):
+    parent = await _start(env.client, task_queue)
+    await _turn(env.client, parent, "spawn", {"task_queue": task_queue})
+    (child,) = (await AgentClient(env.client, parent).get_status()).subagents
+    await env.client.get_workflow_handle(child.workflow_id).terminate("gone before its parent")
+
+    events = await _turn(env.client, parent, "stop_all", {"text": ""})
+    assert _reply(events) == {"text": "1"}
+    stopped = [e.event for e in events if e.event.type == AgentEventType.SUBAGENT_STOPPED]
+    assert [s.workflow_id for s in stopped] == [child.workflow_id]
+    assert (await AgentClient(env.client, parent).get_status()).subagents == []
+
+
+def test_only_an_unprocessed_update_is_worth_retrying():
+    from temporalio.client import WorkflowUpdateFailedError
+
+    from temporal_agent_harness.harness.agent_client import is_unprocessed_update
+
+    unprocessed = WorkflowUpdateFailedError(ApplicationError("dropped", type="UnprocessedUpdate"))
+    rejected = WorkflowUpdateFailedError(ApplicationError("not yours", type="BoardItemNotHeld"))
+    assert is_unprocessed_update(unprocessed)
+    assert not is_unprocessed_update(rejected)

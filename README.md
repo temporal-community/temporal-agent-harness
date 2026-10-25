@@ -1054,6 +1054,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](python/examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](python/examples/code_mode_memory/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](python/examples/agent_dag/README.md)); best in its own UI, **`just agent-dag-studio`** |
+| Eval Swarm | `OPENAI_API_KEY` **and** `GEMINI_API_KEY` (or none, with `simulate: true`); a small, configurable swarm evaluates agents and exports evidence for the [product-incubation workflow](python/examples/swarm_eval/INCUBATION.md) — the dev server needs the swarm search attributes, which `just temporal` registers ([readme](python/examples/swarm_eval/README.md)); send `evaluate` in the UI and open the Swarm pane |
 | Swarm Triage | nothing — hundreds of scripted agents, no model; the dev server needs the swarm search attributes, which `just temporal` registers ([readme](python/examples/swarm_triage/README.md)); send `triage` in the UI |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`

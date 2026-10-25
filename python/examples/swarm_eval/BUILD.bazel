@@ -1,0 +1,197 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "categories",
+    srcs = ["categories.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [":models"],
+)
+
+py_library(
+    name = "eval_agents",
+    srcs = ["eval_agents.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":categories",
+        ":library",
+        ":models",
+        ":progress",
+        ":reports",
+        ":simulated",
+        ":trace",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//openai_agents",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "progress",
+    srcs = ["progress.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "simulated",
+    srcs = ["simulated.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":categories",
+        ":models",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "trace",
+    srcs = ["trace.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":models",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":eval_agents",
+        ":library",
+        ":simulated",
+        ":trace",
+        "//python/examples/monty:activities",
+        "//python/examples/monty:conversational_workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "EvalDispatcher",
+    agent = "examples.swarm_eval.eval_agents:EvalDispatcher",
+    description = """
+Evaluate a configured agent with a small swarm. Send `evaluate` to write cases, run conversations,
+and grade them against tool evidence. Defaults to Monty's travel agent with 16 cases, two active
+conversations, and one judge. Supply target and profile for another agent. `export` returns full
+run evidence for the incubation CLI; `simulate: true` exercises the loop with no API keys.
+Needs the swarm search attributes (the root `just temporal` registers them).""",
+    key = "swarm-eval",
+    label = "Eval Swarm",
+    task_queue = "swarm-eval",
+    deps = [":eval_agents"],
+)
+
+# agents.toml and the dispatcher's schema document. The other agents are started by a run, never
+# as sessions of their own, so the registry does not list them. `bazel test` fails when one is out
+# of date; `bazel run //python/examples/swarm_eval:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "EvalDispatcher.schema.json",
+        "agents.toml",
+    ],
+    agents = [":EvalDispatcher"],
+    visibility = ["//python/tests/web:__pkg__"],
+)
+
+py_library(
+    name = "library",
+    srcs = ["library.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":models",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "reports",
+    srcs = ["reports.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":categories",
+        ":library",
+        ":models",
+    ],
+)
+
+harness_module_binary(
+    name = "incubate",
+    srcs = ["incubate.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":incubation",
+        ":models",
+        ":promotion",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "incubation",
+    srcs = ["incubation.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":models",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "promotion",
+    srcs = ["promotion.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [":incubation"],
+)
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+)

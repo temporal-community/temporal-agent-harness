@@ -1165,7 +1165,16 @@ export class AgentRunController {
     } catch {
       return null;
     }
-    return openable();
+    const listed = openable();
+    if (listed) return listed;
+    /* Not one the session manager lists — a swarm member or a subagent — but any agent
+       workflow can be opened by id. */
+    try {
+      const found = await this.#api.getSession(sessionId);
+      return found.execution_status === "NOT_FOUND" ? null : found;
+    } catch {
+      return null;
+    }
   }
 
   async #loadSessions(): Promise<void> {

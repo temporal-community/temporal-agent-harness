@@ -510,3 +510,45 @@ def test_turn_end_with_no_reply_for_us_reports_no_reply(monkeypatch):
     output, got_reply = _consume(items, monkeypatch)
     assert got_reply is False
     assert output == {}
+
+
+# ---------------------------------------------------------------- where a turn starts reading
+
+
+@pytest.mark.parametrize(("from_offset", "accepted_offset", "expected"), [(0, 57, 57), (90, 57, 90)])
+def test_a_turn_never_reads_from_before_its_message_was_accepted(
+    monkeypatch, from_offset, accepted_offset, expected
+):
+    """A first turn to an agent passes offset 0; reading the agent's stream from there replays its
+    whole history on every turn, which for a busy peer grew until the server killed it."""
+    from temporal_agent_harness.harness.agent_protocol import AgentMessageReply, MessageDisposition
+
+    monkeypatch.setattr(
+        subagent_activities.activity,
+        "info",
+        lambda: SimpleNamespace(workflow_run_id="run", activity_id="1"),
+    )
+
+    class _Client:
+        workflow_id = "peer"
+
+        async def _submit_message(self, *_args, **_kwargs):
+            return AgentMessageReply(
+                turn_number=3,
+                turn_id="t3",
+                message_id="m",
+                disposition=MessageDisposition.JOINED,
+                accepted_offset=accepted_offset,
+            )
+
+    progress = asyncio.run(
+        SubagentActivities(client=None)._submit(
+            _Client(),
+            "grade",
+            {},
+            from_offset=from_offset,
+            update_id_prefix="peer-turn",
+            not_found_type="PeerNotFound",
+        )
+    )
+    assert progress.consumed_offset == expected

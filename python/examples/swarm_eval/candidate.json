@@ -1,0 +1,43 @@
+{
+  "slug": "agent-regression-lab",
+  "name": "Agent Regression Lab",
+  "owner": "Temporal agent developer tools",
+  "example": "swarm_eval",
+  "target_user": "Teams building conversational agents on Temporal Agent Harness",
+  "problem": "Agent changes can silently break multi-turn behavior and tool use; developers need repeatable evidence before shipping.",
+  "workaround": "Manual conversations, ad hoc scripts, and model-only grading without durable execution traces.",
+  "temporal_advantage": "Durable experiments survive worker restarts and correlate every case with its agent workflows.",
+  "harness_advantage": "Typed agent messages, isolated subagents, peer judges, and tool events provide a reusable evaluation interface.",
+  "adoption_hypothesis": "A team can connect one existing harness agent and reproduce a known regression within an hour, then use the saved suite before a release.",
+  "evaluation": {
+    "target": null,
+    "profile": null,
+    "revision": "",
+    "cases": 8,
+    "categories": [
+      "flight_search",
+      "budget"
+    ],
+    "concurrency": 2,
+    "max_turns": 3,
+    "judges": 1,
+    "cases_per_writer": 10,
+    "models": {
+      "target": "gemini-3.1-flash-lite",
+      "writer": "gpt-6-luna",
+      "tester": "gpt-6-luna",
+      "judge": "gpt-6.1-sol"
+    },
+    "suite": null,
+    "save_as": null,
+    "simulate": false
+  },
+  "min_cases": 8,
+  "min_pass_rate": 0.9,
+  "required_categories": [
+    "flight_search",
+    "budget"
+  ],
+  "max_run_seconds": 300.0,
+  "max_cost_usd": 5.0
+}

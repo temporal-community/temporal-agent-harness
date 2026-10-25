@@ -983,6 +983,7 @@
           sessionId={run.session?.workflow_id ?? null}
           loadMembership={(id) => run.sessionSwarm(id)}
           loadTopology={(id, options) => run.swarmTopology(id, options)}
+          onOpenMember={(id) => run.selectSession(id)}
         />
       {:else if pane.kind === "logs"}
         <TranscriptPanel

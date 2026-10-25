@@ -65,6 +65,17 @@ class AgentTurnError(Exception):
     """Workflow published a terminal error event for the turn."""
 
 
+def is_unprocessed_update(error: WorkflowUpdateFailedError) -> bool:
+    """Whether the server gave up on an update the workflow never handled, rather than the
+    workflow rejecting it.
+
+    Temporal answers ``UnprocessedUpdate`` when the workflow task carrying an update ends without
+    the worker accepting or rejecting it — a busy worker that let the task time out, say. Nothing
+    ran and nothing was recorded, so sending the same update again (same update id) is safe; a
+    caller that retries should, unlike for a real rejection."""
+    return getattr(error.cause, "type", None) == "UnprocessedUpdate"
+
+
 class MidTurnRejectedError(Exception):
     """The target handler declares ``mid_turn=MidTurn.REJECT`` and a turn is already open.
 

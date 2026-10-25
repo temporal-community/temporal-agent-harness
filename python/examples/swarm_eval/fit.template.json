@@ -1,0 +1,50 @@
+{
+  "candidate_slug": "agent-regression-lab",
+  "evaluation_hash": "REPLACE_WITH_EVALUATION_HASH",
+  "kind": "synthetic",
+  "assessed_by": "REPLACE_WITH_REVIEWER",
+  "findings": [
+    {
+      "dimension": "problem",
+      "outcome": "unknown",
+      "observation": "Collect and assess real evidence for this hypothesis.",
+      "references": [
+        "REPLACE_WITH_EVIDENCE_REFERENCE"
+      ]
+    },
+    {
+      "dimension": "temporal_advantage",
+      "outcome": "unknown",
+      "observation": "Collect and assess real evidence for this hypothesis.",
+      "references": [
+        "REPLACE_WITH_EVIDENCE_REFERENCE"
+      ]
+    },
+    {
+      "dimension": "harness_advantage",
+      "outcome": "unknown",
+      "observation": "Collect and assess real evidence for this hypothesis.",
+      "references": [
+        "REPLACE_WITH_EVIDENCE_REFERENCE"
+      ]
+    },
+    {
+      "dimension": "adoption",
+      "outcome": "unknown",
+      "observation": "Collect and assess real evidence for this hypothesis.",
+      "references": [
+        "REPLACE_WITH_EVIDENCE_REFERENCE"
+      ]
+    },
+    {
+      "dimension": "operability",
+      "outcome": "unknown",
+      "observation": "Collect and assess real evidence for this hypothesis.",
+      "references": [
+        "REPLACE_WITH_EVIDENCE_REFERENCE"
+      ]
+    }
+  ],
+  "measured_cost_usd": 0,
+  "cost_reference": "REPLACE_WITH_PROVIDER_USAGE_RECORD"
+}

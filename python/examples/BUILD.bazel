@@ -9,6 +9,7 @@ EXAMPLES = [
     "openai_hello",
     "pydantic_ai_hello",
     "react_agent",
+    "swarm_eval",
     "swarm_triage",
     "tictactoe",
 ]

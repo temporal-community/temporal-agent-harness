@@ -112,6 +112,25 @@ class _OpenAIJSONPlainPayloadConverter(PydanticJSONPlainPayloadConverter):
     side does not, so fall back to lenient construction when validation fails.
     """
 
+    def to_payload(self, value: typing.Any) -> temporalio.api.common.v1.Payload | None:
+        """See base class. Serializes BY ALIAS, the names OpenAI's models validate by.
+
+        Some OpenAI fields are aliased because their real name shadows something —
+        ``ResponseFormatTextJSONSchemaConfig.schema_`` is ``schema`` on the wire — and the
+        models only accept the alias. Written by field name, the ``response.completed`` event
+        of every structured (``output_type``) reply failed validation in the workflow, the
+        lenient fallback rebuilt it as some other event, and the agents SDK reported "Model did
+        not produce a final response".
+        """
+        data = self._schema_serializer.to_json(
+            value,
+            exclude_unset=self._to_json_options.exclude_unset if self._to_json_options else False,
+            by_alias=True,
+        )
+        return temporalio.api.common.v1.Payload(
+            metadata={"encoding": self.encoding.encode()}, data=data
+        )
+
     def from_payload(
         self,
         payload: temporalio.api.common.v1.Payload,

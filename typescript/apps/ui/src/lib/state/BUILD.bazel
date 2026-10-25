@@ -745,6 +745,15 @@ vitest_test(
 )
 
 vitest_test(
+    name = "openMember_test",
+    src = "openMember.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "paneStack_test",
     src = "paneStack.test.mjs",
     deps = [

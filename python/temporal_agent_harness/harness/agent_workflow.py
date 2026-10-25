@@ -3412,7 +3412,13 @@ class AgentWorkflowRunner:
         a human/UI uses), publishes :class:`SubagentStopped` (so a consumer can unmount its
         stream), then deregisters so a later ``send_<function>`` to ``handle`` is rejected."""
         inst = self._status.subagent(handle)  # validate ownership (raises UnknownSubagent)
-        await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
+        try:
+            await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
+        except ApplicationError as e:
+            # Already gone (terminated, timed out, failed): stopped is what was asked for, so
+            # record it and deregister rather than failing the caller's turn.
+            if e.type != "ExternalWorkflowExecutionNotFound":
+                raise
         self.publish(
             SubagentStopped(
                 subagent_id=inst.handle,
@@ -3509,6 +3515,10 @@ class AgentWorkflowRunner:
                     self._publish_subagent_reply_received(
                         inst, msg_type, accepted_turn, outcome="error"
                     )
+                # Surface the activity's own error (its type and message — the child's failure),
+                # not the wrapper's "Activity task failed".
+                if cause is not None and cause is not e:
+                    raise cause from e
                 raise
             inst.last_consumed_offset = result.consumed_offset
             # Close the bracket on OUR stream now that the agent (this workflow) actually holds

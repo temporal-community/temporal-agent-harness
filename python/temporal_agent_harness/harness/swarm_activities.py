@@ -22,6 +22,7 @@ from temporalio.common import (
 )
 from temporalio.exceptions import ApplicationError
 
+from temporal_agent_harness.harness.agent_client import is_unprocessed_update
 from temporal_agent_harness.harness.agent_protocol import (
     SWARM_BOARD_UPDATE_ACTIVITY,
     SWARM_BOARD_WORKFLOW,
@@ -67,9 +68,9 @@ class SwarmActivities:
         The update id is this activity's own identity, stable across its retries, so a retried
         claim gets the item the first attempt claimed rather than claiming a second one. A board
         rejection (an unknown item, or one the caller does not hold) fails the activity
-        non-retryably with the board's error type. A call the server turns away because the
-        board has too many updates in flight fails the attempt, and the activity's retry policy
-        tries again (see ``SwarmBoard``)."""
+        non-retryably with the board's error type. A call the server turns away — the board has
+        too many updates in flight, or a busy worker left the update unprocessed — fails the
+        attempt, and the activity's retry policy tries again (see ``SwarmBoard``)."""
         request_model, reply_model = _OPERATIONS[req.operation]
         argument = request_model.model_validate(req.argument)
         info = activity.info()
@@ -99,6 +100,6 @@ class SwarmActivities:
             raise ApplicationError(
                 str(cause) if cause else "the board rejected the call",
                 type=getattr(cause, "type", None) or "BoardRejected",
-                non_retryable=True,
+                non_retryable=not is_unprocessed_update(e),
             ) from e
         return reply.model_dump(mode="json")

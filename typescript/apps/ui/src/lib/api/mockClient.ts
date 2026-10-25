@@ -334,6 +334,22 @@ export class MockAgentApi implements AgentApi {
     };
   }
 
+  async getSession(sessionId: WorkflowId): Promise<Session> {
+    await sleep(60);
+    const listed = this.#scenario.sessions.find((s) => s.workflow_id === sessionId);
+    return (
+      listed ?? {
+        workflow_id: sessionId,
+        created_at: Date.now() / 1000,
+        label: sessionId,
+        agent_workflow_type: this.#scenario.agents[0]?.workflow_type ?? "MockAgent",
+        is_discovered: true,
+        execution_status: "RUNNING",
+        closed: false
+      }
+    );
+  }
+
   /** Every mock session founds a swarm named after itself, so the swarm pane has one to draw. */
   async sessionSwarm(sessionId: WorkflowId): Promise<SwarmMembership> {
     await sleep(60);

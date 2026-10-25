@@ -48,6 +48,11 @@ export interface AgentApi {
   viewFile(request: FileViewRequest): Promise<FileChunk>;
   /** An OKF bundle mount's whole graph, walked from its store as it is now. */
   okfGraph(request: OKFGraphRequest): Promise<OKFGraph>;
+  /**
+   * Any agent workflow as a session, whether or not the session manager lists it: how the
+   * console opens a swarm member. Rejects with a 404 ApiError when there is no such workflow.
+   */
+  getSession(sessionId: WorkflowId): Promise<Session>;
   /** The swarm this session's workflow belongs to, read from its search attributes. */
   sessionSwarm(sessionId: WorkflowId): Promise<SwarmMembership>;
   /**

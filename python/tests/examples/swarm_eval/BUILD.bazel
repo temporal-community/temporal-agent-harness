@@ -1,0 +1,84 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_swarm_eval",
+    srcs = ["test_swarm_eval.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_incubation_agents",
+        ":_incubation_fixtures",
+        "//python/examples/swarm_eval:categories",
+        "//python/examples/swarm_eval:eval_agents",
+        "//python/examples/swarm_eval:incubate",
+        "//python/examples/swarm_eval:incubation",
+        "//python/examples/swarm_eval:library",
+        "//python/examples/swarm_eval:models",
+        "//python/examples/swarm_eval:promotion",
+        "//python/examples/swarm_eval:reports",
+        "//python/examples/swarm_eval:simulated",
+        "//python/examples/swarm_eval:trace",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:swarm_attributes",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_incubation",
+    srcs = ["test_incubation.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_incubation_fixtures",
+        "//python/examples/swarm_eval:eval_agents",
+        "//python/examples/swarm_eval:incubate",
+        "//python/examples/swarm_eval:incubation",
+        "//python/examples/swarm_eval:library",
+        "//python/examples/swarm_eval:models",
+        "//python/examples/swarm_eval:promotion",
+        "//python/examples/swarm_eval:reports",
+        "//python/examples/swarm_eval:trace",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_incubation_agents",
+    srcs = ["_incubation_agents.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_incubation_fixtures",
+    srcs = ["_incubation_fixtures.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/examples/swarm_eval:incubation",
+        "//python/examples/swarm_eval:models",
+        "//python/examples/swarm_eval:reports",
+        "@pypi//pytest",
+    ],
+)
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+)

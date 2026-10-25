@@ -1,0 +1,52 @@
+# Scoped justfile for the eval swarm example (examples/swarm_eval).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server, with the swarm search attributes
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + console on :8000
+#   just worker            # 4. the eval agents and the agent under test
+#
+# Then start an "Eval Swarm" session in the console and send `evaluate`. A live run needs
+# OPENAI_API_KEY and GEMINI_API_KEY in the repo-root .env.local; without them the worker serves
+# simulated runs only (send `simulate: true`), which cost nothing.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../../scripts/untagged-notice.just'
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Start a local Temporal dev server with the swarm search attributes registered (the root recipe).
+temporal:
+    just --justfile "{{root}}/justfile" temporal
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    bazel run //python/temporal_agent_harness/web:cli -- session-manager
+
+# Serve the harness API (and the generic console) on http://localhost:8000 for this registry.
+server:
+    bazel run //python/temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the eval agents (OpenAI), and optionally the Monty target in a child process (Gemini).
+worker:
+    bazel run //python/examples/swarm_eval:worker
+
+# Run the worker for simulated runs only: no API keys, no cost.
+worker-simulated:
+    bazel run //python/examples/swarm_eval:worker -- --simulate
+
+# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
+# temporal`). Ctrl-C stops them all.
+#
+# Run this example's local stack.
+dev:
+    just --justfile "{{root}}/justfile" dev swarm_eval

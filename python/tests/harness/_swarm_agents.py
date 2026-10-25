@@ -82,7 +82,7 @@ class SwarmTestAgent:
     @agent.accepts
     async def slow_echo(self, msg: Echo) -> TextReply:
         """Reply with the text after a while."""
-        await workflow.sleep(2)
+        await workflow.sleep(4)
         return TextReply(text=f"echo: {msg.text}")
 
     @agent.accepts
@@ -107,6 +107,14 @@ class SwarmTestAgent:
         """Start a subagent and reply with its handle."""
         handle = await self._runner.start_subagent("worker", "SwarmTestAgent", msg.task_queue)
         return TextReply(text=handle)
+
+    @agent.accepts
+    async def stop_all(self, msg: Echo) -> TextReply:
+        """Stop every subagent this agent started; reply with how many."""
+        subagents = self._runner.current_status.subagents
+        for subagent in subagents:
+            await self._runner.stop_subagent(subagent.subagent_id)
+        return TextReply(text=str(len(subagents)))
 
     @agent.accepts
     async def spawn_and_fail(self, msg: Spawn) -> TextReply:

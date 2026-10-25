@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { buildPayload, describeSchema, resultForm, validate } from "../src/schemaForm.ts";
+import { buildPayload, describeSchema, emptyValues, resultForm, validate } from "../src/schemaForm.ts";
 
 const travelers = resultForm({
   type: "array",
@@ -18,6 +18,50 @@ const travelers = resultForm({
 }).fields;
 
 describe("schema form fields", () => {
+  test("leaves optional objects unset until configured and validates their children once supplied", () => {
+    const target = {
+      type: "object",
+      properties: { workflow_type: { type: "string" }, handler: { type: "string", default: "ask" } },
+      required: ["workflow_type"],
+      default: { workflow_type: "BranchDefault" }
+    };
+    const fields = describeSchema({
+      type: "object",
+      $defs: { Target: target },
+      properties: {
+        target: { anyOf: [{ $ref: "#/$defs/Target" }, { type: "null" }], default: null },
+        profile: { type: "object", properties: { description: { type: "string" } }, required: ["description"] }
+      }
+    });
+    assert.equal(fields[0]?.default, null, "the explicit outer null overrides the branch default");
+    const values = emptyValues(fields);
+    assert.deepEqual({ ...values }, { target: null, profile: null });
+    assert.deepEqual(validate(fields, values), {});
+    assert.deepEqual(validate(fields, {}), {});
+    assert.deepEqual(buildPayload(fields, values), {});
+
+    values.target = emptyValues(fields[0]!.fields!);
+    assert.deepEqual(validate(fields, values), { "target.workflow_type": "Required." });
+    values.target = { workflow_type: "TravelAgent", handler: "ask" };
+    assert.deepEqual(validate(fields, values), {});
+    assert.deepEqual(buildPayload(fields, values), { target: values.target });
+    values.target = null;
+    assert.deepEqual(validate(fields, values), {});
+    assert.deepEqual(buildPayload(fields, values), {});
+  });
+
+  test("initializes required objects and preserves populated optional defaults", () => {
+    const target = { type: "object", properties: { name: { type: "string" } }, required: ["name"] };
+    const fields = describeSchema({
+      type: "object",
+      properties: { required: target, preset: { ...target, default: { name: "Preset" } } },
+      required: ["required"]
+    });
+    const values = emptyValues(fields);
+    assert.deepEqual(values, { required: { name: "" }, preset: { name: "Preset" } });
+    assert.deepEqual(validate(fields, values), { "required.name": "Required." });
+  });
+
   test("keeps an optional field's title, description and default from its outer anyOf", () => {
     const [choice] = describeSchema({
       type: "object",

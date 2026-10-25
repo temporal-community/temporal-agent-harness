@@ -50,6 +50,7 @@ from temporalio.exceptions import ApplicationError
 from temporal_agent_harness.harness.agent_client import (
     MidTurnRejectedError,
     AgentClient,
+    is_unprocessed_update,
 )
 from temporal_agent_harness.harness.agent_protocol import (
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
@@ -380,14 +381,21 @@ class SubagentActivities:
             raise ApplicationError(
                 str(cause) if cause else "subagent rejected the message",
                 type=getattr(cause, "type", None) or "SubagentSendRejected",
-                non_retryable=True,
+                # Left unprocessed by a busy worker, the send is retried (with the same update
+                # id); a real rejection is not.
+                non_retryable=not is_unprocessed_update(e),
             ) from e
         return _TurnProgress(
             sent=True,
             turn_id=result.turn_id,
             turn_number=result.turn_number,
             message_id=result.message_id,
-            consumed_offset=from_offset,
+            # Never read from before the turn: the agent's stream head when it accepted the
+            # message precedes everything the turn publishes. A caller's first turn to an agent
+            # passes 0, and for a busy agent — a judge every tester asks once — reading from 0
+            # meant each turn's long-poll returned the agent's whole history, until one reply was
+            # too large for the server and it terminated the agent.
+            consumed_offset=max(from_offset, result.accepted_offset),
         )
 
     @staticmethod

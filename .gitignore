@@ -36,3 +36,6 @@ pyrightconfig.json
 /bazel-*
 user.bazelrc
 .venv-bazel
+
+# Local product-incubation evidence and promotion patches (may contain user conversations).
+.incubation/

@@ -36,6 +36,7 @@ from temporal_agent_harness.harness.swarm_attributes import (
     BOARD_ROLE,
     SWARM_ID,
 )
+from temporal_agent_harness.web.session_manager import Session
 
 # The most members one topology read returns. A swarm past it is reported as truncated rather
 # than read without bound.
@@ -133,6 +134,21 @@ async def session_swarm(temporal: Client, workflow_id: str) -> SwarmMembershipRe
         workflow_id=workflow_id,
         swarm_id=attributes.get(SWARM_ID),
         role=attributes.get(AGENT_ROLE),
+    )
+
+
+async def member_session(temporal: Client, workflow_id: str) -> Session:
+    """Any agent workflow — a swarm member, or a subagent — described as a console session, so
+    the console can open one that the session manager never listed. Labelled by its swarm role
+    when it has one."""
+    description = await temporal.get_workflow_handle(workflow_id).describe()
+    role = description.typed_search_attributes.get(AGENT_ROLE)
+    return Session(
+        workflow_id=workflow_id,
+        created_at=description.start_time.timestamp(),
+        label=f"{role} · {description.workflow_type}" if role else description.workflow_type,
+        agent_workflow_type=description.workflow_type,
+        is_discovered=True,
     )
 
 

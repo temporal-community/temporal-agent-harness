@@ -149,6 +149,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
+        ":session_manager",
         "//python/temporal_agent_harness/harness:swarm_attributes",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "@pypi//pydantic",

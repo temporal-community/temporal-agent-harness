@@ -66,7 +66,7 @@ from temporal_agent_harness.web.session_manager import (
     Session,
     SessionManagerWorkflow,
 )
-from temporal_agent_harness.web.swarm import session_swarm, swarm_topology
+from temporal_agent_harness.web.swarm import member_session, session_swarm, swarm_topology
 from temporal_agent_harness.web.task_queue_status import describe_task_queue_workers
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
@@ -274,6 +274,24 @@ def create_agent_harness_app(
             result_type=Session,
         )
         return await _session_with_execution_state(app.state.temporal, session)
+
+    @app.get("/api/sessions/{session_id}")
+    async def get_session(session_id: str):
+        """One agent workflow as a session, whether or not the session manager lists it — how a
+        console opens a swarm member or a subagent it found some other way."""
+        try:
+            session = await member_session(app.state.temporal, session_id)
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return JSONResponse(
+                status_code=404,
+                content={"error": "workflow_not_found", "message": exc.message},
+            )
+        return JSONResponse(
+            content=await _session_with_execution_state(app.state.temporal, session),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/sessions/{session_id}/swarm")
     async def get_session_swarm(session_id: str):

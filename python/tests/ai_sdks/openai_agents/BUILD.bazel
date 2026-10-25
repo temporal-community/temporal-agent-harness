@@ -84,3 +84,37 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+py_library(
+    name = "_structured_stream_workflow",
+    srcs = ["_structured_stream_workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//openai_agents",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_structured_streaming",
+    srcs = ["test_structured_streaming.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_structured_stream_workflow",
+        ":conftest",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//openai",
+        "@pypi//openai_agents",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

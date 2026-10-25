@@ -255,6 +255,10 @@ export class HttpAgentApi implements AgentApi {
       body: JSON.stringify(request)
     });
   }
+  async getSession(sessionId: WorkflowId): Promise<Session> {
+    return json<Session>(apiPath(`sessions/${encodeURIComponent(sessionId)}`));
+  }
+
   async sessionSwarm(sessionId: WorkflowId): Promise<SwarmMembership> {
     return json<SwarmMembership>(apiPath(`sessions/${encodeURIComponent(sessionId)}/swarm`));
   }

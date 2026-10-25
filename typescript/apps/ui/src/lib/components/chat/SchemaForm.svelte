@@ -2,7 +2,7 @@
   // Renders one handler's input schema as a form. Purely schema-driven — see the client's schemaForm.ts.
   // Recurses through itself for nested object fields.
   import { Check, Minus, Plus } from "@lucide/svelte";
-  import { emptyValue, fieldPath, type SchemaField } from "@temporalio/agent-harness-client";
+  import { emptyValue, emptyValues, fieldPath, type SchemaField } from "@temporalio/agent-harness-client";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Select from "$lib/components/primitives/Select.svelte";
   // Self-import so a nested object field recurses. This is the Svelte 5 way; the legacy
@@ -148,7 +148,7 @@
   <div class={["schema-field", { inline: field.kind === "boolean" }]}>
     {#if listed}
       <!-- The legend below names the group. -->
-    {:else if buttons}
+    {:else if buttons || field.kind === "object"}
       <span class="kicker" id={`${fieldId(field)}-label`}>{field.title}{@render required(field)}</span>
     {:else if field.kind === "boolean"}
       <label class="check" for={fieldId(field)}>
@@ -344,16 +344,31 @@
         </Chip>
       </div>
     {:else if field.kind === "object" && field.fields}
-      <fieldset class="nested">
-        <SchemaForm
-          fields={field.fields}
-          bind:values={values[field.name] as Record<string, unknown>}
+      {#if !field.required}
+        <Chip
+          id={fieldId(field)}
+          class="row-add"
+          fill="quiet"
+          dense
           {disabled}
-          idPrefix={fieldId(field)}
-          {errors}
-          path={fieldPath(path, field.name)}
-        />
-      </fieldset>
+          aria-expanded={values[field.name] != null}
+          onclick={() => (values[field.name] = values[field.name] == null ? emptyValues(field.fields ?? []) : null)}
+        >
+          {values[field.name] == null ? "Configure" : "Clear"} {field.title}
+        </Chip>
+      {/if}
+      {#if field.required || values[field.name] != null}
+        <fieldset class="nested" aria-labelledby={`${fieldId(field)}-label`}>
+          <SchemaForm
+            fields={field.fields}
+            bind:values={values[field.name] as Record<string, unknown>}
+            {disabled}
+            idPrefix={fieldId(field)}
+            {errors}
+            path={fieldPath(path, field.name)}
+          />
+        </fieldset>
+      {/if}
     {:else if field.kind !== "boolean"}
       <input
         id={fieldId(field)}

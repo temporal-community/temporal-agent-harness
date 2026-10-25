@@ -24,6 +24,31 @@ const travellers = resultForm({
 }).fields;
 
 describe("schema form fields", () => {
+  it("keeps optional object fields hidden until configured, with a control to clear them", () => {
+    const fields = describeSchema({
+      type: "object",
+      properties: {
+        target: {
+          title: "Target",
+          anyOf: [{ type: "object", properties: { workflow_type: { type: "string" } }, required: ["workflow_type"] }, { type: "null" }],
+          default: null
+        }
+      }
+    });
+    const html = (values, disabled = false) =>
+      stripComments(render(SchemaForm, { props: { fields, values, disabled, idPrefix: "t" } }).body);
+    const unset = html(emptyValues(fields));
+    assert.match(unset, /aria-expanded="false"[^>]*>\s*Configure Target/);
+    assert.doesNotMatch(unset, /<input|<fieldset/);
+    const configured = html({ target: { workflow_type: "TravelAgent" } });
+    assert.match(configured, /aria-expanded="true"[^>]*>\s*Clear Target/);
+    assert.match(configured, /<fieldset[^>]*aria-labelledby="t-target-label"/);
+    assert.match(configured, /id="t-target-workflow_type"/);
+    assert.match(configured, /value="TravelAgent"/);
+    assert.match(html(emptyValues(fields), true), /<button[^>]*disabled/);
+    assert.doesNotMatch(html({ target: null }), /<input|<fieldset/);
+  });
+
   it("renders a boolean as one checkbox, not a checkbox and a text box sharing its id", () => {
     const fields = describeSchema({ type: "object", properties: { ok: { type: "boolean" } } });
     const { body } = render(SchemaForm, { props: { fields, values: emptyValues(fields), idPrefix: "t" } });
