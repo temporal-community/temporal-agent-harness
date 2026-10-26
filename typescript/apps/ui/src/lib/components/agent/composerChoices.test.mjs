@@ -254,7 +254,7 @@ describe("composer handler button", () => {
     const body = stripComments(render(AgentChatPanel, {
       props: {
         items: [], logs: [scriptUpdate], agentLabel: "Studio", sessionId: "wf-root",
-        agentInterface: [execute, generate], editorScript: "async def main():\n    pass"
+        agentInterface: [execute, generate]
       }
     }).body);
     const button = handlerButton(body);

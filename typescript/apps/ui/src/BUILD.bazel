@@ -12,7 +12,6 @@ js_library(
         "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
         "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
         "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
-        "//typescript/apps/ui/src/lib/components/agent:ScriptWorkspace",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",

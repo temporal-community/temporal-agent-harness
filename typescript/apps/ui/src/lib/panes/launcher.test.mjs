@@ -26,7 +26,7 @@ describe("launcher rows", () => {
     const items = launcherItems([rail, drawer]);
     assert.deepEqual(
       items.map((item) => item.kind),
-      ["chat", "logs", "graph", "timeline", "latency", "usage", "state", "decisions", "files", "script"],
+      ["chat", "logs", "graph", "timeline", "latency", "usage", "state", "decisions", "files"],
       "an open view must stay in the list so it can be switched off"
     );
     assert.deepEqual(openKinds([rail, drawer]), ["chat", "graph"]);
@@ -37,7 +37,7 @@ describe("launcher rows", () => {
     const dividers = () => launcherItems([rail, drawer]).flatMap((item, index) => (item.dividerBefore ? [index] : []));
     assert.deepEqual(dividers(), [7], "above Approval decisions, after Agent state");
     for (const kind of ["chat", "graph"]) rail.closePane(kind);
-    rail.openPane({ kind: "script" });
+    rail.openPane({ kind: "files" });
     assert.deepEqual(dividers(), [7], "the order is fixed: what is open never moves a row or the divider");
   });
 
