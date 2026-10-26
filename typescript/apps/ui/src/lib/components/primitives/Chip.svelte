@@ -20,6 +20,7 @@
     | "queue"
     | "retry"
     | "success"
+    | "warning"
     | "error"
     | "live";
 
@@ -27,9 +28,12 @@
 
   /**
    * filled: toned wash, for a status. quiet: hairline only, for a control; without
-   * `onclick` or `href` it is a plain label. bare: no chrome at all.
+   * `onclick` or `href` it is a plain label. bare: no chrome at all. solid: the
+   * tone as a block, for the one primary action on a surface; it is the Chip
+   * counterpart of IconButton's `accent` tone, so a dialog's confirm and the
+   * composer's send read as the same weight.
    */
-  export type ChipFill = "filled" | "quiet" | "bare";
+  export type ChipFill = "filled" | "quiet" | "bare" | "solid";
 
   interface Props {
     label?: string;
@@ -45,6 +49,12 @@
      * tinted, because those callers are matching an established action colour.
      */
     toned?: boolean;
+    /**
+     * Keeps the tone hue on the `lead` icon only, leaving the label neutral. For
+     * a row of sibling actions that should each signal without all shouting:
+     * the icon carries the meaning, the label stays in the row's register.
+     */
+    leadToned?: boolean;
     /** Draws the breathing outline the live status chip uses. */
     ring?: boolean;
     /** Leading square pip, for chips that stand in for a status. */
@@ -71,6 +81,7 @@
     fill = "filled",
     active = false,
     toned = false,
+    leadToned = false,
     ring = false,
     pip = false,
     dense = false,
@@ -93,6 +104,7 @@
       tone,
       active ? "active" : "",
       toned ? "toned" : "",
+      leadToned ? "lead-toned" : "",
       ring ? "ring" : "",
       dense ? "dense" : "",
       interactive ? "interactive" : "",
@@ -197,9 +209,27 @@
     color: var(--text-3);
   }
 
+  /* The block fill. Same recipe as IconButton's accent tone: hue as background,
+     the page's darkest surface as text, no border to soften the edge. */
+  .chip.solid {
+    border-color: transparent;
+    background: var(--chip-color);
+    color: var(--surface-0);
+  }
+
+  /* A neutral solid chip would be a grey block nobody asked for; the fill
+     exists to carry a tone, so without one it borrows the accent. */
+  .chip.solid.neutral {
+    --chip-color: var(--accent);
+  }
+
   /* Hue without chrome: the box stays neutral, the text carries the tone. */
   .chip.quiet.toned,
   .chip.bare.toned {
+    color: var(--chip-color);
+  }
+
+  .chip.lead-toned .chip-lead {
     color: var(--chip-color);
   }
 
@@ -264,6 +294,13 @@
     cursor: default;
   }
 
+  /* Disabled, the block steps down to a neutral surface as IconButton does, so
+     a primary action that cannot be taken yet does not keep calling for it. */
+  .chip.solid:disabled {
+    color: var(--text-3);
+    background: var(--surface-3);
+  }
+
   @media (hover: hover) and (pointer: fine) {
     .chip.interactive:hover:not(:disabled) {
       color: var(--text-1);
@@ -283,6 +320,16 @@
     .chip.toned.interactive:hover:not(:disabled) {
       color: var(--chip-color);
       border-color: color-mix(in srgb, var(--chip-color) 45%, var(--border));
+    }
+
+    .chip.lead-toned.interactive:hover:not(:disabled) .chip-lead {
+      color: var(--chip-color);
+    }
+
+    .chip.solid.interactive:hover:not(:disabled) {
+      color: var(--surface-0);
+      border-color: transparent;
+      background: color-mix(in srgb, var(--chip-color) 88%, var(--text-1));
     }
   }
 
@@ -325,6 +372,7 @@
   .chip.retry { --chip-color: var(--retry); }
   .chip.queue { --chip-color: var(--queue); }
   .chip.success { --chip-color: var(--success); }
+  .chip.warning { --chip-color: var(--warning); }
   .chip.error { --chip-color: var(--error); }
   .chip.live { --chip-color: var(--live); }
 </style>

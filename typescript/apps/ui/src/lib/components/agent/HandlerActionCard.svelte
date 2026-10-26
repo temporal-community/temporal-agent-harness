@@ -100,7 +100,7 @@
         {#snippet lead()}<CircleX size={12} />{/snippet}
       </Chip>
     {/if}
-    <Chip type="submit" form={formId} fill="quiet" dense label={sendLabel} aria-label={`Send ${handler.name}`} data-tip={`Send ${handler.name}`} disabled={locked}>
+    <Chip type="submit" form={formId} tone="accent" fill="quiet" toned dense label={sendLabel} aria-label={`Send ${handler.name}`} data-tip={`Send ${handler.name}`} disabled={locked}>
       {#snippet lead()}<Check size={12} />{/snippet}
     </Chip>
   {/snippet}

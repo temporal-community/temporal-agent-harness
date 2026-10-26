@@ -379,7 +379,9 @@
   <div class="schema-foot">
     <Chip
       type="submit"
+      tone="accent"
       fill="quiet"
+      toned
       dense
       disabled={disabled || send.disabled}
       aria-label={`Send ${send.handler}`}

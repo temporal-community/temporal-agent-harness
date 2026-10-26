@@ -142,3 +142,23 @@ describe("a label does not look like a control", () => {
     );
   });
 });
+
+describe("a primary action is a block, a sibling action a tinted icon", () => {
+  // `solid` is the Chip counterpart of IconButton's accent tone: the one primary
+  // action on a surface (Start session, End session) gets the hue as a block,
+  // and a neutral solid chip borrows the accent rather than drawing a grey one.
+  it("renders the solid fill and the warning tone as classes", () => {
+    assert.match(html(Chip, { label: "Start", fill: "solid", tone: "accent", type: "submit" }), /class="chip sm solid accent[^"]*interactive/);
+    assert.match(html(Chip, { label: "Always allow", tone: "warning", fill: "quiet", onclick: () => {} }), /class="chip sm quiet warning/);
+  });
+
+  // Approve, Always allow and Reject sit in one row: the icon carries each one's
+  // meaning and the label stays in the row's register, so `leadToned` colours
+  // only the lead, never the text.
+  it("scopes leadToned to the lead icon", () => {
+    const css = readFileSync(new URL("./Chip.svelte", import.meta.url), "utf8");
+    assert.match(css, /\.chip\.lead-toned \.chip-lead \{\s*color: var\(--chip-color\);/);
+    assert.doesNotMatch(css, /\.chip\.lead-toned \{/, "leadToned tinted the whole chip");
+    assert.match(html(Chip, { label: "Approve", tone: "success", fill: "quiet", leadToned: true, onclick: () => {} }), /class="chip sm quiet success lead-toned/);
+  });
+});

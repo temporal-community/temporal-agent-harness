@@ -178,7 +178,7 @@
     {/if}
   {/snippet}
   {#snippet foot()}
-    <Chip type="submit" form={formId} fill="quiet" dense label={sendLabel} aria-label={sendLabel} data-tip={sendLabel} disabled={locked}>
+    <Chip type="submit" form={formId} tone="accent" fill="quiet" toned dense label={sendLabel} aria-label={sendLabel} data-tip={sendLabel} disabled={locked}>
       {#snippet lead()}<Check size={12} />{/snippet}
     </Chip>
     <Chip tone="error" fill="quiet" toned dense label="Decline" aria-label="Decline" data-tip="Decline" disabled={locked} onclick={() => void send({ error: DECLINED })}>
