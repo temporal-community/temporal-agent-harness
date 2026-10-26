@@ -7,8 +7,7 @@ export type PaneKind =
   | "timeline"
   | "usage"
   | "state"
-  | "files"
-  | "script";
+  | "files";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -38,8 +37,8 @@ export interface PaneMeta {
    */
   titleNames: "kind" | "subject";
   /**
-   * Only an agent built with it has anything to show: an approval policy, file
-   * mounts, a script. The launcher lists these after the views every run has,
+   * Only an agent built with it has anything to show: an approval policy or file
+   * mounts. The launcher lists these after the views every run has,
    * below a divider, so the list reads from what you always need to what you
    * might.
    */
@@ -144,15 +143,6 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     content: "viewport",
     titleNames: "kind",
     optIn: true
-  },
-  script: {
-    kindLabel: "Script",
-    accent: "--tool",
-    defaultSize: 420,
-    minSize: 320,
-    content: "viewport",
-    titleNames: "kind",
-    optIn: true
   }
 };
 
@@ -182,8 +172,7 @@ const SINGLETON_KINDS = new Set<PaneKind>([
   "timeline",
   "usage",
   "state",
-  "files",
-  "script"
+  "files"
 ]);
 
 export function isSingletonKind(kind: PaneKind): boolean {

@@ -199,8 +199,6 @@
     ) => void | Promise<void>;
     clientToolStatuses?: Readonly<Record<string, ClientToolStatus>>;
     onRetryClientTool?: (toolId: string) => void;
-    editorScript?: string;
-    onOpenScript?: () => void;
     /** The session agent's context window fill; null while the window size is unknown. */
     contextUsage?: ContextWindowUsage | null;
   }
@@ -274,8 +272,6 @@
     onCallbackResult,
     clientToolStatuses = {},
     onRetryClientTool,
-    editorScript = "",
-    onOpenScript,
     contextUsage = null
   }: Props = $props();
   let draft = $state("");
@@ -382,14 +378,6 @@
     return `${firstLine.charAt(0).toUpperCase()}${firstLine.slice(1)}`;
   });
   const queuedMessageTip = $derived(queuedMessageTexts.join(" • "));
-  const latestScriptUpdateTurn = $derived(
-    runLogs.findLast(
-      (row) =>
-        row.event === "callback_requested" &&
-        (row.toolName === "write_code" || row.toolName === "edit_code")
-    )?.turnNumber ?? null
-  );
-  const editorLineCount = $derived(editorScript ? editorScript.split("\n").length : 0);
   const viewRowIds = $derived(new Set(logs.map((row) => row.id)));
   const sentUserMessages = $derived(
     liveMessages
@@ -2197,15 +2185,6 @@
                     {/if}
                   {/each}
                 </div></div>
-              {/if}
-              {#if message.turnNumber === latestScriptUpdateTurn && editorLineCount > 0}
-                <TraceRow
-                  glyph="complete"
-                  name="Script updated"
-                  note={`${editorLineCount} lines`}
-                  tip={onOpenScript ? "Open the script" : undefined}
-                  onActivate={onOpenScript}
-                />
               {/if}
             </div>
           {/if}

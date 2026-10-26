@@ -20,7 +20,6 @@
   import ApprovalDecisionPanel, { verdictTone } from "$lib/components/agent/ApprovalDecisionPanel.svelte";
   import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
   import FilesPanel from "$lib/components/agent/FilesPanel.svelte";
-  import ScriptWorkspace from "$lib/components/agent/ScriptWorkspace.svelte";
   import PaneRail, {
     type PaneDescription,
     type PaneDragState
@@ -349,14 +348,6 @@
             run.fileMounts.length > 0
               ? `${run.fileMounts.length} ${run.fileMounts.length === 1 ? "mount" : "mounts"}`
               : null,
-          statusTone: null
-        };
-      case "script":
-        return {
-          title: PANE_META.script.kindLabel,
-          statusLabel: run.editorScript
-            ? `${run.editorScript.split("\n").length} lines`
-            : null,
           statusTone: null
         };
       default: {
@@ -914,13 +905,6 @@
             run.provideCallbackResult(workflowId, toolId, outcome)}
           clientToolStatuses={run.clientToolStatuses}
           onRetryClientTool={(toolId) => run.retryClientTool(toolId)}
-          editorScript={run.editorScript}
-          onOpenScript={() => stack.openPane({ kind: "script" }, "chat")}
-        />
-      {:else if pane.kind === "script"}
-        <ScriptWorkspace
-          script={run.editorScript}
-          changedLines={run.editorChangedLines}
         />
       {:else if pane.kind === "latency"}
         <LatencyWaterfall

@@ -341,8 +341,6 @@ export class AgentRunController {
   #streamWake: (() => void) | null = null;
   #clientTools: ClientToolCoordinator;
   clientToolStatuses = $state<Readonly<Record<string, ClientToolStatus>>>({});
-  editorScript = $state("");
-  editorChangedLines = $state<{ from: number; to: number } | null>(null);
   /**
    * How often a caught-up stream asks whether another client started a turn. Each ask is
    * a billable Query on Temporal Cloud, so it is slow, and skipped while the page is hidden.
@@ -448,10 +446,8 @@ export class AgentRunController {
     this.#clientTools = new ClientToolCoordinator({
       submit: (request, outcome) =>
         this.provideCallbackResult(request.workflowId, request.toolId, outcome),
-      onChange: (statuses, script, changedLines) => {
+      onChange: (statuses) => {
         this.clientToolStatuses = statuses;
-        this.editorScript = script;
-        this.editorChangedLines = changedLines;
       }
     });
     /* No teardown: one controller lives as long as the page (App.svelte
