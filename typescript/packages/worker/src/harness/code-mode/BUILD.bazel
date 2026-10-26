@@ -24,7 +24,6 @@ ts_project(
     tsconfig = "//typescript/packages/worker:tsconfig",
     visibility = ["//visibility:public"],
     deps = [
-        ":secret",
         "//typescript/packages/worker:node_modules/@pydantic/monty",
         "//typescript/packages/worker:node_modules/@temporalio/activity",
         "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
@@ -53,12 +52,4 @@ ts_project(
     deps = [
         "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
     ],
-)
-
-ts_project(
-    name = "secret",
-    srcs = ["secret.ts"],
-    declaration = True,
-    tsconfig = "//typescript/packages/worker:tsconfig",
-    visibility = ["//visibility:public"],
 )

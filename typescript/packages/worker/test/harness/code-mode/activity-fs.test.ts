@@ -34,7 +34,6 @@ import { codeModeActivities } from "../../../src/harness/code-mode/monty-stepper
 import { buildOkfGraph, type OkfReadable } from "../../../src/harness/code-mode/okf.ts";
 import { assertMatch } from "../../match.ts";
 import {
-  TEST_CONTINUATION_SECRET,
   collect,
   replyText,
   send,
@@ -253,7 +252,7 @@ describe("a script on an activity-backed mount", () => {
       namespace: server.namespace,
       taskQueue,
       workflowsPath: WORKFLOWS,
-      activities: codeModeActivities({ continuationSecret: TEST_CONTINUATION_SECRET }),
+      activities: codeModeActivities(),
       plugins: [new AgentHarnessPlugin({ filesystems: [registered] })],
     });
     running = worker.run();

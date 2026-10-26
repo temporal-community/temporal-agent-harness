@@ -24,6 +24,7 @@ from typing import Any
 
 from google.genai import Client as GeminiClient
 from google.genai._interactions import AsyncStream
+from google.genai._interactions.resources import AsyncInteractionsResource
 from google.genai._interactions.types import (
     FileSearchCallStep,
     FileSearchResultStep,
@@ -86,7 +87,8 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
         was provided.
 
         A Gemini client error (4xx other than 408/429) fails the activity
-        non-retryably; every other failure stays retryable.
+        non-retryably; every other failure stays retryable. The SDK makes one
+        request per attempt: Temporal's retry policy owns retries.
         """
         collected: list[dict[str, Any]] = []
 
@@ -116,7 +118,7 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
                 with translate_gemini_errors():
                     stream: AsyncStream[
                         InteractionSSEEvent
-                    ] = await client.aio.interactions.create(**kwargs)
+                    ] = await _interactions_without_sdk_retries(client).create(**kwargs)
                     async for event in stream:
                         if event_publisher is not None:
                             event_publisher.handle(event)
@@ -132,6 +134,23 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
         return _InteractionResult(events=collected)
 
     return gemini_interactions_create_streamed
+
+
+def _interactions_without_sdk_retries(client: GeminiClient) -> AsyncInteractionsResource:
+    """``client.aio.interactions`` with the SDK's own retries off.
+
+    The Interactions client retries 408, 409, 429 and 5xx inside each call, so every
+    activity attempt would make several requests under Temporal's retry policy. A call
+    cannot turn that off, so this is a copy of the client with ``max_retries=0``. The
+    copy does not carry the Vertex settings ``google.genai.Client`` sets on the client
+    after constructing it, so they are copied too.
+    """
+    nextgen = client.aio.interactions._client
+    without_retries = nextgen.with_options(max_retries=0)
+    without_retries._is_vertex = nextgen._is_vertex
+    without_retries._vertex_project = nextgen._vertex_project
+    without_retries._vertex_location = nextgen._vertex_location
+    return without_retries.interactions
 
 
 def _to_token_usage(usage: Usage | None) -> TokenUsage | None:

@@ -1,7 +1,7 @@
 // Replay: today's workflow code must reproduce the commands of histories recorded by earlier code,
 // or every running session fails its next workflow task after a deploy. histories/ holds the
-// scripted demo (a turn, an approval, a callback, Code Mode, a subagent) and a raw-events publish
-// in a run's first task. Re-record them only on purpose:
+// scripted demo (a turn, an approval, a callback, Code Mode, a subagent). Re-record them only on
+// purpose:
 // bazel run //typescript/packages/worker/test/harness/replay:histories_update
 
 import assert from "node:assert/strict";
@@ -28,7 +28,7 @@ async function replayErrors(
 }
 
 describe("recorded histories replay against the current code", () => {
-  const bundles: Bundle[] = ["scripted-demo", "fixtures"];
+  const bundles: Bundle[] = ["scripted-demo"];
   for (const bundle of bundles)
     it(`every ${bundle} history replays without nondeterminism`, async () => {
       const dir = `${HISTORIES}${bundle}`;
@@ -63,13 +63,6 @@ describe("the current code replays its own histories", () => {
     );
   }
 
-  for (const scenario of ["retry", "abandon"])
-    it(`a raw-streamed model call whose activity is ${scenario === "retry" ? "retried" : "abandoned"} replays`, async () => {
-      const h = await env.start("RawStreamProbeAgent");
-      await send(h, "run", { text: scenario });
-      await collect(env.client, h.workflowId);
-      await replay(h);
-    });
 
   it("a Code Mode script resumed after an approval replays", async () => {
     const h = await env.start("CodeModeProbeAgent");

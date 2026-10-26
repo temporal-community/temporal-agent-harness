@@ -38,8 +38,8 @@ rewinds with you — it is a projection of the stream, not a live subscription.
 The board tools are ordinary host functions in the same sandbox as the travel tools, so one
 script can book a flight and record it without a round trip through the model. They run INLINE
 in the workflow rather than as activities (the board is the agent's own notes, not an action on
-the world), and they are the one thing `MontyChatAgent` does not gate on a human approval — a
-click between every step and the board that is meant to be showing the steps would defeat it.
+the world), and `MontyChatAgent` does not gate them on a human approval — a click between every
+step and the board that is meant to be showing the steps would defeat it.
 
 Easiest way to see it move, with no model and no API key — start a **Monty (Dynamic)** session
 and send it this script (that agent's composer takes a script, not prose):
@@ -62,6 +62,16 @@ async def main():
     return await read_trip_board()
 asyncio.run(main())
 ```
+
+## Asking you mid-turn
+
+Both conversational agents can ask you a question without ending their turn. `ask_user`
+(`ask_user.py`) is a **callback tool**: when the model calls it, the turn pauses and the console
+shows the model's question with an answer box. Your answer goes back to the model as the tool's
+result, and the turn carries on. The model decides when to ask and what — a traveler's name, a
+date, which of the flights it found you want. Each call asks one question; to ask several
+things, the model makes one call per question in the same reply, and you get a card for each.
+Asking needs no approval; the agents allow `ask_user` by name.
 
 ## Setup
 

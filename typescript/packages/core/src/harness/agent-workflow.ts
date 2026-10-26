@@ -14,7 +14,6 @@ import {
   ParentClosePolicy,
   allHandlersFinished,
   condition,
-  defaultPayloadConverter,
   defineQuery,
   defineSignal,
   defineUpdate,
@@ -27,13 +26,7 @@ import {
   uuid4,
   ActivityFailure,
 } from "@temporalio/workflow";
-import {
-  WorkflowStream,
-  decodePayloadWire,
-  workflowStreamPublishSignal,
-  type PublishInput,
-  type WorkflowTopicHandle,
-} from "@temporalio/workflow-streams/workflow";
+import { WorkflowStream, type WorkflowTopicHandle } from "@temporalio/workflow-streams/workflow";
 import {
   AGENT_ID_LENGTH,
   AGENT_INTERFACE_QUERY,
@@ -76,12 +69,6 @@ import {
   type ToolApprovalResult,
   type TurnStreamContext,
 } from "./agent-protocol/index.ts";
-import {
-  MODEL_CALL_ABANDONED,
-  RawEventTranslator,
-  parseRawTopic,
-  rawEventsTopic,
-} from "../ai-sdks/integration-helpers/raw-events.ts";
 import { StateRef, type StateEvent } from "./state/index.ts";
 import {
   CallbackToolError,
@@ -94,7 +81,6 @@ import {
 } from "./agent-workflow/errors.ts";
 import type {
   Admission,
-  AnyHarnessTool,
   AnyStateDecl,
   ApprovalEntry,
   CallbackEntry,
@@ -102,7 +88,6 @@ import type {
   HandlerImpl,
   RunnerOptions,
   SubagentInstance,
-  TurnHost,
 } from "./agent-workflow/types.ts";
 
 export {
@@ -116,7 +101,6 @@ export type {
   HandlerImpl,
   RunnerOptions,
   SubagentInstance,
-  TurnHost,
 };
 
 /**
@@ -202,14 +186,8 @@ export class AgentWorkflowRunner {
       options.autoApprovalCriteriaDefault ??
       AutoApprovalCriteria.empty();
     this.agentId = config.agent_id ?? shortHex(AGENT_ID_LENGTH);
-    // The constructor's own publish handler would take any publish buffered in the first
-    // activation untranslated, so those are held here and translated below.
-    const early: PublishInput[] = [];
-    setHandler(workflowStreamPublishSignal, (input) => void early.push(input));
     this.stream = new WorkflowStream();
     this.#events = this.stream.topic<AgentEvent>(TURN_EVENTS_TOPIC);
-    setHandler(workflowStreamPublishSignal, (input) => this.#onPublish(input));
-    for (const input of early) this.#onPublish(input);
     // Before any handler is installed: a buffered first message is dispatched by setHandler, and
     // its message_accepted must not precede the state snapshots.
     this.state = this.#registerStates(options.states ?? {}, options.data);
@@ -362,40 +340,6 @@ export class AgentWorkflowRunner {
     );
   }
 
-  /** The surface an SDK integration drives one turn through: these tools, this runner. */
-  turnHost(
-    tools: readonly AnyHarnessTool[],
-    { injections = {} }: { injections?: Record<string, unknown> } = {},
-  ): TurnHost {
-    const byName = new Map(tools.map((t) => [t.name, t]));
-    return {
-      tools,
-      runTool: (name, input, options) => {
-        const tool = byName.get(name);
-        if (tool === undefined) return Promise.reject(new Error(`unknown tool: '${name}'`));
-        return this.runTool(options?.toolId || `${name}-${uuid4()}`, tool, input, { injections });
-      },
-      emit: (event) => this.publish(event),
-      modelCall: (format, model, call, options) => {
-        const ctx = this.currentStreamContext;
-        if (ctx === null)
-          return Promise.reject(new Error("modelCall() called with no active turn"));
-        const topic = rawEventsTopic(format, ctx, model, this.#modelCalls++);
-        // A structured-output call's text is its output, not a reply, so it streams no reply deltas.
-        if (options?.structuredOutput) this.#rawEvents.structuredOutput(topic);
-        // No Event Group of its own: the turn's already tags the model activity, and an SDK's
-        // tool loop runs inside `call`, so a model-call scope would mis-tag its tool commands.
-        return call(topic).catch((err: unknown) => {
-          // Its activity's stream may have stopped mid-call; this closes the call's bracket.
-          this.#publishRaw(topic, MODEL_CALL_ABANDONED);
-          throw err;
-        });
-      },
-    };
-  }
-
-  #modelCalls = 0;
-  readonly #rawEvents = new RawEventTranslator();
 
   /** Declared state: each snapshot was published at construction, then every committed mutation. */
   readonly state: Readonly<Record<string, StateRef<Record<string, unknown>>>>;
@@ -454,15 +398,9 @@ export class AgentWorkflowRunner {
 
   // -- the stream -----------------------------------------------------------------------------
 
-  // WorkflowStream keeps its log and dedup maps private; the runner shares them (its own publish
-  // handler replaces the stream's). Revisit if the SDK exposes them.
-  get #stream(): {
-    log: unknown[];
-    baseOffset: number;
-    publisherSequences: Record<string, number>;
-    publisherLastSeen: Record<string, number>;
-    onPublish(input: PublishInput): void;
-  } {
+  // WorkflowStream keeps its log private; the runner reads its head offset from it. Revisit if the
+  // SDK exposes one.
+  get #stream(): { log: unknown[]; baseOffset: number } {
     return this.stream as never;
   }
 
@@ -1156,29 +1094,6 @@ export class AgentWorkflowRunner {
   }
 
   /** @internal Stamp the envelope and publish. `messageId` defaults to the ambient participant. */
-  // Replaces WorkflowStream's own publish-signal handler, with the same per-publisher dedup. Model
-  // activities stream their SDK's raw events to a per-call raw topic; they are translated here
-  // and published to turn_events, so every reader (either language, the Nexus adapter) sees the
-  // harness events, and the raw events themselves are not kept. Translation is pure and uses the
-  // workflow clock, so it replays deterministically. Dedup uses the stream's own maps, so
-  // `stream.getState()` carries them across a continue-as-new.
-  #onPublish(input: PublishInput): void {
-    if (input.publisher_id) {
-      const s = this.#stream;
-      if (input.sequence <= (s.publisherSequences[input.publisher_id] ?? 0)) return;
-      s.publisherSequences[input.publisher_id] = input.sequence;
-      s.publisherLastSeen[input.publisher_id] = Date.now() / 1000;
-    }
-    for (const entry of input.items) {
-      const payload = decodePayloadWire(entry.data);
-      if (parseRawTopic(entry.topic) === null) this.stream.topic(entry.topic).publish(payload);
-      else this.#publishRaw(entry.topic, defaultPayloadConverter.fromPayload(payload));
-    }
-  }
-
-  #publishRaw(topic: string, data: unknown): void {
-    for (const event of this.#rawEvents.translate(topic, data)) this.#events.publish(event);
-  }
 
   pub(
     turnId: string,

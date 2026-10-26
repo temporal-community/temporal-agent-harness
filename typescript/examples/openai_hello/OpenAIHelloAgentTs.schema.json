@@ -1,0 +1,49 @@
+{
+  "agent": "OpenAIHelloAgentTs",
+  "source": "typescript/examples/openai_hello/agents.js#OpenAIHelloAgentTs",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the assistant. Ask it anything; ask about the weather in a city and it\ncalls its `get_weather` tool and tells you what it found.",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "TextMessage": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "title": "Text"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler)."
+    },
+    "TextReply": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "title": "Text"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "title": "TextReply",
+      "description": "A free-form natural-language reply (the output of a plain chat handler)."
+    }
+  }
+}

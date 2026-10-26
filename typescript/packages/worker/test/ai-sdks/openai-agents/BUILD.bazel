@@ -1,0 +1,103 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# Tests of the OpenAI Agents SDK integration (core's src/ai-sdks/openai-agents-harness.ts and
+# worker's src/ai-sdks/openai-agents-harness.ts and src/ai-sdks/openai-agents/). One target per
+# file.
+
+ts_project(
+    name = "openai-agents-harness.test",
+    testonly = True,
+    srcs = ["openai-agents-harness.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":scripted-model",
+        "//typescript/packages/worker:node_modules/@openai/agents-core",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker/src/ai-sdks:openai-agents-harness",
+        "//typescript/packages/worker/src/ai-sdks/integration-helpers:stream-observer",
+    ],
+)
+
+ts_project(
+    name = "openai-agents.test",
+    testonly = True,
+    srcs = ["openai-agents.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":scripted-model",
+        ":tools",
+        ":workflows",
+        "//typescript/packages/worker:node_modules/@openai/agents-core",
+        "//typescript/packages/worker:node_modules/@temporalio/activity",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/openai-agents",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src/ai-sdks:openai-agents-harness",
+        "//typescript/packages/worker/src/ai-sdks/integration-helpers:stream-observer",
+        "//typescript/packages/worker/src/ai-sdks/openai-agents:index",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "scripted-model",
+    testonly = True,
+    srcs = ["scripted-model.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = ["//typescript/packages/worker:node_modules/@openai/agents-core"],
+)
+
+# The probe agents. The worker bundles the compiled workflows.js at test time, so it and the
+# node_modules it imports are runfiles of the test.
+ts_project(
+    name = "workflows",
+    testonly = True,
+    srcs = ["workflows.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":scripted-model",
+        ":tools",
+        "//typescript/packages/worker:node_modules/@openai/agents-core",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "tools",
+    testonly = True,
+    srcs = ["tools.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)
+
+js_test(
+    name = "openai-agents-harness_test",
+    data = [":openai-agents-harness.test"],
+    entry_point = "openai-agents-harness.test.js",
+)
+
+harness_js_test(
+    name = "openai-agents_test",
+    data = [":openai-agents.test"],
+    entry_point = "openai-agents.test.js",
+    # agents-core would export traces to OpenAI from the worker.
+    env = {"OPENAI_AGENTS_DISABLE_TRACING": "1"},
+)

@@ -55,7 +55,7 @@ export interface HostClock {
 export interface CodeBatchStep {
   done: boolean;
   stdout: string;
-  /** Opaque resume state while awaiting a batch: Monty's sealed snapshot dump. */
+  /** Opaque resume state while awaiting a batch: Monty's snapshot dump. */
   snapshot: string | null;
   /** Every call the script made in this step, in call order. Each starts at once. */
   calls: PendingCall[];

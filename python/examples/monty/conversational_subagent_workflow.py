@@ -22,9 +22,9 @@ Why this exists: it's the first real end-to-end exercise of the subagent toolset
 subagent (the per-subagent FIFO gate + turn counter + stream-offset resume), and the
 ``run_subagent_turn`` activity against a live child workflow.
 
-Approval stance: this agent runs under ``always_require_human_approval`` (like
-:class:`MontyChatAgentWorkflow`), so it **gates the subagent tools** — every ``start_monty`` /
-``monty_run_script`` / ``stop_monty`` call escalates to a human. The script's host calls
+Approval stance: this agent allows only ``ask_user`` (like :class:`MontyChatAgentWorkflow`), so
+it **gates the subagent tools** — every ``start_monty`` / ``monty_run_script`` / ``stop_monty``
+call escalates to a human. The script's host calls
 (search/book flights & hotels) run *inside the child*, which keeps its own
 ``dangerously_skip_all`` policy, so — unlike the inline agent — those host calls are NOT gated
 in the parent. (Forwarding a gating policy into the child is a possible follow-up.)
@@ -64,6 +64,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
+    from examples.monty.ask_user import ask_user
     from examples.monty.conversational_workflow import SUPPORTED_MODELS, SetModel
     from examples.monty.workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
@@ -89,9 +90,11 @@ structure, the concurrency rules, and the exact host-function signatures and res
 follow it. The reply carries the script's printed output and final value.
 
 How to behave:
-- Converse naturally. Ask brief clarifying questions when you're missing something essential \
-(origin/destination, dates, traveler name) — don't interrogate; make reasonable assumptions \
-and state them.
+- Converse naturally. When you're missing something essential (origin/destination, dates, \
+traveler name) or need the user to choose between options, ask them with the `ask_user` tool \
+and carry on with their answers in the same turn. Ask ONE question per `ask_user` call; to ask \
+several things, make one call per question in the same reply. Don't interrogate; make \
+reasonable assumptions and state them.
 - Before running your first script, call `start_{SUBAGENT_KEY}` to get a handle. Keep using \
 that one handle for the rest of the conversation; don't start a new script-runner per script.
 - When you have enough to make progress, WRITE A SCRIPT and run it with \
@@ -112,7 +115,8 @@ class MontyChatSubagentWorkflow:
             # Gate the subagent tools: every start_monty / monty_run_script / stop_monty call
             # escalates to a human (same stance as the inline MontyChatAgent). The script's
             # host calls run inside the child, which has its own dangerously_skip_all policy.
-            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
+            # `ask_user` alone is allowed: asking the user a question needs no approval.
+            approval_policy_default=ToolApprovalPolicy.allow_tools([ask_user.__name__]),
         )
         self._model: str = DEFAULT_MODEL
         # The whole conversation, sent as the input of every model call (see
@@ -120,12 +124,16 @@ class MontyChatSubagentWorkflow:
         self._conversation = InteractionConversation()
         # The model-facing tools: drive the barebones MontyDynamicAgent script-runner as a
         # subagent. Built statically from its @agent.accepts handlers — no child started here.
-        # Yields start_monty / monty_run_script / stop_monty.
-        self._tools = agent.subagent_toolset(
-            MontyDynamicAgentWorkflow,
-            key=SUBAGENT_KEY,
-            task_queue=TASK_QUEUE,
-        )
+        # Yields start_monty / monty_run_script / stop_monty. Plus ask_user, to ask the user
+        # something mid-turn.
+        self._tools = [
+            *agent.subagent_toolset(
+                MontyDynamicAgentWorkflow,
+                key=SUBAGENT_KEY,
+                task_queue=TASK_QUEUE,
+            ),
+            ask_user,
+        ]
         self._callables_by_name = {fn.__name__: fn for fn in self._tools}
         # Same Temporal-aware AsyncClient as the QA / inline-Monty agents; the runner is wired
         # in so reply text streams to the workflow stream as it is generated.

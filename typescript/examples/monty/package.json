@@ -1,0 +1,23 @@
+{
+  "name": "@temporal-agent-harness/example-monty",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Monty Code Mode travel agents on the TypeScript harness: a Gemini model writes Python scripts that call durable travel tools.",
+  "dependencies": {
+    "@google/genai": "^2.31.0",
+    "@temporalio/activity": "^1.24.0",
+    "@temporalio/agent-harness": "^0.1.0",
+    "@temporalio/agent-harness-worker": "^0.1.0",
+    "@temporalio/envconfig": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/testing": "^1.24.0",
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  }
+}

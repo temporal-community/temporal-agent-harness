@@ -1,0 +1,250 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:agents.bzl", "harness_agent_registry", "harness_ts_agent")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# The TypeScript twin of //python/examples/monty: the same agents, under "Ts" workflow types on
+# their own task queue, so both languages' examples can be served side by side.
+
+npm_link_all_packages(name = "node_modules")
+
+exports_files(["package.json"])
+
+# package.json's "type": "module" makes tsc emit ES modules (module: NodeNext) and Node load them.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+)
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
+    ],
+)
+
+# Code Mode's Monty sandbox, an optional peer of @temporalio/agent-harness-worker, hoisted where
+# the worker package's code finds it (MODULE.bazel's public_hoist_packages).
+js_library(
+    name = "monty_sandbox",
+    deps = ["//typescript:node_modules/@pydantic/monty"],
+)
+
+# One target per file, depending on the files it imports.
+ts_project(
+    name = "ask-user",
+    srcs = ["ask-user.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "activities",
+    srcs = ["activities.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/zod",
+        ":travel-models",
+    ],
+)
+
+ts_project(
+    name = "activity-bodies",
+    srcs = ["activity-bodies.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":activities",
+        ":node_modules/@temporalio/activity",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":travel-models",
+    ],
+)
+
+# The worker bundles the compiled agents.js, so it and the node_modules it imports are runfiles of
+# :worker.
+ts_project(
+    name = "agents",
+    srcs = ["agents.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":conversational-subagent-workflow",
+        ":conversational-workflow",
+        ":workflow",
+    ],
+)
+
+ts_project(
+    name = "conversational-subagent-workflow",
+    srcs = ["conversational-subagent-workflow.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":ask-user",
+        ":conversational-workflow",
+        ":node_modules/@temporalio/agent-harness",
+        ":workflow",
+    ],
+)
+
+ts_project(
+    name = "conversational-workflow",
+    srcs = ["conversational-workflow.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":activities",
+        ":ask-user",
+        ":node_modules/@google/genai",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/workflow",
+        ":node_modules/zod",
+        ":trip-board",
+    ],
+)
+
+ts_project(
+    name = "models",
+    srcs = ["models.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [":node_modules/zod"],
+)
+
+ts_project(
+    name = "travel-models",
+    srcs = ["travel-models.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [":node_modules/zod"],
+)
+
+ts_project(
+    name = "trip-board",
+    srcs = ["trip-board.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/workflow",
+        ":node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "worker_main",
+    srcs = ["worker.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":activity-bodies",
+        ":agents",
+        ":monty_sandbox",
+        ":node_modules/@google/genai",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/envconfig",
+        ":node_modules/@temporalio/worker",
+        ":workflow",
+    ],
+)
+
+ts_project(
+    name = "workflow",
+    srcs = ["workflow.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":activities",
+        ":models",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/workflow",
+        ":trip-board",
+    ],
+)
+
+# The Monty agents' worker; reads GEMINI_API_KEY and the Temporal connection from the env.
+# `just worker` runs it.
+js_binary(
+    name = "worker",
+    data = [":worker_main"],
+    entry_point = "worker.js",
+)
+
+ts_project(
+    name = "conversational-workflow.test",
+    testonly = True,
+    srcs = ["conversational-workflow.test.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":activity-bodies",
+        ":agents",
+        ":monty_sandbox",
+        ":node_modules/@google/genai",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/client",
+        ":node_modules/@temporalio/testing",
+        ":node_modules/@temporalio/worker",
+    ],
+)
+
+harness_js_test(
+    name = "chat_turn_runs_a_code_mode_script_over_a_host_function_and_streams_the_reply_test",
+    data = [":conversational-workflow.test"],
+    entry_point = "conversational-workflow.test.js",
+)
+
+harness_ts_agent(
+    name = "MontyChatAgentTs",
+    description = """
+A conversational travel-booking assistant, in TypeScript. Chat in plain text; an LLM converses to
+gather your trip details, then WRITES its own Python script and runs it in Monty via a tool to
+orchestrate durable flight/hotel search + booking activities, replying with the results.""",
+    export = "MontyChatAgentTs",
+    key = "monty-chat-ts",
+    label = "Monty (Conversational, TypeScript)",
+    module = "agents.js",
+    task_queue = "monty-dynamic-agent-ts",
+    deps = [":agents"],
+)
+
+harness_ts_agent(
+    name = "MontyChatSubagentAgentTs",
+    description = """
+Same conversational travel-booking experience as Monty (Conversational, TypeScript), but instead
+of running its Python scripts inline it drives the barebones MontyDynamicAgentTs as a SUBAGENT —
+starting a script-runner instance and sending it each script over the harness subagent
+toolset.""",
+    export = "MontyChatSubagentAgentTs",
+    key = "monty-chat-subagent-ts",
+    label = "Monty (Conversational, Subagent, TypeScript)",
+    module = "agents.js",
+    task_queue = "monty-dynamic-agent-ts",
+    deps = [":agents"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //typescript/examples/monty:agents_registry_update` rewrites them.
+harness_agent_registry(
+    name = "agents_registry",
+    srcs = [
+        "MontyChatAgentTs.schema.json",
+        "MontyChatSubagentAgentTs.schema.json",
+        "agents.toml",
+    ],
+    agents = [
+        ":MontyChatAgentTs",
+        ":MontyChatSubagentAgentTs",
+    ],
+)

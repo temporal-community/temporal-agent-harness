@@ -757,54 +757,7 @@ export const NullBriefParentAgent = defineAgent({
   }),
 });
 
-// -- the web API and the published client --------------------------------------------------------
-
-const answerTool = tool({
-  name: "answer_question",
-  description: "Ask the user a question.",
-  inputSchema: TextInput,
-  outputSchema: z.object({ answer: z.string() }),
-  inherentlySafe: true,
-});
-const Notes = z.object({ notes: z.array(z.string()).default([]) }).meta({ title: "Notes" });
-
-export const ContractAgent = defineAgent({
-  name: "ContractAgent",
-  approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
-  states: { notes: state(Notes) },
-  handlers: {
-    ask: handler({
-      description: "Chat with the contract agent.",
-      input: TextMessage,
-      output: TextReply,
-      midTurn: MidTurn.ENQUEUE,
-    }),
-    exclusive: handler({
-      description: "Only when idle.",
-      input: TextMessage,
-      output: TextReply,
-      midTurn: MidTurn.REJECT,
-    }),
-  },
-  create: ({ runner, state: { notes } }) => ({
-    async ask({ text }) {
-      const parts: string[] = [];
-      if (text.includes("approve"))
-        parts.push(
-          await runner.runTool("gated-1", gatedWorkflowTool, { text: "go" }).catch(denied),
-        );
-      if (text.includes("callback"))
-        parts.push((await runner.runTool("cb-1", answerTool, { text: "Why?" })).answer);
-      const reply = [`You said: ${text}`, ...parts].join(" | ");
-      for (const word of reply.split(/(?<= )/)) runner.publish({ type: "reply_delta", text: word });
-      notes.mutate((d) => {
-        d.notes.push(text);
-      });
-      return { text: reply };
-    },
-    exclusive: async ({ text }) => ({ text: `exclusive:${text}` }),
-  }),
-});
+// -- agents started by name ---------------------------------------------------------------------
 
 export const BriefedAgent = defineAgent({
   name: "BriefedAgent",
@@ -816,53 +769,7 @@ export const BriefedAgent = defineAgent({
   create: ({ data }) => ({ ask: async () => ({ text: data.topic }) }),
 });
 
-/** Replies with the principal it acts for, which only the server may set. */
-export const ActingAgent = defineAgent({
-  name: "ActingAgent",
-  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
-  initData: {
-    schema: z.object({ principal: z.string().optional() }),
-    required: false,
-    serverOwned: ["principal"],
-  },
-  handlers: {
-    ask: handler({ description: "Who do you act for?", input: TextMessage, output: TextReply }),
-  },
-  create: ({ data }) => ({ ask: async () => ({ text: data?.principal ?? "nobody" }) }),
-});
-
-// -- raw model streams ---------------------------------------------------------------------------
-
-/** Streams raw OpenAI Agents events to `topic` the way a model activity does; see test/support.ts. */
-export type RawModelProbe = (topic: string, scenario: "retry" | "abandon") => Promise<string>;
-const { raw_model_probe } = proxyActivities<{ raw_model_probe: RawModelProbe }>({
-  startToCloseTimeout: "30 seconds",
-  retry: { initialInterval: "100 milliseconds", maximumAttempts: 2 },
-});
-
-export const RawStreamProbeAgent = defineAgent({
-  name: "RawStreamProbeAgent",
-  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
-  handlers: {
-    run: handler({
-      description: "Make one raw-streamed model call.",
-      input: TextMessage,
-      output: TextReply,
-    }),
-  },
-  create: ({ runner }) => ({
-    run: async ({ text }) => ({
-      text: await runner
-        .turnHost([])
-        .modelCall("openai-agents", "probe-model", (topic) =>
-          raw_model_probe(topic, text as "retry" | "abandon"),
-        )
-        .catch(() => "model call failed"),
-    }),
-  }),
-});
-
-/** The TypeScript twin of test/interop/py_agent.py's PyEcho, for the wire parity test. */
+/** Echoes the message back; run-agent-worker's test starts it by name. */
 export const InteropEcho = defineAgent({
   name: "InteropEcho",
   approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
@@ -877,25 +784,6 @@ export const InteropEcho = defineAgent({
   }),
 });
 
-/** Drives one turn of a PyEcho child (a Python agent) on `task_queue`; the child closes with it. */
-export const InteropParent = defineAgent({
-  name: "InteropParent",
-  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
-  handlers: {
-    ask: handler({
-      description: "Ask the Python child.",
-      input: z.object({ text: z.string(), task_queue: z.string() }),
-      output: TextReply,
-    }),
-  },
-  create: ({ runner }) => ({
-    ask: async ({ text, task_queue }) => {
-      const child = await runner.startSubagent("py", "PyEcho", task_queue);
-      // Not stopped: a closed child's stream can no longer be read by a reader still merging it.
-      return { text: String((await runner.runSubagentTurn(child, "ask", { text })).text) };
-    },
-  }),
-});
 
 // -- payload size --------------------------------------------------------------------------------
 

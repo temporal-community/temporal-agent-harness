@@ -95,8 +95,16 @@ def _genai_error(status_code: int) -> genai_errors.APIError:
 def _interactions_activity(raises: BaseException) -> tuple[Any, AsyncMock]:
     """The real interactions activity over a client whose ``create`` raises ``raises``."""
     create = AsyncMock(side_effect=raises)
+    # The activity calls ``create`` on a retry-less copy of the client's Interactions client.
+    nextgen = SimpleNamespace(
+        interactions=SimpleNamespace(create=create),
+        _is_vertex=False,
+        _vertex_project=None,
+        _vertex_location=None,
+    )
+    nextgen.with_options = lambda **_: nextgen
     client = SimpleNamespace(
-        aio=SimpleNamespace(interactions=SimpleNamespace(create=create))
+        aio=SimpleNamespace(interactions=SimpleNamespace(_client=nextgen))
     )
     return make_gemini_interactions_create_streamed(cast(GeminiClient, client)), create
 

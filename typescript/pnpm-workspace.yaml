@@ -4,6 +4,7 @@
 packages:
   - packages/*
   - apps/*
+  - examples/*
 
 # A dependency on a workspace package's version (the bindings' `^0.1.0` client) links the working
 # tree's copy, and Bazel links that package's `:pkg` (bazel/npm_package.bzl), so the bindings

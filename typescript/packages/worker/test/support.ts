@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ApplicationFailure, Context } from "@temporalio/activity";
+import { ApplicationFailure } from "@temporalio/activity";
 import { Client, Connection, type WorkflowHandle } from "@temporalio/client";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import {
@@ -13,7 +13,6 @@ import {
   bundleWorkflowCode,
   type BundlerPlugin,
 } from "@temporalio/worker";
-import { WorkflowStreamClient } from "@temporalio/workflow-streams/client";
 import type {
   JevApprovalAnswer,
   JevApprovalRequest,
@@ -28,18 +27,11 @@ import {
   type AgentMessageReply,
   type StreamEventOf,
 } from "@temporalio/agent-harness/harness/agent-protocol";
-import { codeModeActivities } from "../src/harness/code-mode/monty-stepper.ts";
 import { AgentClient } from "../src/harness/agent-client.ts";
 import { subscribe } from "../src/harness/stream-merge/index.ts";
 import { DEFAULT_PAYLOAD_STORAGE } from "../src/utils/large-payload.ts";
+import { AgentHarnessPlugin, toolActivity } from "../src/index.ts";
 import {
-  harnessActivities,
-  rawTopicAttemptInterceptor,
-  toolActivities,
-  toolActivity,
-} from "../src/index.ts";
-import {
-  type RawModelProbe,
   bigResult,
   bookItem,
   failingTool,
@@ -55,7 +47,6 @@ const NAMESPACE = "default";
 const dataConverter = { externalStorage: DEFAULT_PAYLOAD_STORAGE };
 /** The compiled fixture module the worker bundles its workflows from. */
 export const FIXTURES = fileURLToPath(new URL("./fixtures/workflows.js", import.meta.url));
-export const TEST_CONTINUATION_SECRET = "test-only-continuation-secret-0123456789";
 
 /** What the fake `load_skills` activity seeds VfsProbeAgent's /skills with. */
 export const skills: { files: Record<string, string> } = {
@@ -69,10 +60,9 @@ export const jev: {
   seen: JevApprovalRequest[];
 } = { answer: null, error: null, seen: [] };
 
+// The fixtures' fakes, which win over the plugin's activities of the same name.
 function fixtureActivities() {
   return {
-    ...harnessActivities(),
-    ...codeModeActivities({ continuationSecret: TEST_CONTINUATION_SECRET }),
     async load_skills(): Promise<Record<string, string>> {
       return { ...skills.files };
     },
@@ -82,25 +72,12 @@ function fixtureActivities() {
         throw ApplicationFailure.create({ message: jev.error, nonRetryable: true });
       return jev.answer!;
     },
-    // "retry": attempt 1 streams part of a reply and fails, attempt 2 streams a whole one.
-    // "abandon": streams part of a reply, then fails for good.
-    raw_model_probe: (async (topic, scenario) => {
-      const { attempt } = Context.current().info;
-      const stream = WorkflowStreamClient.fromWithinActivity();
-      const raw = stream.topic<unknown>(topic);
-      try {
-        raw.publish({ type: "response_started" });
-        raw.publish({ type: "output_text_delta", delta: `attempt ${attempt}` });
-        if (scenario === "abandon")
-          throw ApplicationFailure.create({ message: "model gone", nonRetryable: true });
-        if (attempt === 1) throw ApplicationFailure.create({ message: "connection reset" });
-        raw.publish({ type: "response_done", response: { usage: {}, output: [] } });
-        return `attempt ${attempt}`;
-      } finally {
-        await stream[Symbol.asyncDispose]();
-      }
-    }) satisfies RawModelProbe,
-    ...toolActivities(
+  };
+}
+
+function fixturePlugin() {
+  return new AgentHarnessPlugin({
+    tools: [
       toolActivity(gatedActivityTool, async ({ text }) => `act:${text}`),
       toolActivity(safeActivityTool, async ({ text }) => `safe:${text}`),
       toolActivity(refundCustomer, async ({ amount }) => `refunded:${amount}`),
@@ -118,8 +95,8 @@ function fixtureActivities() {
         async ({ text }) =>
           new Promise((resolve) => setTimeout(() => resolve(`slow:${text}`), 2_500)),
       ),
-    ),
-  };
+    ],
+  });
 }
 
 export interface TemporalServer {
@@ -175,7 +152,7 @@ export async function startEnv(name: string, plugins?: BundlerPlugin[]): Promise
       taskQueue: queue,
       workflowBundle,
       activities: fixtureActivities(),
-      interceptors: { activity: [rawTopicAttemptInterceptor] },
+      plugins: [fixturePlugin()],
       dataConverter,
       ...(maxCachedWorkflows === undefined ? {} : { maxCachedWorkflows }),
     });

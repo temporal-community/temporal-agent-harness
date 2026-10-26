@@ -20,6 +20,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
+        ":ask_user",
         ":conversational_workflow",
         ":workflow",
         "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
@@ -39,6 +40,7 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":activities",
+        ":ask_user",
         ":trip_board",
         "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
         "//python/temporal_agent_harness/harness:agent",
@@ -154,4 +156,12 @@ harness_agent_registry(
         ":MontyChatSubagentAgent",
     ],
     visibility = ["//python/tests/web:__pkg__"],
+)
+
+py_library(
+    name = "ask_user",
+    srcs = ["ask_user.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["//python/temporal_agent_harness/harness:agent"],
 )

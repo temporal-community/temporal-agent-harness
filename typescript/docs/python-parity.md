@@ -25,16 +25,17 @@ Paths are under `python/temporal_agent_harness/`, `typescript/packages/core/src/
 | `harness/state/` | core `harness/state/index.ts` |
 | `harness/stream_merge/` | worker `harness/stream-merge/index.ts` |
 | `harness/code_mode/{driver,tool,stubs,vfs,okf,okf_tool,mount_decl,activity_fs}.py` | core `harness/code-mode/` at the same names, with `base64.ts` (the workflow sandbox has no `Buffer`); the activity side of `activity_fs` and `okf` in worker `harness/code-mode/` |
-| `harness/code_mode/monty_stepper.py` | worker `harness/code-mode/monty-stepper.ts`, with `secret.ts` (the key that seals snapshots in history) |
+| `harness/code_mode/monty_stepper.py` | worker `harness/code-mode/monty-stepper.ts` |
 | `harness/code_mode/_texts.py` | core `harness/code-mode/texts.ts`; both generated from `contract/code_mode/` |
 | — | core `harness/py-repr.ts`: Python's `repr()`, which the Python harness shows the model |
-| `plugin.py` | worker `plugin.ts`; `runAgentWorker` in worker `index.ts` |
+| `plugin.py` | worker `plugin.ts` |
 | `utils/large_payload.py` | worker `utils/large-payload.ts`, `utils/s3.ts` |
 | `ai_sdks/jev/evaluator.py` | core and worker `ai-sdks/jev/evaluator.ts` |
-| `ai_sdks/integration_helpers/` | core `ai-sdks/integration-helpers/raw-events.ts` (model streams translated in the workflow) |
-| `web/client.py` | worker `web/client.ts` |
-| the rest of `web/`, `ui/` | None: the server, session manager, registry, the rest of the CLI and the console have one implementation, which serves agents written with either SDK |
-| `ai_sdks/openai_agents*`, `ai_sdks/google_genai_plugin/` | Stage 5's integrations PR (`openai-agents`, `gemini`, plus `ai-sdk`) |
+| `ai_sdks/integration_helpers/` | worker `ai-sdks/integration-helpers/stream-observer.ts`: the same per-call observer contract, with which each integration's model activity translates its SDK's stream and publishes harness events to the turn. Python's `RawTopicObserver` fallback (raw events to a named topic, for its plugins used outside the harness) has no counterpart: the TypeScript integrations only run inside it |
+| `web/`, `ui/` | None: the server, session manager, registry, the rest of the CLI and the console have one implementation, which serves agents written with either SDK |
+| `ai_sdks/openai_agents_harness.py` | core `ai-sdks/openai-agents-harness.ts` (tools, the streamed run, MCP governance, in the workflow); worker `ai-sdks/openai-agents-harness.ts` (`OpenAIStreamObserver`, in the model activity) |
+| `ai_sdks/openai_agents/` | Temporal's `@temporalio/openai-agents`, which Python vendors, used as published; worker `ai-sdks/openai-agents/` replaces only its streamed model activity (`invoke-model-activity.ts`, to add the observer) and wraps its plugin (`temporal-openai-agents.ts`). Not ported yet: stateful MCP, sandbox, tracing, Nexus MCP, `activity_as_tool`, `nexus_operation_as_tool`, `testing`, hosted-tool credentials |
+| `ai_sdks/google_genai_plugin/` | core `ai-sdks/google-genai-plugin/` (the client, `InteractionConversation`, `functionParam`) and worker `ai-sdks/google-genai-plugin/` (`GoogleGenAIPlugin`, the Interactions activity, error mapping), module for module. Not ported yet: `models.generate_content` and its function calling, files, file search stores, Vertex AI options |
 | `ai_sdks/pydantic_ai_harness.py` | None: Pydantic AI is Python-only |
 | `ai_sdks/typesafe_harness.py` | Not ported yet |
 | `nexus_agent_adapter/` | None: Nexus is not part of the TypeScript SDK |
@@ -48,7 +49,7 @@ change, or adds a row here saying which SDK has it and why.
 
 | Area | Python | TypeScript | Why |
 | --- | --- | --- | --- |
-| Where Code Mode runs Monty | In the workflow (the sandbox passes `pydantic_monty` through); the paused interpreter stays in workflow memory | In activities; each paused script is snapshotted, sealed with an HMAC, and passed through history | A TypeScript workflow isolate can't load native code. Parity is a follow-up to investigate (Monty's WebAssembly core) |
+| Where Code Mode runs Monty | In the workflow (the sandbox passes `pydantic_monty` through); the paused interpreter stays in workflow memory | In activities; each paused script is snapshotted and passed through history | A TypeScript workflow isolate can't load native code. Parity is a follow-up to investigate (Monty's WebAssembly core) |
 | Code Mode's time limit | A script stops after 1 s without awaiting a host function | The same, but cut to 80% of the step activity's start-to-close timeout when that is shorter; the error still says 1 s | A script runs inside an activity, and a script that outlived the activity would time out and retry instead of failing on its limit |
 | `os.urandom` in Code Mode | `random.Random` seeded from `workflow.random()`; a bad size raises `randbytes`'s errors | SHA-256 of the workflow's seed and the call id; a bad size raises `TypeError: os.urandom() takes an integer size` or `ValueError: negative argument not allowed` | Both are deterministic on replay, but the TypeScript activity can't share the workflow's generator, so the bytes and the error wording differ |
 | Deleting a missing key in a state draft | `del d.values["k"]` raises `KeyError` | `delete d.values.k` does nothing | State drafts are immer recipes, and JavaScript's `delete` of an absent key is not an error |
@@ -56,7 +57,11 @@ change, or adds a row here saying which SDK has it and why.
 | Decorators | `@agent.defn`, `@agent.accepts`, `@agent.tool_defn` | `defineAgent`, `handler`, `tool`, `activityTool` | TypeScript has no decorators on functions; declarations are data plus zod schemas |
 | Ambient context | `contextvars` | `AsyncLocalStorage` | Language |
 | Schemas | pydantic models | Any Standard Schema that renders JSON Schema (zod 4); rendered in zod's own input and output modes, so documents are equivalent to Python's but not byte-identical | Language |
-| Starting a worker | A `Worker` with `AgentHarnessPlugin` | `runAgentWorker`, which also bundles the agents module as the workflows module | The TypeScript worker bundles workflow code |
+| What `AgentHarnessPlugin(tools=...)` takes | The agent's tools; the activity-backed ones carry their bodies | The bodies alone, each from `toolActivity(tool, impl)` | A tool's declaration is bundled into the workflow, which can't import its worker-side body |
+| Running an OpenAI agent streamed | `Runner.run_streamed(agent, input, context=runner)`; the vendored runner's `stream_to_provider` hook reads the turn off the run context | `runStreamed(runner, agent, input)`, which hands the turn to the official runner as its streaming route | Temporal's TypeScript runner has no `stream_to_provider` hook |
+| Where OpenAI model-activity settings are set | On the worker's `OpenAIAgentsPlugin(model_params=...)`, which installs them in the worker process for every workflow it runs | As Temporal's TypeScript plugin designs it: workflow code sets defaults (`runStreamed(..., { defaultModelParams })`, the official runner's option), and the plugin's `modelParams`, on the client that starts a workflow, travel in its header and override them | A workflow isolate can't read the worker's memory; settings written in the workflow or recorded with its start hold for every worker and bundle that runs it |
+| OpenAI streamed usage when the provider reports none | `None` | `0` | `@openai/agents-core` normalizes missing usage to zero |
+| An OpenAI tool's structured result, as text to the model | `json.dumps` spacing | `JSON.stringify` spacing | Language |
 | A subagent send tool's input key | The child handler's own parameter name, read from its signature | The handler's `inputName` (default `message`) | A JavaScript function's parameter names can't be read reliably |
 | A Code Mode script's Monty crash (not a timeout) | A fixed crash message | `MontyCrashedError: <message>` from the Node binding | The two Monty bindings report a crash differently |
 | File errors from an in-workflow VFS mount | Python's `OSError` wording | `[Errno n] … '<virtual path>'`; activity-backed mounts give Python's wording | The in-workflow filesystem formats its own errors |

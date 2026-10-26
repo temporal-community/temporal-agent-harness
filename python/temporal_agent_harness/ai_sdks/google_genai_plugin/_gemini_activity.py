@@ -7,7 +7,9 @@ they never appear in workflow event history.
 
 Every activity here runs its SDK call under :func:`translate_gemini_errors`,
 so a Gemini client error (4xx other than 408/429) fails it non-retryably
-instead of retrying the identical request forever.
+instead of retrying the identical request forever. Each also turns the SDK's
+own retries off for its call, whatever the client is configured with, so an
+activity attempt makes one request and Temporal's retry policy owns retries.
 """
 
 from __future__ import annotations
@@ -15,12 +17,12 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 import google.auth.credentials
 from google.genai import Client as GeminiClient
 from google.genai import types
-from google.genai.types import HttpOptions
+from google.genai.types import HttpOptions, HttpRetryOptions
 from google.genai.types import HttpResponse as SdkHttpResponse
 
 from temporalio import activity
@@ -73,11 +75,41 @@ def _extract_text_delta(body: str) -> str:
 
 def _resolve_http_options(
     overrides: Any,
-) -> HttpOptions | None:
-    """Reconstruct ``HttpOptions`` from serializable overrides, or None."""
-    if overrides is None:
-        return None
-    return HttpOptions.model_validate(overrides.model_dump(exclude_none=True))
+) -> HttpOptions:
+    """The request's ``HttpOptions``: the serializable overrides, with the SDK's retries off."""
+    options = (
+        HttpOptions()
+        if overrides is None
+        else HttpOptions.model_validate(overrides.model_dump(exclude_none=True))
+    )
+    options.retry_options = _no_sdk_retries()
+    return options
+
+
+def _no_sdk_retries() -> HttpRetryOptions:
+    """Per-request retry options that make the SDK try once (a per-request setting wins
+    over the client's own ``retry_options``)."""
+    return HttpRetryOptions(attempts=1)
+
+
+_Config = TypeVar(
+    "_Config",
+    types.UploadFileConfig,
+    types.DownloadFileConfig,
+    types.RegisterFilesConfig,
+    types.UploadToFileSearchStoreConfig,
+)
+
+
+def _without_sdk_retries(config: _Config | None, config_type: type[_Config]) -> _Config:
+    """A copy of ``config`` whose ``http_options`` turn the SDK's retries off."""
+    resolved = config_type() if config is None else config.model_copy()
+    http_options = (
+        HttpOptions() if resolved.http_options is None else resolved.http_options.model_copy()
+    )
+    http_options.retry_options = _no_sdk_retries()
+    resolved.http_options = http_options
+    return resolved
 
 
 class GeminiApiCaller:
@@ -184,7 +216,8 @@ class GeminiApiCaller:
 
             with translate_gemini_errors():
                 return await self._client.aio.files.upload(
-                    file=file_arg, config=req.config
+                    file=file_arg,
+                    config=_without_sdk_retries(req.config, types.UploadFileConfig),
                 )
 
         @activity.defn
@@ -194,7 +227,8 @@ class GeminiApiCaller:
             """Download a file using the real genai.Client on the worker."""
             with translate_gemini_errors():
                 return await self._client.aio.files.download(
-                    file=req.file, config=req.config
+                    file=req.file,
+                    config=_without_sdk_retries(req.config, types.DownloadFileConfig),
                 )
 
         @activity.defn
@@ -219,7 +253,7 @@ class GeminiApiCaller:
                 return await self._client.aio.files.register_files(
                     auth=auth,
                     uris=req.uris,
-                    config=req.config,
+                    config=_without_sdk_retries(req.config, types.RegisterFilesConfig),
                 )
 
         @activity.defn
@@ -238,7 +272,9 @@ class GeminiApiCaller:
                 return await self._client.aio.file_search_stores.upload_to_file_search_store(
                     file_search_store_name=req.file_search_store_name,
                     file=file_arg,
-                    config=req.config,
+                    config=_without_sdk_retries(
+                        req.config, types.UploadToFileSearchStoreConfig
+                    ),
                 )
 
         return [

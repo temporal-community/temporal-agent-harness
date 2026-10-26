@@ -2,7 +2,7 @@
 // stream from the activity, as a real model activity does.
 
 import { setTimeout as sleep } from "node:timers/promises";
-import { publisherFromActivity, toolActivities, toolActivity } from "../../../src/index.ts";
+import { publisherFromActivity, toolActivity } from "../../../src/index.ts";
 import {
   bookFlight,
   searchFlights,
@@ -96,11 +96,12 @@ export const scriptedDemoActivities = {
     });
     return step;
   },
-  ...toolActivities(
-    toolActivity(searchFlights, async ({ origin, destination }) => [
-      { flight_id: `FL-${origin}${destination}-001`, price_usd: destination === "BOS" ? 199 : 249 },
-      { flight_id: `FL-${origin}${destination}-002`, price_usd: destination === "BOS" ? 329 : 289 },
-    ]),
-    toolActivity(bookFlight, async ({ flight_id }) => `AIR-${flight_id.slice(-6).toUpperCase()}`),
-  ),
 };
+
+export const scriptedDemoTools = [
+  toolActivity(searchFlights, async ({ origin, destination }) => [
+    { flight_id: `FL-${origin}${destination}-001`, price_usd: destination === "BOS" ? 199 : 249 },
+    { flight_id: `FL-${origin}${destination}-002`, price_usd: destination === "BOS" ? 329 : 289 },
+  ]),
+  toolActivity(bookFlight, async ({ flight_id }) => `AIR-${flight_id.slice(-6).toUpperCase()}`),
+];

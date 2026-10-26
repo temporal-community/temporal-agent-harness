@@ -7,7 +7,8 @@
 
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { runAgentWorker } from "../../src/index.ts";
+import { NativeConnection, Worker } from "@temporalio/worker";
+import { AgentHarnessPlugin } from "../../src/index.ts";
 
 const { values } = parseArgs({
   options: {
@@ -16,21 +17,22 @@ const { values } = parseArgs({
     "task-queue": { type: "string" },
   },
 });
-// runAgentWorker connects with the same TEMPORAL_* env as the CLI.
-if (values.address) process.env.TEMPORAL_ADDRESS = values.address;
-if (values.namespace) process.env.TEMPORAL_NAMESPACE = values.namespace;
 const taskQueue = values["task-queue"] ?? process.env.TEMPORAL_TASK_QUEUE;
 if (!taskQueue) {
   console.error("error: pass --task-queue or set TEMPORAL_TASK_QUEUE");
   process.exit(2);
 }
 
-const stop = new AbortController();
-for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stop.abort());
-
-await runAgentWorker({
-  agents: fileURLToPath(new URL("./agents.js", import.meta.url)),
-  taskQueue,
-  name: "serving",
-  signal: stop.signal,
+const connection = await NativeConnection.connect({
+  address: values.address ?? process.env.TEMPORAL_ADDRESS ?? "localhost:7233",
 });
+const worker = await Worker.create({
+  connection,
+  namespace: values.namespace ?? process.env.TEMPORAL_NAMESPACE ?? "default",
+  taskQueue,
+  workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
+  plugins: [new AgentHarnessPlugin()],
+});
+console.log(`serving worker ready: taskQueue=${taskQueue}`);
+await worker.run();
+await connection.close();
