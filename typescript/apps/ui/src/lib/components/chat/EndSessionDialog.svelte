@@ -80,7 +80,7 @@
     {/if}
     <div class="end-actions">
       <Chip class="end-cancel" size="sm" fill="quiet" onclick={() => dialogElement?.close()}>Cancel</Chip>
-      <Chip class="end-confirm" size="sm" tone="error" toned disabled={ending} onclick={() => void confirm()}>
+      <Chip class="end-confirm" size="sm" fill="solid" tone="error" disabled={ending} onclick={() => void confirm()}>
         {ending ? "Ending…" : "End session"}
       </Chip>
     </div>

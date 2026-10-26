@@ -571,6 +571,7 @@
             {/if}
             <Chip
               type="submit"
+              fill="solid"
               tone="accent"
               aria-label={selected ? `Start session with ${selected.name}` : undefined}
               disabled={busy || !agent || agentBlocked(agent)}

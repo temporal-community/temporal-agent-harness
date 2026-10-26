@@ -58,7 +58,7 @@ describe("ending a session", () => {
     );
     assert.match(body, /End this session\?/);
     assert.match(body, /The agent stops and you can't send to it again\. Its history stays viewable\./);
-    assert.match(body, /end-cancel[^"]*"[^>]*>\s*(<[^>]*>\s*)*Cancel[\s\S]*class="chip sm filled error toned[^"]*end-confirm[\s\S]*End session/);
+    assert.match(body, /end-cancel[^"]*"[^>]*>\s*(<[^>]*>\s*)*Cancel[\s\S]*class="chip sm solid error[^"]*end-confirm[\s\S]*End session/);
   });
 
   it("is wired to the controller from the manager only, and ends a session that is not on screen", async () => {

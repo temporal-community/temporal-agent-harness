@@ -2244,7 +2244,7 @@
         <CheckCircle2 size={14} aria-hidden="true" />
         <span>Session ended</span>
         {#if onStartNewSession}
-          <Chip class="start-new" size="sm" tone="accent" disabled={creatingSession} onclick={onStartNewSession}>
+          <Chip class="start-new" size="sm" fill="solid" tone="accent" disabled={creatingSession} onclick={onStartNewSession}>
             {#snippet lead()}<Plus size={13} aria-hidden="true" />{/snippet}
             Start a new session
           </Chip>
@@ -2398,10 +2398,10 @@
                 {/if}
               {/snippet}
               {#snippet foot()}
-                <Chip fill="quiet" dense label="Approve" aria-label="Approve" data-tip="Approve" disabled={busy} onclick={(event) => void resolveApproval(event, request, true)}>
+                <Chip tone="success" fill="quiet" leadToned dense label="Approve" aria-label="Approve" data-tip="Approve" disabled={busy} onclick={(event) => void resolveApproval(event, request, true)}>
                   {#snippet lead()}<Check size={12} />{/snippet}
                 </Chip>
-                <Chip fill="quiet" dense label="Always allow" aria-label="Always allow" data-tip="Always allow" disabled={busy} onclick={(event) => void resolveApproval(event, request, true, true)}>
+                <Chip tone="warning" fill="quiet" leadToned dense label="Always allow" aria-label="Always allow" data-tip="Always allow" disabled={busy} onclick={(event) => void resolveApproval(event, request, true, true)}>
                   {#snippet lead()}<ShieldCheck size={12} />{/snippet}
                 </Chip>
                 <Chip tone="error" fill="quiet" toned dense label="Reject" aria-label="Reject" data-tip="Reject" disabled={busy} onclick={(event) => void resolveApproval(event, request, false)}>
