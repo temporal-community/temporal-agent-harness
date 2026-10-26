@@ -211,7 +211,7 @@ describe("StartSessionDialog", () => {
     const start = footer.search(/>\s*Start session</);
     assert.ok(cancel > -1 && start > cancel);
     assert.match(footer, /<button[^>]*class="chip sm quiet[^"]*"[^>]*>\s*Cancel<\/button>/);
-    assert.match(footer, /<button[^>]*class="chip sm filled accent[^"]*"[^>]*type="submit"/);
+    assert.match(footer, /<button[^>]*class="chip sm solid accent[^"]*"[^>]*type="submit"/);
     assert.match(body, /<button[^>]*class="head-button"[^>]*aria-label="Close"/);
   });
 });
