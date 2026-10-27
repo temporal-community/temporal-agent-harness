@@ -401,6 +401,17 @@
         : ""
   );
 
+  /* A turn's activity is drawn once, under the message that opened it. A message that joins the
+     running turn shares its number, and drawing it there too repeated the whole turn under each. */
+  const turnOpeners = $derived.by(() => {
+    const openers = new Map<number, string>();
+    for (const message of messages) {
+      if (message.role === "user" && message.turnNumber != null && !openers.has(message.turnNumber)) {
+        openers.set(message.turnNumber, message.id);
+      }
+    }
+    return openers;
+  });
   /* The in-flight turn's status rides its header, under the message that started it. */
   const statusInHeader = $derived(
     turnRunning && messages.some((message) => message.role === "user" && message.turnNumber === latestTurn)
@@ -1940,7 +1951,7 @@
           {/if}
         </article>
 
-        {#if message.role === "user"}
+        {#if message.role === "user" && message.turnNumber != null && turnOpeners.get(message.turnNumber) === message.id}
           {@const activityLogs = logsForTurn(message.turnNumber)}
           {@const activeLog = activeLogForTurn(message.turnNumber)}
           {@const working = statusInHeader && turnWorking(message.turnNumber)}

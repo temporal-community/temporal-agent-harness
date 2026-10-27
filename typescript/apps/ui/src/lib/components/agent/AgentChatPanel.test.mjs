@@ -683,9 +683,10 @@ describe("a turn's trace", () => {
   });
 });
 
-/* A turn number is not a feed. One turn holds several messages, and continue-as-new
-   reuses the numbers, so opening one message's trace used to open every other feed
-   on that number — and a nested group, keyed only by its step, opened in each of them. */
+/* Opening one feed used to open every other feed on that turn number, and a nested group,
+   keyed only by its step, opened in each of them. One turn holds several messages, but its
+   activity is drawn once, under the message that opened it: a message that joined the turn
+   mid-turn used to repeat the whole trace under itself. */
 describe("activity feed disclosures", () => {
   const HIDDEN = [
     "message_accepted",
@@ -750,7 +751,7 @@ describe("activity feed disclosures", () => {
   );
   const stateStep = traceSteps(visible.filter((row) => row.turnNumber === 1)).find((step) => step.name === "State changed");
   const feedA = feedId("msg-1a");
-  const feedB = feedId("msg-1b");
+  const feedC = feedId("msg-2");
 
   function rendered(seed) {
     seedDisclosure(seed);
@@ -774,17 +775,22 @@ describe("activity feed disclosures", () => {
   const buttonFor = (feed, name) =>
     (feed.match(/<button\b[\s\S]*?<\/button>/g) ?? []).find((button) => button.includes(name));
 
-  it("opens one feed and leaves the other turn, the other message, and nested groups shut", () => {
+  it("draws a turn's activity once, under the message that opened it", () => {
+    const body = rendered(null);
+    const feeds = feedsOf(body);
+    assert.ok(feeds.get("Plan msg-1a") && feeds.get("Plan msg-2"), [...feeds.keys()].join(", "));
+    assert.equal(feeds.get("Plan msg-1b"), "", "the second message on turn 1 repeats nothing");
+    assert.equal(body.match(/class="activity-feed/g)?.length, 2, "one feed per turn");
+  });
+
+  it("opens one feed and leaves the other turn and nested groups shut", () => {
     const feeds = feedsOf(rendered({ feeds: { [feedA]: true }, groups: [], thoughts: [] }));
     const a = feeds.get("Plan msg-1a");
-    const b = feeds.get("Plan msg-1b");
     const c = feeds.get("Plan msg-2");
-    assert.ok(a && b && c, [...feeds.keys()].join(", "));
+    assert.ok(a && c, [...feeds.keys()].join(", "));
     assert.ok(a.startsWith(" expanded"), "the feed that was opened");
-    assert.ok(!b.startsWith(" expanded"), "the other message on the same turn stays shut");
     assert.ok(!c.startsWith(" expanded"), "the other turn stays shut");
     assert.match(a, /class="activity-trace/);
-    assert.doesNotMatch(b, /class="activity-trace/);
     assert.doesNotMatch(c, /class="activity-trace/);
     for (const name of ["run_travel_code", "State changed", "open_trip"]) {
       assert.match(buttonFor(a, name), /aria-expanded="false"/, name);
@@ -799,22 +805,20 @@ describe("activity feed disclosures", () => {
     assert.ok(stateStep, "the turn has a state-change group");
     const feeds = feedsOf(
       rendered({
-        feeds: { [feedA]: true, [feedB]: true },
+        feeds: { [feedA]: true, [feedC]: true },
         groups: [groupKey(feedA, stateStep.id)],
         thoughts: []
       })
     );
     const a = feeds.get("Plan msg-1a");
-    const b = feeds.get("Plan msg-1b");
     const c = feeds.get("Plan msg-2");
     assert.match(buttonFor(a, "State changed"), /aria-expanded="true"/);
     assert.match(buttonFor(a, "run_travel_code"), /aria-expanded="false"/);
-    assert.match(buttonFor(b, "State changed"), /aria-expanded="false"/);
-    assert.match(buttonFor(b, "run_travel_code"), /aria-expanded="false"/);
+    assert.match(buttonFor(c, "State changed"), /aria-expanded="false"/);
+    assert.match(buttonFor(c, "run_travel_code"), /aria-expanded="false"/);
     assert.match(a, /aria-label="Full details"/);
-    assert.doesNotMatch(b, /Full details/);
-    assert.doesNotMatch(a + b, /activity-script-detail/);
-    assert.ok(!c.startsWith(" expanded"));
+    assert.doesNotMatch(c, /Full details/);
+    assert.doesNotMatch(a + c, /activity-script-detail/);
     const thought = a.match(/<details\b[^>]*>/)?.[0] ?? "";
     assert.doesNotMatch(thought, /\bopen\b/);
   });
