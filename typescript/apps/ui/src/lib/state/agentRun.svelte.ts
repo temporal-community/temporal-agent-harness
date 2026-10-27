@@ -1820,6 +1820,12 @@ export class AgentRunController {
     try {
       const reply = await submitted;
       if (this.session?.workflow_id !== session.workflow_id) return true;
+      /* Accepted, so the session exists. Its first attach may now carry the turn and not go
+         idle until the turn ends, which is otherwise what clears this. */
+      this.creatingSession = false;
+      /* Accepted, so the session exists. Its first attach may now carry the turn and not go
+         idle until the turn ends, which is otherwise what clears this. */
+      this.creatingSession = false;
       // The reply's `message_id` is the only bookkeeping a send needs: it pairs the message
       // with its own terminal on the stream (see #ingestFrame), whether the message opened a
       // turn, queued behind one, or joined one.
