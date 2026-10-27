@@ -83,8 +83,14 @@ const results = [];
 function scales(pane, what, measure) {
   it(`${pane}: ${what}`, () => {
     measure(N);
-    const small = measure(N);
-    const large = measure(4 * N);
+    /* Fastest of three turns at each size, taken alternately, so a stall during one 4N
+       measurement doesn't read as a shape. Quadratic work is 16x every turn. */
+    let small = Infinity;
+    let large = Infinity;
+    for (let turn = 0; turn < 3; turn += 1) {
+      small = Math.min(small, measure(N));
+      large = Math.min(large, measure(4 * N));
+    }
     const ratio = large / Math.max(small, 0.001);
     results.push({ pane, what, small, large, ratio });
     /* Under half a millisecond at 4N, the ratio is timer noise, not a shape. */
