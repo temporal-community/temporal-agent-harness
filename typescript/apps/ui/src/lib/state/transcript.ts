@@ -8,6 +8,8 @@ export type TranscriptItem =
       kind: "user";
       id: string;
       turnNumber: number;
+      /** The handler the message went to. */
+      handler: string;
       text: string;
       /** The payload field the text came from (`text`, `script`, …), or null when it was labelled. */
       field: string | null;
@@ -135,6 +137,7 @@ export function transcriptBuilder(): (
           kind: "user",
           id: `user-${key}`,
           turnNumber: turn_number,
+          handler: frame.data.handler,
           text: renderUserMessage(frame.data.handler, frame.data.payload),
           field: promptField(frame.data.payload),
           timestamp

@@ -826,6 +826,47 @@ describe("activity feed disclosures", () => {
 
 // Prose sent to a script handler came back as a type checker's traceback, one block per token,
 // and the chat drew it as a single wrapped paragraph that filled the pane.
+// Each policy or model change drew a user bubble and an agent reply, so a few changes buried
+// the conversation under "Updated tool approval policy to: …" exchanges.
+describe("a setting change", () => {
+  const setPolicy = {
+    name: "set_approval_policy", description: "", output: {}, mid_turn: "accept", model_callable: false,
+    parameters: { type: "object", properties: { new_policy: { type: "string", enum: ["allow_safe", "strict"] } }, required: ["new_policy"] }
+  };
+  const ask = {
+    name: "ask", description: "", output: {}, mid_turn: "enqueue", model_callable: true,
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }
+  };
+  const said = (turnNumber, key, handler, text) => ({ kind: "user", id: `user-${key}`, turnNumber, handler, text, timestamp: 100 });
+  const answered = (turnNumber, key, text, extra = {}) => ({
+    kind: "agent", id: `reply-${key}`, turnNumber, text, streaming: false, timestamp: 101, citations: [], data: false, ...extra
+  });
+  const items = [
+    said(1, "m1", "ask", "Find hotels"),
+    said(1, "m2", "set_approval_policy", "allow_safe"),
+    answered(1, "m2", "Updated tool approval policy to: new_policy='allow_safe'"),
+    said(2, "m3", "set_approval_policy", "strict"),
+    answered(2, "m3", "", { error: "Function refused" }),
+    answered(1, "m1", "Here are three hotels.")
+  ];
+
+  it("is one quiet line with its reply folded in, and the conversation keeps its bubbles", () => {
+    const body = chat({ items, agentInterface: [ask, setPolicy] });
+    const lines = [...body.matchAll(/<p class="setting-change[\s\S]*?<\/p>/g)].map((m) => m[0]);
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /set_approval_policy[\s\S]*allow_safe[\s\S]*Updated tool approval policy/);
+    assert.match(lines[1], /\bfailed\b[\s\S]*strict[\s\S]*Function refused/);
+    const bubbles = articles(body).map((a) => a.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+    assert.equal(bubbles.length, 2, "the question and its answer only");
+    assert.ok(bubbles[0].includes("Find hotels") && bubbles[1].includes("Here are three hotels."), bubbles.join(" | "));
+  });
+
+  it("stays a bubble for an agent that declares no such handler", () => {
+    const body = chat({ items: [said(1, "m2", "set_approval_policy", "allow_safe")], agentInterface: [ask] });
+    assert.doesNotMatch(body, /setting-change/);
+  });
+});
+
 describe("a script error reply", () => {
   const block = (token, column) =>
     `error[unresolved-reference]: Name \`${token}\` used when not defined\n --> main.py:1:${column}\n  |\n1 | ok run it now\n  | ^^`;

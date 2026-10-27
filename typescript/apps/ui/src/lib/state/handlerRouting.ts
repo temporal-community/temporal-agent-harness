@@ -32,6 +32,15 @@ function naturalLanguageScore(handler: AgentInterfaceFunction): number {
 }
 
 /**
+ * Whether the handler sets one thing from a list: one required enum field, anything else
+ * optional. Read from the schema alone. Its messages read as a setting change in the chat.
+ */
+export function takesOneChoice(handler: AgentInterfaceFunction): boolean {
+  const required = describeSchema(handler.parameters).filter((field) => field.required);
+  return required.length === 1 && required[0]!.kind === "enum";
+}
+
+/**
  * Whether the handler needs something from the user. One whose fields are all optional is a
  * command (start over, refresh): sent once, not the composer's resting handler.
  */

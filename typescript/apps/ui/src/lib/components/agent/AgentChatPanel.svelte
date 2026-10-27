@@ -42,6 +42,7 @@
     Plus,
     RotateCw,
     ShieldCheck,
+    SlidersHorizontal,
     Sparkles,
     SquareCode
   } from "@lucide/svelte";
@@ -96,6 +97,7 @@
     composerHandler,
     offersActionCard,
     pickSettled,
+    takesOneChoice,
     takesScript
   } from "$lib/state/handlerRouting";
   import { singleStringPayload } from "$lib/state/inboundMessageText";
@@ -209,6 +211,9 @@
     data?: boolean;
     json?: unknown;
     error?: string;
+    /** A setting change: the handler it went to, drawn as one line with its reply folded in. */
+    setting?: string;
+    settingReply?: { text: string; streaming: boolean; error?: string };
   }
 
   interface TurnActivitySummary {
@@ -313,7 +318,15 @@
      an unchanged message is the same object, and the keyed list leaves it alone. */
   const messageOfItem = new WeakMap<TranscriptItem, ChatMessage>();
 
-  const transcriptMessages = $derived(seedMessages(items));
+  /* The transcript is the session agent's, so its own handlers decide what reads as a setting. */
+  const settingHandlers = $derived(
+    new Set(
+      (messageTargets.find((target) => target.role === "parent")?.agentInterface ?? agentInterface)
+        .filter(takesOneChoice)
+        .map((handler) => handler.name)
+    )
+  );
+  const transcriptMessages = $derived(seedMessages(items, settingHandlers));
   const messages = $derived([...transcriptMessages, ...localMessages]);
 
   /* Only the messages in view are in the DOM: chat was 97% of a 5,000-message page, and
@@ -345,7 +358,7 @@
   );
 
   const liveMessages = $derived(
-    liveItems ? [...seedMessages(liveItems), ...localMessages] : messages
+    liveItems ? [...seedMessages(liveItems, settingHandlers), ...localMessages] : messages
   );
   const runLogs = $derived(liveLogs ?? logs);
   const startedTurns = $derived(
@@ -735,17 +748,33 @@
     }
   });
 
-  function seedMessages(transcriptItems: TranscriptItem[]): ChatMessage[] {
+  function seedMessages(transcriptItems: TranscriptItem[], settings: ReadonlySet<string>): ChatMessage[] {
     const messages: ChatMessage[] = [];
     const emittedUsers = new Set<number>();
+    /* A setting's message key to its line, so its reply folds into it instead of a bubble. */
+    const settingAt = new Map<string, number>();
 
     for (const item of transcriptItems) {
       if (item.kind === "user") emittedUsers.add(item.turnNumber);
       else if (item.kind !== "agent" || !emittedUsers.has(item.turnNumber)) continue;
+      if (item.kind === "agent") {
+        const at = settingAt.get(item.id.slice("reply-".length));
+        if (at != null) {
+          messages[at] = {
+            ...messages[at]!,
+            settingReply: { text: item.text, streaming: item.streaming, error: item.error }
+          };
+          continue;
+        }
+      }
       let message = messageOfItem.get(item);
       if (!message) {
         message = chatMessage(item);
         messageOfItem.set(item, message);
+      }
+      if (item.kind === "user" && settings.has(item.handler)) {
+        settingAt.set(item.id.slice("user-".length), messages.length);
+        message = { ...message, setting: item.handler };
       }
       messages.push(message);
     }
@@ -1899,6 +1928,16 @@
           style:top={`${row.start}px`}
           {@attach measureMessage}
         >
+        {#if message.setting}
+          {@const settled = message.settingReply}
+          {@const note = settled?.error ?? (settled && !settled.streaming ? markdownToText(settled.text) : "")}
+          <p class={["setting-change", { failed: settled?.error }]} title={note || undefined}>
+            <SlidersHorizontal size={12} aria-hidden="true" />
+            <span class="setting-name">{message.setting}</span>
+            <strong class="setting-value fade-end" dir="auto">{message.text}</strong>
+            {#if note}<span class="setting-note fade-end" dir="auto">{note}</span>{/if}
+          </p>
+        {:else}
         <article class={["message", message.role, { latest: row.index === latestReplyIndex }]}>
           <div class={["bubble", { data: message.data, script: message.script, "has-copy": reply && copyable }]}>
             {#if reply && scriptError(message.text)}
@@ -1950,6 +1989,7 @@
             <span class="message-copy"><Copyable value={message.text} label="Copy message" /></span>
           {/if}
         </article>
+        {/if}
 
         {#if message.role === "user" && message.turnNumber != null && turnOpeners.get(message.turnNumber) === message.id}
           {@const activityLogs = logsForTurn(message.turnNumber)}
@@ -2758,6 +2798,42 @@
   .reply-error > :global(svg) {
     flex: none;
     margin-top: 3px;
+  }
+
+  /* A setting change is one quiet line, not an exchange: the value, then what the agent said. */
+  .setting-change {
+    margin: 0;
+    padding: 2px 0;
+    display: flex;
+    gap: var(--gap-sm);
+    align-items: center;
+    min-width: 0;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+  }
+
+  .setting-change > :global(svg) {
+    flex: none;
+  }
+
+  .setting-name {
+    flex: none;
+  }
+
+  .setting-value {
+    min-width: 0;
+    flex: 0 1 auto;
+    color: var(--text-2);
+    font-weight: 500;
+  }
+
+  .setting-note {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .setting-change.failed .setting-note {
+    color: var(--error);
   }
 
   /* No frame: the turn's header is the pressable part, and the trace hangs under it. */
