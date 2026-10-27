@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { render } from "svelte/server";
-import { beforeEach, describe, it } from "vitest";
+import { afterEach, beforeEach, describe, it, vi } from "vitest";
 
 import { ApiError } from "../src/lib/api/httpClient.ts";
 import AgentChatPanel from "../src/lib/components/agent/AgentChatPanel.svelte";
@@ -91,6 +91,10 @@ describe("Session Manager drawer", () => {
 });
 
 describe("Session Manager rows", () => {
+  /* Day groups read the clock: a session started minutes ago fell under "Yesterday" just
+     after midnight. Midday keeps every test start on the same day, and after the fixed ones. */
+  beforeEach(() => vi.useFakeTimers({ now: new Date(2026, 9, 28, 12), toFake: ["Date"] }));
+  afterEach(() => vi.useRealTimers());
   const controls = readFileSync(
     fileURLToPath(new URL("../src/lib/components/chat/SessionControls.svelte", import.meta.url)),
     "utf8"
