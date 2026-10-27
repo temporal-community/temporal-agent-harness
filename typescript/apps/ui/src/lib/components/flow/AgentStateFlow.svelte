@@ -253,6 +253,7 @@
     nodesConnectable={false}
     edgesFocusable={false}
     elementsSelectable
+    elevateNodesOnSelect={false}
     onnodeclick={({ node }) => handleNodeClick(node)}
     proOptions={{ hideAttribution: true }}
   >

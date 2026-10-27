@@ -198,6 +198,18 @@ describe("a subagent's own flow arrows", () => {
     assert.equal(kindFromState(container.data.state, container.data.tone), "complete");
   });
 
+  /* Svelte Flow lifts a selected node by 1000 unless told not to. Clicking the Subagent
+     activity container to inspect it selected it, and on closing the dialog it sat at 1010
+     over the subagent boundaries at 11, hiding every card inside them. */
+  it("are not buried by a selected container", () => {
+    const flowSource = readFileSync(
+      new URL("../src/lib/components/flow/AgentStateFlow.svelte", import.meta.url),
+      "utf8"
+    );
+    const canvas = flowSource.slice(flowSource.indexOf("<SvelteFlow"), flowSource.indexOf("<AutoFitView"));
+    assert.match(canvas, /\belevateNodesOnSelect=\{false\}/);
+  });
+
   it("are not flattened onto one rung by the edge layer's own z-index", () => {
     const flowSource = readFileSync(
       new URL("../src/lib/components/flow/AgentStateFlow.svelte", import.meta.url),
