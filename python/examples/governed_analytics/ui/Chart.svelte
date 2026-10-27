@@ -22,7 +22,8 @@
     render_bar_chart: "Bar chart",
     render_line_chart: "Line chart",
     render_pie_chart: "Pie chart",
-    render_scatter_chart: "Scatter plot"
+    render_scatter_chart: "Scatter plot",
+    render_heatmap_chart: "Heatmap"
   };
 </script>
 
@@ -31,6 +32,7 @@
   import BarChart from "./BarChart.svelte";
   import LineChart from "./LineChart.svelte";
   import PieChart from "./PieChart.svelte";
+  import HeatmapChart from "./HeatmapChart.svelte";
   import ScatterChart from "./ScatterChart.svelte";
 
   interface Props {
@@ -48,7 +50,7 @@
   const title = $derived(String(input.title ?? "Chart"));
   const series = $derived((Array.isArray(input.series) ? input.series : []) as Series[]);
   const legend = $derived(
-    tool === "render_pie_chart"
+    tool === "render_pie_chart" || tool === "render_heatmap_chart"
       ? []
       : series.length > 1
         ? series.map((s, i) => ({ name: s.name, color: seriesColor(i) }))
@@ -69,6 +71,14 @@
       const values = (input.values ?? []) as number[];
       return { columns: ["Label", "Value"], rows: labels.map((l, i) => [l, values[i] ?? null]) };
     }
+    if (tool === "render_heatmap_chart") {
+      const rowLabels = (input.row_labels ?? []) as string[];
+      const values = (input.values ?? []) as number[][];
+      return {
+        columns: ["", ...((input.column_labels ?? []) as string[])],
+        rows: rowLabels.map((l, r) => [l, ...(values[r] ?? [])])
+      };
+    }
     const points = (input.points ?? []) as { x: number; y: number; label?: string | null }[];
     return {
       columns: ["Label", String(input.x_label ?? "x"), String(input.y_label ?? "y")],
@@ -81,7 +91,7 @@
   <figcaption>
     <div>
       <b>{title}</b>
-      <small>{CHART_KINDS[tool] ?? "Chart"}{#if input.y_label} · {input.y_label}{/if}</small>
+      <small>{CHART_KINDS[tool] ?? "Chart"}{#if input.y_label ?? input.value_label} · {input.y_label ?? input.value_label}{/if}</small>
     </div>
     {#if !problem}
       <button class:on={showTable} onclick={() => (showTable = !showTable)} aria-pressed={showTable}>Table</button>
@@ -115,6 +125,15 @@
         <LineChart width={width || 560} xValues={(input.x_values ?? []) as string[]} {series} onhover={(t) => (tip = t)} />
       {:else if tool === "render_pie_chart"}
         <PieChart width={width || 560} labels={(input.labels ?? []) as string[]} values={(input.values ?? []) as number[]} onhover={(t) => (tip = t)} />
+      {:else if tool === "render_heatmap_chart"}
+        <HeatmapChart
+          width={width || 560}
+          rowLabels={(input.row_labels ?? []) as string[]}
+          columnLabels={(input.column_labels ?? []) as string[]}
+          values={(input.values ?? []) as number[][]}
+          valueLabel={String(input.value_label ?? "")}
+          onhover={(t) => (tip = t)}
+        />
       {:else}
         <ScatterChart
           width={width || 560}

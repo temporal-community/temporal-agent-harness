@@ -519,6 +519,43 @@ namespace Temporal {
     },
   };
 
+  action "bank-analyst/render_heatmap_chart" appliesTo {
+    principal: [Worker], resource: [TaskQueue],
+    context: {
+      input: {
+        parameterCount: Long,
+        arg0?: {
+          title?: String,
+          row_labels?: Set<String>,
+          column_labels?: Set<String>,
+          // values: a list of records or mixed values, which Dogwood can't see
+          value_label?: String,
+        },
+      },
+      caller: Caller,
+    },
+  };
+
+  action "bank-analyst/render_heatmap_chart/result" appliesTo {
+    principal: [Worker], resource: [TaskQueue],
+    context: {
+      input: {
+        parameterCount: Long,
+        arg0?: {
+          chart_id?: String,
+        },
+        arg1?: {
+          title?: String,
+          row_labels?: Set<String>,
+          column_labels?: Set<String>,
+          // values: a list of records or mixed values, which Dogwood can't see
+          value_label?: String,
+        },
+      },
+      caller: Caller,
+    },
+  };
+
   action "bank-analyst/publish_report" appliesTo {
     principal: [Worker], resource: [TaskQueue],
     context: {

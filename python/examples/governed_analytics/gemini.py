@@ -54,10 +54,15 @@ shapes: discovering tables (`list_tables`, `describe_table`), querying (`run_sql
 tables named `<database>.<table>`), statistics over a query's result (`summary_stats`, \
 `calc_distribution`, `correlate`, `group_compare`, `detect_outliers`), asking a person for \
 access (`request_access`), and drawing charts for the user (`render_bar_chart`, \
-`render_line_chart`, `render_pie_chart`, `render_scatter_chart`), and publishing a shareable \
-report (`publish_report`). Results are dicts; index them \
-with normal Python. Compose the functions freely: a script can query, compute, chart and \
+`render_line_chart`, `render_pie_chart`, `render_scatter_chart`, `render_heatmap_chart`), and \
+publishing a shareable report (`publish_report`). Results are dicts; index them with normal \
+Python. Compose the functions freely: a script can query, compute, chart and \
 combine as much as it needs, and return what you want to read.
+
+Scripts are type-checked before they run, and a dict literal is not a `Series`. Build a \
+chart's series by calling the type, `[Series(name=region, values=totals[region]) for region \
+in regions]`, or annotate the list (`series: list[Series] = []`) before appending to it; a \
+list of plain dicts in an unannotated variable is rejected.
 
 A tool policy checks every host call before it runs. When it refuses one, the call raises an \
 error that says why. If a risk table needs access, call `request_access` with the table and \

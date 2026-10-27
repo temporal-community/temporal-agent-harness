@@ -76,4 +76,26 @@ async def render_scatter_chart(
     ...
 
 
-CHART_TOOLS = [render_bar_chart, render_line_chart, render_pie_chart, render_scatter_chart]
+@agent.callback_tool_defn()
+async def render_heatmap_chart(
+    title: str,
+    row_labels: list[str],
+    column_labels: list[str],
+    values: list[list[float]],
+    value_label: str | None = None,
+) -> ChartRendered:
+    """Draw a heatmap for the user: a grid of cells, one row of `values` per row label and one
+    value per column label, each cell shaded by its value (two hues when values run both sides
+    of zero). A `correlate` result draws as one: its `columns` as both labels, its `matrix` as
+    `values`. Returns the chart's id; write `[chart:<chart_id>]` on its own line in your answer
+    where the chart belongs."""
+    ...
+
+
+CHART_TOOLS = [
+    render_bar_chart,
+    render_line_chart,
+    render_pie_chart,
+    render_scatter_chart,
+    render_heatmap_chart,
+]

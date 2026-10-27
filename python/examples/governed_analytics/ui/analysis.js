@@ -198,7 +198,7 @@ export function readScriptOutput(text) {
 export const SQL_TOOLS = ["run_sql", "summary_stats", "calc_distribution", "correlate", "group_compare", "detect_outliers"];
 /** Every tool a script calls to read data: each call is put to the policy. */
 export const DATA_TOOLS = ["list_tables", "describe_table", ...SQL_TOOLS];
-export const CHART_TOOLS = ["render_bar_chart", "render_line_chart", "render_pie_chart", "render_scatter_chart"];
+export const CHART_TOOLS = ["render_bar_chart", "render_line_chart", "render_pie_chart", "render_scatter_chart", "render_heatmap_chart"];
 /** Publishing a report: a callback tool the policy judges first, like a data call. */
 export const REPORT_TOOL = "publish_report";
 
@@ -331,6 +331,21 @@ export function chartProblem(tool, input) {
     const points = input.points;
     if (!Array.isArray(points) || points.length === 0) return "`points` needs at least one point.";
     if (!points.every((p) => isRecord(p) && Number.isFinite(p.x) && Number.isFinite(p.y))) return "Each point needs numeric `x` and `y`.";
+    return null;
+  }
+  if (tool === "render_heatmap_chart") {
+    const { row_labels: rows, column_labels: columns, values } = input;
+    if (!Array.isArray(rows) || rows.length === 0) return "`row_labels` needs at least one label.";
+    if (!Array.isArray(columns) || columns.length === 0) return "`column_labels` needs at least one label.";
+    if (!Array.isArray(values) || values.length !== rows.length) {
+      return `\`values\` has ${Array.isArray(values) ? values.length : 0} rows for ${rows.length} row labels.`;
+    }
+    for (const [r, row] of values.entries()) {
+      if (!numbers(row)) return `Row "${String(rows[r])}" needs numeric values.`;
+      if (/** @type {number[]} */ (row).length !== columns.length) {
+        return `Row "${String(rows[r])}" has ${/** @type {number[]} */ (row).length} values for ${columns.length} column labels.`;
+      }
+    }
     return null;
   }
   return `${tool} is not a chart this page draws.`;
@@ -472,6 +487,51 @@ export function reportRoute(hash) {
   } catch {
     return null;
   }
+}
+
+// -- the demo -------------------------------------------------------------------------------------
+
+/**
+ * The demo, as the questions a presenter sends in order: find and chart the deposit drop in open
+ * data, and publish a report on it; then ask about loan defaults, which needs a person's grant, and
+ * try to publish again, which the policy now refuses. Each step comes with two other plausible
+ * questions, so the follow-ups read as choices rather than a script.
+ * @type {readonly { text: string; others: readonly string[] }[]}
+ */
+export const DEMO_STEPS = [
+  {
+    text: "Which branches had the biggest drop in deposit volume last quarter, and is it unusual? Chart them against the rest of the network.",
+    others: []
+  },
+  {
+    text: "Publish a report on this I can share with the regional managers.",
+    others: ["Is the difference statistically significant?", "Break it down by region"]
+  },
+  {
+    text: "Do those branches also have higher loan default rates? Show how credit scores, loan amounts and defaults correlate there as a heatmap.",
+    others: ["How did new accounts change at those branches?", "Summarize this for an executive email"]
+  },
+  {
+    text: "Publish a report on the default rates at those branches for the regional managers.",
+    others: ["Which loan products default most?", "Is this driven by mortgages?"]
+  }
+];
+
+/** Follow-ups for a conversation that isn't on the demo's path, or has finished it. */
+export const FOLLOW_UPS = ["Chart that", "Is the difference statistically significant?", "Break it down by region"];
+
+/**
+ * The follow-ups to offer after `sent`, the questions asked so far: the demo's next step first,
+ * after the furthest step already asked (so a typed question in between doesn't lose the thread),
+ * then its two others. Off the demo's path, or past its end, the general follow-ups.
+ * @param {readonly string[]} sent
+ * @returns {string[]}
+ */
+export function followUps(sent) {
+  const asked = new Set(sent.map((t) => t.trim()));
+  const reached = DEMO_STEPS.findLastIndex((step) => asked.has(step.text));
+  const next = reached === -1 ? undefined : DEMO_STEPS[reached + 1];
+  return next ? [next.text, ...next.others] : FOLLOW_UPS;
 }
 
 // -- text -----------------------------------------------------------------------------------------

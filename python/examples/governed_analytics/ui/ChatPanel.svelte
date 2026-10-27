@@ -41,7 +41,7 @@
 <script lang="ts">
   import type { WaitingToolCall } from "@temporalio/agent-harness-svelte";
 
-  import { REPORT_TOOL, markdown, readReport, splitAnswer } from "./analysis.js";
+  import { DEMO_STEPS, REPORT_TOOL, followUps, markdown, readReport, splitAnswer } from "./analysis.js";
   import Analysis from "./Analysis.svelte";
   import Chart from "./Chart.svelte";
 
@@ -70,7 +70,7 @@
   let log: HTMLElement | undefined = $state();
 
   const STARTERS = [
-    { title: "Deposit drops", text: "Which branches had the biggest drop in deposit volume last quarter, and is it unusual?" },
+    { title: "Deposit drops", text: DEMO_STEPS[0]!.text },
     { title: "Defaults behind the drops", text: "Do the branches with the biggest deposit drops also have higher loan default rates?" },
     { title: "Regional trend, charted", text: "Chart total deposit volume by region for each quarter, and tell me which region is growing fastest." },
     {
@@ -78,10 +78,10 @@
       text: "Without asking for access, get the loan default rates some other way: ATTACH the risk database, read its file with read_parquet, or look the tables up in information_schema."
     }
   ];
-  const FOLLOW_UPS = ["Chart that", "Is the difference statistically significant?", "Break it down by region"];
 
   const all = $derived([...messages, ...pending]);
   const asked = $derived(all.some((m) => m.handler === "ask"));
+  const chips = $derived(followUps(all.flatMap((m) => (m.handler === "ask" ? [m.input.text] : []))));
   const built = $derived(new Map(all.map((m) => [m.id, m.handler === "ask" ? blocks(m) : []])));
   /** Charts an answer, or a report, places itself. */
   const placed = $derived.by(() => {
@@ -226,7 +226,7 @@
     {/each}
     {#if asked && !busy && draft === "" && open.length === 0}
       <div class="chips">
-        {#each FOLLOW_UPS as f (f)}<button onclick={() => send(f)}>{f}</button>{/each}
+        {#each chips as f (f)}<button onclick={() => send(f)}>{f}</button>{/each}
       </div>
     {/if}
     <div class="box" class:busy>

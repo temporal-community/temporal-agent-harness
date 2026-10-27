@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  DEMO_STEPS,
+  FOLLOW_UPS,
   chartProblem,
   dataOrigin,
+  followUps,
   highlightPython,
   highlightSql,
   markdown,
@@ -145,6 +148,10 @@ test("chart data that can't be drawn is refused with a reason the agent can act 
   assert.match(chartProblem("render_pie_chart", { labels: ["a"], values: [-1] }) ?? "", /negative/);
   assert.equal(chartProblem("render_scatter_chart", { points: [{ x: 1, y: 2 }] }), null);
   assert.match(chartProblem("render_scatter_chart", { points: [{ x: "1", y: 2 }] }) ?? "", /numeric/);
+  const corr = { row_labels: ["a", "b"], column_labels: ["a", "b"], values: [[1, -0.4], [-0.4, 1]] };
+  assert.equal(chartProblem("render_heatmap_chart", corr), null);
+  assert.match(chartProblem("render_heatmap_chart", { ...corr, values: [[1, -0.4]] }) ?? "", /1 rows for 2 row labels/);
+  assert.match(chartProblem("render_heatmap_chart", { ...corr, values: [[1], [-0.4, 1]] }) ?? "", /Row "a" has 1 values for 2 column labels/);
 });
 
 test("an answer splits around the charts it places on their own lines", () => {
@@ -202,4 +209,13 @@ test("a script's queries are highlighted as SQL, and its awaited host calls are 
   } finally {
     delete globalThis.hljs;
   }
+});
+
+test("the follow-ups lead with the demo's next step, after the furthest step asked", () => {
+  const [first, second, third] = DEMO_STEPS;
+  assert.deepEqual(followUps([first.text]), [second.text, ...second.others]);
+  assert.equal(followUps([first.text, "something typed", second.text])[0], third.text);
+  assert.equal(followUps([first.text, second.text, "something typed"])[0], third.text);
+  assert.deepEqual(followUps(["something typed"]), FOLLOW_UPS);
+  assert.deepEqual(followUps(DEMO_STEPS.map((s) => s.text)), FOLLOW_UPS);
 });

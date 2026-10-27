@@ -93,6 +93,10 @@ Start a conversation from the sidebar. The studio shows:
   made in the session.
 - **Access requests**: when the agent calls `request_access`, its `ask_for_access` waits above
   the composer with the table and the agent's reason, until you grant or decline.
+- **Suggestions that follow the demo**: the *Deposit drops* starter begins the demo script
+  below, and after each of its questions the first follow-up chip is the script's next one (the
+  other two are plausible alternatives). The studio reads where you are from the questions asked
+  so far, so a typed question in between, or a reload, keeps your place.
 
 The page has no build step: the browser compiles its components (`svelte-sw.js`, as in the agent
 DAG example's studio). Scripts and queries are highlighted by highlight.js, which `index.html`
@@ -103,27 +107,32 @@ Point it at another API with `?api=http://host:8000/api/`.
 
 ## Demo script
 
+In the studio, steps 1 to 3 are one session of four questions: start with the *Deposit drops*
+card and click the first follow-up each time. Granting access stays yours to click.
+
 **1. The happy path.** Ask:
 
-> Which branches had the biggest drop in deposit volume last quarter, and is it unusual?
+> Which branches had the biggest drop in deposit volume last quarter, and is it unusual? Chart
+> them against the rest of the network.
 
 The agent writes a script that queries `analytics.branch_deposits` and calls
 `detect_outliers`/`calc_distribution`. Every host call shows up in Approval decisions as
 approved by `dogwood_evaluator`, each with the facts the policy saw (the statement and its
-tables). Six branches dropped about 30%; the rest held steady.
+tables). Six branches dropped about 30%; the rest held steady, and the chart shows it.
 
 Then share it, in the studio:
 
-> Chart the drop by branch, and publish a report on it I can share with the regional managers.
+> Publish a report on this I can share with the regional managers.
 
-The agent draws the chart and calls `publish_report`. The session has read only analytics data,
+The agent calls `publish_report`, embedding the chart. The session has read only analytics data,
 so the policy lets it through (`publish-reports`), and the conversation shows the report's card
 with its public link. Click it: the report opens as a published page, the chart in it; Back
 returns to the conversation.
 
 **2. The wall.** Follow up:
 
-> Do those branches also have higher loan default rates?
+> Do those branches also have higher loan default rates? Show how credit scores, loan amounts
+> and defaults correlate there as a heatmap.
 
 The script queries `risk.loan_applications`, and the policy refuses it: *"Risk tables need a
 person to grant access…"* (policy `risk-needs-access`). Telling the agent it is authorized
@@ -132,7 +141,7 @@ changes nothing; the denial comes from the policy, not the prompt.
 **3. The grant.** The agent calls `request_access`. The chat shows the table and the agent's
 reason; pick **Grant for this session**. The script, waiting durably on your answer, carries on
 and runs the query again, which now passes. The defaulted share is about three times higher at
-those branches. `table_access` shows `risk.loan_applications` as granted, with the agent's
+those branches, and the heatmap shows how scores, amounts and defaults move together. `table_access` shows `risk.loan_applications` as granted, with the agent's
 reason. Declining is an answer too: the agent is told you declined, nothing is granted, and the
 board shows the table as declined.
 
@@ -146,7 +155,7 @@ revoke opens the table again. The board follows each change.
 
 Now ask for a report again:
 
-> Publish a report on the default rates at those branches.
+> Publish a report on the default rates at those branches for the regional managers.
 
 The policy refuses it: *"This session has read restricted data, so its findings can't be
 published publicly"* (policy `no-public-report-after-restricted-run-sql`). Every SQL result
