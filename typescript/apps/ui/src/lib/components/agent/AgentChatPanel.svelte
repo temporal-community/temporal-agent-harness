@@ -93,14 +93,12 @@
   } from "$lib/state/replyStatus";
   import { STEP_GLYPHS } from "$lib/state/logTree";
   import {
-    choiceField,
-    choiceKind,
-    choiceLabel,
-    choicePayload,
-    choiceText,
+    actionQueue,
     composerHandler,
-    takesScript,
-    type ChoiceKind
+    offersActionCard,
+    pickSettled,
+    takesOneChoice,
+    takesScript
   } from "$lib/state/handlerRouting";
   import { singleStringPayload } from "$lib/state/inboundMessageText";
   import type { TranscriptItem } from "$lib/state/transcript";
@@ -115,10 +113,7 @@
   import PendingCard from "./PendingCard.svelte";
   import type { ClientToolStatus } from "$lib/state/clientToolProvider";
   import ReplyStatus from "./ReplyStatus.svelte";
-  import {
-    singleStringField,
-    type SchemaField
-  } from "@temporalio/agent-harness-client";
+  import { singleStringField } from "@temporalio/agent-harness-client";
   type MessageTargetRole = "parent" | "subagent";
   /**
    * One agent a message can be addressed to, with its OWN discovered handler surface.
@@ -199,8 +194,6 @@
     ) => void | Promise<void>;
     clientToolStatuses?: Readonly<Record<string, ClientToolStatus>>;
     onRetryClientTool?: (toolId: string) => void;
-    editorScript?: string;
-    onOpenScript?: () => void;
     /** The session agent's context window fill; null while the window size is unknown. */
     contextUsage?: ContextWindowUsage | null;
   }
@@ -218,6 +211,9 @@
     data?: boolean;
     json?: unknown;
     error?: string;
+    /** A setting change: the handler it went to, drawn as one line with its reply folded in. */
+    setting?: string;
+    settingReply?: { text: string; streaming: boolean; error?: string };
   }
 
   interface TurnActivitySummary {
@@ -274,8 +270,6 @@
     onCallbackResult,
     clientToolStatuses = {},
     onRetryClientTool,
-    editorScript = "",
-    onOpenScript,
     contextUsage = null
   }: Props = $props();
   let draft = $state("");
@@ -316,10 +310,6 @@
   let pickerButtonOpen = $state(false);
   let dismissedPickerDraft = $state<string | null>(null);
   let selectedHandlers = $state<Record<string, string>>({});
-  let sentChoices = $state<Record<string, { value: string; after: number }>>({});
-  let openChoiceName = $state<string | null>(null);
-  let choiceIndex = $state(0);
-  let choiceSending = $state(false);
   let attachments = $state<ComposerAttachment[]>([]);
   let attachmentError = $state<string | null>(null);
   let attachmentInputElement = $state<HTMLInputElement | null>(null);
@@ -328,7 +318,15 @@
      an unchanged message is the same object, and the keyed list leaves it alone. */
   const messageOfItem = new WeakMap<TranscriptItem, ChatMessage>();
 
-  const transcriptMessages = $derived(seedMessages(items));
+  /* The transcript is the session agent's, so its own handlers decide what reads as a setting. */
+  const settingHandlers = $derived(
+    new Set(
+      (messageTargets.find((target) => target.role === "parent")?.agentInterface ?? agentInterface)
+        .filter(takesOneChoice)
+        .map((handler) => handler.name)
+    )
+  );
+  const transcriptMessages = $derived(seedMessages(items, settingHandlers));
   const messages = $derived([...transcriptMessages, ...localMessages]);
 
   /* Only the messages in view are in the DOM: chat was 97% of a 5,000-message page, and
@@ -360,7 +358,7 @@
   );
 
   const liveMessages = $derived(
-    liveItems ? [...seedMessages(liveItems), ...localMessages] : messages
+    liveItems ? [...seedMessages(liveItems, settingHandlers), ...localMessages] : messages
   );
   const runLogs = $derived(liveLogs ?? logs);
   const startedTurns = $derived(
@@ -382,14 +380,6 @@
     return `${firstLine.charAt(0).toUpperCase()}${firstLine.slice(1)}`;
   });
   const queuedMessageTip = $derived(queuedMessageTexts.join(" • "));
-  const latestScriptUpdateTurn = $derived(
-    runLogs.findLast(
-      (row) =>
-        row.event === "callback_requested" &&
-        (row.toolName === "write_code" || row.toolName === "edit_code")
-    )?.turnNumber ?? null
-  );
-  const editorLineCount = $derived(editorScript ? editorScript.split("\n").length : 0);
   const viewRowIds = $derived(new Set(logs.map((row) => row.id)));
   const sentUserMessages = $derived(
     liveMessages
@@ -424,6 +414,17 @@
         : ""
   );
 
+  /* A turn's activity is drawn once, under the message that opened it. A message that joins the
+     running turn shares its number, and drawing it there too repeated the whole turn under each. */
+  const turnOpeners = $derived.by(() => {
+    const openers = new Map<number, string>();
+    for (const message of messages) {
+      if (message.role === "user" && message.turnNumber != null && !openers.has(message.turnNumber)) {
+        openers.set(message.turnNumber, message.id);
+      }
+    }
+    return openers;
+  });
   /* The in-flight turn's status rides its header, under the message that started it. */
   const statusInHeader = $derived(
     turnRunning && messages.some((message) => message.role === "user" && message.turnNumber === latestTurn)
@@ -480,26 +481,12 @@
   const showTargetPicker = $derived(targets.filter((t) => !t.closed).length > 1);
   /** Every handler of the selected target — the composer's entire source of truth. */
   const handlers = $derived(activeTarget?.agentInterface ?? []);
-  /* A pick-from-a-list handler is a menu in the control row; the rest are the composer's. */
-  const choiceHandlers = $derived(
-    handlers.flatMap((handler) => {
-      const field = choiceField(handler);
-      if (!field) return [];
-      const value = currentChoice(handler, field);
-      const label = choiceLabel(handler, field);
-      const icon = choiceIcon(choiceKind(handler, field));
-      const tip = `${label}: ${value == null ? "not set" : choiceText(value)}`;
-      return [{ handler, field, value, label, icon, tip }];
-    })
-  );
-  const composerHandlers = $derived(handlers.filter((handler) => !choiceField(handler)));
-  const openChoice = $derived(choiceHandlers.find((choice) => choice.handler.name === openChoiceName) ?? null);
   const handlerSelectionKey = $derived(`${sessionId}:${activeTarget?.workflowId ?? ""}`);
   const selectedHandlerName = $derived(selectedHandlers[handlerSelectionKey] ?? null);
   /* Typing goes to a handler written in the text box; one that takes a form is a card in the
      attention queue, so the box is always a message field. */
-  const textHandlers = $derived(composerHandlers.filter((handler) => textFieldOf(handler) != null));
-  const formHandlers = $derived(composerHandlers.filter((handler) => textFieldOf(handler) == null));
+  const textHandlers = $derived(handlers.filter((handler) => textFieldOf(handler) != null));
+  const formHandlers = $derived(handlers.filter((handler) => textFieldOf(handler) == null));
   const selectedHandler = $derived(composerHandler(textHandlers, selectedHandlerName));
   /* A handler other than the one plain typing goes to keeps its icon revealed, so the mode shows. */
   const offDefaultHandler = $derived(
@@ -529,7 +516,9 @@
   /* One card per idle stretch: each turn's is a new request, so sending one drops it from the
      queue like an answer and the next idle run deals a fresh one. */
   const actionRow = $derived.by<ReplayLogRow | null>(() => {
-    if (!actionHandler || !canSendToTarget || !runIdle) return null;
+    if (!actionHandler || !canSendToTarget || !offersActionCard(actionHandler, selectedHandlerName, runIdle)) {
+      return null;
+    }
     const timestamp = runTurnRows.at(-1)?.timestamp ?? 0;
     return {
       id: `action:${activeTarget?.workflowId ?? sessionId}:${runTurn}`,
@@ -547,10 +536,12 @@
     };
   });
   const actionWhen = $derived(
-    runTurn > 0 ? `After turn ${runTurn} · ${formatTimestamp(actionRow?.timestamp ?? 0)}` : "Before the first turn"
+    runTurn > 0
+      ? `${runIdle ? "After" : "During"} turn ${runTurn} · ${formatTimestamp(actionRow?.timestamp ?? 0)}`
+      : "Before the first turn"
   );
-  /* Requests the agent is blocked on first, in its order; the offered input after them. */
-  const queueRows = $derived(actionRow ? [...pendingRows, actionRow] : pendingRows);
+  const actionPicked = $derived(actionRow != null && actionHandler?.name === selectedHandlerName);
+  const queueRows = $derived(actionQueue(pendingRows, actionRow, actionPicked));
   /* What the end of the message list keeps clear: the queue's header plus its padding above
      and gap below, 8px and 10px in its CSS. An action card alone answers the reply above it,
      so the list keeps all of it clear, not only the header a blocked request leaves room for. */
@@ -612,7 +603,7 @@
     canSendToTarget && (typedPickerOpen || pickerButtonOpen) && !composerDisabled
   );
   const pickerItems = $derived(
-    buildPickerItems(pickerOpen, targets, composerHandlers, pickerDraft, showTargetPicker)
+    buildPickerItems(pickerOpen, targets, handlers, pickerDraft, showTargetPicker)
   );
   const composerBusy = $derived(
     sendingBlocksInput || connectingBlocksInput || creatingSession || closed
@@ -665,8 +656,6 @@
       historyIndex = -1;
       historyStash = "";
       pickerButtonOpen = false;
-      sentChoices = {};
-      openChoiceName = null;
       dismissedPickerDraft = null;
       attachments = [];
       attachmentError = null;
@@ -759,17 +748,33 @@
     }
   });
 
-  function seedMessages(transcriptItems: TranscriptItem[]): ChatMessage[] {
+  function seedMessages(transcriptItems: TranscriptItem[], settings: ReadonlySet<string>): ChatMessage[] {
     const messages: ChatMessage[] = [];
     const emittedUsers = new Set<number>();
+    /* A setting's message key to its line, so its reply folds into it instead of a bubble. */
+    const settingAt = new Map<string, number>();
 
     for (const item of transcriptItems) {
       if (item.kind === "user") emittedUsers.add(item.turnNumber);
       else if (item.kind !== "agent" || !emittedUsers.has(item.turnNumber)) continue;
+      if (item.kind === "agent") {
+        const at = settingAt.get(item.id.slice("reply-".length));
+        if (at != null) {
+          messages[at] = {
+            ...messages[at]!,
+            settingReply: { text: item.text, streaming: item.streaming, error: item.error }
+          };
+          continue;
+        }
+      }
       let message = messageOfItem.get(item);
       if (!message) {
         message = chatMessage(item);
         messageOfItem.set(item, message);
+      }
+      if (item.kind === "user" && settings.has(item.handler)) {
+        settingAt.set(item.id.slice("user-".length), messages.length);
+        message = { ...message, setting: item.handler };
       }
       messages.push(message);
     }
@@ -1300,7 +1305,7 @@
     }
     /* A form handler is the queue's card: the reader lands in its first field. */
     void tick().then(() =>
-      document.querySelector<HTMLElement>('.pending-card[aria-label^="Action:"] form :is(input, select, textarea)')?.focus()
+      document.querySelector<HTMLElement>('.pending-card[aria-label^="Action:"] form :is(input, select, textarea, [role="radio"][tabindex="0"])')?.focus()
     );
   }
 
@@ -1361,12 +1366,10 @@
 
   function togglePicker(): void {
     if (pickerOpen) return closePicker();
-    openChoiceName = null;
     pickerButtonOpen = true;
   }
 
-  /* The handler list opened from its button holds focus, like the choice lists beside it.
-     Escape is the dismissable layer's. */
+  /* The handler list opened from its button holds focus. Escape is the dismissable layer's. */
   function handlePickerKeydown(event: KeyboardEvent): void {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       movePickerSelection(event.key === "ArrowDown" ? 1 : -1);
@@ -1381,8 +1384,6 @@
     event.preventDefault();
   }
 
-  type ChoiceHandler = (typeof choiceHandlers)[number];
-
   function handlerIcon(kind: HandlerKind): typeof Cpu {
     switch (kind) {
       case "text":
@@ -1394,117 +1395,6 @@
         return unhandled;
       }
     }
-  }
-
-  function choiceIcon(kind: ChoiceKind): typeof Cpu {
-    switch (kind) {
-      case "policy":
-        return ShieldCheck;
-      case "model":
-        return Cpu;
-      case "other":
-        return SlidersHorizontal;
-      default: {
-        const unhandled: never = kind;
-        return unhandled;
-      }
-    }
-  }
-
-  function choiceKey(handler: AgentInterfaceFunction): string {
-    return `${activeTarget?.workflowId ?? ""} ${handler.name}`;
-  }
-
-  /** The run log's last admitted message to this handler on this target, or -1. */
-  function lastChoiceRow(handler: AgentInterfaceFunction): number {
-    return runLogs.findLastIndex(
-      (row) =>
-        row.message?.handler === handler.name &&
-        (row.workflowId ?? sessionId) === activeTarget?.workflowId
-    );
-  }
-
-  /**
-   * What this target was last sent for the handler, else its schema default; null if neither is a
-   * choice. A value just sent stands until the run log admits a newer message to the handler, so
-   * the button and its list show the pick at once.
-   */
-  function currentChoice(handler: AgentInterfaceFunction, field: SchemaField): string | null {
-    const row = lastChoiceRow(handler);
-    const local = sentChoices[choiceKey(handler)];
-    const sent = local && local.after >= row ? local.value : runLogs[row]?.message?.payload[field.name];
-    const value = sent ?? field.default;
-    return typeof value === "string" && field.choices?.includes(value) ? value : null;
-  }
-
-  /* `sending` only stops a `reject` handler and spans the whole turn, so a choice send also waits
-     on its own: one choice in flight at a time, across every choice button. */
-  function choiceBlocked(choice: ChoiceHandler): boolean {
-    return (
-      choiceSending ||
-      composerDisabled ||
-      !canSendToTarget ||
-      (sending && choice.handler.mid_turn === "reject")
-    );
-  }
-
-  function toggleChoice(choice: ChoiceHandler): void {
-    if (openChoiceName === choice.handler.name) {
-      openChoiceName = null;
-      return;
-    }
-    if (choiceBlocked(choice)) return;
-    pickerButtonOpen = false;
-    openChoiceName = choice.handler.name;
-    /* No active row while unset, so Enter pressed through the opening press can't pick one. */
-    choiceIndex = choice.field.choices!.indexOf(choice.value ?? "");
-  }
-
-  /** Send the picked option through the same path as the handler form. */
-  async function pickChoice(choice: ChoiceHandler, option: string): Promise<void> {
-    openChoiceName = null;
-    if (option === choice.value || choiceBlocked(choice)) return;
-    const key = choiceKey(choice.handler);
-    const previous = sentChoices[key];
-    sentChoices[key] = { value: option, after: lastChoiceRow(choice.handler) };
-    choiceSending = true;
-    let sent = false;
-    try {
-      const payload = choicePayload(choice.field, option);
-      sent = await dispatchMessage(choice.handler, payload, summarizePayload(choice.handler.name, payload));
-    } finally {
-      choiceSending = false;
-      if (!sent && sentChoices[key]?.value === option) {
-        if (previous) sentChoices[key] = previous;
-        else delete sentChoices[key];
-      }
-    }
-  }
-
-  function handleChoiceKeydown(event: KeyboardEvent, choice: ChoiceHandler): void {
-    const options = choice.field.choices!;
-    let next: number | null = null;
-    if (event.key === "ArrowDown") next = choiceIndex + 1;
-    else if (event.key === "ArrowUp") next = choiceIndex < 0 ? options.length - 1 : choiceIndex - 1;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = options.length - 1;
-    else if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      if (choiceIndex < 0) openChoiceName = null;
-      else void pickChoice(choice, options[choiceIndex]!);
-      return;
-    } else if (event.key === "Tab") {
-      openChoiceName = null;
-      return;
-    } else if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
-      const key = event.key.toLowerCase();
-      const ahead = [...options.slice(choiceIndex + 1), ...options.slice(0, choiceIndex + 1)];
-      const match = ahead.find((option) => choiceText(option).toLowerCase().startsWith(key));
-      if (match) next = options.indexOf(match);
-    }
-    if (next == null) return;
-    event.preventDefault();
-    choiceIndex = (next + options.length) % options.length;
   }
 
   /* Scrolls the list, the option's offsetParent, and nothing above it: scrollIntoView would
@@ -1683,13 +1573,13 @@
     }
   }
 
-  /* A picked card stands, saying it was sent, until the turn it started is under way; then the
-     pick goes, so the next idle run offers the default again. */
-  let sentPick = $state<{ key: string; name: string } | null>(null);
+  /* A picked card stands, saying it was sent, until its turn is under way or done; then the pick
+     goes, so the next idle run offers the default again. */
+  let sentPick = $state<{ key: string; name: string; turn: number } | null>(null);
   let actionMenuOpen = $state(false);
   let actionMenuIndex = $state(0);
   $effect(() => {
-    if (runIdle || !sentPick) return;
+    if (!sentPick || !pickSettled(sentPick.turn, runIdle, runTurn)) return;
     const { key, name } = sentPick;
     sentPick = null;
     untrack(() => {
@@ -1699,9 +1589,10 @@
 
   /** Send a queue card's form to its handler. */
   async function sendAction(handler: AgentInterfaceFunction, payload: JsonRecord): Promise<boolean> {
+    const turn = untrack(() => runTurn);
     const sent = await dispatchMessage(handler, payload, summarizePayload(handler.name, payload));
     if (sent && untrack(() => selectedHandlers[handlerSelectionKey]) === handler.name) {
-      sentPick = { key: handlerSelectionKey, name: handler.name };
+      sentPick = { key: handlerSelectionKey, name: handler.name, turn };
     }
     return sent;
   }
@@ -2037,6 +1928,16 @@
           style:top={`${row.start}px`}
           {@attach measureMessage}
         >
+        {#if message.setting}
+          {@const settled = message.settingReply}
+          {@const note = settled?.error ?? (settled && !settled.streaming ? markdownToText(settled.text) : "")}
+          <p class={["setting-change", { failed: settled?.error }]} title={note || undefined}>
+            <SlidersHorizontal size={12} aria-hidden="true" />
+            <span class="setting-name">{message.setting}</span>
+            <strong class="setting-value fade-end" dir="auto">{message.text}</strong>
+            {#if note}<span class="setting-note fade-end" dir="auto">{note}</span>{/if}
+          </p>
+        {:else}
         <article class={["message", message.role, { latest: row.index === latestReplyIndex }]}>
           <div class={["bubble", { data: message.data, script: message.script, "has-copy": reply && copyable }]}>
             {#if reply && scriptError(message.text)}
@@ -2088,8 +1989,9 @@
             <span class="message-copy"><Copyable value={message.text} label="Copy message" /></span>
           {/if}
         </article>
+        {/if}
 
-        {#if message.role === "user"}
+        {#if message.role === "user" && message.turnNumber != null && turnOpeners.get(message.turnNumber) === message.id}
           {@const activityLogs = logsForTurn(message.turnNumber)}
           {@const activeLog = activeLogForTurn(message.turnNumber)}
           {@const working = statusInHeader && turnWorking(message.turnNumber)}
@@ -2197,15 +2099,6 @@
                     {/if}
                   {/each}
                 </div></div>
-              {/if}
-              {#if message.turnNumber === latestScriptUpdateTurn && editorLineCount > 0}
-                <TraceRow
-                  glyph="complete"
-                  name="Script updated"
-                  note={`${editorLineCount} lines`}
-                  tip={onOpenScript ? "Open the script" : undefined}
-                  onActivate={onOpenScript}
-                />
               {/if}
             </div>
           {/if}
@@ -2321,6 +2214,7 @@
         noun={(row) => (row === actionRow ? "action" : row.event === "callback_requested" ? "response" : "approval")}
         bind:headHeight={queueHead}
         onempty={() => composerInput?.focus()}
+        show={actionPicked ? actionRow!.id : null}
       >
         {#snippet banner(request)}
           {#if request === actionRow && actionHandler}
@@ -2491,43 +2385,6 @@
             {/if}
           {/each}
         </div>
-      {:else if openChoice}
-        {@const choice = openChoice}
-        <!-- Keyed: opening another handler's list mounts a new layer, so it takes focus and
-             hands it back to its own button. -->
-        {#key choice.handler.name}
-        <div
-          class="handler-picker choice-menu"
-          id="choice-menu"
-          role="listbox"
-          tabindex="-1"
-          aria-label={choice.label}
-          aria-activedescendant={choiceIndex < 0 ? undefined : `choice-option-${choiceIndex}`}
-          onkeydown={(event: KeyboardEvent) => handleChoiceKeydown(event, choice)}
-          {@attach dismissable({ ondismiss: () => (openChoiceName = null), keep: ".choice-button" })}
-          {@attach focusOnOpen}
-        >
-          <p class="picker-hint">{choice.label} for {activeTarget?.label ?? agentLabel}</p>
-          {#each choice.field.choices ?? [] as option, index (option)}
-            <button
-              type="button"
-              class={["picker-row", { active: index === choiceIndex, selected: option === choice.value }]}
-              id={`choice-option-${index}`}
-              role="option"
-              tabindex="-1"
-              aria-selected={option === choice.value}
-              title={option}
-              onclick={() => void pickChoice(choice, option)}
-              {@attach keepInMenu(index === choiceIndex)}
-            >
-              <span class="picker-name">
-                <strong class="fade-end">{choiceText(option)}</strong>
-                {#if option === choice.value}<Check size={13} aria-hidden="true" />{/if}
-              </span>
-            </button>
-          {/each}
-        </div>
-        {/key}
       {/if}
 
       {#if handlerHint}<span id={handlerHintId} class="visually-hidden">{handlerHint}</span>{/if}
@@ -2557,22 +2414,6 @@
             {/if}
           </IconButton>
         {/if}
-        {#each choiceHandlers as choice (choice.handler.name)}
-          {@const open = openChoiceName === choice.handler.name}
-          <!-- aria-disabled, not disabled, so a send in flight keeps focus on the button and
-               its tip readable; toggleChoice and pickChoice refuse while it is set. -->
-          <IconButton
-            class="choice-button"
-            label={choice.tip}
-            aria-disabled={choiceBlocked(choice) && !open ? "true" : undefined}
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            aria-controls={open ? "choice-menu" : undefined}
-            onclick={() => toggleChoice(choice)}
-          >
-            <choice.icon size={15} aria-hidden="true" />
-          </IconButton>
-        {/each}
       {/snippet}
 
         <form
@@ -2957,6 +2798,42 @@
   .reply-error > :global(svg) {
     flex: none;
     margin-top: 3px;
+  }
+
+  /* A setting change is one quiet line, not an exchange: the value, then what the agent said. */
+  .setting-change {
+    margin: 0;
+    padding: 2px 0;
+    display: flex;
+    gap: var(--gap-sm);
+    align-items: center;
+    min-width: 0;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+  }
+
+  .setting-change > :global(svg) {
+    flex: none;
+  }
+
+  .setting-name {
+    flex: none;
+  }
+
+  .setting-value {
+    min-width: 0;
+    flex: 0 1 auto;
+    color: var(--text-2);
+    font-weight: 500;
+  }
+
+  .setting-note {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .setting-change.failed .setting-note {
+    color: var(--error);
   }
 
   /* No frame: the turn's header is the pressable part, and the trace hangs under it. */

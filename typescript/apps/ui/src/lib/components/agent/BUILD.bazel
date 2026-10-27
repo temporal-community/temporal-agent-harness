@@ -260,16 +260,6 @@ js_library(
 )
 
 js_library(
-    name = "ScriptWorkspace",
-    srcs = ["ScriptWorkspace.svelte"],
-    visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = [
-        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
-        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
-    ],
-)
-
-js_library(
     name = "TranscriptPanel",
     srcs = ["TranscriptPanel.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -389,20 +379,6 @@ vitest_test(
         "//typescript/apps/ui/src/lib/motion:toastClose",
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
         "//typescript/apps/ui/src/lib/state:pendingRequests",
-        "//typescript/apps/ui/tests/support:controllerHarness",
-    ],
-)
-
-vitest_test(
-    name = "ScriptWorkspace_test",
-    src = "ScriptWorkspace.test.mjs",
-    deps = [
-        ":AgentChatPanel",
-        ":ScriptWorkspace",
-        "//typescript/apps/ui:node_modules/svelte",
-        "//typescript/apps/ui/src:App",
-        "//typescript/apps/ui/src/lib/panes:registry",
-        "//typescript/apps/ui/src/lib/state:editorWorkspace",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

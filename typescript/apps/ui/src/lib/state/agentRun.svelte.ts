@@ -341,8 +341,6 @@ export class AgentRunController {
   #streamWake: (() => void) | null = null;
   #clientTools: ClientToolCoordinator;
   clientToolStatuses = $state<Readonly<Record<string, ClientToolStatus>>>({});
-  editorScript = $state("");
-  editorChangedLines = $state<{ from: number; to: number } | null>(null);
   /**
    * How often a caught-up stream asks whether another client started a turn. Each ask is
    * a billable Query on Temporal Cloud, so it is slow, and skipped while the page is hidden.
@@ -448,10 +446,8 @@ export class AgentRunController {
     this.#clientTools = new ClientToolCoordinator({
       submit: (request, outcome) =>
         this.provideCallbackResult(request.workflowId, request.toolId, outcome),
-      onChange: (statuses, script, changedLines) => {
+      onChange: (statuses) => {
         this.clientToolStatuses = statuses;
-        this.editorScript = script;
-        this.editorChangedLines = changedLines;
       }
     });
     /* No teardown: one controller lives as long as the page (App.svelte
@@ -1824,6 +1820,12 @@ export class AgentRunController {
     try {
       const reply = await submitted;
       if (this.session?.workflow_id !== session.workflow_id) return true;
+      /* Accepted, so the session exists. Its first attach may now carry the turn and not go
+         idle until the turn ends, which is otherwise what clears this. */
+      this.creatingSession = false;
+      /* Accepted, so the session exists. Its first attach may now carry the turn and not go
+         idle until the turn ends, which is otherwise what clears this. */
+      this.creatingSession = false;
       // The reply's `message_id` is the only bookkeeping a send needs: it pairs the message
       // with its own terminal on the stream (see #ingestFrame), whether the message opened a
       // turn, queued behind one, or joined one.
