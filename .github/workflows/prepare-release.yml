@@ -1,0 +1,99 @@
+name: Prepare release
+
+# Bumps a release unit's version on main and pushes a release branch for a human to open a PR
+# from. Merging that PR releases (finish-release.yml). See RELEASE.md.
+#
+#   python  python/pyproject.toml, uv.lock and the README's pins; tag <version>; PyPI.
+#   npm     every @temporalio/agent-harness* package at one version; tag npm-v<version>; npm.
+
+on:
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: What to release
+        type: choice
+        options: [python, npm]
+        required: true
+      bump:
+        description: Version increment
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release-${{ inputs.unit }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # npm: scripts/release.mjs refreshes typescript/pnpm-lock.yaml with `pnpm install
+      # --lockfile-only`; action-setup reads typescript/package.json's packageManager.
+      - if: inputs.unit == 'npm'
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: typescript/package.json
+      # python: it refreshes python/uv.lock with `uv lock`.
+      - if: inputs.unit == 'python'
+        uses: astral-sh/setup-uv@v10.3.0
+
+      - name: Bump the version
+        id: release
+        env:
+          RELEASE_UNIT: ${{ inputs.unit }}
+          RELEASE_BUMP: ${{ inputs.bump }}
+        run: node scripts/release.mjs prepare
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
+
+      # main's newest disk cache for the unit's targets (tests.yml): python/ on the default
+      # interpreter, or everything else.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-${{ inputs.unit == 'python' && 'py313' || 'other' }}-${{ github.sha }}
+          restore-keys: bazel-disk-${{ inputs.unit == 'python' && 'py313' || 'other' }}-
+
+      # The release's own artifacts build and pass their checks at the new version: the wheel and
+      # sdist, or every package's tests including the check of its tarball against package.json.
+      # The PR's CI then runs the whole suite. A manifest change makes Bazel rewrite rules_js's
+      # record of it in .aspect/, which the release commit includes.
+      - name: Test the proposed release
+        run: bazel test ${{ steps.release.outputs.test_targets }} --config=ci --disk_cache="$HOME/.cache/bazel-disk"
+
+      - name: Push the release branch and show the PR creation link
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$RELEASE_BRANCH"
+          git add -u
+          git status --short
+          git commit -m "Release $RELEASE_TAG"
+          git push origin "$RELEASE_BRANCH"
+          node scripts/release.mjs summary

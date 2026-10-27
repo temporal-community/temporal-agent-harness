@@ -7,14 +7,17 @@ name: Publish to PyPI
 #
 # Bazel builds both archives (//python:dists), with the browser UI built from typescript/apps/ui/
 # in the same invocation, and the tests that gate the upload check those same files.
+#
+# finish-release.yml dispatches this against the release tag (a bare <version>, which the `pypi`
+# environment's tag policy requires) after a release PR merges, having created the GitHub Release
+# itself. Rerun it against the same tag to retry; a tag's publication is checked below.
 
 on:
-  # The normal path: cut a GitHub release for the tag, and it publishes.
-  release:
-    types: [published]
-  # Manual fallback — dispatch this against the TAG, not a branch, so the artifacts come from
-  # the released commit. Needed for a release that was created before this workflow existed.
+  # Dispatch this against the TAG, not a branch, so the artifacts come from the released commit.
   workflow_dispatch:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
   contents: read
@@ -68,13 +71,16 @@ jobs:
           cp "$dists"/* python/dist/
           ls -l python/dist
 
-      # The version lives in python/pyproject.toml and is bumped by hand, so a tag and a version CAN
-      # disagree. Catch that here rather than discovering that 0.4.0 shipped 0.3.0's code.
+      # The tag must be a bare stable version naming the archives built from its commit, or
+      # 0.4.0 could ship 0.3.0's code.
       - name: Check the built version matches the release tag
-        if: github.event_name == 'release'
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" != tag ] || ! [[ "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Run this against a release tag such as 0.9.0, not ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          version="$GITHUB_REF_NAME"
           for dist in "temporal_agent_harness-${version}-py3-none-any.whl" "temporal_agent_harness-${version}.tar.gz"; do
             if [ ! -f "python/dist/${dist}" ]; then
               echo "::error::Release tag ${GITHUB_REF_NAME} has no ${dist}; python/dist holds: $(ls python/dist)"
