@@ -10,7 +10,7 @@
 // surfaces draw their prose through this same renderer.
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { render } from "svelte/server";
@@ -97,12 +97,31 @@ const CHILD = `
   await server.close();
 `;
 
+/* Starting Vite and compiling the component cold takes seconds idle and over 25 s on a loaded
+   machine, so it gets its own budget; only the cases are on the hang clock. */
 function runIsolated(cases) {
   const cwd = fileURLToPath(new URL("../../../../", import.meta.url));
-  const run = spawnSync(process.execPath, ["--input-type=module", "-e", CHILD], { cwd, input: JSON.stringify(cases), encoding: "utf8", timeout: 25_000 });
-  const lines = run.stdout.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
-  const hung = run.error || run.signal || run.status ? (lines.at(-1)?.name ?? "startup") : null;
-  return { hung, stderr: run.stderr, results: new Map(lines.filter((line) => "ms" in line).map((line) => [line.name, line])) };
+  const child = spawn(process.execPath, ["--input-type=module", "-e", CHILD], { cwd });
+  let stdout = "";
+  let stderr = "";
+  let timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    if (!stdout.includes('{"name"') && chunk.includes('{"name"')) {
+      clearTimeout(timer);
+      timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    }
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+  child.stdin.end(JSON.stringify(cases));
+  return new Promise((resolve) => {
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      const lines = stdout.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
+      const hung = signal || status ? (lines.at(-1)?.name ?? "startup") : null;
+      resolve({ hung, stderr, results: new Map(lines.filter((line) => "ms" in line).map((line) => [line.name, line])) });
+    });
+  });
 }
 
 describe("hostile input, in a child process", () => {
@@ -122,9 +141,9 @@ describe("hostile input, in a child process", () => {
     "fenced code U+2028": '```json\n{"a": "x\u2028y"}\n```'
   };
   let run;
-  beforeAll(() => {
-    run = runIsolated(Object.entries(cases));
-  });
+  beforeAll(async () => {
+    run = await runIsolated(Object.entries(cases));
+  }, 150_000);
   const drawn = (name) => {
     assert.equal(run.hung, null, `hung or crashed on ${run.hung}\n${run.stderr}`);
     return run.results.get(name);
