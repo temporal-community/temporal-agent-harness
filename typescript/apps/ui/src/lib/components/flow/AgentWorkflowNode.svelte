@@ -15,12 +15,6 @@
 
   let { data }: Props = $props();
 
-  const boundaryWidth = $derived(
-    typeof data.boundaryWidth === "number" ? data.boundaryWidth : 930
-  );
-  const boundaryHeight = $derived(
-    typeof data.boundaryHeight === "number" ? data.boundaryHeight : 240
-  );
   const headerPrefix = $derived(
     typeof data.headerPrefix === "string" ? data.headerPrefix : null
   );
@@ -48,10 +42,7 @@
   const titleTip = $derived(data.title.length > 40 ? data.title : undefined);
 </script>
 
-<div
-  class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}
-  style={`width: ${boundaryWidth}px; height: ${boundaryHeight}px;`}
->
+<div class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}>
   <Handle id="target-top" class="workflow-handle" type="target" position={Position.Top} />
   <div class="workflow-head">
     <div class="workflow-title-group">
@@ -90,8 +81,11 @@
 </div>
 
 <style>
+  /* The node box flowProjection sizes from boundaryWidth/boundaryHeight. */
   .workflow-boundary {
     --status-color: var(--accent);
+    width: 100%;
+    height: 100%;
     pointer-events: none;
     border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
     border-radius: var(--radius-lg);
@@ -112,7 +106,8 @@
   .status-error { --status-color: var(--error); }
   .status-live { --status-color: var(--live); }
 
-  /* Zero-sized for the same reason as AgentStateNode's .node-handle. */
+  /* Zero-sized for the same reason as AgentStateNode's .node-handle, on the node box and
+     pulled out by 1px. flowProjection's handlesFor mirrors this, so change both. */
   :global(.workflow-handle) {
     width: 0;
     height: 0;

@@ -247,7 +247,6 @@
     bind:edges
     {nodeTypes}
     {defaultEdgeOptions}
-    fitView
     {fitViewOptions}
     {minZoom}
     {maxZoom}
@@ -263,6 +262,7 @@
   >
     <AutoFitView
       signature={fitSignature}
+      graphNodes={graph.nodes}
       {fitViewOptions}
       {ready}
       hold={tweening}
@@ -391,10 +391,12 @@
   }
 
   /* Keep the canvas chrome in place while Svelte Flow measures its first node
-     set. Only the graph plane waits, so revealing final geometry cannot flash
-     the whole pane. */
+     set. Only the graph plane and the minimap's marks of it wait, so revealing
+     final geometry cannot flash the whole pane, and the minimap cannot draw the
+     unmeasured graph first. */
   .flow-wrap:not(.settled) :global(.svelte-flow__viewport),
-  .flow-wrap:not(.settled) :global(.svelte-flow__viewport *) {
+  .flow-wrap:not(.settled) :global(.svelte-flow__viewport *),
+  .flow-wrap:not(.settled) :global(.svelte-flow__minimap-node) {
     visibility: hidden !important;
   }
 

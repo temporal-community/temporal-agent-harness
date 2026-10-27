@@ -1,4 +1,4 @@
-import type { Edge, Node } from "@xyflow/svelte";
+import type { Edge, Node, NodeHandle, Position } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
@@ -775,6 +775,57 @@ function runtimeLayoutFor(
   };
 }
 
+function nodeDimensions(item: Node<AgentNodeData>): NodeDimensions {
+  return item.type === "agentWorkflow"
+    ? {
+        width: numericData(item.data, "boundaryWidth", runtimeBoundaryWidth(1)),
+        height: numericData(item.data, "boundaryHeight", runtimeBoundaryHeight(1))
+      }
+    : dimensionsForData(item.data);
+}
+
+/* xyflow reads a handle's box from the DOM; these are the same boxes, from the
+   handle rules in AgentStateNode and AgentWorkflowNode. A card's handles sit in
+   its 1px border, pulled out by half of it; a boundary's sit on the node box,
+   pulled out by 1px. */
+function port(id: string, type: NodeHandle["type"], position: string, x: number, y: number): NodeHandle {
+  return { id, type, position: position as Position, x, y, width: 0, height: 0 };
+}
+
+function handlesFor(type: string | undefined, { width, height }: NodeDimensions): NodeHandle[] {
+  if (type === "agentWorkflow") {
+    return [
+      port("target-top", "target", "top", width / 2 - 1, -1),
+      port("source-bottom", "source", "bottom", width / 2 - 1, height + 1)
+    ];
+  }
+  const midX = width / 2 - 0.5;
+  const midY = height / 2 - 0.5;
+  return [
+    port("target-left", "target", "left", 0.5, midY),
+    port("target-top", "target", "top", midX, 0.5),
+    port("target-bottom", "target", "bottom", midX, height - 0.5),
+    port("source-right", "source", "right", width - 0.5, midY),
+    port("source-top", "source", "top", midX, 0.5),
+    port("source-bottom", "source", "bottom", midX, height - 0.5)
+  ];
+}
+
+/**
+ * Every node carries the size it was laid out at, and its ports.
+ *
+ * Without them xyflow hides each new node object until it has measured it in the
+ * DOM, and draws no edge into it until it has found its handles there. Every
+ * frame rebuilds every node, so that was every card, hidden and re-measured, on
+ * every frame. The cards fill exactly this box (AgentStateNode, AgentWorkflowNode).
+ */
+function withKnownSizes(nodes: Node<AgentNodeData>[]): Node<AgentNodeData>[] {
+  return nodes.map((item) => {
+    const dimensions = nodeDimensions(item);
+    return { ...item, ...dimensions, handles: handlesFor(item.type, dimensions) };
+  });
+}
+
 function graphBounds(graph: AgentGraph): GraphBounds {
   if (graph.nodes.length === 0) {
     return { minX: 0, minY: 0, width: 0, height: 0 };
@@ -784,13 +835,7 @@ function graphBounds(graph: AgentGraph): GraphBounds {
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
   for (const item of graph.nodes) {
-    const dimensions =
-      item.type === "agentWorkflow"
-        ? {
-            width: numericData(item.data, "boundaryWidth", runtimeBoundaryWidth(1)),
-            height: numericData(item.data, "boundaryHeight", runtimeBoundaryHeight(1))
-          }
-        : dimensionsForData(item.data);
+    const dimensions = nodeDimensions(item);
     minX = Math.min(minX, item.position.x);
     minY = Math.min(minY, item.position.y);
     maxX = Math.max(maxX, item.position.x + dimensions.width);
@@ -2212,8 +2257,10 @@ export function buildAgentGraph(
     }
   }
 
+  const cued = markEdgeCues(nodes, edges, options.reducedMotion ?? false);
   return {
-    ...markEdgeCues(nodes, edges, options.reducedMotion ?? false),
+    nodes: withKnownSizes(cued.nodes),
+    edges: cued.edges,
     activeTurn,
     status,
     failed,
@@ -2453,7 +2500,8 @@ export function buildAgentTreeGraph(
     nextX += graphWidth(graph) + 95;
     return positioned;
   });
-  const nodes = positionedRoots.flatMap((graph) => graph.nodes);
+  /* Again, because nesting rewrites a boundary's size after its own graph was built. */
+  const nodes = withKnownSizes(positionedRoots.flatMap((graph) => graph.nodes));
   const edges = positionedRoots.flatMap((graph) => graph.edges);
 
   return {
