@@ -8,6 +8,12 @@ js_library(
 )
 
 js_library(
+    name = "growth",
+    srcs = ["growth.mjs"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "fakeIndexedDb",
     srcs = ["fakeIndexedDb.mjs"],
     visibility = ["//typescript/apps/ui:__subpackages__"],

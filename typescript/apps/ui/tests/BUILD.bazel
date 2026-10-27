@@ -256,6 +256,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/state:replayTimeline",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
         "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+        "//typescript/apps/ui/tests/support:growth",
     ],
 )
 
@@ -276,6 +277,7 @@ vitest_test(
         "//typescript/apps/ui/src/lib/state:replayTimeline",
         "//typescript/apps/ui/src/lib/state:stepTimeline",
         "//typescript/apps/ui/src/lib/state:transcript",
+        "//typescript/apps/ui/tests/support:growth",
     ],
 )
 

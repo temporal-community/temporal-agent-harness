@@ -1,12 +1,14 @@
 // ABOUTME: Asserts a full rebuild of the derived projections stays O(frames). A live commit folds
 // them forward, but a reset, another session or a scrub back rebuilds every one from scratch, so a
-// rebuild that went quadratic would freeze the tab on a long run. Doubling the events must
-// roughly double the cost, never quadruple it. This is the cheap stand-in for a soak test — the
-// degradation is a function of EVENT COUNT, not elapsed time, so it is reproduced by choosing n
-// rather than by waiting for n to arrive.
+// rebuild that went quadratic would freeze the tab on a long run. Timed at four sizes, the cost
+// must grow as n^1.5 or slower: about 1 is linear, 2 quadratic. This is the cheap stand-in for a
+// soak test — the degradation is a function of EVENT COUNT, not elapsed time, so it is reproduced
+// by choosing n rather than by waiting for n to arrive.
 
 import assert from "node:assert/strict";
 import { describe, it } from "vitest";
+
+import { growthExponent, msPerCall } from "./support/growth.mjs";
 
 import { summarizeCost } from "$lib/cost/pricing.ts";
 import { buildAgentGraph, buildAgentTreeGraph } from "$lib/state/flowProjection.ts";
@@ -71,49 +73,37 @@ const commit = (frames) => {
 
 const build = (n) => Array.from({ length: n }, (_, i) => frame(i));
 
-/* Best of three rounds rather than one round's mean. The same tree measures 47ms
-   on a quiet machine and 78ms with other work running, so one round cannot pin a
-   constant tightly enough to assert on: the threshold would have to be loose
-   enough to tolerate the contention, which is loose enough to miss a regression.
-   The fastest round is the one the scheduler interfered with least, and that is
-   the number that is a property of the code. */
-const measure = (n, reps) => {
+const measure = (n) => {
   const frames = build(n);
   commit(frames); // shape the hidden classes before the clock starts
-  let best = Infinity;
-  for (let round = 0; round < 3; round += 1) {
-    const started = performance.now();
-    for (let r = 0; r < reps; r += 1) commit(frames);
-    best = Math.min(best, (performance.now() - started) / reps);
-  }
-  return best;
+  return msPerCall(() => commit(frames));
 };
 
 describe("one commit stays O(frames)", () => {
-  it("4x the events must not cost more than 8x the work", () => {
+  it("the cost of a commit grows no faster than n^1.5", () => {
     /* An unmeasured warm-up. Without it the first size pays for JIT compilation and
-       reads as the SLOWEST per-frame, which inverts the very ratio being asserted. */
+       reads as the SLOWEST per-frame, which inverts the very growth being asserted. */
     {
       const frames = build(2_000);
       for (let r = 0; r < 40; r += 1) commit(frames);
     }
 
-    const small = measure(4_000, 10);
-    const large = measure(16_000, 5);
+    const sizes = [2_000, 4_000, 8_000, 16_000].map((n) => [n, measure(n)]);
+    const small = sizes[1][1];
+    const large = sizes[3][1];
 
     /* Both thresholds below are calibrated against node, not a browser. They guard
        the SHAPE of the cost curve, which is a property of the code; the absolute
        milliseconds a real paint budget sees are the browser's, and are not what
        this file is measuring. */
 
-    /* 4x the events for ~4x the work. The bar is 8x: loose enough that a noisy CI
-       box never fails it, tight enough that genuinely quadratic work (which would
-       be 16x) cannot slip through. */
-    const ratio = large / small;
+    /* Linear work fits about 1 and quadratic about 2, so 1.5 sits between them, and
+       four sizes' medians keep one noisy measurement from moving the fit far. */
+    const exponent = growthExponent(sizes);
     assert.ok(
-      ratio < 8,
-      `4x the events must not cost ${ratio.toFixed(1)}x the work — a projection went superlinear ` +
-        `(4,000 events: ${small.toFixed(1)}ms, 16,000 events: ${large.toFixed(1)}ms)`
+      exponent < 1.5,
+      `a commit's cost grows as n^${exponent.toFixed(2)} — a projection went superlinear ` +
+        `(${sizes.map(([n, ms]) => `${n.toLocaleString()} events: ${ms.toFixed(1)}ms`).join(", ")})`
     );
 
     /* The absolute constant is REPORTED, not asserted. This used to be a hard
@@ -133,7 +123,7 @@ describe("one commit stays O(frames)", () => {
        one lived in the tree while it passed. A check people learn to re-run until it
        goes green is a check nobody reads the output of. So: report, do not gate.
 
-       What that costs, honestly: the ratio cannot see a uniformly slower rebuild,
+       What that costs, honestly: the growth cannot see a uniformly slower rebuild,
        because both sizes pay the same tax, so a constant-factor regression is now
        unguarded. That is a real loss and it is why the number is still printed. It
        is affordable today only because the constant is already known and recorded
@@ -169,13 +159,13 @@ describe("one commit stays O(frames)", () => {
       large < ADVISORY_MS
         ? ""
         : `\n  NOTE: past the ${ADVISORY_MS}ms advisory — on a quiet machine that is worth a look, on a` +
-          `\n  loaded one it is the machine. Not a failure either way; the ratio above is the gate.`;
+          `\n  loaded one it is the machine. Not a failure either way; the growth above is the gate.`;
 
     /* Kept as a print, not converted to an assertion: the comment above is the
        reason this file no longer gates on the absolute, and a number nobody can
        read is the same as a number nobody recorded. */
     console.log(
-      `projection cost OK (4k ${small.toFixed(1)}ms, 16k ${large.toFixed(1)}ms, ${ratio.toFixed(1)}x)${advisory}`
+      `projection cost OK (4k ${small.toFixed(1)}ms, 16k ${large.toFixed(1)}ms, n^${exponent.toFixed(2)})${advisory}`
     );
   });
 });
@@ -195,25 +185,19 @@ describe("one long turn stays O(frames)", () => {
       }))
     ).flat()
   ];
-  const measure = (frames, reps) => {
+  const measure = (tools) => {
+    const frames = turn(tools);
     buildAgentGraph(frames);
-    let best = Infinity;
-    for (let round = 0; round < 3; round += 1) {
-      const started = performance.now();
-      for (let r = 0; r < reps; r += 1) buildAgentGraph(frames);
-      best = Math.min(best, (performance.now() - started) / reps);
-    }
-    return best;
+    return msPerCall(() => buildAgentGraph(frames));
   };
 
-  it("4x the tools in one turn must not cost more than 8x the work", () => {
-    measure(turn(500), 10);
-    const small = measure(turn(2_000), 10);
-    const large = measure(turn(8_000), 3);
-    const ratio = large / small;
+  it("the cost of one turn's tools grows no faster than n^1.5", () => {
+    measure(500);
+    const sizes = [1_000, 2_000, 4_000, 8_000].map((tools) => [tools, measure(tools)]);
+    const exponent = growthExponent(sizes);
     assert.ok(
-      ratio < 8,
-      `4x the tools in one turn cost ${ratio.toFixed(1)}x the work (2,000 tools: ${small.toFixed(1)}ms, 8,000: ${large.toFixed(1)}ms)`
+      exponent < 1.5,
+      `one turn's tools cost n^${exponent.toFixed(2)} (${sizes.map(([n, ms]) => `${n.toLocaleString()} tools: ${ms.toFixed(1)}ms`).join(", ")})`
     );
   });
 });
