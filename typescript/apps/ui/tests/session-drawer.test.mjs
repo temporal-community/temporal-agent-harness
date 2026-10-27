@@ -460,7 +460,11 @@ describe("Session Manager rows", () => {
   it("archives into a shut Archived group that persists, keeps the listbox valid, and unarchives back", () => {
     const { storage } = installBrowserSurface();
     const key = "temporal-agent-ui.prefs.v1";
-    const sessions = [session("wf-a", { closed: true }), session("wf-b"), session("wf-gone", { execution_status: "NOT_FOUND", closed: true })];
+    const sessions = [
+      session("wf-a", { closed: true }),
+      session("wf-b"),
+      session("wf-gone", { execution_status: "NOT_FOUND", closed: true, created_at: Date.now() / 1000 - 180 })
+    ];
     const headings = (body) => [...body.matchAll(/class="group-heading[^"]*"[^>]*>([^<]*?) <span/g)].map((m) => m[1]);
     const ids = (body) => [...body.matchAll(/id="session-option-([^"]+)" class="session-row/g)].map((m) => m[1]);
     const options = (body) => [...body.matchAll(/<button[^>]*role="option"[^>]*aria-setsize="(\d+)" aria-posinset="(\d+)"[\s\S]*?<\/button>/g)];
