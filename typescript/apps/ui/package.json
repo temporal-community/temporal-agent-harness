@@ -8,8 +8,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "svelte-check --tsconfig ./tsconfig.json && vitest run",
-    "test": "vitest run",
+    "check": "svelte-check --tsconfig ./tsconfig.json && vitest run --exclude 'tests/*Cost.test.mjs' && vitest run --no-file-parallelism tests/paneCost.test.mjs tests/projectionCost.test.mjs",
+    "test": "vitest run --exclude 'tests/*Cost.test.mjs' && vitest run --no-file-parallelism tests/paneCost.test.mjs tests/projectionCost.test.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {
