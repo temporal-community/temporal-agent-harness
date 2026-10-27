@@ -1,0 +1,96 @@
+:root {
+  --bg: #0a0d13;
+  --panel: #0f131b;
+  --panel-2: #141924;
+  --panel-3: #1a2030;
+  --line: #222a39;
+  --line-2: #2c3547;
+  --ink: #e7eaf1;
+  --muted: #8d95a6;
+  --faint: #596275;
+  --accent: #5fa8ff;
+  --accent-ink: #06111f;
+  --accent-soft: rgba(95, 168, 255, 0.14);
+  --cyan: #38d3ee;
+  --good: #3ddc97;
+  --warn: #f5b945;
+  --bad: #f87171;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+
+  /* Chart series, in a fixed order (a categorical palette checked for colour-blind contrast). */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef1f6;
+    --panel: #ffffff;
+    --panel-2: #f6f8fb;
+    --panel-3: #edf0f6;
+    --line: #dfe4ec;
+    --line-2: #cfd6e2;
+    --ink: #151a24;
+    --muted: #5d6677;
+    --faint: #9aa3b3;
+    --accent: #1f64c8;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(31, 100, 200, 0.1);
+    --cyan: #0891b2;
+    --good: #0f9d63;
+    --warn: #b7791f;
+    --bad: #d33a3a;
+    --shadow: 0 10px 30px rgba(30, 40, 70, 0.12);
+
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #6250d6;
+    --series-8: #e34948;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13.5px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, pre, kbd { font-family: var(--mono); }
+::selection { background: var(--accent-soft); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+#boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: 0.35; } }

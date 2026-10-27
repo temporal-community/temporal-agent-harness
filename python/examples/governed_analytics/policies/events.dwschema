@@ -1,0 +1,24 @@
+// Dogwood event schema for the governed analytics agent's tool policy, the same as the
+// temporal-untrusted-workers Dogwood verifier's own (verifiers/dogwood/policies).
+//
+// A tool call is a `request`, the only decision kind: each one is decided.
+// What the workflow run received (here, the agent's messages and its tools'
+// results) is recorded as `received`, history for later decisions.
+//
+// The verifier's store keeps the event schema it was created with: to change
+// this file, start with a new store (`just reset-store`).
+//
+// Both kinds pin caller.run to the current request's run. A pin declared on
+// every kind makes every temporal condition key-local: a decision only ever
+// sees its own workflow run's events.
+max_window = 30d
+
+decision event <A>::request {
+    ...inputs(A),
+    caller: { pin run: String = context.caller.run },
+}
+
+event <A>::received {
+    ...inputs(A),
+    caller: { pin run: String = context.caller.run },
+}

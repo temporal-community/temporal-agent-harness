@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 # ---------------------------------------------------------------------------
 # Protocol constants — workflow must use these exact names
@@ -311,6 +311,36 @@ class AutoApprovalDecision:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+class ReceivedInputKind(StrEnum):
+    """What a :class:`ReceivedInput` is."""
+
+    MESSAGE = "message"
+    TOOL_RESULT = "tool_result"
+
+
+@dataclass(frozen=True)
+class ReceivedInput:
+    """One thing the agent received during this run: a message it accepted, or a tool's result.
+
+    The runner records these in arrival order and hands them to the evaluator as
+    :attr:`AutoApprovalContext.received`, so a policy can ask where a value came from, for
+    example "only read a table a person granted access to".
+
+    ``name`` is the ``@agent.accepts`` handler for a message, and the tool's name for a tool
+    result. ``payload`` is the message's input-model JSON, or the tool's return value as JSON.
+    ``id`` is unique within the run: the ``send_agent_message`` update's ID for a message, the
+    tool call's ID for a tool result. ``arguments`` is a tool result's call, its keyword
+    arguments as JSON, so a policy can tie a result to what was asked: a person's answer to a
+    callback tool answers the arguments they were shown. ``None`` for a message.
+    """
+
+    kind: ReceivedInputKind
+    name: str
+    payload: JsonValue
+    id: str
+    arguments: JsonValue = None
+
+
 @dataclass
 class AutoApprovalContext:
     """The facts about a single tool call that an auto mode evaluator judges.
@@ -357,6 +387,9 @@ class AutoApprovalContext:
     (0 = still the ones the session started with). An evaluator should record it alongside
     its verdict: criteria change over the life of an agent, so "which rules decided this
     call" is only answerable if the decision names the generation it applied.
+
+    ``received`` is everything this run has received so far, oldest first (see
+    :class:`ReceivedInput`): the messages it accepted and the results of the tools it ran.
     """
 
     tool_name: str
@@ -369,6 +402,7 @@ class AutoApprovalContext:
     # Required is the point: see the guarantee in the class docstring.
     criteria_set: AutoApprovalCriteriaSet = field(kw_only=True)
     criteria_set_name: str = field(kw_only=True)
+    received: tuple[ReceivedInput, ...] = field(default=(), kw_only=True)
 
     @property
     def thresholds(self) -> tuple[float, float | None]:

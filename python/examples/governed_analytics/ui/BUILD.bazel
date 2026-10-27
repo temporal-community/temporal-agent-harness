@@ -1,0 +1,77 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@npm//typescript/packages/svelte:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+load("//bazel:static_page.bzl", "static_page")
+
+# The studio, served with the client and the Svelte binding: `bazel run :studio` (`just studio`).
+# Nothing builds the page itself; the browser compiles each .svelte file (svelte-sw.js).
+static_page(
+    name = "studio",
+    srcs = [
+        "AccessPanel.svelte",
+        "Analysis.svelte",
+        "App.svelte",
+        "BarChart.svelte",
+        "Chart.svelte",
+        "ChatPanel.svelte",
+        "DataCall.svelte",
+        "LineChart.svelte",
+        "PieChart.svelte",
+        "ReportCard.svelte",
+        "ReportView.svelte",
+        "ResultView.svelte",
+        "ScatterChart.svelte",
+        "Sidebar.svelte",
+        "Studio.svelte",
+        "analysis.js",
+        "index.html",
+        "style.css",
+        "svelte-sw.js",
+    ],
+    packages = {
+        "//typescript/packages/client:pkg": "harness-client",
+        "//typescript/packages/svelte:pkg": "harness-svelte",
+    },
+)
+
+# Type-checks the studio's components, and analysis.js through its JSDoc types, against the Svelte
+# binding's sources and the agent's generated client (tsconfig.json's `paths` point into
+# typescript/packages/svelte).
+svelte_check_bin.svelte_check_test(
+    name = "svelte_check_test",
+    args = [
+        "--tsconfig",
+        "./tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = [
+        "AccessPanel.svelte",
+        "Analysis.svelte",
+        "App.svelte",
+        "BarChart.svelte",
+        "Chart.svelte",
+        "ChatPanel.svelte",
+        "DataCall.svelte",
+        "LineChart.svelte",
+        "PieChart.svelte",
+        "ReportCard.svelte",
+        "ReportView.svelte",
+        "ResultView.svelte",
+        "ScatterChart.svelte",
+        "Sidebar.svelte",
+        "Studio.svelte",
+        "analysis.js",
+        "tsconfig.json",
+        "//python/examples/governed_analytics:client_sdk_types",
+        "//typescript/packages/svelte:node_modules/svelte",
+        "//typescript/packages/svelte/src/lib:index",
+    ],
+    # The client's declarations, which a test's runfiles leave out by default.
+    include_transitive_types = True,
+)
+
+# How the studio reads the agent's stream: tool results, policy decisions, chart data and answers.
+js_test(
+    name = "analysis_reads_the_agent_stream_test",
+    data = ["analysis.js"],
+    entry_point = "analysis.test.mjs",
+)

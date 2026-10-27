@@ -5,6 +5,7 @@ EXAMPLES = [
     "agent_dag",
     "auto_mode",
     "code_mode_memory",
+    "governed_analytics",
     "monty",
     "openai_hello",
     "pydantic_ai_hello",

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Governed Analytics Studio</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23101a2b'/%3E%3Cg fill='%235fa8ff'%3E%3Crect x='8' y='15' width='4' height='9' rx='1'/%3E%3Crect x='14' y='10' width='4' height='14' rx='1'/%3E%3Crect x='20' y='6' width='4' height='18' rx='1'/%3E%3C/g%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+    />
+    <!-- highlight.js for scripts and queries, with GitHub's colours for each scheme. Offline, the
+         studio shows code as plain text (analysis.js). -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+      integrity="sha512-rO+olRTkcf304DQBxSWxln8JXCzTHlKnIdnMUwYvQa9/Jd4cQaNkItIUj6Z4nvW1dqK0SKXLbn9h4KwZTNtAyw=="
+      crossorigin="anonymous"
+      media="(prefers-color-scheme: dark)"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"
+      integrity="sha512-0aPQyyeZrWj9sCA46UlmWgKOP0mUipLQ6OZXu8l4IcAmD2u31EPEy9VcIMvl7SoAaKe8bLXZhYoMaE/in+gcgA=="
+      crossorigin="anonymous"
+      media="(prefers-color-scheme: light)"
+    />
+    <script
+      defer
+      src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
+      integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ=="
+      crossorigin="anonymous"
+    ></script>
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "svelte": "https://esm.sh/svelte@5.57.1",
+          "svelte/": "https://esm.sh/svelte@5.57.1/",
+          "@temporalio/agent-harness-svelte": "./harness-svelte/dist/index.js",
+          "@temporalio/agent-harness-client": "./harness-client/dist/src/index.js"
+        }
+      }
+    </script>
+    <script type="module">
+      // svelte-sw.js compiles the .svelte files as they load, once it controls the page.
+      await navigator.serviceWorker.register("./svelte-sw.js");
+      if (!navigator.serviceWorker.controller) {
+        await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve));
+      }
+      const [{ mount }, { default: App }] = await Promise.all([import("svelte"), import("./App.svelte")]);
+      document.getElementById("boot")?.remove();
+      mount(App, { target: document.body });
+    </script>
+  </head>
+  <body>
+    <div id="boot">Loading studio…</div>
+  </body>
+</html>

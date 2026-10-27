@@ -1,0 +1,212 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:codegen.bzl", "harness_client_sdk")
+
+py_library(
+    name = "databases",
+    srcs = ["databases.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//duckdb"],
+)
+
+harness_module_binary(
+    name = "generate_data",
+    srcs = ["generate_data.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":databases",
+        "@pypi//duckdb",
+    ],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "sql_analysis",
+    srcs = ["sql_analysis.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":databases",
+        ":models",
+        "@pypi//duckdb",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "sql_policy",
+    srcs = ["sql_policy.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":models",
+        ":sql_analysis",
+        ":tools",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/dogwood_approvals:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "tools",
+    srcs = ["tools.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":databases",
+        ":models",
+        ":sql_analysis",
+        "//python/temporal_agent_harness/harness:agent",
+        "@pypi//duckdb",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "access",
+    srcs = ["access.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "gemini",
+    srcs = ["gemini.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "@pypi//google_genai",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_module_binary(
+    name = "schema",
+    srcs = ["schema.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":access",
+        ":charts",
+        ":reports",
+        ":sql_policy",
+        ":tools",
+        ":workflow",
+        "//python/temporal_agent_harness/harness/dogwood_approvals:__init__",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":databases",
+        ":sql_analysis",
+        ":tools",
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":access",
+        ":charts",
+        ":gemini",
+        ":reports",
+        ":sql_policy",
+        ":tools",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/dogwood_approvals:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "GovernedAnalyticsAgent",
+    agent = "examples.governed_analytics.workflow:GovernedAnalyticsAgentWorkflow",
+    description = """
+A bank analyst over three DuckDB databases, composing a fixed set of data tools in Code Mode.
+Every tool call is checked by a Dogwood tool policy first: analytics data is open, risk data
+needs a time-boxed lease you grant, and customer PII is never readable.""",
+    key = "governed-analytics",
+    label = "Governed analytics (Dogwood policy)",
+    task_queue = "governed-analytics-agent",
+    deps = [":workflow"],
+)
+
+# agents.toml and its agent's schema document. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/governed_analytics:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "GovernedAnalyticsAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":GovernedAnalyticsAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)
+
+py_library(
+    name = "charts",
+    srcs = ["charts.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "@pypi//pydantic",
+    ],
+)
+
+# The agent's typed TypeScript client, client_sdk/GovernedAnalyticsAgent.ts, for the studio (ui/):
+# `bazel run //python/examples/governed_analytics:client_sdk_update` rewrites it.
+harness_client_sdk(
+    name = "client_sdk",
+    srcs = ["client_sdk/GovernedAnalyticsAgent.ts"],
+    agents = [":GovernedAnalyticsAgent"],
+    visibility = [":__subpackages__"],
+)
+
+py_library(
+    name = "reports",
+    srcs = ["reports.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "@pypi//pydantic",
+    ],
+)

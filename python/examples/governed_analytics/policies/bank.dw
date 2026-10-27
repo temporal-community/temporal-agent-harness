@@ -1,0 +1,240 @@
+// Tool policy for the governed analytics agent (examples/governed_analytics).
+//
+// Every host call the agent's scripts make is a tool call named "bank-analyst/<tool>", decided
+// here before it runs. `permit` says what may run; a `forbid`, or no `permit` at all, refuses
+// the call, and the agent reads the forbid's @reason as the error.
+//
+// A SQL tool's call arrives as the facts of its query (statement, table_functions, error; see
+// SqlFacts in models.py), together with one "bank-analyst/read_table" check per table the
+// query reads. The checks are decided with the call: a query runs only if every table it reads
+// may be read.
+//
+// The session's history is there to look back on, grants and revocations among it. Access the
+// agent asked for is a "bank-analyst/request_access/result" event: the person's answer as
+// input.arg0.access ("Grant for this session" or "Decline"), and the table they were shown as
+// input.arg1.table. Access the person granted unasked is an "update/grant_access" event,
+// and a revocation an "update/revoke_access" event, each with the table as input.arg0.table.
+// See schema.cedarschema for every action's input.
+
+// ---------------------------------------------------------------- discovering tables
+
+@id("list-open-databases")
+permit (principal, action == Temporal::Action::"bank-analyst/list_tables", resource)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has database &&
+  ["analytics", "risk"].contains(context.input.arg0.database)
+};
+
+@id("describe-open-tables")
+permit (principal, action == Temporal::Action::"bank-analyst/describe_table", resource)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has table &&
+  (context.input.arg0.table like "analytics.*" || context.input.arg0.table like "risk.*")
+};
+
+@id("customer-pii-is-hidden")
+@reason("The customer_pii database is never available to the agent, not even its table names")
+forbid (
+  principal,
+  action in [
+    Temporal::Action::"bank-analyst/list_tables",
+    Temporal::Action::"bank-analyst/describe_table"
+  ],
+  resource
+)
+when {
+  context.input has arg0 &&
+  ((context.input.arg0 has database && context.input.arg0.database == "customer_pii") ||
+   (context.input.arg0 has table && context.input.arg0.table like "customer_pii.*"))
+};
+
+// ---------------------------------------------------------------- queries
+
+@id("sql-tools")
+permit (
+  principal,
+  action in [
+    Temporal::Action::"bank-analyst/run_sql",
+    Temporal::Action::"bank-analyst/summary_stats",
+    Temporal::Action::"bank-analyst/calc_distribution",
+    Temporal::Action::"bank-analyst/correlate",
+    Temporal::Action::"bank-analyst/group_compare",
+    Temporal::Action::"bank-analyst/detect_outliers"
+  ],
+  resource
+)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has statement &&
+  context.input.arg0.statement == "SELECT"
+};
+
+// ATTACH, COPY, SET, PRAGMA, INSTALL/LOAD, several statements at once: none of them run.
+@id("select-only")
+@reason("Only a single read-only SELECT statement may run")
+forbid (
+  principal,
+  action in [
+    Temporal::Action::"bank-analyst/run_sql",
+    Temporal::Action::"bank-analyst/summary_stats",
+    Temporal::Action::"bank-analyst/calc_distribution",
+    Temporal::Action::"bank-analyst/correlate",
+    Temporal::Action::"bank-analyst/group_compare",
+    Temporal::Action::"bank-analyst/detect_outliers"
+  ],
+  resource
+)
+unless {
+  context.input has arg0 &&
+  context.input.arg0 has statement &&
+  context.input.arg0.statement == "SELECT"
+};
+
+// read_csv, read_parquet, glob and the catalog functions behind information_schema reach past
+// the tables this policy governs.
+@id("no-file-or-catalog-functions")
+@reason("Queries may not read files or the catalog; query the tables by name")
+forbid (
+  principal,
+  action in [
+    Temporal::Action::"bank-analyst/run_sql",
+    Temporal::Action::"bank-analyst/summary_stats",
+    Temporal::Action::"bank-analyst/calc_distribution",
+    Temporal::Action::"bank-analyst/correlate",
+    Temporal::Action::"bank-analyst/group_compare",
+    Temporal::Action::"bank-analyst/detect_outliers"
+  ],
+  resource
+)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has table_functions &&
+  !["range", "generate_series", "query_table"].containsAll(context.input.arg0.table_functions)
+};
+
+// A query that doesn't plan has no tables to check, so it doesn't run.
+@id("queries-must-plan")
+@reason("The query does not plan, so its tables can't be checked; check table and column names with describe_table")
+forbid (
+  principal,
+  action in [
+    Temporal::Action::"bank-analyst/run_sql",
+    Temporal::Action::"bank-analyst/summary_stats",
+    Temporal::Action::"bank-analyst/calc_distribution",
+    Temporal::Action::"bank-analyst/correlate",
+    Temporal::Action::"bank-analyst/group_compare",
+    Temporal::Action::"bank-analyst/detect_outliers"
+  ],
+  resource
+)
+when { context.input has arg0 && context.input.arg0 has error };
+
+// ---------------------------------------------------------------- tables
+
+@id("analytics-tables")
+permit (principal, action == Temporal::Action::"bank-analyst/read_table", resource)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has table &&
+  context.input.arg0.table like "analytics.*"
+};
+
+// A risk table may be read once a person granted access to it in this session, and for as long
+// as they haven't revoked it since: "no revoke_access for the table since a grant of it". A
+// grant after a revoke opens it again. Events are pinned to the run, so 30d (the event schema's
+// longest window) means the whole session.
+@id("risk-access-requested")
+permit (principal, action == Temporal::Action::"bank-analyst/read_table", resource)
+when temporal {
+  !Temporal::Action::"update/revoke_access"::received{ input.arg0.table: context.input.arg0.table }
+  since within 30d Temporal::Action::"bank-analyst/request_access/result"::received{ input.arg0.access: "Grant for this session", input.arg1.table: context.input.arg0.table }
+};
+
+@id("risk-access-granted")
+permit (principal, action == Temporal::Action::"bank-analyst/read_table", resource)
+when temporal {
+  !Temporal::Action::"update/revoke_access"::received{ input.arg0.table: context.input.arg0.table }
+  since within 30d Temporal::Action::"update/grant_access"::received{ input.arg0.table: context.input.arg0.table }
+};
+
+// Without access, a risk table is refused, and the reason tells the agent how to get it.
+@id("risk-needs-access")
+@reason("Risk tables need a person to grant access: call request_access with the table and your reason, then run the query again")
+forbid (principal, action == Temporal::Action::"bank-analyst/read_table", resource)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has table &&
+  context.input.arg0.table like "risk.*"
+}
+unless temporal {
+  !Temporal::Action::"update/revoke_access"::received{ input.arg0.table: context.input.arg0.table }
+  since within 30d Temporal::Action::"bank-analyst/request_access/result"::received{ input.arg0.access: "Grant for this session", input.arg1.table: context.input.arg0.table }
+}
+unless temporal {
+  !Temporal::Action::"update/revoke_access"::received{ input.arg0.table: context.input.arg0.table }
+  since within 30d Temporal::Action::"update/grant_access"::received{ input.arg0.table: context.input.arg0.table }
+};
+
+// Nothing opens customer data.
+@id("customer-pii-is-closed")
+@reason("Customer PII is never available to the agent")
+forbid (principal, action == Temporal::Action::"bank-analyst/read_table", resource)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has table &&
+  context.input.arg0.table like "customer_pii.*"
+};
+
+// ---------------------------------------------------------------- publishing reports
+
+// A report anyone with the link can read may be published...
+@id("publish-reports")
+permit (principal, action == Temporal::Action::"bank-analyst/publish_report", resource);
+
+// ...unless this session has read restricted data, by any SQL tool, at any point: whatever the
+// report says, it may carry what was read. Each SQL tool's result records whether its query read
+// a table outside analytics (restricted_data), and only a query that ran has a result, so a
+// refused attempt doesn't count. A Dogwood pattern names one action: one rule per SQL tool.
+@id("no-public-report-after-restricted-run-sql")
+@reason("This session has read restricted data, so its findings can't be published publicly")
+forbid (principal, action == Temporal::Action::"bank-analyst/publish_report", resource)
+when temporal {
+  formerly within 30d Temporal::Action::"bank-analyst/run_sql/result"::received{ input.arg0.restricted_data: true }
+};
+
+@id("no-public-report-after-restricted-summary-stats")
+@reason("This session has read restricted data, so its findings can't be published publicly")
+forbid (principal, action == Temporal::Action::"bank-analyst/publish_report", resource)
+when temporal {
+  formerly within 30d Temporal::Action::"bank-analyst/summary_stats/result"::received{ input.arg0.restricted_data: true }
+};
+
+@id("no-public-report-after-restricted-calc-distribution")
+@reason("This session has read restricted data, so its findings can't be published publicly")
+forbid (principal, action == Temporal::Action::"bank-analyst/publish_report", resource)
+when temporal {
+  formerly within 30d Temporal::Action::"bank-analyst/calc_distribution/result"::received{ input.arg0.restricted_data: true }
+};
+
+@id("no-public-report-after-restricted-correlate")
+@reason("This session has read restricted data, so its findings can't be published publicly")
+forbid (principal, action == Temporal::Action::"bank-analyst/publish_report", resource)
+when temporal {
+  formerly within 30d Temporal::Action::"bank-analyst/correlate/result"::received{ input.arg0.restricted_data: true }
+};
+
+@id("no-public-report-after-restricted-group-compare")
+@reason("This session has read restricted data, so its findings can't be published publicly")
+forbid (principal, action == Temporal::Action::"bank-analyst/publish_report", resource)
+when temporal {
+  formerly within 30d Temporal::Action::"bank-analyst/group_compare/result"::received{ input.arg0.restricted_data: true }
+};
+
+@id("no-public-report-after-restricted-detect-outliers")
+@reason("This session has read restricted data, so its findings can't be published publicly")
+forbid (principal, action == Temporal::Action::"bank-analyst/publish_report", resource)
+when temporal {
+  formerly within 30d Temporal::Action::"bank-analyst/detect_outliers/result"::received{ input.arg0.restricted_data: true }
+};

@@ -1,0 +1,51 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+# The stub is for editors and type checkers; rules_py's py_library takes no .pyi sources.
+# gazelle:python_generate_pyi_srcs false
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":evaluator",
+        ":schema",
+        ":toolpolicy_pb2",
+    ],
+)
+
+py_library(
+    name = "evaluator",
+    srcs = ["evaluator.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":toolpolicy_pb2",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "schema",
+    srcs = ["schema.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/code_mode:stubs",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "toolpolicy_pb2",
+    srcs = ["toolpolicy_pb2.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//protobuf"],
+)

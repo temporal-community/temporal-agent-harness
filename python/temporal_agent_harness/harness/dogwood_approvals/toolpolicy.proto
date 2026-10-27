@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+// The answers of the tool-policy Nexus service's operations, as the temporal-untrusted-workers
+// Dogwood verifier (github.com/02strich/temporal-untrusted-workers, proto/toolpolicy/v1) returns
+// them.
+//
+// Only the responses are declared: dogwood_evaluator sends its requests as plain JSON, and the
+// verifiers parse the payload bytes as JSON whatever their encoding. Each response arrives as a
+// "json/protobuf" payload whose messageType names its message, and the Python SDK decodes it
+// only once a message of that name is registered. Package, messages, enum values and field
+// numbers match the upstream contract for that reason.
+//
+// Regenerate toolpolicy_pb2.py / .pyi with `just generate-toolpolicy`.
+package temporal_untrusted_workers.toolpolicy.v1;
+
+// The answer of VerifyToolCalls. The zero value denies.
+message VerifyToolCallsResponse {
+  // Was `bool allowed`.
+  reserved 1;
+  reserved "allowed";
+
+  Decision decision = 3;
+  // Why the tool calls were not approved.
+  string reason = 2;
+}
+
+// A verifier's verdict on a request's tool calls.
+enum Decision {
+  // No decision; denies. So does a value this file doesn't know.
+  DECISION_UNSPECIFIED = 0;
+  DECISION_APPROVED = 1;
+  DECISION_DENIED = 2;
+  // The tool calls need a human's approval.
+  DECISION_ESCALATE = 3;
+  // The verifier can't decide right now (rate limit, a dependency is down).
+  DECISION_RETRY_LATER = 4;
+}
+
+// The answer of RecordInputEvents: an acknowledgement.
+message RecordInputEventsResponse {}

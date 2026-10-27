@@ -53,6 +53,14 @@ gazelle:
 buildifier:
     bazel run //:buildifier
 
+# Regenerate the Dogwood tool-policy response bindings. protoc 3.20's output loads on every
+# protobuf runtime temporalio supports; the .pyi needs a newer protoc.
+generate-toolpolicy:
+    cd {{ python }} && uv tool run --python 3.10 --from grpcio-tools==1.48.2 --with "setuptools<70" \
+        python -m grpc_tools.protoc -I. --python_out=. temporal_agent_harness/harness/dogwood_approvals/toolpolicy.proto
+    cd {{ python }} && uv tool run --from grpcio-tools==1.71.0 \
+        python -m grpc_tools.protoc -I. --pyi_out=. temporal_agent_harness/harness/dogwood_approvals/toolpolicy.proto
+
 # ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
 
 # Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).

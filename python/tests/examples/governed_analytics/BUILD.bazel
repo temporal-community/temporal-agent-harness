@@ -1,0 +1,104 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/examples/governed_analytics:generate_data",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_sql_analysis",
+    srcs = ["test_sql_analysis.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:databases",
+        "//python/examples/governed_analytics:models",
+        "//python/examples/governed_analytics:sql_analysis",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_tools",
+    srcs = ["test_tools.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:generate_data",
+        "//python/examples/governed_analytics:tools",
+        "//python/tests:conftest",
+        "@pypi//duckdb",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_access",
+    srcs = ["test_access.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:access",
+        "//python/examples/governed_analytics:workflow",
+        "//python/temporal_agent_harness/harness/dogwood_approvals:__init__",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_workflow",
+    srcs = ["test_workflow.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:sql_analysis",
+        "//python/examples/governed_analytics:tools",
+        "//python/examples/governed_analytics:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_request_access",
+    srcs = ["test_request_access.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:access",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_reports",
+    srcs = ["test_reports.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:reports",
+        "//python/examples/governed_analytics:tools",
+        "//python/examples/governed_analytics:workflow",
+        "//python/temporal_agent_harness/harness/dogwood_approvals:__init__",
+        "//python/tests:conftest",
+    ],
+)

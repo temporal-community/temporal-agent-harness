@@ -1,0 +1,112 @@
+# Scoped justfile for the governed analytics example (examples/governed_analytics).
+# Run from this directory: `just <recipe>`.
+#
+# Local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just endpoint          # 2. once per server: the tool-verifier Nexus endpoint
+#   just data              # 3. once: the bank's three DuckDB databases
+#   just verifier          # 4. the Dogwood verifier, serving policies/bank.dw
+#   just dev               # 5. session manager + UI on :8000 + this example's worker
+#   just studio            # 6. optional: the studio UI on http://127.0.0.1:5173
+#
+# The recipes build and run each program with Bazel (install bazelisk as `bazel`). First-time
+# setup: `cp .env.example .env.local` from the repo root and fill it in (Temporal connection +
+# GEMINI_API_KEY), and set DOGWOOD_VERIFIER_DIR to a checkout of temporal-untrusted-workers'
+# verifiers/dogwood. See README.md.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../../scripts/untagged-notice.just'
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+# TEMPORAL_CONFIG_FILE (from the repo-root .env.local) is a path relative to the repo root, and
+# the `temporal` CLI reads it too, so every recipe runs from there.
+set working-directory := "../../.."
+
+policies := justfile_directory() / "policies"
+# The verifier's durable store: the installed policies and every session's history.
+store := justfile_directory() / ".dogwood" / "bank.redb"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection and verifier checkout these recipes will use (from the repo-root
+# .env.local).
+config:
+    @echo ".env.local           = {{ if path_exists(justfile_directory() / '../../../.env.local') == 'true' { 'found' } else { 'MISSING — cp .env.example .env.local at the repo root' } }}"
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset: the CLI and worker use localhost:7233>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+    @echo "DOGWOOD_VERIFIER_DIR = ${DOGWOOD_VERIFIER_DIR:-<unset>}"
+    @echo "GEMINI_API_KEY       = ${GEMINI_API_KEY:+set}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Create the Nexus endpoint the agent asks for verdicts, routed to the verifier's task queue.
+endpoint:
+    temporal operator nexus endpoint create --name tool-verifier \
+        --target-namespace default --target-task-queue tool-verifier
+
+# Write the bank's three synthetic DuckDB databases into data/ (the same data every run).
+data:
+    bazel run //python/examples/governed_analytics:generate_data
+
+# RUST_LOG=info,dogwood_request=debug logs every request the policy decides.
+#
+# Run the Dogwood verifier on this example's policy (needs cargo and DOGWOOD_VERIFIER_DIR).
+verifier:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${DOGWOOD_VERIFIER_DIR:-}" ]; then
+        echo "error: set DOGWOOD_VERIFIER_DIR to temporal-untrusted-workers/verifiers/dogwood" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "{{store}}")"
+    cd "$DOGWOOD_VERIFIER_DIR"
+    DOGWOOD_POLICY_FILE="{{policies}}/bank.dw" \
+    DOGWOOD_SCHEMA_FILE="{{policies}}/schema.cedarschema" \
+    DOGWOOD_EVENT_SCHEMA_FILE="{{policies}}/events.dwschema" \
+    DOGWOOD_STORE="{{store}}" \
+        cargo run --release -p dogwood-verifier
+
+# Delete the verifier's store, and with it every session's history. Stop the verifier first.
+reset-store:
+    rm -rf "{{justfile_directory()}}/.dogwood"
+
+# Regenerate policies/schema.cedarschema after changing the agent's tools.
+schema:
+    bazel run //python/examples/governed_analytics:schema
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    bazel run //python/temporal_agent_harness/web:cli -- session-manager
+
+# Serve the Svelte UI + FastAPI API on http://localhost:8000, pointed at this example's registry.
+server:
+    bazel run //python/temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the governed analytics agent worker (needs GEMINI_API_KEY and `just data`).
+worker:
+    bazel run //python/examples/governed_analytics:worker
+
+# The page has no build step (the browser compiles the components); it is served with the client
+# and the Svelte binding as Bazel builds them. It talks to the API `just dev` (or `just server`)
+# serves on :8000. `port` defaults to 5173.
+#
+# Serve the studio (ui/) on http://127.0.0.1:<port>.
+studio port="":
+    bazel run //python/examples/governed_analytics/ui:studio -- {{port}}
+
+# Type-check the studio against the generated client types, and test how it reads the stream.
+check-ui:
+    bazel test //python/examples/governed_analytics/ui:all
+
+# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
+# temporal`). Ctrl-C stops them all.
+#
+# Run this example's local stack.
+dev:
+    just --justfile "{{justfile_directory()}}/../../../justfile" dev governed_analytics

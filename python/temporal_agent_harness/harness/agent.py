@@ -85,6 +85,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     MessageContext,
     MidTurn,
     AutoApprovalContext,
+    ReceivedInput,
+    ReceivedInputKind,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import (
@@ -137,6 +139,8 @@ __all__ = [
     "MessageContext",
     "MidTurn",
     "AutoApprovalContext",
+    "ReceivedInput",
+    "ReceivedInputKind",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
     "WorkflowDefnOptions",

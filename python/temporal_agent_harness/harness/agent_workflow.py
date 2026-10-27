@@ -39,6 +39,7 @@ from typing import (
 )
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from temporalio import activity, workflow
 from temporalio.common import VersioningBehavior
 from temporalio.contrib.workflow_streams import (
@@ -97,6 +98,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     SubagentTurnResult,
     AutoApprovalContext,
     AutoApprovalCriteria,
+    ReceivedInput,
+    ReceivedInputKind,
     ToolApprovalDecision,
     AutoApprovalEvaluationEnded,
     AutoApprovalEvaluationError,
@@ -2029,6 +2032,8 @@ class AgentWorkflowRunner:
         _assert_async_auto_mode_evaluator(auto_mode_evaluator)
         _assert_auto_mode_has_an_evaluator(approval_policy, auto_mode_evaluator)
         self._auto_mode_evaluator = auto_mode_evaluator
+        # What this run has received, oldest first; see AutoApprovalContext.received.
+        self._received: list[ReceivedInput] = []
         self._status = _WorkflowStatus(
             agent_id=self._agent_id,
             approval_policy=approval_policy,
@@ -2174,6 +2179,16 @@ class AgentWorkflowRunner:
                     message_id=message_id,
                 )
             )
+
+        update = workflow.current_update_info()
+        self._received.append(
+            ReceivedInput(
+                kind=ReceivedInputKind.MESSAGE,
+                name=message.type,
+                payload=to_jsonable_python(message.payload),
+                id=update.id if update is not None else message_id,
+            )
+        )
 
         # Published for EVERY admitted message, not only a queued one: it is the only event
         # carrying what was sent, and a joining message gets no ``turn_started`` of its own to
@@ -2464,6 +2479,7 @@ class AgentWorkflowRunner:
             # after set_name_for() returned a name that is registered and non-empty.
             criteria_set=criteria_set,
             criteria_set_name=name or "",
+            received=tuple(self._received),
         )
 
     def _warn_ungoverned_tool(
@@ -3481,13 +3497,26 @@ class AgentWorkflowRunner:
         itself neither
         dispatches activities nor publishes — that lives in the tool object so
         ``tool_start`` means "now executing."
+
+        A successful call's result is recorded as a :class:`ReceivedInput`, which later
+        evaluations see in :attr:`AutoApprovalContext.received`.
         """
         runner_token = _CURRENT_RUNNER.set(self)
         tool_id_token = _CURRENT_TOOL_ID.set(call_id)
         injections_token = _CURRENT_TOOL_INJECTIONS.set(injections)
         closing = False
         try:
-            return await tool_callable(*args, **kwargs)
+            result = await tool_callable(*args, **kwargs)
+            self._received.append(
+                ReceivedInput(
+                    kind=ReceivedInputKind.TOOL_RESULT,
+                    name=getattr(tool_callable, "__name__", repr(tool_callable)),
+                    payload=to_jsonable_python(result, fallback=str),
+                    id=call_id,
+                    arguments=to_jsonable_python(kwargs, fallback=str),
+                )
+            )
+            return result
         except GeneratorExit:
             # The coroutine is being closed after the workflow was evicted mid-call, from
             # another context: the tokens cannot be reset there (it raises ValueError, which

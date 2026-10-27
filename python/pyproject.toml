@@ -121,6 +121,7 @@ examples = [
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
     "typesafe-sdk>=0.6.0",
     "temporalio-typesafe>=0.0.1,<0.1",  # TypeSafePlugin for the auto_mode and typesafe_hello workers
+    "duckdb>=2.0.0",  # the governed_analytics example's databases, tools and query analysis
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —

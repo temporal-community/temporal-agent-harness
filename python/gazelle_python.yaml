@@ -1,6 +1,7 @@
 manifest:
   modules_mapping:
     81d243bd2c585b0f4821__mypyc: charset_normalizer
+    adbc_driver_duckdb: duckdb
     agents: openai_agents
     aioboto3: aioboto3
     aiobotocore: aiobotocore
@@ -33,6 +34,7 @@ manifest:
     dns: dnspython
     docker: docker
     dotenv: python_dotenv
+    duckdb: duckdb
     email_validator: email_validator
     fastapi: fastapi
     fastapi_cli: fastapi_cli

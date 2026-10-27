@@ -49,13 +49,15 @@ requires_nexus_mcp = pytest.mark.skipif(
 class _FakeRunner:
     """The bits of AgentWorkflowRunner the wrapper touches.
 
-    ``run_tool`` borrows the real implementation, which only parks the ambient tool id /
-    runner / injections -- so the test sees exactly the funnel the wrapper relies on.
+    ``run_tool`` borrows the real implementation, which parks the ambient tool id /
+    runner / injections and records the result -- so the test sees exactly the funnel the
+    wrapper relies on.
     """
 
     def __init__(self) -> None:
         self.published: list[Any] = []
         self.run_tool_ids: list[str] = []
+        self._received: list[Any] = []
 
     def publish(self, event: Any) -> None:
         self.published.append(event)

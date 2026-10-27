@@ -1,0 +1,163 @@
+{
+  "agent": "GovernedAnalyticsAgent",
+  "source": "examples.governed_analytics.workflow:GovernedAnalyticsAgentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Ask the bank's analyst a question about branches, deposits, products or loans. It\nanswers by writing and running analysis scripts over the bank's databases; reading\nrestricted data needs access you grant.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "grant_access": {
+      "description": "Let the agent read a restricted table for the rest of this session, without waiting\nfor it to ask. Revoke it with revoke_access.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/AccessRequest"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "revoke_access": {
+      "description": "Take back the agent's access to a restricted table, however it was granted. Its\nnext query on the table is refused.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/AccessRequest"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "table_access": {
+      "$ref": "#/$defs/TableAccessBoard"
+    }
+  },
+  "$defs": {
+    "AccessRequest": {
+      "description": "The restricted table to grant or revoke the agent's access to.",
+      "properties": {
+        "table": {
+          "description": "The restricted table.",
+          "enum": [
+            "risk.loan_applications",
+            "risk.credit_scores"
+          ],
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table"
+      ],
+      "title": "AccessRequest",
+      "type": "object"
+    },
+    "TableAccess": {
+      "additionalProperties": false,
+      "description": "Where one restricted table stands.",
+      "properties": {
+        "table": {
+          "title": "Table",
+          "type": "string"
+        },
+        "status": {
+          "default": "needs access",
+          "enum": [
+            "needs access",
+            "granted",
+            "declined",
+            "revoked",
+            "never"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "via": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Via"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "table",
+        "status",
+        "via",
+        "reason"
+      ],
+      "title": "TableAccess",
+      "type": "object"
+    },
+    "TableAccessBoard": {
+      "additionalProperties": false,
+      "description": "The restricted tables, and which the agent may read right now.",
+      "properties": {
+        "tables": {
+          "items": {
+            "$ref": "#/$defs/TableAccess"
+          },
+          "title": "Tables",
+          "type": "array"
+        }
+      },
+      "required": [
+        "tables"
+      ],
+      "title": "TableAccessBoard",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}
