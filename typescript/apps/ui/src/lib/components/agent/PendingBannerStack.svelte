@@ -25,9 +25,11 @@
     headHeight?: number;
     /** Where focus goes when the last request is answered from inside the stack. */
     onempty?: () => void;
+    /** A row the reader asked for: once it is in `rows`, it comes to the front, unfolded. */
+    show?: string | number | null;
   }
 
-  let { rows, key, label, noun, banner, headHeight = $bindable(0), onempty }: Props = $props();
+  let { rows, key, label, noun, banner, headHeight = $bindable(0), onempty, show = null }: Props = $props();
 
   /* Banners drawn behind the front one; the rest are only counted. */
   const PEEKING = 2;
@@ -79,6 +81,17 @@
   const title = $derived(pagerNoun.charAt(0).toUpperCase() + pagerNoun.slice(1));
   /* One announcement per change, in words. Folded, only the count; it never reopens itself. */
   const spoken = $derived(rows.length === 0 ? "" : open ? `${title} ${index + 1} of ${rows.length}` : count);
+
+  /* Once per ask: paging away from the shown row afterwards stays the reader's choice. */
+  const showAt = $derived(show == null ? -1 : rows.findIndex((row) => keyOf(row) === show));
+  $effect(() => {
+    if (showAt < 0) return;
+    untrack(() => {
+      activeKey = show;
+      lastIndex = showAt;
+      open = true;
+    });
+  });
 
   function step(by: 1 | -1): void {
     const next = index + by;

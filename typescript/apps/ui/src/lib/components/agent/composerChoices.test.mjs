@@ -1,8 +1,9 @@
-// A handler that is one required enum is an icon button in the composer's control row that opens
-// a list of its options; a pick sends it as the handler form would, while the text box stays the
-// prompt. Pressing the button used to step the value, so a burst of presses sent a burst of
-// changes. The open list can't be reached from SSR (no DOM here), so its wiring is read from
-// source; the rendered button is checked as rendered.
+// Every handler is listed by its own name in the `/` picker and taken in on its card, whatever its
+// schema. A handler that was one required enum used to be pulled out into an icon button named by
+// its field, so two handlers sharing an input model (a playpen agent's `grant_access` and
+// `revoke_access`, both `AccessRequest`) drew as two identical "Table: not set" icons, missing
+// from the list. The open picker can't be reached from SSR (no DOM here), so its source of rows
+// is read from source; the rest is checked as rendered.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -11,7 +12,7 @@ import { describe, it } from "vitest";
 
 import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
 import AgentChatPanel from "./AgentChatPanel.svelte";
-import { choiceField, choiceLabel, choicePayload, composerHandler } from "$lib/state/handlerRouting.ts";
+import { composerHandler } from "$lib/state/handlerRouting.ts";
 
 const handler = (name, properties, required) => ({
   name,
@@ -31,8 +32,10 @@ const accepted = (handlerName, payload, id = "m1") => ({
 
 const generate = handler("generate", { text: { type: "string", title: "Text" } }, ["text"]);
 const setModel = enumHandler("set_model", "model", ["gemini-3.8-flash", "gemini-3.1-flash-lite"]);
-const policyOptions = ["human_approval_only", "allow_safe", "auto_mode"];
-const travelPolicy = enumHandler("set_approval_policy", "posture", policyOptions, "Posture");
+const travelPolicy = enumHandler("set_approval_policy", "posture", ["human_approval_only", "allow_safe", "auto_mode"], "Posture");
+const tables = ["risk.loan_applications", "risk.credit_scores"];
+const grantAccess = enumHandler("grant_access", "table", tables, "Table");
+const revokeAccess = enumHandler("revoke_access", "table", tables, "Table");
 const panel = readFileSync(new URL("./AgentChatPanel.svelte", import.meta.url), "utf8");
 
 const composer = (agentInterface, logs = []) =>
@@ -42,123 +45,46 @@ const composer = (agentInterface, logs = []) =>
     }).body
   );
 const allButtons = (body) => [...body.matchAll(/<button[^>]*choice-button[\s\S]*?<\/button>/g)].map((m) => m[0]);
-const buttons = (body) => allButtons(body).filter((button) => !button.includes("handler-button"));
-const handlerButton = (body) => allButtons(body).find((button) => button.includes("handler-button"));
-const names = (body) => buttons(body).map((button) => button.match(/aria-label="([^"]*)"/)?.[1]);
+/* The composer's own, not a card's switcher between form handlers, which shares its look. */
+const handlerButton = (body) =>
+  allButtons(body).find((button) => button.includes("handler-button") && !button.includes("action-switch"));
+const card = (body) => body.match(/<article class="pending-card[^"]*" aria-label="Action: [\s\S]*?<\/article>/)?.[0] ?? "";
 
-describe("composer choice buttons", () => {
-  it("puts model and policy in the bar as buttons and keeps the prompt a text box", () => {
-    const body = composer([generate, setModel, travelPolicy]);
-
-    assert.deepEqual(names(body), ["Model: not set", "Policy: not set"], "short names, never handler ids");
-    assert.equal(choiceLabel(generate, { name: "approval_mode", title: "approval_mode" }), "Approval mode");
-    assert.match(body, /<form class="composer[\s\S]*<textarea/);
-    assert.doesNotMatch(body, /handler-form|<select|role="combobox"|choice-menu/, "no form, no menu");
-    assert.equal(composerHandler([setModel, generate, travelPolicy], "set_model")?.name, "generate");
-  });
-
-  it("opens a listbox of every option instead of sending on a press", () => {
-    const body = composer([generate, travelPolicy]);
-    const [button] = buttons(body);
-    assert.match(button, /aria-haspopup="listbox"/);
-    assert.match(button, /aria-expanded="false"/);
-    assert.doesNotMatch(body, /role="listbox"/, "closed until pressed");
-
-    assert.match(panel, /onclick=\{\(\) => toggleChoice\(choice\)\}/, "a press opens, it never sends");
-    assert.doesNotMatch(panel.match(/function toggleChoice[\s\S]*?\n {2}\}/)[0], /dispatchMessage|pickChoice/);
-    assert.match(panel, /role="listbox"[\s\S]*aria-activedescendant/);
-    assert.match(
-      panel,
-      /\{#each choice\.field\.choices \?\? \[\] as option, index \(option\)\}[\s\S]*?role="option"[\s\S]*?aria-selected=\{option === choice\.value\}/,
-      "one option per enum value, the current one selected"
+describe("every handler, by name", () => {
+  it("draws no control per handler beside the handler button, whatever the schema", () => {
+    const body = composer([generate, setModel, travelPolicy, grantAccess, revokeAccess]);
+    const composerControls = body.match(/<div class="composer-controls[\s\S]*?<\/form>/)?.[0] ?? "";
+    assert.deepEqual(
+      allButtons(composerControls).map((b) => b.match(/aria-label="([^"]*)"/)[1]),
+      ["Handler: generate"],
+      "no icon named by a field"
     );
-    assert.match(panel, /\.picker-row\.selected \{\s*background: var\(--selected-bg\);/, "selection is a tint");
+    assert.doesNotMatch(body, /Table: not set|Model: not set|Policy: not set|choice-menu/);
+    assert.match(body, /<form class="composer[\s\S]*<textarea[^>]*placeholder="Message"/);
   });
 
-  it("sends a picked row as the handler form's payload and closes the list", () => {
-    assert.deepEqual(choicePayload(choiceField(setModel), "gemini-3.1-flash-lite"), { model: "gemini-3.1-flash-lite" });
-    const withNote = handler(
-      "set_policy",
-      { posture: { type: "string", enum: ["auto_mode"] }, note: { type: "string" } },
-      ["posture"]
-    );
-    assert.deepEqual(choicePayload(choiceField(withNote), "auto_mode"), { posture: "auto_mode" });
-    assert.match(panel, /onclick=\{\(\) => void pickChoice\(choice, option\)\}/);
-    const pick = panel.match(/async function pickChoice[\s\S]*?\n {2}\}/)[0];
-    assert.match(pick, /^[^\n]*\{\s*openChoiceName = null;/, "closes before anything else");
-    assert.match(pick, /dispatchMessage\(choice\.handler, payload,/, "through the form's own send");
+  it("lists every handler in the picker, from the one source the composer uses", () => {
+    assert.match(panel, /buildPickerItems\(pickerOpen, targets, handlers, pickerDraft, showTargetPicker\)/);
+    assert.match(panel, /const handlers = \$derived\(activeTarget\?\.agentInterface \?\? \[\]\);/);
+    assert.doesNotMatch(panel, /choiceField|choiceHandlers/, "nothing pulls a handler out of the list");
   });
 
-  // Each press used to send at once, so ten fast presses left ten "policy changed" rows.
-  it("lets one choice send be in flight at a time and undoes a failed one", () => {
-    const pick = panel.match(/async function pickChoice[\s\S]*?\n {2}\}/)[0];
-    const blocked = panel.match(/function choiceBlocked[\s\S]*?\n {2}\}/)[0];
-    assert.match(blocked, /choiceSending \|\|/, "a send in flight blocks every choice");
-    assert.match(panel.match(/function toggleChoice[\s\S]*?\n {2}\}/)[0], /if \(choiceBlocked\(choice\)\) return;/, "no list while sending");
-    assert.match(pick, /option === choice\.value \|\| choiceBlocked\(choice\)\) return;/, "the current value or a second pick is a no-op");
-    assert.ok(pick.indexOf("choiceSending = true") < pick.indexOf("await dispatchMessage"), "claimed before the await");
-    assert.match(pick, /finally \{\s*choiceSending = false;\s*if \(!sent && sentChoices\[key\]\?\.value === option\)/, "a failed send puts the old value back");
-    assert.match(pick, /if \(previous\) sentChoices\[key\] = previous;\s*else delete sentChoices\[key\];/);
+  it("takes a one-enum handler on its card, named for the handler, its options in the form", () => {
+    const body = card(composer([revokeAccess]));
+    assert.match(body, /aria-label="Action: revoke_access"/);
+    for (const table of tables) assert.ok(body.includes(table), table);
+    assert.match(body, /aria-label="Send revoke_access"/);
   });
 
-  it("closes on Escape or an outside press without sending", () => {
-    assert.match(panel, /dismissable\(\{ ondismiss: \(\) => \(openChoiceName = null\), keep: "\.choice-button" \}\)/);
-    const keys = panel.match(/function handleChoiceKeydown[\s\S]*?\n {2}\}/)[0];
-    assert.match(keys, /event\.key === "Enter" \|\| event\.key === " "\) \{[\s\S]*?pickChoice/, "only Enter or Space on a row picks");
-    assert.doesNotMatch(keys, /Escape/, "Escape is the dismissable layer's: close and hand focus back");
-    // Held or repeated Enter opens the list and then lands on it: with no value yet, that
-    // press must not pick the first row.
-    assert.match(panel, /choiceIndex = choice\.field\.choices!\.indexOf\(choice\.value \?\? ""\);/);
-    assert.match(keys, /if \(choiceIndex < 0\) openChoiceName = null;\s*else void pickChoice/);
+  it("keeps an explicit pick of any handler, and a text handler as the default", () => {
+    assert.equal(composerHandler([setModel, generate], "set_model")?.name, "set_model");
+    assert.equal(composerHandler([grantAccess, revokeAccess], "revoke_access")?.name, "revoke_access");
+    assert.equal(composerHandler([setModel, generate, travelPolicy], null)?.name, "generate");
   });
 
-  // The travel agent's policy field is titled "Posture", and with no default the chip printed
-  // that title. The control is now the icon alone; the value lives in its name and tip.
-  it("is an icon alone, names the policy Policy, and shows the last sent value", () => {
-    const untitled = handler("set_effort", { reasoning_effort: { type: "string", enum: ["low", "high"] } }, ["reasoning_effort"]);
-    const body = composer([generate, travelPolicy, setModel, untitled], [accepted("set_model", { model: "gemini-3.8-flash" })]);
-
-    assert.deepEqual(names(body), ["Policy: not set", "Model: gemini-3.8-flash", "Reasoning Effort: not set"]);
-    assert.doesNotMatch(body, /Posture/, "not in the button, its name, or its tip");
-    const icons = buttons(body).map((button) => [...button.matchAll(/lucide-([a-z-]+)"/g)].map((m) => m[1]));
-    assert.deepEqual(icons, [["shield-check"], ["cpu"], ["sliders-horizontal"]], "one icon each, no chevron");
-    for (const button of buttons(body)) {
-      assert.doesNotMatch(button, />\s*[^<\s][^<]*</, "no visible label");
-      assert.match(button, /data-tip="[^"]+"/);
-    }
-
-    let logs = [];
-    for (const [i, option] of [policyOptions[2], policyOptions[0]].entries()) {
-      logs = [...logs, accepted("set_approval_policy", { posture: option }, `m${i}`)];
-      assert.deepEqual(names(composer([generate, travelPolicy], logs)), [`Policy: ${option === "auto_mode" ? "Auto mode" : "Human approval only"}`]);
-    }
-  });
-
-  it("adds no buttons for an agent with no single-enum handler", () => {
-    const book = handler(
-      "book",
-      { kind: { type: "string", enum: ["flight", "hotel"] }, city: { type: "string" } },
-      ["kind", "city"]
-    );
-    const upload = handler("upload", { file: { type: "string", contentEncoding: "base64" } }, ["file"]);
-    for (const other of [book, upload, generate]) assert.equal(choiceField(other), null, other.name);
-    assert.deepEqual(names(composer([generate, book])), []);
-  });
-
-  it("keeps a long value whole in the name and tip, and never squeezes the button", () => {
-    const long = `model-${"x".repeat(300)}`;
-    const many = enumHandler("set_model", "model", [long, "m-1"]);
-    const body = composer([generate, many], [accepted("set_model", { model: long })]);
-    assert.deepEqual(names(body), [`Model: ${long}`]);
-    assert.ok(body.includes(`data-tip="Model: ${long}"`));
-    assert.match(panel, /:global\(\.choice-button\) \{\s*flex: none;/);
-    assert.match(panel, /\.composer:not\(\.expanded\) textarea::placeholder \{[^}]*white-space: nowrap/, "a wrapped placeholder shows the scrollbar track");
-  });
-
-  // Default IconButton chrome painted a filled box on every choice control.
+  // Default IconButton chrome painted a filled box on every composer control.
   // At rest the border stays 1px and only its color drops, so a reveal cannot shift the row.
-  // Field hover and focus-within used to light the box while typing; only the button itself does now.
-  it("rests a choice button without a box until that button is hovered, focused, or open", () => {
+  it("rests the handler button without a box until it is hovered, focused, open, or off-default", () => {
     const rest = panel.match(
       /\.composer-controls :global\(\.choice-button\) \{\s*border-color: transparent;\s*background: transparent;\s*color: var\(--text-3\);\s*\}/
     );
@@ -169,44 +95,33 @@ describe("composer choice buttons", () => {
       /\.(?:composer|handler-form):is\(:hover, :focus-within\)[^{]*choice-button/,
       "composer hover and focus-within leave the hairline off and the icon dim"
     );
-
-    const reveal = panel.match(
-      /\.composer-controls :global\(\.icon-button\.choice-button:hover:not\(:disabled, \[aria-disabled="true"\]\)\),\s*\.composer-controls :global\(\.icon-button\.choice-button:focus-visible\),\s*\.composer-controls :global\(\.icon-button\.choice-button\[aria-expanded="true"\]\),\s*\.composer-controls :global\(\.icon-button\.handler-button\.revealed\) \{\s*border-color: var\(--border\);\s*background: transparent;\s*color: var\(--text-2\);\s*\}/
-    );
-    assert.ok(reveal, "hover, keyboard focus, and an open list bring the hairline and the full icon");
     assert.match(
       panel,
       /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.composer-controls :global\(\.choice-button\) \{\s*transition: none;\s*\}/
     );
-
-    const body = composer([generate, setModel, travelPolicy]);
-    assert.match(body, /<textarea[^>]*placeholder="Message"/);
-    assert.match(body, /<textarea[^>]*aria-label="Message /);
+    assert.match(panel, /\.composer:not\(\.expanded\) textarea::placeholder \{[^}]*white-space: nowrap/, "a wrapped placeholder shows the scrollbar track");
   });
 });
 
 // The handler picker was a full-width chip reading "ask → Monty (conversational, subagent)",
 // and script mode added a row saying "Runs this Python as written."; at the narrowest pane
-// both wrapped and truncated. The handler is now one more choice icon in the same row.
+// both wrapped and truncated. The handler is now an icon in the control row.
 describe("composer handler button", () => {
   const execute = handler("execute", { script: { type: "string", title: "Script" } }, ["script"]);
   const book = handler("book", { kind: { type: "string", enum: ["flight", "hotel"] }, city: { type: "string" } }, ["kind", "city"]);
 
-  it("is a choice icon whose name and tip carry the label, with the script hint read out but not shown", () => {
+  it("is an icon whose name and tip carry the label, with the script hint read out but not shown", () => {
     const body = composer([execute, setModel, travelPolicy]);
     const button = handlerButton(body);
-    assert.ok(button, "the handler control is a choice button");
+    assert.ok(button, "the handler control is in the control row");
     assert.match(button, /aria-haspopup="listbox"/);
     assert.match(button, /aria-expanded="false"/);
     assert.match(button, /aria-label="Handler: execute"/);
     assert.match(button, /data-tip="Handler: execute\. Runs this Python as written\./);
     assert.deepEqual([...button.matchAll(/lucide-([a-z-]+)"/g)].map((m) => m[1]), ["square-code"]);
     assert.doesNotMatch(button, />\s*[^<\s][^<]*</, "no visible label");
-    assert.deepEqual(
-      allButtons(body).map((b) => b.match(/aria-label="([^"]*)"/)[1]),
-      ["Handler: execute", "Model: not set", "Policy: not set"],
-      "handler first, in the same row as model and policy"
-    );
+    const composerControls = body.match(/<div class="composer-controls[\s\S]*?<\/form>/)?.[0] ?? "";
+    assert.deepEqual(allButtons(composerControls).map((b) => b.match(/aria-label="([^"]*)"/)[1]), ["Handler: execute"]);
 
     const describedBy = button.match(/aria-describedby="([^"]+)"/)?.[1];
     assert.ok(describedBy, "the button is described by the hint");
@@ -318,7 +233,7 @@ describe("composer handler button", () => {
     assert.match(panel, /onclick=\{\(\) => selectHandler\(item\.handler\)\}/, "every listed handler, form ones too, is pickable");
   });
 
-  it("opens the handler list like its siblings: focus moves in, arrows move, Escape hands back", () => {
+  it("opens the handler list: focus moves in, arrows move, Escape hands back", () => {
     assert.match(panel, /onclick=\{togglePicker\}/);
     assert.match(panel, /id="handler-menu"\s+role="listbox"\s+tabindex="-1"/);
     assert.match(panel, /\{@attach pickerButtonOpen && focusOnOpen\}/);

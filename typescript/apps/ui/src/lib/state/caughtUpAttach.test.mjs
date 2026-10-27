@@ -418,6 +418,30 @@ describe("a caught-up attach", () => {
     assert.equal(controller.connecting, false, "and must not still present as loading");
   });
 
+  // A form-only agent's first message goes from its queue card, which a creating session does
+  // not gate, so it can land before the first attach goes idle. That attach then carries the
+  // whole first turn and never goes idle in it, and the composer stayed locked until the turn
+  // ended: nothing could be sent mid-turn. An accepted message is proof the session exists.
+  it("a new session's first accepted message releases the composer mid-turn", async () => {
+    const { controller, attachCalls } = boot({
+      sessions: [],
+      streamFor: (_id, _call, signal) =>
+        (async function* () {
+          await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+        })(),
+      statusFor: () => "RUNNING"
+    });
+    controller.agents = [
+      { key: "qa", label: "QA", workflow_type: "X", task_queue: "q", description: "" }
+    ];
+
+    void controller.startNewSession("X");
+    await waitFor("the new session to attach", () => attachCalls.length === 1);
+    assert.equal(controller.creatingSession, true, "the open attach has not gone idle");
+    assert.equal(await controller.sendMessage({ type: "play", payload: { cell: 5 } }), true);
+    assert.equal(controller.creatingSession, false, "an accepted message ends creating");
+  });
+
   // Replay frames put the pipeline in catch-up, where commits happen every 24
   // frames or once the 1s ceiling expires — so a partial chunk is staged, not on
   // screen. Learning the workflow closed calls #stopStream, which aborts the read;

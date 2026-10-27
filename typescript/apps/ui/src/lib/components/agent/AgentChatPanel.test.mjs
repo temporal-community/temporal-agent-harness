@@ -683,9 +683,10 @@ describe("a turn's trace", () => {
   });
 });
 
-/* A turn number is not a feed. One turn holds several messages, and continue-as-new
-   reuses the numbers, so opening one message's trace used to open every other feed
-   on that number — and a nested group, keyed only by its step, opened in each of them. */
+/* Opening one feed used to open every other feed on that turn number, and a nested group,
+   keyed only by its step, opened in each of them. One turn holds several messages, but its
+   activity is drawn once, under the message that opened it: a message that joined the turn
+   mid-turn used to repeat the whole trace under itself. */
 describe("activity feed disclosures", () => {
   const HIDDEN = [
     "message_accepted",
@@ -750,7 +751,7 @@ describe("activity feed disclosures", () => {
   );
   const stateStep = traceSteps(visible.filter((row) => row.turnNumber === 1)).find((step) => step.name === "State changed");
   const feedA = feedId("msg-1a");
-  const feedB = feedId("msg-1b");
+  const feedC = feedId("msg-2");
 
   function rendered(seed) {
     seedDisclosure(seed);
@@ -774,17 +775,22 @@ describe("activity feed disclosures", () => {
   const buttonFor = (feed, name) =>
     (feed.match(/<button\b[\s\S]*?<\/button>/g) ?? []).find((button) => button.includes(name));
 
-  it("opens one feed and leaves the other turn, the other message, and nested groups shut", () => {
+  it("draws a turn's activity once, under the message that opened it", () => {
+    const body = rendered(null);
+    const feeds = feedsOf(body);
+    assert.ok(feeds.get("Plan msg-1a") && feeds.get("Plan msg-2"), [...feeds.keys()].join(", "));
+    assert.equal(feeds.get("Plan msg-1b"), "", "the second message on turn 1 repeats nothing");
+    assert.equal(body.match(/class="activity-feed/g)?.length, 2, "one feed per turn");
+  });
+
+  it("opens one feed and leaves the other turn and nested groups shut", () => {
     const feeds = feedsOf(rendered({ feeds: { [feedA]: true }, groups: [], thoughts: [] }));
     const a = feeds.get("Plan msg-1a");
-    const b = feeds.get("Plan msg-1b");
     const c = feeds.get("Plan msg-2");
-    assert.ok(a && b && c, [...feeds.keys()].join(", "));
+    assert.ok(a && c, [...feeds.keys()].join(", "));
     assert.ok(a.startsWith(" expanded"), "the feed that was opened");
-    assert.ok(!b.startsWith(" expanded"), "the other message on the same turn stays shut");
     assert.ok(!c.startsWith(" expanded"), "the other turn stays shut");
     assert.match(a, /class="activity-trace/);
-    assert.doesNotMatch(b, /class="activity-trace/);
     assert.doesNotMatch(c, /class="activity-trace/);
     for (const name of ["run_travel_code", "State changed", "open_trip"]) {
       assert.match(buttonFor(a, name), /aria-expanded="false"/, name);
@@ -799,22 +805,20 @@ describe("activity feed disclosures", () => {
     assert.ok(stateStep, "the turn has a state-change group");
     const feeds = feedsOf(
       rendered({
-        feeds: { [feedA]: true, [feedB]: true },
+        feeds: { [feedA]: true, [feedC]: true },
         groups: [groupKey(feedA, stateStep.id)],
         thoughts: []
       })
     );
     const a = feeds.get("Plan msg-1a");
-    const b = feeds.get("Plan msg-1b");
     const c = feeds.get("Plan msg-2");
     assert.match(buttonFor(a, "State changed"), /aria-expanded="true"/);
     assert.match(buttonFor(a, "run_travel_code"), /aria-expanded="false"/);
-    assert.match(buttonFor(b, "State changed"), /aria-expanded="false"/);
-    assert.match(buttonFor(b, "run_travel_code"), /aria-expanded="false"/);
+    assert.match(buttonFor(c, "State changed"), /aria-expanded="false"/);
+    assert.match(buttonFor(c, "run_travel_code"), /aria-expanded="false"/);
     assert.match(a, /aria-label="Full details"/);
-    assert.doesNotMatch(b, /Full details/);
-    assert.doesNotMatch(a + b, /activity-script-detail/);
-    assert.ok(!c.startsWith(" expanded"));
+    assert.doesNotMatch(c, /Full details/);
+    assert.doesNotMatch(a + c, /activity-script-detail/);
     const thought = a.match(/<details\b[^>]*>/)?.[0] ?? "";
     assert.doesNotMatch(thought, /\bopen\b/);
   });
@@ -822,6 +826,47 @@ describe("activity feed disclosures", () => {
 
 // Prose sent to a script handler came back as a type checker's traceback, one block per token,
 // and the chat drew it as a single wrapped paragraph that filled the pane.
+// Each policy or model change drew a user bubble and an agent reply, so a few changes buried
+// the conversation under "Updated tool approval policy to: …" exchanges.
+describe("a setting change", () => {
+  const setPolicy = {
+    name: "set_approval_policy", description: "", output: {}, mid_turn: "accept", model_callable: false,
+    parameters: { type: "object", properties: { new_policy: { type: "string", enum: ["allow_safe", "strict"] } }, required: ["new_policy"] }
+  };
+  const ask = {
+    name: "ask", description: "", output: {}, mid_turn: "enqueue", model_callable: true,
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }
+  };
+  const said = (turnNumber, key, handler, text) => ({ kind: "user", id: `user-${key}`, turnNumber, handler, text, timestamp: 100 });
+  const answered = (turnNumber, key, text, extra = {}) => ({
+    kind: "agent", id: `reply-${key}`, turnNumber, text, streaming: false, timestamp: 101, citations: [], data: false, ...extra
+  });
+  const items = [
+    said(1, "m1", "ask", "Find hotels"),
+    said(1, "m2", "set_approval_policy", "allow_safe"),
+    answered(1, "m2", "Updated tool approval policy to: new_policy='allow_safe'"),
+    said(2, "m3", "set_approval_policy", "strict"),
+    answered(2, "m3", "", { error: "Function refused" }),
+    answered(1, "m1", "Here are three hotels.")
+  ];
+
+  it("is one quiet line with its reply folded in, and the conversation keeps its bubbles", () => {
+    const body = chat({ items, agentInterface: [ask, setPolicy] });
+    const lines = [...body.matchAll(/<p class="setting-change[\s\S]*?<\/p>/g)].map((m) => m[0]);
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /set_approval_policy[\s\S]*allow_safe[\s\S]*Updated tool approval policy/);
+    assert.match(lines[1], /\bfailed\b[\s\S]*strict[\s\S]*Function refused/);
+    const bubbles = articles(body).map((a) => a.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+    assert.equal(bubbles.length, 2, "the question and its answer only");
+    assert.ok(bubbles[0].includes("Find hotels") && bubbles[1].includes("Here are three hotels."), bubbles.join(" | "));
+  });
+
+  it("stays a bubble for an agent that declares no such handler", () => {
+    const body = chat({ items: [said(1, "m2", "set_approval_policy", "allow_safe")], agentInterface: [ask] });
+    assert.doesNotMatch(body, /setting-change/);
+  });
+});
+
 describe("a script error reply", () => {
   const block = (token, column) =>
     `error[unresolved-reference]: Name \`${token}\` used when not defined\n --> main.py:1:${column}\n  |\n1 | ok run it now\n  | ^^`;
