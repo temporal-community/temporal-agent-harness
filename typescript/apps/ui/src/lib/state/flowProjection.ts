@@ -1388,6 +1388,9 @@ export function buildAgentGraph(
       replyIsData = false;
       replyState = "waiting";
       resetTurnTools();
+      /* The last turn's reply was just cleared above; its card would sit empty ahead of
+         this turn's tools until a reply frame puts it back after them. */
+      if (runtimeNodes.delete("output")) runtimeNodeOrder.splice(runtimeNodeOrder.indexOf("output"), 1);
       runtimeHeaderPrefix = undefined;
       if (queued > 0) queued -= 1;
     } else if (frame.event === "model_interaction_started") {
