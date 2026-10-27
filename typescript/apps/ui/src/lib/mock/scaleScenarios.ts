@@ -962,6 +962,41 @@ function actionsScenario(worst: boolean): MockScenario {
   return { ...base, instantFrames: base.frames.length, agentInterface: worst ? ten : [newGame, play] };
 }
 
+/* A turn still under way, held on two approvals and a callback, as the playpen analytics agent
+   waits on a grant: `ask` takes text; `grant_access` and `revoke_access` join the turn and share
+   one input model, a single `table` enum; `reset_session` needs an idle agent. */
+function actionsBusyScenario(): MockScenario {
+  const base = mixedScenario(2, 1);
+  base.sessions = [{ ...base.sessions[0]!, workflow_id: "agent-session-scale-actionsbusy", label: "Action cards mid-turn" }];
+  const accessRequest = {
+    type: "object",
+    properties: { table: { type: "string", title: "Table", enum: ["risk.loan_applications", "risk.credit_scores", "customer_pii.accounts"] } },
+    required: ["table"]
+  };
+  const access = (name: string, description: string): AgentInterfaceFunction => ({
+    name,
+    description,
+    parameters: accessRequest,
+    output: textOutput,
+    mid_turn: "accept",
+    model_callable: false
+  });
+  const reset: AgentInterfaceFunction = {
+    ...access("reset_session", "Start over."),
+    parameters: { type: "object", properties: { confirm: { type: "boolean", title: "Confirm" }, reason: { type: "string" } }, required: ["confirm"] },
+    mid_turn: "reject"
+  };
+  return {
+    ...base,
+    agentInterface: [
+      handlerInterface[0]!,
+      access("grant_access", "Let the agent read a restricted table for the rest of this session, without waiting for it to ask. Revoke it with revoke_access."),
+      access("revoke_access", "Take back the agent's access to a restricted table, however it was granted. Its next query on the table is refused."),
+      reset
+    ]
+  };
+}
+
 const textOutput = { type: "object", properties: { text: { type: "string", title: "Text" } } };
 /* Handlers whose arguments the composer draws as a form: the two auto_mode/Monty settings, and
    one that asks for every field kind the schema form has. */
@@ -1731,6 +1766,8 @@ export function scaleScenario(name: string): MockScenario | undefined {
     case "actions":
     case "actionsworst":
       return actionsScenario(name === "actionsworst");
+    case "actionsbusy":
+      return actionsBusyScenario();
     case "handlers":
       return handlersScenario();
     case "selects":
