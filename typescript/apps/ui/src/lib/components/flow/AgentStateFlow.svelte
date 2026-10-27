@@ -239,6 +239,9 @@
 </script>
 
 <div class="flow-wrap" class:settled bind:this={flowWrapElement}>
+  <!-- A plain wheel belongs to the rail, so a sideways scroll over the graph still
+       moves between panes. Pinch (ctrl+wheel), the corner buttons and dragging
+       still zoom and pan the canvas, as on the timeline. -->
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -248,6 +251,7 @@
     {fitViewOptions}
     {minZoom}
     {maxZoom}
+    preventScrolling={false}
     colorMode="dark"
     nodesDraggable={false}
     nodesConnectable={false}
