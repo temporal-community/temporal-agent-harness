@@ -648,6 +648,7 @@ vitest_test(
     name = "incrementalProjections_test",
     src = "incrementalProjections.test.mjs",
     deps = [
+        ":flowProjection",
         ":replayTimeline",
         ":replyRuns",
         ":stepTimeline",

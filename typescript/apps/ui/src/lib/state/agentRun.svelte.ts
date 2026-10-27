@@ -33,7 +33,7 @@ import {
   writeUrlSessionId
 } from "./agentRunStorage";
 import {
-  buildAgentTreeGraph,
+  agentTreeGraphBuilder,
   settledNearCursor,
   settledToolIdFromFrame,
   type AgentGraphSource
@@ -539,8 +539,9 @@ export class AgentRunController {
       ? this.#lingering
       : settledNearCursor(this.visibleReplayTimeline)
   );
+  #foldGraph = agentTreeGraphBuilder();
   graph = $derived(
-    buildAgentTreeGraph(this.graphAgents, {
+    this.#foldGraph(this.graphAgents, {
       focus: this.graphFocus,
       linger: this.graphLinger,
       reducedMotion: prefersReducedMotion.current

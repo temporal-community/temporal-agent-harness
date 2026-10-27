@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
 import { buildUsageTimeline, usageTimelineBuilder } from "../cost/pricing.ts";
+import { agentTreeGraphBuilder, buildAgentTreeGraph, settledNearCursor } from "./flowProjection.ts";
 import { jsonReplyScenarios } from "../mock/jsonReplyScenarios.ts";
 import { realisticQaScenario } from "../mock/scenarios.ts";
 import { buildReplayTimeline, replayTimelineBuilder } from "./replayTimeline.ts";
@@ -66,6 +67,82 @@ describe("incremental projections", () => {
       assert.deepEqual(workflow.rows(), Array.from({ length: workflow.rowCount }, (_, k) => workflow.rowAt(k)), `rows at ${input.length}`);
       assert.deepEqual(shownWorkflowRows(workflow), shownWorkflowRows(oneByOne), `shown rows at ${input.length}`);
     }
+  });
+
+  /* The tree's sources the way the controller groups them: the root's frames, then each
+     announced subagent's own. Each step's arrays are new, as the controller's are. */
+  const treeSources = (s, timeline, agents) => [
+    { workflowId: s.workflow_id, role: "parent", label: "Agent", frames: timeline.filter((e) => e.role === "parent").map((e) => e.frame), agentInterface: [] },
+    ...agents.map((agent) => ({
+      workflowId: agent.workflowId,
+      role: "subagent",
+      label: agent.label,
+      parentWorkflowId: s.workflow_id,
+      subagentId: agent.subagentId,
+      frames: timeline.filter((e) => e.workflowId === agent.workflowId).map((e) => e.frame),
+      agentInterface: []
+    }))
+  ];
+  const retried = [
+    entry("turn_started", 0, 1),
+    ...[1, 2, 3].flatMap((k) => [
+      entry("tool_start", k, 1, { tool_id: `r${k}`, tool_name: "fetch", tool_input: {} }),
+      entry("tool_error", k + 0.5, 1, { tool_id: `r${k}`, tool_name: "fetch", message: "timeout" })
+    ]),
+    entry("turn_end", 4, 1)
+  ].map((e) => e.frame);
+
+  for (const focus of [false, true]) {
+    it(`the state flow graph folded per agent matches a full rebuild at every step${focus ? ", in focus view" : ""}`, () => {
+      const timeline = replayTimelineBuilder();
+      const fold = agentTreeGraphBuilder();
+      const forward = steps.map(([s, frames, agents]) => {
+        const t = timeline(s, frames, agents, "Agent");
+        return { sources: treeSources(s, t, agents), linger: focus ? settledNearCursor(t) : undefined };
+      });
+      const retries = retried.map((_, n) => ({
+        sources: [{ workflowId: "wf-r", role: "parent", label: "Agent", frames: retried.slice(0, n + 1), agentInterface: [] }]
+      }));
+      /* Then back over the same steps: a scrub, which has to start over. */
+      const inputs = [...forward, ...forward.slice(0, 30).reverse(), ...retries, retries.at(-1)];
+      let previous = null;
+      for (const { sources, linger } of inputs) {
+        const folded = fold(sources, { focus, linger });
+        const where = `${sources[0].workflowId}:${sources.reduce((n, a) => n + a.frames.length, 0)}`;
+        assert.deepEqual(folded, buildAgentTreeGraph(sources, { focus, linger }), `graph differs at ${where}`);
+        if (previous) assert.deepEqual(previous.value, previous.copy, `changed an earlier graph before ${where}`);
+        previous = { value: folded, copy: structuredClone(folded) };
+      }
+    });
+  }
+
+  /* Counted rather than timed, so a loaded machine cannot fail it: a fold that went back over the
+     run reads more of it the longer the run is. */
+  it("a frame appended to the state flow graph is the only one read, however long the run", () => {
+    let reads = 0;
+    const watched = (frame) =>
+      new Proxy(frame, { get: (target, key) => ((key === "data" || key === "event") && (reads += 1), target[key]) });
+    const run = (turns) =>
+      Array.from({ length: turns }, (_, t) => [
+        entry("turn_started", t * 10, t + 1),
+        ...Array.from({ length: 5 }, (_, k) => [
+          entry("tool_start", t * 10 + k, t + 1, { tool_id: `t${t}-${k}`, tool_name: "search", tool_input: {} }),
+          entry("tool_end", t * 10 + k + 0.5, t + 1, { tool_id: `t${t}-${k}`, tool_name: "search", tool_output: "{}" })
+        ]).flat(),
+        entry("turn_end", t * 10 + 9, t + 1)
+      ]).flat().map((e) => watched(e.frame));
+    const readsForLastFrame = (frames) => {
+      const fold = agentTreeGraphBuilder();
+      const sources = (n) => [{ workflowId: "wf", role: "parent", label: "Agent", frames: frames.slice(0, n), agentInterface: [] }];
+      fold(sources(frames.length - 1), { focus: true });
+      reads = 0;
+      fold(sources(frames.length), { focus: true });
+      return reads;
+    };
+    const short = readsForLastFrame(run(10));
+    const long = readsForLastFrame(run(100));
+    assert.ok(short > 0, "the appended frame was never read");
+    assert.equal(long, short, `appending one frame read ${short} times at 120 frames but ${long} at 1,200`);
   });
 
   it("the replay timeline keeps folding when the same subagents arrive in another order", () => {

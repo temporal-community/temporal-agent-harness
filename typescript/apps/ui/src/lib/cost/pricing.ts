@@ -200,42 +200,92 @@ function unreportedModel(frame: AgentSseFrame): string | null {
 }
 
 export function summarizeCost(frames: AgentSseFrame[]): CostSummary {
-  const byModel = new Map<string, { tokens: UsageTotals; unreportedCalls: number }>();
-  const aggregate = emptyTotals();
-  let unreportedCalls = 0;
-  let cacheReadReportedCalls = 0;
-  let cacheReadUnreportedCalls = 0;
-  const entry = (model: string) => {
-    let found = byModel.get(model);
-    if (!found) byModel.set(model, (found = { tokens: emptyTotals(), unreportedCalls: 0 }));
-    return found;
+  const ledger = costLedger();
+  for (const frame of frames) ledger.add(frame);
+  return ledger.summary();
+}
+
+/** summarizeCost a frame at a time, for a caller that keeps the frames it has already read. */
+export function costLedger(): { add(frame: AgentSseFrame): void; summary(): CostSummary } {
+  const tally = emptyTally();
+  return {
+    add(frame) {
+      const unreported = unreportedModel(frame);
+      if (unreported != null) {
+        tally.unreportedCalls += 1;
+        tally.cacheReadUnreportedCalls += 1;
+        tallyEntry(tally, unreported).unreportedCalls += 1;
+        return;
+      }
+      const metered = meteredUsage(frame);
+      if (!metered) return;
+      if (metered.usage.cached_tokens != null) tally.cacheReadReportedCalls += 1;
+      addUsage(tallyEntry(tally, metered.model).tokens, metered.usage);
+      addUsage(tally.tokens, metered.usage);
+    },
+    summary: () => summaryOf(tally)
   };
+}
 
-  for (const frame of frames) {
-    const unreported = unreportedModel(frame);
-    if (unreported != null) {
-      unreportedCalls += 1;
-      cacheReadUnreportedCalls += 1;
-      entry(unreported).unreportedCalls += 1;
-      continue;
+/** One summary of several agents' frames, each summarized on its own; models keep first-seen order. */
+export function mergeCostSummaries(summaries: readonly CostSummary[]): CostSummary {
+  const tally = emptyTally();
+  for (const summary of summaries) {
+    addTotals(tally.tokens, summary.tokens);
+    tally.unreportedCalls += summary.unreportedCalls;
+    tally.cacheReadReportedCalls += summary.cacheReadReportedCalls;
+    tally.cacheReadUnreportedCalls += summary.cacheReadUnreportedCalls;
+    for (const item of summary.modelBreakdown) {
+      const found = tallyEntry(tally, item.model);
+      addTotals(found.tokens, item.tokens);
+      found.unreportedCalls += item.unreportedCalls;
     }
-    const metered = meteredUsage(frame);
-    if (!metered) continue;
-    if (metered.usage.cached_tokens != null) cacheReadReportedCalls += 1;
-    addUsage(entry(metered.model).tokens, metered.usage);
-    addUsage(aggregate, metered.usage);
   }
+  return summaryOf(tally);
+}
 
-  const modelBreakdown = [...byModel.entries()].map(([model, { tokens, unreportedCalls }]) => ({
+interface CostTally {
+  byModel: Map<string, { tokens: UsageTotals; unreportedCalls: number }>;
+  tokens: UsageTotals;
+  unreportedCalls: number;
+  cacheReadReportedCalls: number;
+  cacheReadUnreportedCalls: number;
+}
+
+const emptyTally = (): CostTally => ({
+  byModel: new Map(),
+  tokens: emptyTotals(),
+  unreportedCalls: 0,
+  cacheReadReportedCalls: 0,
+  cacheReadUnreportedCalls: 0
+});
+
+function tallyEntry(tally: CostTally, model: string) {
+  let found = tally.byModel.get(model);
+  if (!found) tally.byModel.set(model, (found = { tokens: emptyTotals(), unreportedCalls: 0 }));
+  return found;
+}
+
+function addTotals(totals: UsageTotals, more: UsageTotals): void {
+  totals.input += more.input;
+  totals.output += more.output;
+  totals.thought += more.thought;
+  totals.cached += more.cached;
+  totals.toolUse += more.toolUse;
+  totals.total += more.total;
+}
+
+function summaryOf(tally: CostTally): CostSummary {
+  const modelBreakdown = [...tally.byModel.entries()].map(([model, { tokens, unreportedCalls }]) => ({
     model,
-    tokens,
+    tokens: copyTotals(tokens),
     estimatedCostUsd: unreportedCalls > 0 ? null : estimate(model, tokens),
     unreportedCalls
   }));
 
   const knownCost = modelBreakdown.every((item) => item.estimatedCostUsd != null);
   return {
-    tokens: aggregate,
+    tokens: copyTotals(tally.tokens),
     estimatedCostUsd: knownCost
       ? modelBreakdown.reduce(
           (sum, item) => sum + (item.estimatedCostUsd ?? 0),
@@ -243,9 +293,9 @@ export function summarizeCost(frames: AgentSseFrame[]): CostSummary {
         )
       : null,
     modelBreakdown,
-    unreportedCalls,
-    cacheReadReportedCalls,
-    cacheReadUnreportedCalls
+    unreportedCalls: tally.unreportedCalls,
+    cacheReadReportedCalls: tally.cacheReadReportedCalls,
+    cacheReadUnreportedCalls: tally.cacheReadUnreportedCalls
   };
 }
 
