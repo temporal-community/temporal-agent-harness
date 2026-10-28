@@ -36,6 +36,8 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
 DEFAULT_MODEL = "gemini-3.8-flash"
+# Less thinking per call, so each round of the tool loop answers sooner.
+THINKING_LEVEL = "low"
 
 SYSTEM_INSTRUCTION = """\
 You are a data analyst at a bank. You answer the user's business questions from the bank's \
@@ -127,6 +129,7 @@ class GeminiChat:
                 input=self._conversation.steps,
                 system_instruction=SYSTEM_INSTRUCTION,
                 tools=declarations,
+                generation_config={"thinking_level": THINKING_LEVEL},
                 stream=True,
             )
             reply = await self._conversation.read_reply(stream)

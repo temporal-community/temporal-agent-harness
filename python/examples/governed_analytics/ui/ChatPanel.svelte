@@ -68,6 +68,14 @@
 
   let draft = $state("");
   let log: HTMLElement | undefined = $state();
+  // Whether the log follows the conversation as it grows: while it's scrolled to the bottom.
+  // Scrolling up stops it, so a tool call stays put while you read it; scrolling back down,
+  // the jump button, or sending a message starts it again.
+  let following = $state(true);
+
+  function onscroll(): void {
+    if (log) following = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  }
 
   const STARTERS = [
     { title: "Deposit drops", text: DEMO_STEPS[0]!.text },
@@ -105,6 +113,7 @@
     if (!trimmed || busy) return;
     onsend(trimmed);
     draft = "";
+    following = true;
   }
 
   function keydown(e: KeyboardEvent): void {
@@ -119,17 +128,19 @@
     return `${((m.endedAt ?? now) - m.startedAt).toFixed(1)}s`;
   }
 
-  // Follow the conversation as it grows.
+  // Follow the conversation as it grows, unless the log was scrolled away from the bottom.
+  // Instant, not smooth: a smooth scroll's in-between positions would read as scrolling away.
   $effect(() => {
     void all.length;
     void all.at(-1)?.parts.length;
     void open.length;
-    log?.scrollTo({ top: log.scrollHeight, behavior: "smooth" });
+    if (following) log?.scrollTo({ top: log.scrollHeight });
   });
 </script>
 
 <section class="chat">
-  <div class="log" bind:this={log}>
+  <div class="log-frame">
+  <div class="log" bind:this={log} {onscroll}>
     {#if !asked}
       <div class="welcome">
         <div class="badge"><span class="shield"></span> Every query is checked by the bank's tool policy</div>
@@ -205,6 +216,10 @@
       {/if}
     {/each}
   </div>
+  {#if !following}
+    <button class="latest" onclick={() => (following = true)}>↓ Jump to latest</button>
+  {/if}
+  </div>
 
   <div class="composer">
     {#each open as r (r.part.toolId)}
@@ -243,6 +258,12 @@
 
 <style>
   .chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .log-frame { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  .latest {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px;
+    padding: 5px 12px; border-radius: 999px; font-size: 12px; cursor: pointer; z-index: 2;
+    color: var(--ink); background: var(--panel); border: 1px solid var(--line-2); box-shadow: var(--shadow);
+  }
   .log { flex: 1; overflow: auto; padding: 18px 6px 10px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
   .log > * { width: 100%; max-width: 920px; margin-left: auto; margin-right: auto; }
 
