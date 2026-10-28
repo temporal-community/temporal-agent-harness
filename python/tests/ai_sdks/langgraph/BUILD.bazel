@@ -2,6 +2,30 @@ load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("//bazel:pytest.bzl", "harness_pytest_test")
 
 harness_pytest_test(
+    name = "test_langgraph_harness",
+    srcs = ["test_langgraph_harness.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:langgraph_harness",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//langchain_core",
+        "@pypi//langgraph",
+        "@pypi//langgraph_checkpoint",
+        "@pypi//langgraph_prebuilt",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
     name = "test_tool_node",
     srcs = ["test_tool_node.py"],
     imports = ["../../.."],
