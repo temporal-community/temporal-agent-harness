@@ -1,0 +1,66 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks:langgraph_harness",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//langchain_core",
+        "@pypi//langchain_openai",
+        "@pypi//langgraph",
+        "@pypi//langgraph_checkpoint",
+        "@pypi//langgraph_prebuilt",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "LangGraphHelloAgent",
+    agent = "examples.langgraph_hello.workflow:LangGraphHelloAgentWorkflow",
+    description = """
+A hello-world LangGraph agent. Chat in plain text: it reports a city's weather (an activity tool),
+remembers notes you give it (a gated inline tool that writes its state), and asks you back when a
+request is ambiguous (a callback tool). Shows the harness streaming path for the LangGraph
+integration end to end — a reasoning model node run as an activity by the vendored
+temporalio-langgraph plugin → stream_to_harness → live turn stream (thought_summary / reply_delta /
+tool_requested / tool_start / tool_end / model_interaction_*), with every ToolNode call gated by
+the harness.""",
+    key = "langgraph-hello",
+    label = "LangGraph Hello",
+    task_queue = "langgraph-hello",
+    deps = [":workflow"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/langgraph_hello:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "LangGraphHelloAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":LangGraphHelloAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)
