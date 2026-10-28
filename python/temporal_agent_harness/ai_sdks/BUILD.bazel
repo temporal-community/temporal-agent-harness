@@ -61,6 +61,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
+        "//python/temporal_agent_harness/ai_sdks/langgraph:_plugin",
         "//python/temporal_agent_harness/ai_sdks/langgraph:_task_cache",
         "//python/temporal_agent_harness/harness:__init__",
         "//python/temporal_agent_harness/harness:stream_context",

@@ -153,6 +153,7 @@ try:
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise RuntimeError(_INSTALL_MESSAGE) from exc
 
+from temporal_agent_harness.ai_sdks.langgraph import _plugin
 from temporal_agent_harness.ai_sdks.langgraph._task_cache import set_task_cache
 from temporal_agent_harness.harness import AgentWorkflowRunner
 from temporal_agent_harness.harness.agent_protocol import (
@@ -541,6 +542,9 @@ def _stream_to_harness(
                 await heartbeat
 
     return wrapper
+
+
+_plugin.stream_wrapper = _stream_to_harness  # the plugin applies it to stream_to_harness nodes
 
 
 def _non_retryable(exc: BaseException) -> bool:

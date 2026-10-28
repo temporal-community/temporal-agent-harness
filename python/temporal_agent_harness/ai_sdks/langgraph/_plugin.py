@@ -46,6 +46,10 @@ _ACTIVITY_OPTION_KEYS: frozenset[str] = frozenset(
 _LANGGRAPH_OPTION_KEYS: frozenset[str] = _ACTIVITY_OPTION_KEYS | frozenset(
     {"summary_fn", "stream_to_harness", "stream_batch_interval"}
 )
+# Vendored: the wrapper a stream_to_harness node gets, taking the function and
+# the batch interval. The harness glue (ai_sdks/langgraph_harness.py) sets it on
+# import; it imports this package, so this package cannot import it.
+stream_wrapper: Callable[..., Callable] | None = None
 
 
 def _constant_summary_fn(
@@ -357,16 +361,19 @@ class LangGraphPlugin(SimplePlugin):
         if static_summary is not None:
             summary_fn = _constant_summary_fn(static_summary)
 
-        # Vendored: the harness glue imports this package, so import it lazily.
+        # Vendored: wrap a streamed node with the harness glue's wrapper.
         batch_interval = opts.pop("stream_batch_interval", None)
         if opts.pop("stream_to_harness", False):
             if execute_in != "activity":
                 raise ValueError(
                     f"{activity_name}: stream_to_harness needs execute_in='activity'."
                 )
-            from temporal_agent_harness.ai_sdks.langgraph_harness import _stream_to_harness
-
-            func = _stream_to_harness(func, batch_interval=batch_interval)
+            if stream_wrapper is None:
+                raise RuntimeError(
+                    f"{activity_name}: import temporal_agent_harness.ai_sdks.langgraph_harness "
+                    "before building the plugin; it provides stream_to_harness."
+                )
+            func = stream_wrapper(func, batch_interval=batch_interval)
         if execute_in == "activity":
             wrapped = wrap_activity(
                 func,
