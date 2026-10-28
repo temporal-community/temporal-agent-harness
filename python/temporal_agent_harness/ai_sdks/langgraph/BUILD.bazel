@@ -1,0 +1,82 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [":_plugin"],
+)
+
+py_library(
+    name = "_activity",
+    srcs = ["_activity.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_langgraph_config",
+        ":_task_cache",
+        "@pypi//langgraph",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_interceptor",
+    srcs = ["_interceptor.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_activity",
+        "@pypi//langgraph",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_langgraph_config",
+    srcs = ["_langgraph_config.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//langchain_core",
+        "@pypi//langgraph",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "_plugin",
+    srcs = ["_plugin.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_activity",
+        ":_interceptor",
+        ":_langgraph_config",
+        ":_task_cache",
+        ":_workflow",
+        "@pypi//langgraph",
+        "@pypi//langgraph_prebuilt",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_task_cache",
+    srcs = ["_task_cache.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+)
+
+py_library(
+    name = "_workflow",
+    srcs = ["_workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//langchain_core",
+        "@pypi//langgraph",
+        "@pypi//temporalio",
+    ],
+)

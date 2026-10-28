@@ -38,6 +38,7 @@ py_library(
         "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
         "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
         "//python/temporal_agent_harness/ai_sdks/jev:__init__",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
         "//python/temporal_agent_harness/ai_sdks/openai_agents",
         "//python/temporal_agent_harness/harness:__init__",
         "//python/temporal_agent_harness/utils:__init__",
