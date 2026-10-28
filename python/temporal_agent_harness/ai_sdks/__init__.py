@@ -8,8 +8,8 @@ observability. One subpackage per SDK; more are expected over time.
   * :mod:`temporal_agent_harness.ai_sdks.openai_agents` — the OpenAI Agents SDK.
   * :mod:`temporal_agent_harness.ai_sdks.pydantic_ai_harness` — Pydantic AI (glue for the
     unmodified upstream ``pydantic_ai.durable_exec.temporal`` plugin).
-  * :mod:`temporal_agent_harness.ai_sdks.langgraph_harness` — LangGraph (glue over the vendored
-    ``temporalio-langgraph`` plugin in :mod:`temporal_agent_harness.ai_sdks.langgraph`).
+  * :mod:`temporal_agent_harness.ai_sdks.langgraph` — LangGraph (the vendored
+    ``temporalio-langgraph`` plugin with the harness's integration beside it).
   * :mod:`temporal_agent_harness.ai_sdks.typesafe_harness` — typed decisions through
     the canonical ``temporalio-typesafe`` plugin.
   * :mod:`temporal_agent_harness.ai_sdks.jev` — a Jev-backed auto mode evaluator for tool

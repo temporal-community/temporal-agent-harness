@@ -5,7 +5,10 @@ py_library(
     srcs = ["__init__.py"],
     imports = ["../../.."],
     visibility = ["//python:__subpackages__"],
-    deps = [":_plugin"],
+    deps = [
+        ":_harness",
+        ":_plugin",
+    ],
 )
 
 py_library(
@@ -52,6 +55,7 @@ py_library(
     visibility = ["//python:__subpackages__"],
     deps = [
         ":_activity",
+        ":_harness",
         ":_interceptor",
         ":_langgraph_config",
         ":_task_cache",
@@ -77,6 +81,25 @@ py_library(
     deps = [
         "@pypi//langchain_core",
         "@pypi//langgraph",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_harness",
+    srcs = ["_harness.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_task_cache",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//langchain_core",
+        "@pypi//langgraph",
+        "@pypi//langgraph_prebuilt",
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
         "@pypi//temporalio",
     ],
 )

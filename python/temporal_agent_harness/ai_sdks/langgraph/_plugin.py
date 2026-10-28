@@ -10,6 +10,7 @@ import warnings
 from dataclasses import replace
 from datetime import timedelta
 from functools import partial, update_wrapper
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from langgraph._internal._runnable import RunnableCallable
@@ -19,6 +20,12 @@ from langgraph.pregel import Pregel
 
 from temporalio import activity, workflow
 from temporal_agent_harness.ai_sdks.langgraph._activity import wrap_activity, wrap_execute_activity
+from temporal_agent_harness.ai_sdks.langgraph._harness import (
+    HarnessContext,
+    _stream_to_harness,
+    _turn_config,
+    harness_tool_call,
+)
 from temporal_agent_harness.ai_sdks.langgraph._interceptor import (
     LangGraphInterceptor,
     _workflow_entrypoints,
@@ -46,10 +53,6 @@ _ACTIVITY_OPTION_KEYS: frozenset[str] = frozenset(
 _LANGGRAPH_OPTION_KEYS: frozenset[str] = _ACTIVITY_OPTION_KEYS | frozenset(
     {"summary_fn", "stream_to_harness", "stream_batch_interval"}
 )
-# Vendored: the wrapper a stream_to_harness node gets, taking the function and
-# the batch interval. The harness glue (ai_sdks/langgraph_harness.py) sets it on
-# import; it imports this package, so this package cannot import it.
-stream_wrapper: Callable[..., Callable] | None = None
 
 
 def _constant_summary_fn(
@@ -214,6 +217,15 @@ class LangGraphPlugin(SimplePlugin):
                     runnable = node.runnable
                     if not isinstance(runnable, RunnableCallable):
                         raise ValueError(f"Node {node_name} must be a RunnableCallable")
+                    # Vendored: in a harness graph (a HarnessContext context_schema), a
+                    # ToolNode without its own awrap_tool_call goes through the harness gate.
+                    if (
+                        isinstance(runnable, ToolNode)
+                        and runnable._awrap_tool_call is None
+                        and isinstance(graph.context_schema, type)
+                        and issubclass(graph.context_schema, HarnessContext)
+                    ):
+                        runnable._awrap_tool_call = harness_tool_call
                     # Vendored: only ToolNode's async path honours awrap_tool_call. Keep
                     # the sync path otherwise: sync tools need run_in_executor,
                     # which the workflow event loop doesn't provide.
@@ -368,12 +380,7 @@ class LangGraphPlugin(SimplePlugin):
                 raise ValueError(
                     f"{activity_name}: stream_to_harness needs execute_in='activity'."
                 )
-            if stream_wrapper is None:
-                raise RuntimeError(
-                    f"{activity_name}: import temporal_agent_harness.ai_sdks.langgraph_harness "
-                    "before building the plugin; it provides stream_to_harness."
-                )
-            func = stream_wrapper(func, batch_interval=batch_interval)
+            func = _stream_to_harness(func, batch_interval=batch_interval)
         if execute_in == "activity":
             wrapped = wrap_activity(
                 func,
@@ -400,12 +407,23 @@ class LangGraphPlugin(SimplePlugin):
 
 
 def graph(
-    name: str, cache: dict[str, Any] | None = None
-) -> StateGraph[Any, Any, Any, Any]:
+    name: str,
+    runner: Any = None,
+    cache: dict[str, Any] | None = None,
+    *,
+    injections: Mapping[str, object] | None = None,
+    **fields: object,
+) -> StateGraph[Any, Any, Any, Any] | _TurnGraph:
     """Retrieve a registered graph by name.
 
     Args:
         name: Graph name as registered with LangGraphPlugin.
+        runner: Vendored: the harness ``AgentWorkflowRunner``. Given, the graph
+            is bound to the current harness turn: call this in the handler,
+            and ``compile`` the result as the builder. The compiled graph runs
+            on the workflow's checkpoint thread with a ``HarnessContext`` (the
+            graph's ``context_schema``; ``injections`` and ``fields`` fill it),
+            so ``ainvoke`` takes just the input.
         cache: Optional task result cache from a previous cache() call.
             Restores cached results so previously-completed nodes are
             not re-executed after continue-as-new.
@@ -418,16 +436,39 @@ def graph(
         )
     if name not in graphs:
         raise KeyError(f"Graph {name!r} not found. Available graphs: {list(graphs)}")
-    return graphs[name]
+    builder = graphs[name]
+    if runner is None:
+        return builder
+    return _TurnGraph(builder, _turn_config(builder.context_schema, runner, injections, fields))
+
+
+class _TurnGraph:
+    """Vendored: a registered graph whose ``compile`` binds the harness turn."""
+
+    def __init__(self, builder: StateGraph[Any, Any, Any, Any], config: dict[str, Any]) -> None:
+        self._builder = builder
+        self._config = config
+
+    def compile(self, **kwargs: Any) -> Pregel[Any, Any, Any, Any]:
+        return self._builder.compile(**kwargs).with_config(self._config)
 
 
 def entrypoint(
-    name: str, cache: dict[str, Any] | None = None
+    name: str,
+    runner: Any = None,
+    cache: dict[str, Any] | None = None,
+    *,
+    injections: Mapping[str, object] | None = None,
+    **fields: object,
 ) -> Pregel[Any, Any, Any, Any]:
     """Retrieve a registered entrypoint by name.
 
     Args:
         name: Entrypoint name as registered with Plugin.
+        runner: Vendored: the harness ``AgentWorkflowRunner``; binds the
+            entrypoint to the current harness turn as :func:`graph` does. An
+            entrypoint is built once at import, so give each workflow its own
+            checkpointer: ``.copy({"checkpointer": self._checkpointer})``.
         cache: Optional task result cache from a previous cache() call.
             Restores cached results so previously-completed tasks are
             not re-executed after continue-as-new.
@@ -442,7 +483,10 @@ def entrypoint(
         raise KeyError(
             f"Entrypoint {name!r} not found. Available entrypoints: {list(entrypoints)}"
         )
-    return entrypoints[name]
+    pregel = entrypoints[name]
+    if runner is None:
+        return pregel
+    return pregel.with_config(_turn_config(pregel.context_schema, runner, injections, fields))
 
 
 def cache() -> dict[str, Any] | None:

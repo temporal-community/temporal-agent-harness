@@ -34,7 +34,6 @@ py_library(
     deps = [
         ":__init__",
         "//python/temporal_agent_harness/ai_sdks:__init__",
-        "//python/temporal_agent_harness/ai_sdks:langgraph_harness",
         "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
         "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
         "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",

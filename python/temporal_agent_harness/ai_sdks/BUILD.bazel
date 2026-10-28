@@ -54,23 +54,3 @@ py_library(
         "@pypi//typesafe_sdk",
     ],
 )
-
-py_library(
-    name = "langgraph_harness",
-    srcs = ["langgraph_harness.py"],
-    imports = ["../.."],
-    visibility = ["//python:__subpackages__"],
-    deps = [
-        "//python/temporal_agent_harness/ai_sdks/langgraph:_plugin",
-        "//python/temporal_agent_harness/ai_sdks/langgraph:_task_cache",
-        "//python/temporal_agent_harness/harness:__init__",
-        "//python/temporal_agent_harness/harness:stream_context",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
-        "@pypi//langchain_core",
-        "@pypi//langgraph",
-        "@pypi//langgraph_prebuilt",
-        "@pypi//pydantic",
-        "@pypi//pydantic_core",
-        "@pypi//temporalio",
-    ],
-)

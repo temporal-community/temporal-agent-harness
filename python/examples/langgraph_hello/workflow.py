@@ -13,7 +13,7 @@ harness owns approval and the ``tool_start`` / ``tool_end`` / ``tool_error`` eve
 
 ``temporalio-langgraph`` runs the graph durably: each node with ``execute_in="activity"`` is an
 activity, the rest run in the workflow, and the graph is checkpointed in workflow memory with the
-workflow id as its thread. ``run_turn`` maps one harness message onto one graph run.
+workflow id as its thread. ``graph(name, runner, ...)`` binds each harness turn to that thread.
 
 Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is registered
 in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
@@ -29,18 +29,14 @@ from temporalio.common import RetryPolicy
 from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
-    from langchain_core.messages import SystemMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import END, START, MessagesState, StateGraph
     from langgraph.prebuilt import ToolNode, tools_condition
+    from langgraph.types import Command
 
-    from temporal_agent_harness.ai_sdks.langgraph import graph
-    from temporal_agent_harness.ai_sdks.langgraph_harness import (
-        HarnessContext,
-        harness_tool_call,
-        run_turn,
-    )
+    from temporal_agent_harness.ai_sdks.langgraph import HarnessContext, graph
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
@@ -133,7 +129,7 @@ def build_graph() -> StateGraph[Any, Any, Any, Any]:
     )
     g.add_node(
         "tools",
-        ToolNode(TOOLS, awrap_tool_call=harness_tool_call),
+        ToolNode(TOOLS),  # the plugin routes its calls through harness_tool_call
         metadata={"execute_in": "workflow"},
     )
     g.add_edge(START, "agent")
@@ -156,13 +152,24 @@ class LangGraphHelloAgentWorkflow:
             # get_weather and ask_user are inherently safe; remember goes to the user first.
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-        self._graph = (
-            graph(GRAPH).compile(checkpointer=InMemorySaver()).with_config(recursion_limit=25)
-        )
+        self._checkpointer = InMemorySaver()
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the assistant: ask about the weather in a city, ask it to remember something,
         or ask something ambiguous and it will ask you back."""
-        context = HarnessContext(runner=self._runner, injections={"notes": self.notes})
-        return TextReply(text=await run_turn(self._graph, message.text, context))
+        g = (
+            graph(GRAPH, self._runner, injections={"notes": self.notes})
+            .compile(checkpointer=self._checkpointer)
+            .with_config(recursion_limit=25)
+        )
+        # A pending interrupt() (ask_user's question) takes this message as its answer.
+        pending = (await g.aget_state(g.config or {})).interrupts
+        result = await g.ainvoke(
+            Command(resume={i.id: message.text for i in pending})
+            if pending
+            else {"messages": [HumanMessage(message.text)]}
+        )
+        if interrupts := result.get("__interrupt__"):
+            return TextReply(text="\n".join(str(i.value) for i in interrupts))
+        return TextReply(text=result["messages"][-1].text)

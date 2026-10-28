@@ -6,7 +6,8 @@
 > Imports here and in this README are rewritten mechanically, `sed 's/temporalio\.langgraph/temporal_agent_harness.ai_sdks.langgraph/g'`,
 > and `BUILD.bazel` is gazelle output, so a diff against upstream can be reproduced rather than eyeballed;
 > nothing else is changed, and upstream's `py.typed` is not copied. Drop this copy for the PyPI package once a release
-> carries the ToolNode fix. The harness glue lives beside it in `langgraph_harness.py`.
+> carries the ToolNode fix. `_harness.py` is the harness's own module, not upstream's: `graph()` and `entrypoint()`
+> take the harness runner (a `# Vendored:` hunk) and the package exports its names beside the plugin's.
 
 # LangGraph Plugin for Temporal Python SDK
 
@@ -73,7 +74,7 @@ class MyWorkflow:
 
 ## Execution Location
 
-Every node (Graph API) and task (Functional API) must be labeled with `execute_in`, set to either `"activity"` or `"workflow"`. This is required per node/task; it cannot be set in `default_activity_options`. An activity node or task may also set `"stream_to_harness": True` to stream its chat-model calls onto the harness turn, and `"stream_batch_interval"` for how often they flush (see `ai_sdks/langgraph_harness.py`).
+Every node (Graph API) and task (Functional API) must be labeled with `execute_in`, set to either `"activity"` or `"workflow"`. This is required per node/task; it cannot be set in `default_activity_options`. An activity node or task may also set `"stream_to_harness": True` to stream its chat-model calls onto the harness turn, and `"stream_batch_interval"` for how often they flush (see `_harness.py`).
 
 ```python
 # Graph API

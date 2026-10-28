@@ -10,6 +10,12 @@ execution, automatic retries, and timeouts. It supports both the LangGraph Graph
 API (``StateGraph``) and Functional API (``@entrypoint`` / ``@task``).
 """
 
+from temporal_agent_harness.ai_sdks.langgraph._harness import (
+    HarnessContext,
+    LangGraphStreamHandler,
+    adopt_prebuilt,
+    harness_tool_call,
+)
 from temporal_agent_harness.ai_sdks.langgraph._plugin import (
     LangGraphPlugin,
     cache,
@@ -18,8 +24,12 @@ from temporal_agent_harness.ai_sdks.langgraph._plugin import (
 )
 
 __all__ = [
+    "HarnessContext",
     "LangGraphPlugin",
+    "LangGraphStreamHandler",
+    "adopt_prebuilt",
     "cache",
     "entrypoint",
     "graph",
+    "harness_tool_call",
 ]

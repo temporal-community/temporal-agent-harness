@@ -31,7 +31,8 @@ from langgraph.func import entrypoint, task
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, create_react_agent, tools_condition
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from langgraph.types import Send, interrupt
+from langgraph.pregel import Pregel
+from langgraph.types import Command, Send, interrupt
 from pydantic import BaseModel
 
 from temporalio import workflow
@@ -57,18 +58,20 @@ with workflow.unsafe.imports_passed_through():
         ToolRequested,
     )
 
-    from temporal_agent_harness.ai_sdks.langgraph import LangGraphPlugin, graph
-    from temporal_agent_harness.ai_sdks.langgraph import entrypoint as registered_entrypoint
-    from temporal_agent_harness.ai_sdks.langgraph_harness import (
+    from temporal_agent_harness.ai_sdks.langgraph import (
         HarnessContext,
+        LangGraphPlugin,
         LangGraphStreamHandler,
+        adopt_prebuilt,
+        graph,
+        harness_tool_call,
+    )
+    from temporal_agent_harness.ai_sdks.langgraph import entrypoint as registered_entrypoint
+    from temporal_agent_harness.ai_sdks.langgraph._harness import (
         _non_retryable,
         _stream_to_harness,
-        adopt_prebuilt,
         _token_usage,
         _with_handler,
-        harness_tool_call,
-        run_turn,
     )
     from temporal_agent_harness.plugin import AgentHarnessPlugin
 
@@ -257,7 +260,7 @@ def build_graph(shape: str = "state") -> StateGraph[Any, Any, Any, Any]:
         g.add_node("agent", call_model, metadata=MODEL_NODE)
     g.add_node(
         "tools",
-        ToolNode([get_weather, ask_user, whoami], awrap_tool_call=harness_tool_call),
+        ToolNode([get_weather, ask_user, whoami]),  # the plugin sets harness_tool_call
         metadata={"execute_in": "workflow"},
     )
     g.add_edge(START, "agent")
@@ -309,6 +312,19 @@ def functional_plugin() -> Any:
     return _functional_plugin
 
 
+async def turn(g: Pregel[Any, Any, Any, Any], text: str) -> str:
+    """One harness turn, as the hello example's handler: resume a pending interrupt or append."""
+    pending = (await g.aget_state(g.config or {})).interrupts
+    result = await g.ainvoke(
+        Command(resume={i.id: text for i in pending})
+        if pending
+        else {"messages": [HumanMessage(text)]}
+    )
+    if interrupts := result.get("__interrupt__"):
+        return "\n".join(str(i.value) for i in interrupts)
+    return result["messages"][-1].text
+
+
 @agent.defn(name="LangGraphHarnessTestAgent")
 class GraphAgent:
     @agent.init
@@ -318,13 +334,15 @@ class GraphAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-        self._graph = graph("agent").compile(checkpointer=InMemorySaver())
+        self._checkpointer = InMemorySaver()
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask the agent something."""
-        context = HarnessContext(runner=self._runner, injections={"user": "alice"})
-        return TextReply(text=await run_turn(self._graph, message.text, context))
+        g = graph("agent", self._runner, injections={"user": "alice"}).compile(
+            checkpointer=self._checkpointer
+        )
+        return TextReply(text=await turn(g, message.text))
 
 
 @agent.defn(name="LangGraphFunctionalTestAgent")
@@ -337,15 +355,15 @@ class FunctionalAgent:
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
         # An entrypoint is built once at import, so give this workflow its own checkpointer.
-        self._graph = registered_entrypoint("functional").copy(
-            {"checkpointer": InMemorySaver()}
-        )
+        self._checkpointer = InMemorySaver()
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask the agent something."""
-        context = HarnessContext(runner=self._runner, injections={"user": "alice"})
-        return TextReply(text=await run_turn(self._graph, message.text, context))
+        g = registered_entrypoint("functional", self._runner, injections={"user": "alice"}).copy(
+            {"checkpointer": self._checkpointer}
+        )
+        return TextReply(text=await turn(g, message.text))
 
 
 AGENTS = {"functional": "LangGraphFunctionalTestAgent"}
@@ -838,7 +856,7 @@ async def test_stream_to_harness_guards(monkeypatch: pytest.MonkeyPatch):
     async def node(state: dict[str, Any]) -> dict[str, Any]:
         return state
 
-    target = "temporal_agent_harness.ai_sdks.langgraph_harness.get_runtime"
+    target = "temporal_agent_harness.ai_sdks.langgraph._harness.get_runtime"
     context = HarnessContext.model_construct(stream_context=cast(Any, object()))
     monkeypatch.setattr(target, lambda: SimpleNamespace(context=context))
     with pytest.raises(RuntimeError, match="activity node"):

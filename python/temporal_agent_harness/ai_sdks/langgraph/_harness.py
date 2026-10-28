@@ -1,13 +1,15 @@
-# ABOUTME: Harness-owned glue for LangGraph over the vendored temporalio-langgraph plugin
-# ABOUTME: (ai_sdks/langgraph/): context schema, model-stream wrapper, ToolNode gate, run_turn.
+# ABOUTME: The harness's LangGraph integration beside the vendored plugin: context schema,
+# ABOUTME: model-stream wrapper, ToolNode gate, and the turn binding graph()/entrypoint() apply.
 
 """Harness integration for LangGraph, via the vendored ``temporalio-langgraph`` plugin (``ai_sdks.langgraph``).
 
 The harness owns the session, the turn event stream, tool approvals and clients. LangGraph owns
 the inner loop, made durable by ``temporalio-langgraph``. This module connects them:
 
-- :class:`HarnessContext` is the graph's ``context_schema``. It carries the harness runner and
-  tool injections inside the workflow, and the turn's stream context into activity nodes.
+- ``graph(name, runner, injections=...)`` (and ``entrypoint`` for the Functional API) is the
+  plugin's lookup bound to the turn: the compiled graph runs on the workflow's checkpoint thread
+  with a :class:`HarnessContext`, the graph's ``context_schema``, which carries the harness runner
+  and tool injections inside the workflow and the turn's stream context into activity nodes.
 - An activity node with ``"stream_to_harness": True`` in its metadata (or a task's
   ``activity_options``) has its chat-model calls publish ``model_interaction_started``,
   ``reply_delta``, ``thought_summary`` and ``model_interaction_ended`` (with token usage) onto
@@ -18,9 +20,6 @@ the inner loop, made durable by ``temporalio-langgraph``. This module connects t
 - :func:`harness_tool_call` is a ``ToolNode`` ``awrap_tool_call`` that runs each call through
   ``AgentWorkflowRunner.run_tool``, so approvals, tool events and ``Injected[...]`` parameters
   apply.
-- :func:`run_turn` runs one turn. A message resumes a pending ``interrupt()``; otherwise it is
-  appended as a ``HumanMessage``. :func:`thread_config` is the graph thread it runs on, one per
-  agent workflow.
 - :func:`adopt_prebuilt` makes a prebuilt graph such as ``create_react_agent``'s run on the plugin
   with the three above applied.
 
@@ -30,9 +29,8 @@ Build the graph with the harness context and the plugin's activity metadata:
 >>> from langgraph.checkpoint.memory import InMemorySaver
 >>> from langgraph.graph import END, START, MessagesState, StateGraph
 >>> from langgraph.prebuilt import ToolNode, tools_condition
->>> from temporal_agent_harness.ai_sdks.langgraph import graph
->>> from temporal_agent_harness.ai_sdks.langgraph_harness import (
-...     HarnessContext, harness_tool_call, run_turn,
+>>> from temporal_agent_harness.ai_sdks.langgraph import (
+...     HarnessContext, LangGraphPlugin, graph, harness_tool_call,
 ... )
 >>> from temporalio.common import RetryPolicy
 >>> model = ChatOpenAI(model="gpt-5.1").bind_tools([get_weather])  # get_weather: @agent.tool_defn()
@@ -48,18 +46,18 @@ Build the graph with the harness context and the plugin's activity metadata:
 ...     "heartbeat_timeout": timedelta(seconds=10),
 ...     "retry_policy": RetryPolicy(maximum_attempts=3),
 ... })
->>> g.add_node("tools", ToolNode([get_weather], awrap_tool_call=harness_tool_call),
-...            metadata={"execute_in": "workflow"})
+>>> g.add_node("tools", ToolNode([get_weather]), metadata={"execute_in": "workflow"})
 >>> g.add_edge(START, "agent")
 >>> g.add_conditional_edges("agent", route, ["tools", END])
 >>> g.add_edge("tools", "agent")
 
-In the agent, compile the graph with a checkpointer and run one turn per message:
+In the agent, keep one checkpointer and run one turn per message (``graph()`` binds the turn, so
+call it in the handler; a pending ``interrupt()`` is resumed with ``Command(resume=...)``, as in
+``examples/langgraph_hello``):
 
->>> self._graph = graph("weather").compile(checkpointer=InMemorySaver()).with_config(
-...     recursion_limit=25
-... )
->>> reply = await run_turn(self._graph, message.text, HarnessContext(runner=self._runner))
+>>> g = graph("weather", self._runner).compile(checkpointer=self._checkpointer)
+>>> result = await g.ainvoke({"messages": [HumanMessage(message.text)]})
+>>> reply = result["messages"][-1].text
 
 On the client, register ``LangGraphPlugin`` before ``AgentHarnessPlugin`` so the harness's data
 converter wins; workers built from the client pick both up:
@@ -111,13 +109,14 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import suppress
 from datetime import timedelta
 from functools import wraps
 from inspect import iscoroutinefunction, signature
 from typing import Any, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 from uuid import UUID
+from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from pydantic_core import to_jsonable_python
@@ -135,11 +134,12 @@ try:
         BaseCallbackManager,
         Callbacks,
     )
-    from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+    from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
     from langchain_core.messages.ai import UsageMetadata
     from langchain_core.outputs import ChatGenerationChunk, GenerationChunk, LLMResult
     from langchain_core.runnables import RunnableConfig
     from langchain_core.runnables.config import run_in_executor, var_child_runnable_config
+    from langgraph._internal._constants import CONFIG_KEY_RUNTIME
     from langgraph._internal._runnable import RunnableCallable
     from langgraph.constants import TAG_NOSTREAM
     from langgraph.errors import GraphBubbleUp, GraphInterrupt
@@ -148,12 +148,11 @@ try:
     from langgraph.prebuilt import ToolNode
     from langgraph.prebuilt.tool_node import ToolCallRequest
     from langgraph.pregel import Pregel
-    from langgraph.runtime import get_runtime
+    from langgraph.runtime import Runtime, get_runtime
     from langgraph.types import Command
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise RuntimeError(_INSTALL_MESSAGE) from exc
 
-from temporal_agent_harness.ai_sdks.langgraph import _plugin
 from temporal_agent_harness.ai_sdks.langgraph._task_cache import set_task_cache
 from temporal_agent_harness.harness import AgentWorkflowRunner
 from temporal_agent_harness.harness.agent_protocol import (
@@ -173,14 +172,13 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError, is_cancelled_exception
 
 _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
+_call_ids: WeakKeyDictionary[AgentWorkflowRunner, set[str]] = WeakKeyDictionary()
 
 __all__ = [
     "HarnessContext",
     "LangGraphStreamHandler",
     "adopt_prebuilt",
     "harness_tool_call",
-    "run_turn",
-    "thread_config",
 ]
 
 P = ParamSpec("P")
@@ -206,14 +204,12 @@ class _Publisher(Protocol):
 class HarnessContext(BaseModel):
     """LangGraph runtime context for one harness turn.
 
-    Declare it as the graph's ``context_schema`` and pass one per turn to
-    :func:`run_turn`. Only ``stream_context``, snapshotted from ``runner`` on
-    the workflow side, crosses into activity nodes; ``runner`` and
-    ``injections`` stay in the workflow for :func:`harness_tool_call`.
-    A subclass may add fields, but must then be the graph's declared
+    Declare it as the graph's ``context_schema``; ``graph()`` makes one per
+    turn. Only ``stream_context``, snapshotted from ``runner`` on the workflow
+    side, crosses into activity nodes; ``runner`` and ``injections`` stay in
+    the workflow for :func:`harness_tool_call`. A subclass may add fields,
+    passed as keywords to ``graph()``, but must then be the graph's declared
     ``context_schema``: activity nodes reject an unregistered context type.
-    Make one per turn: :func:`harness_tool_call` records the turn's tool call
-    ids on it.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -224,7 +220,6 @@ class HarnessContext(BaseModel):
     )
     stream_context: TurnStreamContext | None = None
     _task_calls: Counter[str | None] = PrivateAttr(default_factory=Counter)
-    _call_ids: set[str] = PrivateAttr(default_factory=set)
 
     @model_validator(mode="after")
     def _snapshot_stream_context(self) -> HarnessContext:
@@ -233,42 +228,25 @@ class HarnessContext(BaseModel):
         return self
 
 
-async def run_turn(
-    graph: Pregel[Any, Any, Any, Any],  # pyright: ignore[reportExplicitAny]
-    text: str,
-    context: HarnessContext,
-) -> str:
-    """Run one harness turn on a checkpointed ``MessagesState`` graph.
-
-    ``text`` resumes the graph's pending ``interrupt()`` calls if there are
-    any; otherwise it is appended as a ``HumanMessage``. Returns the last
-    ``AIMessage``'s text ("" if there is none), or the interrupt values when
-    the turn is interrupted. The graph must be compiled with a checkpointer;
-    its thread is :func:`thread_config`.
-    """
-    config = thread_config()
+def _turn_config(
+    schema: object,
+    runner: AgentWorkflowRunner,
+    injections: Mapping[str, object] | None,
+    fields: Mapping[str, object],
+) -> RunnableConfig:
+    if not (isinstance(schema, type) and issubclass(schema, HarnessContext)):
+        raise TypeError(f"the graph's context_schema must be a HarnessContext, got {schema!r}")
+    context = schema(runner=runner, injections=dict(injections or {}), **fields)
     # graph() seeds the plugin's continue-as-new task cache on whichever context
     # @agent.init ran in, where it would retain every node result for the
     # workflow's lifetime. The harness never continues-as-new: run without one.
     set_task_cache(None)
-    state = await graph.aget_state(config)
-    if state.interrupts:
-        # The interrupted calls already ran to a tool_error last turn; the re-run is a new
-        # call to clients, so it is requested and run under a fresh tool_id.
-        for message in state.values.get("messages", []):
-            if isinstance(message, AIMessage):
-                context._call_ids.update(c["id"] for c in message.tool_calls if c["id"])
-    graph_input: Command[str] | dict[str, list[HumanMessage]] = (
-        Command(resume={i.id: text for i in state.interrupts})
-        if state.interrupts
-        else {"messages": [HumanMessage(text)]}
-    )
-    result = await graph.ainvoke(graph_input, config, context=context)
-    if interrupts := result.get("__interrupt__"):
-        return "\n".join(str(i.value) for i in interrupts)
-    return next(
-        (m.text for m in reversed(result.get("messages", [])) if isinstance(m, AIMessage)), ""
-    )
+    return {
+        "configurable": {
+            "thread_id": workflow.info().workflow_id,
+            CONFIG_KEY_RUNTIME: Runtime(context=context),  # inherited by ainvoke(context=None)
+        }
+    }
 
 
 def adopt_prebuilt(
@@ -304,8 +282,6 @@ def adopt_prebuilt(
                 **activity_options[name],
             }
         else:
-            if isinstance(runnable, ToolNode) and runnable._awrap_tool_call is None:  # pyright: ignore[reportPrivateUsage]
-                runnable._awrap_tool_call = harness_tool_call  # pyright: ignore[reportPrivateUsage]
             node.metadata = {"execute_in": "workflow", **(node.metadata or {})}
     for branches in builder.branches.values():
         for branch in branches.values():
@@ -352,19 +328,16 @@ def _async(fn: Callable[..., Any]) -> Callable[..., Awaitable[Any]]:  # pyright:
     return twin
 
 
-def thread_config() -> RunnableConfig:
-    """The config :func:`run_turn` runs under: one graph thread per agent workflow."""
-    return {"configurable": {"thread_id": workflow.info().workflow_id}}
-
-
 async def harness_tool_call(
     request: ToolCallRequest,
     execute: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
 ) -> ToolMessage | Command:
     """Run a ``ToolNode`` tool call through the harness.
 
-    Pass as ``ToolNode(tools, awrap_tool_call=harness_tool_call)`` on a node
-    with ``execute_in="workflow"``. Each call goes through
+    The plugin sets it as the ``awrap_tool_call`` of every ``ToolNode`` in a
+    graph whose ``context_schema`` is a :class:`HarnessContext`; pass it
+    yourself on a ``ToolNode`` built inside a Functional API task. The node
+    runs with ``execute_in="workflow"``. Each call goes through
     ``AgentWorkflowRunner.run_tool``, so harness approvals, tool events and
     ``Injected[...]`` parameters apply. A streamed model node publishes
     ``tool_requested`` when the model makes the call; a call the model gave no
@@ -388,8 +361,8 @@ async def harness_tool_call(
     context = cast(object, request.runtime.context)  # typed None by LangGraph
     if not isinstance(context, HarnessContext) or context.runner is None:
         raise RuntimeError(
-            "harness_tool_call needs a HarnessContext with a runner; run the graph "
-            "with run_turn() in an agent workflow."
+            "harness_tool_call needs a HarnessContext with a runner; pass the runner to "
+            "graph() in an agent workflow."
         )
     call = request.tool_call
     name = call.get("name", "")
@@ -399,12 +372,14 @@ async def harness_tool_call(
         context._task_calls[task] += 1
         # Clients see the provider's id; a missing or repeated one gets a fresh id. A missing
         # one is written back into the AIMessage's dict, which reaches the state only when the
-        # node received the state itself, not a Send copy of the call.
+        # node received the state itself, not a Send copy of the call. Ids are kept for the
+        # workflow, so a call re-run to resume its interrupt() is a new call to clients.
+        seen = _call_ids.setdefault(context.runner, set())
         call_id = call["id"] or ""
-        minted = not call_id or call_id in context._call_ids
+        minted = not call_id or call_id in seen
         if minted:
             call_id = str(workflow.uuid4())
-        context._call_ids.add(call_id)
+        seen.add(call_id)
         if not call["id"]:
             call["id"] = call_id  # the AIMessage's dict, so both messages carry it
         if minted:
@@ -543,8 +518,6 @@ def _stream_to_harness(
 
     return wrapper
 
-
-_plugin.stream_wrapper = _stream_to_harness  # the plugin applies it to stream_to_harness nodes
 
 
 def _non_retryable(exc: BaseException) -> bool:

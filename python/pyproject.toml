@@ -101,9 +101,9 @@ nexus-mcp = [
     "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.31.0",
 ]
-# The LangGraph integration: temporal_agent_harness.ai_sdks.langgraph_harness over
-# ai_sdks.langgraph (temporalio-langgraph 0.1.0 vendored with a local, not-yet-upstream ToolNode
-# awrap_tool_call fix the tool gating needs; see ai_sdks/langgraph/README.md). TRANSITION:
+# The LangGraph integration: temporal_agent_harness.ai_sdks.langgraph (temporalio-langgraph 0.1.0
+# vendored with a local, not-yet-upstream ToolNode awrap_tool_call fix the tool gating needs, and
+# the harness's _harness.py beside it; see ai_sdks/langgraph/README.md). TRANSITION:
 # depend on temporalio-langgraph from PyPI once a release carries that fix.
 langgraph = [
     "langgraph>=1.2.0,<2",

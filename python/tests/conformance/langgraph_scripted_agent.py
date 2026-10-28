@@ -21,13 +21,7 @@ from pydantic import Field
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 
-from temporal_agent_harness.ai_sdks.langgraph import graph
-from temporal_agent_harness.ai_sdks.langgraph_harness import (
-    HarnessContext,
-    harness_tool_call,
-    run_turn,
-    thread_config,
-)
+from temporal_agent_harness.ai_sdks.langgraph import HarnessContext, graph
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
@@ -171,7 +165,7 @@ def build_graph() -> StateGraph[Any, Any, Any, Any]:
     )
     g.add_node(
         "tools",
-        ToolNode(list(TOOLS.values()), awrap_tool_call=harness_tool_call),
+        ToolNode(list(TOOLS.values())),
         metadata={"execute_in": "workflow"},
     )
     g.add_edge(START, "begin")
@@ -195,7 +189,7 @@ class LangGraphScriptedAgent:
             ),
         )
         self.subagents: dict[str, str] = {}
-        self._graph = graph(GRAPH).compile(checkpointer=InMemorySaver())
+        self._checkpointer = InMemorySaver()
 
     @agent.accepts(mid_turn=MidTurn.REJECT)
     async def run_reject(self, script: Script) -> ScriptReply:
@@ -213,9 +207,9 @@ class LangGraphScriptedAgent:
         return await self._play(script)
 
     async def _play(self, script: Script) -> ScriptReply:
-        context = PlayContext(runner=self._runner, agent=self)
-        await run_turn(self._graph, script.model_dump_json(), context)
-        state = await self._graph.aget_state(thread_config())
+        g = graph(GRAPH, self._runner, agent=self).compile(checkpointer=self._checkpointer)
+        await g.ainvoke({"messages": [HumanMessage(script.model_dump_json())]})
+        state = await g.aget_state(g.config or {})
         return ScriptReply(text="".join(state.values["reply"]))
 
 

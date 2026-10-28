@@ -8,8 +8,8 @@ harness_pytest_test(
     deps = [
         ":conftest",
         "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks:langgraph_harness",
         "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:_harness",
         "//python/temporal_agent_harness/harness:__init__",
         "//python/temporal_agent_harness/harness:agent",
         "//python/temporal_agent_harness/harness:agent_client",

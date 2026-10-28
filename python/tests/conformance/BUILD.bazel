@@ -119,7 +119,6 @@ py_library(
     deps = [
         ":script",
         ":scripted_agent",
-        "//python/temporal_agent_harness/ai_sdks:langgraph_harness",
         "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
         "//python/temporal_agent_harness/harness:__init__",
         "//python/temporal_agent_harness/harness:agent",

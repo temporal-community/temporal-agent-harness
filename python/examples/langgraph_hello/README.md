@@ -7,8 +7,8 @@ plugin runs the model node in, to the live turn stream the web UI consumes — a
 console pane: thought summaries, an approval card, the agent-state pane and a callback answer box.
 
 LangGraph's Temporal plugin is vendored as `ai_sdks.langgraph` (what differs from upstream is listed in its README): it runs
-each node marked `execute_in="activity"` as an activity and the rest in the workflow. The harness
-supplies a glue module (`ai_sdks/langgraph_harness.py`) for the seams the plugin lacks.
+each node marked `execute_in="activity"` as an activity and the rest in the workflow. The harness's
+own module beside it, `ai_sdks/langgraph/_harness.py`, supplies the seams the plugin lacks.
 
 ## What it demonstrates
 
@@ -19,12 +19,13 @@ supplies a glue module (`ai_sdks/langgraph_harness.py`) for the seams the plugin
   `model_interaction_ended` (with token usage) — heartbeating while the node runs.
 - **Reasoning summaries.** The model is `gpt-5.1` with `reasoning={"effort": "medium", "summary":
   "auto"}`; its summaries stream as `thought_summary` events the console shows while it thinks.
-- **`HarnessContext` as the graph's `context_schema`.** Each turn passes
-  `HarnessContext(runner=self._runner, injections={"notes": self.notes})` to `run_turn`; it
-  snapshots the turn's stream context for the activity node and keeps the runner and the
-  injections in the workflow for the tool node.
-- **One tool of each harness kind**, all in one prebuilt `ToolNode(..., awrap_tool_call=
-  harness_tool_call)` that runs **in-workflow**, so every call goes through
+- **`HarnessContext` as the graph's `context_schema`.** Each turn calls
+  `graph(GRAPH, self._runner, injections={"notes": self.notes})`, which binds one to the compiled
+  graph: it snapshots the turn's stream context for the activity node and keeps the runner and
+  the injections in the workflow for the tool node. The handler then calls `ainvoke` as any
+  LangGraph code would, resuming a pending `interrupt()` with `Command(resume=...)`.
+- **One tool of each harness kind**, all in one prebuilt `ToolNode` that runs **in-workflow**;
+  the plugin sets `harness_tool_call` as its `awrap_tool_call`, so every call goes through
   `AgentWorkflowRunner.run_tool` — where the approval gate and `tool_start`/`tool_end` events live:
   - `get_weather` is an `@agent.activity_tool_defn`: its body runs as a Temporal activity the
     worker registers with `AgentHarnessPlugin(tools=[get_weather])`. Inherently safe.
@@ -39,7 +40,7 @@ supplies a glue module (`ai_sdks/langgraph_harness.py`) for the seams the plugin
 
 | File | Role |
 |---|---|
-| `workflow.py` | `LangGraphHelloAgent` — the harness agent; one `ask` handler, the `Notes` state, three tools, a two-node graph driven by `run_turn`. |
+| `workflow.py` | `LangGraphHelloAgent` — the harness agent; one `ask` handler, the `Notes` state, three tools, a two-node graph run one turn per message. |
 | `worker.py` | Worker hosting the workflow; `LangGraphPlugin` then `AgentHarnessPlugin` on the client. |
 | `agents.toml`, `LangGraphHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
@@ -77,7 +78,7 @@ uv run --group examples python -m examples.langgraph_hello.worker
 
 ## Behavior and limits
 
-The essentials are in the `langgraph_harness` module docstring; these are the rest.
+The essentials are in the `ai_sdks/langgraph/_harness.py` module docstring; these are the rest.
 
 - Each activity attempt is its own model interaction. A failed attempt's deltas stay on the
   stream, and one lost to a crash or timeout leaves its `model_interaction_started` unmatched.
@@ -107,7 +108,7 @@ The essentials are in the `langgraph_harness` module docstring; these are the re
 - The Functional API works the same way: declare `@entrypoint(context_schema=HarnessContext)`,
   set `"stream_to_harness": True` in the model task's `activity_options` (`execute_in="activity"`), run
   tools from a workflow-side task that invokes `ToolNode(..., awrap_tool_call=harness_tool_call)`
-  and pass `entrypoint(name).copy({"checkpointer": InMemorySaver()})` to `run_turn`. An
+  and run `entrypoint(name, self._runner, ...).copy({"checkpointer": self._checkpointer})`. An
   entrypoint is built once at import, so each workflow takes its own checkpointer that way; an
   activity task's value comes back untyped, so `convert_to_messages` the reply; and the plugin
   wraps a task in place, so construct it once per process. `tests/ai_sdks/langgraph` has the agent.
