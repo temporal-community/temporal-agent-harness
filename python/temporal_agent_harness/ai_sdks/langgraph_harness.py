@@ -1,5 +1,5 @@
 # ABOUTME: Harness-owned glue for LangGraph over the vendored temporalio-langgraph plugin
-# ABOUTME: (ai_sdks/langgraph/): context schema, model-stream decorator, ToolNode gate, run_turn.
+# ABOUTME: (ai_sdks/langgraph/): context schema, model-stream wrapper, ToolNode gate, run_turn.
 
 """Harness integration for LangGraph, via the vendored ``temporalio-langgraph`` plugin (``ai_sdks.langgraph``).
 
