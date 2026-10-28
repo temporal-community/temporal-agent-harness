@@ -10,7 +10,9 @@
  * "nothing stored", which every caller already has to handle.
  */
 const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
-const desksStorageKey = "temporal-agent-ui.desks.v1";
+/* Bumped when the default desk changes: a desk saved against the old default brings
+   back its widths, which push the new default's columns off the right edge. */
+const desksStorageKey = "temporal-agent-ui.desks.v2";
 const prefsStorageKey = "temporal-agent-ui.prefs.v1";
 /** Cap how many session desks we keep so quota failures stay rare. */
 const MAX_STORED_DESKS = 40;

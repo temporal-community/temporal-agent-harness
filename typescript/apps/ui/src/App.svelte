@@ -78,16 +78,16 @@
   const DRAWER_MIN_H = 96;
   /* Only reached when there is nothing measurable to fit to — a drawer holding a
      pane with no natural height, or opened before its trace has loaded. */
-  const DRAWER_DEFAULT_H = 340;
+  const DRAWER_DEFAULT_H = 240;
   /* Not pixel-tight. A fitted drawer sitting exactly on its last row reads as
      clipped rather than fitted, sub-pixel rounding is enough to raise a scrollbar
      on a trace that fits, and during a live run this is where the next turn
      appears before anything has to move. */
   const DRAWER_FIT_SLACK = 12;
-  /* An unattended fit stops well short of the row's own ceiling. Nothing that happens
-     without being asked for should be able to take three fifths of the window; the
-     reader who wants that drags for it, and the gutter goes all the way to 60vh. */
-  const DRAWER_FIT_MAX_FRACTION = 0.5;
+  /* An unattended fit stops well short of the row's own ceiling. The default desk stacks
+     two panes in one column above it, which need the height more than a long trace
+     does; the reader who wants the trace drags for it, and the gutter goes to 60vh. */
+  const DRAWER_FIT_MAX_FRACTION = 0.25;
   /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
      grid — so a drawer is never set larger than it can be drawn. */
   const DRAWER_MAX_FRACTION = 0.6;
