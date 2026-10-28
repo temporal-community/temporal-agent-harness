@@ -63,12 +63,12 @@ with workflow.unsafe.imports_passed_through():
         HarnessContext,
         LangGraphStreamHandler,
         _non_retryable,
+        _stream_to_harness,
         adopt_prebuilt,
         _token_usage,
         _with_handler,
         harness_tool_call,
         run_turn,
-        stream_to_harness,
     )
     from temporal_agent_harness.plugin import AgentHarnessPlugin
 
@@ -833,7 +833,7 @@ async def test_stream_to_harness_guards(monkeypatch: pytest.MonkeyPatch):
         return state
 
     with pytest.raises(TypeError, match="async node"):
-        stream_to_harness(cast(Any, sync_node))
+        _stream_to_harness(cast(Any, sync_node))
 
     async def node(state: dict[str, Any]) -> dict[str, Any]:
         return state
@@ -842,11 +842,11 @@ async def test_stream_to_harness_guards(monkeypatch: pytest.MonkeyPatch):
     context = HarnessContext.model_construct(stream_context=cast(Any, object()))
     monkeypatch.setattr(target, lambda: SimpleNamespace(context=context))
     with pytest.raises(RuntimeError, match="activity node"):
-        await stream_to_harness(node)({})
+        await _stream_to_harness(node)({})
 
     # Outside a harness turn, with or without options, the node runs unchanged.
     monkeypatch.setattr(target, lambda: SimpleNamespace(context=None))
-    streamed = stream_to_harness(batch_interval=timedelta(seconds=1))(node)
+    streamed = _stream_to_harness(node, batch_interval=timedelta(seconds=1))
     assert await streamed({"a": 1}) == {"a": 1}
 
 

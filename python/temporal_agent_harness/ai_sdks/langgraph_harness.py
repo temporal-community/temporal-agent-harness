@@ -11,7 +11,8 @@ the inner loop, made durable by ``temporalio-langgraph``. This module connects t
 - An activity node with ``"stream_to_harness": True`` in its metadata (or a task's
   ``activity_options``) has its chat-model calls publish ``model_interaction_started``,
   ``reply_delta``, ``thought_summary`` and ``model_interaction_ended`` (with token usage) onto
-  the turn stream; :func:`stream_to_harness` is the wrapper the plugin applies. It installs a
+  the turn stream; ``"stream_batch_interval"`` sets how often buffered deltas reach the
+  workflow. The plugin wraps the node at registration. It installs a
   :class:`LangGraphStreamHandler`, the LangChain callback handler that does the publishing,
   the counterpart of the OpenAI Agents and Pydantic AI stream observers.
 - :func:`harness_tool_call` is a ``ToolNode`` ``awrap_tool_call`` that runs each call through
@@ -73,7 +74,7 @@ is in ``python/examples/langgraph_hello/README.md``):
 
 - Only async nodes and routers run in the workflow: LangGraph runs sync functions in a thread
   pool, which workflows forbid. Wrap prebuilt sync routers such as ``tools_condition``, as above.
-- ``stream_to_harness`` (the metadata key or the wrapper) streams the chat models the node calls, directly or through a chain such
+- A ``stream_to_harness`` node streams the chat models it calls, directly or through a chain such
   as ``prompt | model``, with citations as ``text_annotation`` and a tool the provider ran itself
   (web search, ...) as a ``tool_requested`` / ``tool_start`` / ``tool_end`` span that no approval
   policy can gate. A call made under a tool run, or tagged ``nostream``, publishes nothing:
@@ -83,12 +84,12 @@ is in ``python/examples/langgraph_hello/README.md``):
   own ``streaming_topic`` (``get_stream_writer()``) is bypassed: its custom-mode stream carries
   whatever a node writes, not the model's tokens, which the harness needs as ``reply_delta``;
   a node may still write to it alongside.
-- ``stream_to_harness`` heartbeats while the node runs, so give the model node a
+- A streamed node heartbeats while it runs, so give the model node a
   ``heartbeat_timeout``: a lost worker is then retried after it, not after
   ``start_to_close_timeout``. Cancelling the workflow doesn't cancel the running activity; it
   stops when its next heartbeat fails.
 - Give every activity node a ``retry_policy``: Temporal retries an activity forever by default,
-  and each attempt re-streams. ``stream_to_harness`` fails a model error carrying a 4xx
+  and each attempt re-streams. A streamed node fails a model error carrying a 4xx
   ``status_code`` other than 408, 409 and 429 as non-retryable, so a bad key fails the turn once.
 - A tool may call ``interrupt()`` only as the sole call in its ``ToolNode`` invocation (one
   ``Send`` per call makes every call its own invocation), because resume re-runs the whole
@@ -115,7 +116,7 @@ from contextlib import suppress
 from datetime import timedelta
 from functools import wraps
 from inspect import iscoroutinefunction, signature
-from typing import Any, ParamSpec, Protocol, TypeAlias, TypeVar, cast, overload
+from typing import Any, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -178,7 +179,6 @@ __all__ = [
     "adopt_prebuilt",
     "harness_tool_call",
     "run_turn",
-    "stream_to_harness",
     "thread_config",
 ]
 
@@ -365,7 +365,7 @@ async def harness_tool_call(
     Pass as ``ToolNode(tools, awrap_tool_call=harness_tool_call)`` on a node
     with ``execute_in="workflow"``. Each call goes through
     ``AgentWorkflowRunner.run_tool``, so harness approvals, tool events and
-    ``Injected[...]`` parameters apply. ``stream_to_harness`` publishes
+    ``Injected[...]`` parameters apply. A streamed model node publishes
     ``tool_requested`` when the model makes the call; a call the model gave no
     id, or a repeated one, is requested here under a fresh id.
     Arguments are validated against the tool's schema before the tool runs.
@@ -481,26 +481,13 @@ def _describe(value: object) -> str:
     return f"<{type(value).__qualname__}>"
 
 
-@overload
-def stream_to_harness(node: Callable[P, Awaitable[R]], /) -> Callable[P, Awaitable[R]]: ...
-
-
-@overload
-def stream_to_harness(
-    *, batch_interval: timedelta | None = None
-) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]: ...
-
-
-def stream_to_harness(
-    node: Callable[P, Awaitable[R]] | None = None,
-    /,
-    *,
-    batch_interval: timedelta | None = None,
-) -> Any:
+def _stream_to_harness(
+    node: Callable[P, Awaitable[R]], *, batch_interval: timedelta | None = None
+) -> Callable[P, Awaitable[R]]:
     """Stream an activity node's chat-model calls onto the harness turn.
 
     The plugin applies this to a node or task whose options set
-    ``"stream_to_harness": True``; wrap a node directly only to set
+    ``"stream_to_harness": True``, with ``"stream_batch_interval"`` as
     ``batch_interval``. The node must be async and run with
     ``execute_in="activity"``. Chat models
     the node calls, directly or through a chain, publish
@@ -512,8 +499,6 @@ def stream_to_harness(
     A model error with a 4xx ``status_code`` other than 408, 409 or 429 fails
     the activity as non-retryable.
     """
-    if node is None:
-        return lambda n: stream_to_harness(n, batch_interval=batch_interval)
     if not iscoroutinefunction(node):
         raise TypeError(f"stream_to_harness needs an async node, got {node!r}")
 
@@ -595,7 +580,7 @@ async def _heartbeat() -> None:
 class LangGraphStreamHandler(AsyncCallbackHandler):
     """A LangChain callback handler that publishes a model call as harness turn events.
 
-    :func:`stream_to_harness` installs one per activity node run; use it
+    A ``stream_to_harness`` node installs one per run; use it
     directly to stream a model call made outside such a node, by passing it in
     the call's ``config={"callbacks": [...]}`` with any publisher that has
     ``publish(event)``.

@@ -1,7 +1,7 @@
 """A hello-world LangGraph agent on the harness: a weather chat with one of each harness tool kind.
 
 The turn is one run of a two-node ``StateGraph``: the ``agent`` node calls a reasoning chat model
-in an activity, where ``stream_to_harness`` publishes the stream as ``model_interaction_started``,
+in an activity, where its ``stream_to_harness`` option publishes the stream as ``model_interaction_started``,
 ``thought_summary``, ``reply_delta`` and ``model_interaction_ended`` (with token usage); the
 ``tools`` node is a prebuilt ``ToolNode`` whose calls go through ``harness_tool_call``, so the
 harness owns approval and the ``tool_start`` / ``tool_end`` / ``tool_error`` events. Its tools:
@@ -122,11 +122,11 @@ def build_graph() -> StateGraph[Any, Any, Any, Any]:
             "execute_in": "activity",
             "stream_to_harness": True,
             "start_to_close_timeout": timedelta(minutes=2),
-            # stream_to_harness heartbeats, so a lost worker is retried after this, not after
+            # A streamed node heartbeats, so a lost worker is retried after this, not after
             # start_to_close_timeout.
             "heartbeat_timeout": timedelta(seconds=10),
             # Temporal retries forever by default, and every attempt streams again;
-            # stream_to_harness fails a 4xx (bad key, bad request) without retrying.
+            # A streamed node fails a 4xx (bad key, bad request) without retrying.
             "retry_policy": RetryPolicy(maximum_attempts=3),
             "summary_fn": summarize_model_call,
         },

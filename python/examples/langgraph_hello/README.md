@@ -85,8 +85,8 @@ The essentials are in the `langgraph_harness` module docstring; these are the re
 - The plugin checks a node's `execute_in` at registration but its timeouts only on its first
   call: an activity node with neither `start_to_close_timeout` nor
   `schedule_to_close_timeout` fails the first turn that reaches it.
-- `tool_requested` carries the model's arguments as given, before validation. `stream_to_harness`
-  publishes it as the model call ends, before `model_interaction_ended`; a call the model gave no
+- `tool_requested` carries the model's arguments as given, before validation. The streamed
+  node publishes it as the model call ends, before `model_interaction_ended`; a call the model gave no
   id is requested by the workflow-side `ToolNode` under a fresh one.
 - A tool that fails or is denied becomes an error `ToolMessage` the model sees. A result that
   isn't a string, `ToolMessage` or `Command` is sent as JSON.
