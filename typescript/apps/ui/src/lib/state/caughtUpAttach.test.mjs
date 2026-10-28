@@ -44,7 +44,7 @@
  * and that case pins the behaviour rather than the guard producing it.
  */
 import assert from "node:assert/strict";
-import { describe, it } from "vitest";
+import { describe, it, onTestFinished, vi } from "vitest";
 
 import { installBrowserSurface, sleep } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
@@ -57,6 +57,15 @@ async function waitFor(label, predicate, timeoutMs = 6_000) {
     await sleep(25);
   }
   assert.fail(`timed out after ${timeoutMs}ms waiting for ${label}`);
+}
+
+/* waitFor under fake timers: steps time forward so the promises between timers settle. */
+async function advanceUntil(label, predicate, timeoutMs = 6_000) {
+  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += 25) {
+    if (predicate()) return;
+    await vi.advanceTimersByTimeAsync(25);
+  }
+  assert.fail(`timed out after ${timeoutMs}ms of fake time waiting for ${label}`);
 }
 
 const { freshStorage } = installBrowserSurface();
@@ -332,6 +341,9 @@ describe("a caught-up attach", () => {
   // banner on a healthy session is worse than the stall it replaced, because it
   // teaches people to disbelieve real ones.
   it("the whole budget, on a session that is perfectly healthy", async () => {
+    /* Fake time, so the 31.5s backoff ladder runs in milliseconds instead of being waited out. */
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
     const { controller, attachCalls } = boot({
       sessions: [session("wf-budget")],
       streamFor: (_id, call) =>
@@ -357,8 +369,8 @@ describe("a caught-up attach", () => {
 
     const started = Date.now();
     void controller.sendMessage({ text: "hello" });
-    await waitFor("the reply to arrive", () => controller.frames.length === 4);
-    await waitFor("the composer to be released", () => !controller.sending, 2_000);
+    await advanceUntil("the reply to arrive", () => controller.frames.length === 4);
+    await advanceUntil("the composer to be released", () => !controller.sending, 2_000);
     const releasedAt = Date.now() - started;
     assert.ok(
       releasedAt < 2_000,
@@ -367,11 +379,7 @@ describe("a caught-up attach", () => {
 
     /* Out past the last backoff step, so the loop has given up and anything it
        says on the way out has been said. */
-    await waitFor(
-      "the retry budget to run out",
-      () => Date.now() - started > 34_000,
-      40_000
-    );
+    await vi.advanceTimersByTimeAsync(34_000 - (Date.now() - started));
     clearInterval(watch);
 
     assert.equal(firstError, null, `a healthy session must never raise a banner (saw ${firstError})`);
@@ -379,7 +387,7 @@ describe("a caught-up attach", () => {
     assert.equal(controller.sending, false, "the composer must still be released");
 
     const settled = attachCalls.length;
-    await sleep(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     assert.equal(attachCalls.length, settled, "the budget must actually stop the loop");
   });
 
