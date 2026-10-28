@@ -205,9 +205,12 @@ export function summarizeCost(frames: AgentSseFrame[]): CostSummary {
   return ledger.summary();
 }
 
-/** summarizeCost a frame at a time, for a caller that keeps the frames it has already read. */
-export function costLedger(): { add(frame: AgentSseFrame): void; summary(): CostSummary } {
-  const tally = emptyTally();
+/**
+ * summarizeCost a frame at a time, for a caller that keeps the frames it has already read.
+ * `from` resumes the tally a summary was read off.
+ */
+export function costLedger(from?: CostSummary): { add(frame: AgentSseFrame): void; summary(): CostSummary } {
+  const tally = tallyOf(from ? [from] : []);
   return {
     add(frame) {
       const unreported = unreportedModel(frame);
@@ -229,6 +232,10 @@ export function costLedger(): { add(frame: AgentSseFrame): void; summary(): Cost
 
 /** One summary of several agents' frames, each summarized on its own; models keep first-seen order. */
 export function mergeCostSummaries(summaries: readonly CostSummary[]): CostSummary {
+  return summaryOf(tallyOf(summaries));
+}
+
+function tallyOf(summaries: readonly CostSummary[]): CostTally {
   const tally = emptyTally();
   for (const summary of summaries) {
     addTotals(tally.tokens, summary.tokens);
@@ -241,7 +248,7 @@ export function mergeCostSummaries(summaries: readonly CostSummary[]): CostSumma
       found.unreportedCalls += item.unreportedCalls;
     }
   }
-  return summaryOf(tally);
+  return tally;
 }
 
 interface CostTally {
