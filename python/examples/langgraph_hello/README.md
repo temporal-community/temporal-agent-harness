@@ -12,7 +12,8 @@ supplies a glue module (`ai_sdks/langgraph_harness.py`) for the seams the plugin
 
 ## What it demonstrates
 
-- **Streaming via `stream_to_harness`.** The `agent` node is decorated with it. Inside the model
+- **Streaming via `stream_to_harness`.** The `agent` node sets it in its metadata, beside
+  `execute_in`, and the plugin wraps the node. Inside the model
   activity it attaches a LangChain callback handler to the node's model calls and translates the
   stream into harness vocabulary — `model_interaction_started` → `reply_delta` / `thought_summary` …
   `model_interaction_ended` (with token usage) — heartbeating while the node runs.
@@ -104,7 +105,7 @@ The essentials are in the `langgraph_harness` module docstring; these are the re
 - Adding, removing or reordering activity nodes on an executed path breaks replay of running
   sessions; use `workflow.patched()` or Worker Versioning.
 - The Functional API works the same way: declare `@entrypoint(context_schema=HarnessContext)`,
-  put `stream_to_harness` under `task()` for the model call (`execute_in="activity"`), run
+  set `"stream_to_harness": True` in the model task's `activity_options` (`execute_in="activity"`), run
   tools from a workflow-side task that invokes `ToolNode(..., awrap_tool_call=harness_tool_call)`
   and pass `entrypoint(name).copy({"checkpointer": InMemorySaver()})` to `run_turn`. An
   entrypoint is built once at import, so each workflow takes its own checkpointer that way; an

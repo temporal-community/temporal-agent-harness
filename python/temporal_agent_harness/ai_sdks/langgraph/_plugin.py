@@ -41,8 +41,10 @@ _ACTIVITY_OPTION_KEYS: frozenset[str] = frozenset(
 # Node/task option keys beyond the raw execute_activity parameters:
 # 'summary_fn' is a callable consumed in the workflow (not a Temporal
 # option), so it must be split out of Graph API metadata too.
+# Vendored: 'stream_to_harness' marks an activity node whose model calls stream
+# onto the harness turn.
 _LANGGRAPH_OPTION_KEYS: frozenset[str] = _ACTIVITY_OPTION_KEYS | frozenset(
-    {"summary_fn"}
+    {"summary_fn", "stream_to_harness"}
 )
 
 
@@ -89,7 +91,8 @@ class LangGraphPlugin(SimplePlugin):
             include ``execute_in`` (``"activity"`` or ``"workflow"``) and
             may include any kwarg accepted by
             :func:`workflow.execute_activity` (e.g. ``start_to_close_timeout``,
-            ``retry_policy``).
+            ``retry_policy``). An activity node with ``stream_to_harness=True``
+            streams its chat-model calls onto the harness turn.
         entrypoints: Functional API entrypoints to make available to
             workflows, keyed by name. Workflows retrieve them with
             :func:`entrypoint`.
@@ -353,6 +356,15 @@ class LangGraphPlugin(SimplePlugin):
         if static_summary is not None:
             summary_fn = _constant_summary_fn(static_summary)
 
+        # Vendored: the harness glue imports this package, so import it lazily.
+        if opts.pop("stream_to_harness", False):
+            if execute_in != "activity":
+                raise ValueError(
+                    f"{activity_name}: stream_to_harness needs execute_in='activity'."
+                )
+            from temporal_agent_harness.ai_sdks.langgraph_harness import stream_to_harness
+
+            func = stream_to_harness(func)
         if execute_in == "activity":
             wrapped = wrap_activity(
                 func,

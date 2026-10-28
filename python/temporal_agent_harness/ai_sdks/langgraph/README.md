@@ -73,7 +73,7 @@ class MyWorkflow:
 
 ## Execution Location
 
-Every node (Graph API) and task (Functional API) must be labeled with `execute_in`, set to either `"activity"` or `"workflow"`. This is required per node/task; it cannot be set in `default_activity_options`.
+Every node (Graph API) and task (Functional API) must be labeled with `execute_in`, set to either `"activity"` or `"workflow"`. This is required per node/task; it cannot be set in `default_activity_options`. An activity node or task may also set `"stream_to_harness": True` to stream its chat-model calls onto the harness turn (see `ai_sdks/langgraph_harness.py`).
 
 ```python
 # Graph API

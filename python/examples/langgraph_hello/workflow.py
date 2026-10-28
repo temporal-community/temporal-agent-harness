@@ -40,7 +40,6 @@ with workflow.unsafe.imports_passed_through():
         HarnessContext,
         harness_tool_call,
         run_turn,
-        stream_to_harness,
     )
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
@@ -95,7 +94,6 @@ async def ask_user(question: str) -> str:
 TOOLS = [get_weather, remember, ask_user]
 
 
-@stream_to_harness
 async def call_model(state: MessagesState) -> dict[str, Any]:
     """The model activity: one chat completion over the conversation, streamed to the harness."""
     model = ChatOpenAI(
@@ -122,6 +120,7 @@ def build_graph() -> StateGraph[Any, Any, Any, Any]:
         call_model,
         metadata={
             "execute_in": "activity",
+            "stream_to_harness": True,
             "start_to_close_timeout": timedelta(minutes=2),
             # stream_to_harness heartbeats, so a lost worker is retried after this, not after
             # start_to_close_timeout.

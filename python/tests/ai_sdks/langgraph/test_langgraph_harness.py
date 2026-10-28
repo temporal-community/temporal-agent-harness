@@ -194,7 +194,6 @@ async def ask_user(question: str) -> str:
     return str(interrupt(question))
 
 
-@stream_to_harness
 async def call_model(state: MessagesState) -> dict[str, Any]:
     return {"messages": [await FakeChatModel().ainvoke(state["messages"])]}
 
@@ -229,6 +228,7 @@ ROUTES: dict[str, Any] = {
 }
 MODEL_NODE: dict[str, Any] = {
     "execute_in": "activity",
+    "stream_to_harness": True,
     "start_to_close_timeout": timedelta(seconds=30),
     "heartbeat_timeout": timedelta(seconds=2),
     "retry_policy": RetryPolicy(maximum_attempts=1),
@@ -266,7 +266,6 @@ def build_graph(shape: str = "state") -> StateGraph[Any, Any, Any, Any]:
     return g
 
 
-@stream_to_harness
 async def model_call(messages: list[BaseMessage]) -> AIMessage:
     return await FakeChatModel().ainvoke(messages)
 

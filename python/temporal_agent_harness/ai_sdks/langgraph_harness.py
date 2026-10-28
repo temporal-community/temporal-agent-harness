@@ -8,9 +8,10 @@ the inner loop, made durable by ``temporalio-langgraph``. This module connects t
 
 - :class:`HarnessContext` is the graph's ``context_schema``. It carries the harness runner and
   tool injections inside the workflow, and the turn's stream context into activity nodes.
-- :func:`stream_to_harness` wraps an activity node so its chat-model calls publish
-  ``model_interaction_started``, ``reply_delta``, ``thought_summary`` and
-  ``model_interaction_ended`` (with token usage) onto the turn stream. It installs a
+- An activity node with ``"stream_to_harness": True`` in its metadata (or a task's
+  ``activity_options``) has its chat-model calls publish ``model_interaction_started``,
+  ``reply_delta``, ``thought_summary`` and ``model_interaction_ended`` (with token usage) onto
+  the turn stream; :func:`stream_to_harness` is the wrapper the plugin applies. It installs a
   :class:`LangGraphStreamHandler`, the LangChain callback handler that does the publishing,
   the counterpart of the OpenAI Agents and Pydantic AI stream observers.
 - :func:`harness_tool_call` is a ``ToolNode`` ``awrap_tool_call`` that runs each call through
@@ -30,18 +31,18 @@ Build the graph with the harness context and the plugin's activity metadata:
 >>> from langgraph.prebuilt import ToolNode, tools_condition
 >>> from temporal_agent_harness.ai_sdks.langgraph import graph
 >>> from temporal_agent_harness.ai_sdks.langgraph_harness import (
-...     HarnessContext, harness_tool_call, run_turn, stream_to_harness,
+...     HarnessContext, harness_tool_call, run_turn,
 ... )
 >>> from temporalio.common import RetryPolicy
 >>> model = ChatOpenAI(model="gpt-5.1").bind_tools([get_weather])  # get_weather: @agent.tool_defn()
->>> @stream_to_harness
-... async def call_model(state: MessagesState) -> dict:
+>>> async def call_model(state: MessagesState) -> dict:
 ...     return {"messages": [await model.ainvoke(state["messages"])]}
 >>> async def route(state: dict) -> str:  # async wrapper: sync routers can't run in a workflow
 ...     return tools_condition(state)
 >>> g = StateGraph(MessagesState, context_schema=HarnessContext)
 >>> g.add_node("agent", call_model, metadata={
 ...     "execute_in": "activity",
+...     "stream_to_harness": True,
 ...     "start_to_close_timeout": timedelta(minutes=2),
 ...     "heartbeat_timeout": timedelta(seconds=10),
 ...     "retry_policy": RetryPolicy(maximum_attempts=3),
@@ -72,7 +73,7 @@ is in ``python/examples/langgraph_hello/README.md``):
 
 - Only async nodes and routers run in the workflow: LangGraph runs sync functions in a thread
   pool, which workflows forbid. Wrap prebuilt sync routers such as ``tools_condition``, as above.
-- ``stream_to_harness`` streams the chat models the node calls, directly or through a chain such
+- ``stream_to_harness`` (the metadata key or the wrapper) streams the chat models the node calls, directly or through a chain such
   as ``prompt | model``, with citations as ``text_annotation`` and a tool the provider ran itself
   (web search, ...) as a ``tool_requested`` / ``tool_start`` / ``tool_end`` span that no approval
   policy can gate. A call made under a tool run, or tagged ``nostream``, publishes nothing:
@@ -277,8 +278,8 @@ def adopt_prebuilt(
 
     Returns the graph's builder to register with ``LangGraphPlugin``.
     ``activity_options`` maps each model-calling node to its activity options
-    (timeouts, retry policy, summary): those nodes run as activities under
-    :func:`stream_to_harness`.
+    (timeouts, retry policy, summary): those nodes run as activities with
+    ``stream_to_harness`` set.
     Every other node runs in the workflow, each ``ToolNode`` without its own
     ``awrap_tool_call`` goes through :func:`harness_tool_call`, closure nodes get
     the module-level identity the plugin keys them by, and sync routers get the
@@ -294,9 +295,13 @@ def adopt_prebuilt(
             fn = runnable.afunc or runnable.func
             if fn is None:
                 raise ValueError(f"Node {name!r} has no function")
-            runnable.afunc = stream_to_harness(_module_level(fn, name))
+            runnable.afunc = _module_level(fn, name)
             runnable.func = None  # the plugin takes afunc only when func is gone
-            node.metadata = {"execute_in": "activity", **activity_options[name]}
+            node.metadata = {
+                "execute_in": "activity",
+                "stream_to_harness": True,
+                **activity_options[name],
+            }
         else:
             if isinstance(runnable, ToolNode) and runnable._awrap_tool_call is None:  # pyright: ignore[reportPrivateUsage]
                 runnable._awrap_tool_call = harness_tool_call  # pyright: ignore[reportPrivateUsage]
@@ -494,7 +499,10 @@ def stream_to_harness(
 ) -> Any:
     """Stream an activity node's chat-model calls onto the harness turn.
 
-    Wrap an async node that runs with ``execute_in="activity"``. Chat models
+    The plugin applies this to a node or task whose options set
+    ``"stream_to_harness": True``; wrap a node directly only to set
+    ``batch_interval``. The node must be async and run with
+    ``execute_in="activity"``. Chat models
     the node calls, directly or through a chain, publish
     ``model_interaction_started``, text as ``reply_delta``, reasoning as
     ``thought_summary`` and ``model_interaction_ended`` with usage. Calls made

@@ -26,7 +26,6 @@ from temporal_agent_harness.ai_sdks.langgraph_harness import (
     HarnessContext,
     harness_tool_call,
     run_turn,
-    stream_to_harness,
     thread_config,
 )
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
@@ -151,7 +150,6 @@ async def play(state: PlayState) -> Command[Any]:
     return Command(goto="play", update=update)
 
 
-@stream_to_harness
 async def model(state: PlayState) -> dict[str, Any]:
     message = await ScriptedChatModel(step=state["step"]).ainvoke(state["messages"])
     return {"messages": [message], "reply": [*state["reply"], message.text]}
@@ -166,6 +164,7 @@ def build_graph() -> StateGraph[Any, Any, Any, Any]:
         model,
         metadata={
             "execute_in": "activity",
+            "stream_to_harness": True,
             "start_to_close_timeout": timedelta(seconds=30),
             "heartbeat_timeout": timedelta(seconds=5),
         },
