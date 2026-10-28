@@ -2226,6 +2226,7 @@ export class AgentRunController {
     this.#sinceCatchUpPublish = 0;
     this.#workflowResumeOffsets = new Map<string, number>();
     this.#clientTools.reset();
+    this.#heldTarget = null;
     this.viewIndex = 0;
     this.following = true;
     this.lastResumeOffset = 0;
@@ -2561,9 +2562,53 @@ export class AgentRunController {
   }
 
   goTo(index: number): void {
-    this.viewIndex = Math.max(0, Math.min(index, this.total));
+    this.#heldTarget = null;
+    this.viewIndex = this.#clamp(index);
     this.following = this.viewIndex === this.total;
     if (this.following) this.pause();
+  }
+
+  #clamp(index: number): number {
+    return Math.max(0, Math.min(index, this.total));
+  }
+
+  /* Where the cursor is headed once the held key's pending frame lands; null when nothing waits. */
+  #heldTarget: number | null = null;
+  #heldFrame = false;
+
+  /**
+   * Move the cursor relative to where it is — or to where a held key has it headed.
+   *
+   * A held key repeats about 30 times a second, and on a long run one move can cost more than a
+   * frame, so applying every repeat queues keydowns faster than the page paints and it goes on
+   * moving after the key comes up. A held repeat that lands while a frame is pending therefore only
+   * moves the target; the frame applies the net of them once. Each move still starts from the
+   * previous target and is clamped on its own, so N repeats are N moves and a reversal nets out.
+   *
+   * A press that is not a repeat always applies at once, and so does every programmatic call: a
+   * single step reads back synchronously, exactly as before. Any other seek goes through goTo(),
+   * which drops the pending target — the reader asked for somewhere absolute.
+   */
+  #move(next: (from: number) => number, held: boolean): void {
+    const target = this.#clamp(next(this.#heldTarget ?? this.viewIndex));
+    if (held && this.#heldFrame) {
+      this.#heldTarget = target;
+      return;
+    }
+    this.goTo(target);
+    if (held && typeof requestAnimationFrame === "function") this.#awaitHeldFrame();
+  }
+
+  #awaitHeldFrame(): void {
+    this.#heldFrame = true;
+    requestAnimationFrame(() => {
+      this.#heldFrame = false;
+      const target = this.#heldTarget;
+      if (target == null) return;
+      this.goTo(target);
+      /* Keep the window open while repeats keep landing, so a burst applies once per frame. */
+      this.#awaitHeldFrame();
+    });
   }
 
   /**
@@ -2587,46 +2632,50 @@ export class AgentRunController {
     return run && index < run.endIndex ? run.startIndex - 1 : index;
   }
 
-  stepBack(): void {
+  /* `held` is true for a key's auto-repeat; see #move. */
+  stepBack(held = false): void {
     this.pause();
-    this.goTo(this.#stopAtOrBefore(this.viewIndex - 1));
+    this.#move((from) => this.#stopAtOrBefore(from - 1), held);
   }
 
-  stepForward(): void {
-    this.goTo(this.#stopAtOrAfter(this.viewIndex + 1));
+  stepForward(held = false): void {
+    this.#move((from) => this.#stopAtOrAfter(from + 1), held);
   }
 
-  previousTurn(): void {
+  previousTurn(held = false): void {
     this.pause();
-    const target = [...this.turnMarkers]
-      .reverse()
-      .find((marker) => marker.index < this.viewIndex - 1);
-    this.goTo(target?.index ?? 0);
+    this.#move(
+      (from) => [...this.turnMarkers].reverse().find((marker) => marker.index < from - 1)?.index ?? 0,
+      held
+    );
   }
 
-  nextTurn(): void {
+  nextTurn(held = false): void {
     this.pause();
     /* Strictly past the cursor. `>=` matched the marker the cursor was standing
        on, so at the start of any turn — which is exactly where this button and
        previousTurn leave you — it re-seeked to the same index and the control
        did nothing at all. */
-    const target = this.turnMarkers.find((marker) => marker.index > this.viewIndex);
-    this.goTo(target?.index ?? this.total);
+    this.#move(
+      (from) => this.turnMarkers.find((marker) => marker.index > from)?.index ?? this.total,
+      held
+    );
   }
 
   /* Both strictly past the cursor, so standing on a boundary the key moves off
      it rather than re-seeking where you already are — the defect nextTurn's
      comment above records, avoided here by construction. */
-  previousStep(): void {
+  previousStep(held = false): void {
     this.pause();
-    const target = [...this.stepBoundaries].reverse().find((index) => index < this.viewIndex);
-    this.goTo(target ?? 0);
+    this.#move(
+      (from) => [...this.stepBoundaries].reverse().find((index) => index < from) ?? 0,
+      held
+    );
   }
 
-  nextStep(): void {
+  nextStep(held = false): void {
     this.pause();
-    const target = this.stepBoundaries.find((index) => index > this.viewIndex);
-    this.goTo(target ?? this.total);
+    this.#move((from) => this.stepBoundaries.find((index) => index > from) ?? this.total, held);
   }
 
   jumpToLive(): void {

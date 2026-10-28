@@ -826,6 +826,17 @@ vitest_test(
 )
 
 vitest_test(
+    name = "heldStepping_test",
+    src = "heldStepping.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":replayHotkeys",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "replyRuns_test",
     src = "replyRuns.test.mjs",
     deps = [":replyRuns"],
