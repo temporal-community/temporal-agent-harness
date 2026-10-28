@@ -30,11 +30,7 @@ from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 from temporal_agent_harness.harness.state import HarnessState, StateRef
 
-# The tables a person can open. A choice rather than free text, so a grant always names the
-# table exactly as the policy's read_table check does.
-RestrictedTable = Literal["risk.loan_applications", "risk.credit_scores"]
-
-GRANT_FOR_THIS_SESSION = "Grant for this session"
+from examples.governed_analytics.models import GRANT_FOR_THIS_SESSION, RestrictedTable
 
 # ---------------------------------------------------------------------------
 # The observable state

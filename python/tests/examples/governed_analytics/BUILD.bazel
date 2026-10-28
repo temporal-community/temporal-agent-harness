@@ -28,20 +28,6 @@ harness_pytest_test(
 )
 
 harness_pytest_test(
-    name = "test_tools",
-    srcs = ["test_tools.py"],
-    imports = ["../../.."],
-    deps = [
-        ":conftest",
-        "//python/examples/governed_analytics:generate_data",
-        "//python/examples/governed_analytics:tools",
-        "//python/tests:conftest",
-        "@pypi//duckdb",
-        "@pypi//pytest",
-    ],
-)
-
-harness_pytest_test(
     name = "test_access",
     srcs = ["test_access.py"],
     imports = ["../../.."],
@@ -95,10 +81,43 @@ harness_pytest_test(
     imports = ["../../.."],
     deps = [
         ":conftest",
+        "//python/examples/governed_analytics:queries",
         "//python/examples/governed_analytics:reports",
         "//python/examples/governed_analytics:tools",
         "//python/examples/governed_analytics:workflow",
         "//python/temporal_agent_harness/harness/dogwood_approvals:__init__",
         "//python/tests:conftest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_queries",
+    srcs = ["test_queries.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:generate_data",
+        "//python/examples/governed_analytics:queries",
+        "//python/tests:conftest",
+        "@pypi//duckdb",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_branch_report",
+    srcs = ["test_branch_report.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/examples/governed_analytics:models",
+        "//python/examples/governed_analytics:sql_analysis",
+        "//python/examples/governed_analytics/static:activities",
+        "//python/examples/governed_analytics/static:workflow",
+        "//python/tests:conftest",
+        "@pypi//nexus_rpc",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
     ],
 )

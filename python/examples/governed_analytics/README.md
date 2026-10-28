@@ -20,13 +20,14 @@ engineering leaders.
 | `workflow.py` | **The harness.** The agent, its tools as one Code Mode tool, the approval policy, and the Dogwood evaluator every tool call goes through. |
 | `gemini.py` | **The model.** Gemini's prompt and its tool-calling loop. It hands each tool call to the harness (`runner.run_tool`). |
 | `access.py` | `request_access`, through which the agent asks a person for access to a restricted table, and the `table_access` board the agent's state shows. |
-| `tools.py`, `databases.py` | The data tools, and the locked-down DuckDB connection they read through. |
+| `tools.py`, `queries.py`, `databases.py` | The data tools, the queries they run, and the locked-down DuckDB connection those read through. |
 | `sql_analysis.py`, `sql_policy.py` | What the policy sees of a query: its facts, read off DuckDB's parser and planner, and one `read_table` check per table it reads. |
 | `policies/bank.dw` | **The policy**, in Dogwood. `schema.cedarschema` is generated from the tools (`just schema`); `events.dwschema` is the verifier's event schema. |
 | `generate_data.py` | The synthetic bank data (`just data`). |
 | `worker.py` | The worker. |
 | `charts.py` | The chart tools: callback tools the studio draws. |
 | `reports.py` | `publish_report`: a shareable report, which the studio "hosts" and the policy may refuse. |
+| `static/` | The same policy as a plain reporting workflow, without the agent: a small query change gets its report refused. [static/README.md](static/README.md). |
 | `ui/`, `client_sdk/` | The studio (below), and the agent's TypeScript types it is checked against (`bazel run //python/examples/governed_analytics:client_sdk_update`). |
 
 ## Setup

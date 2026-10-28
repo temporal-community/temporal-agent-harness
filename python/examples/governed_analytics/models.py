@@ -3,7 +3,17 @@
 Plain pydantic models, safe to import from workflow code.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, JsonValue
+
+# The tables a person can open. A choice rather than free text, so a grant always names the
+# table exactly as the policy's read_table check does.
+RestrictedTable = Literal["risk.loan_applications", "risk.credit_scores"]
+
+# The answer that opens a restricted table: the policy's risk-access-requested rule matches it
+# in a recorded request_access result.
+GRANT_FOR_THIS_SESSION = "Grant for this session"
 
 
 class SqlFacts(BaseModel):
@@ -130,3 +140,15 @@ class Outliers(DataResult):
     columns: list[str]
     rows: list[list[JsonValue]]
     truncated: bool
+
+
+class ReportSection(BaseModel):
+    heading: str
+    body: str = Field(
+        description="Markdown. A line `[chart:<chart_id>]` embeds a chart drawn earlier."
+    )
+
+
+class PublishedReport(BaseModel):
+    report_id: str
+    url: str = Field(description="The report's public link, to give the user.")

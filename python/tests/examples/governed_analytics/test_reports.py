@@ -2,7 +2,7 @@
 # tool's result says which tables its query read and whether any was restricted, and the
 # policy sees those results and the publish_report call.
 
-from examples.governed_analytics import tools
+from examples.governed_analytics import queries, tools
 from examples.governed_analytics.reports import publish_report
 from examples.governed_analytics.workflow import ACTION_PREFIX
 from temporal_agent_harness.harness.dogwood_approvals import dogwood_schema
@@ -14,12 +14,11 @@ def _action(schema: str, name: str) -> str:
 
 
 def test_a_result_says_what_its_query_read() -> None:
-    open_result = tools._reading(tools._run_sql, "SELECT * FROM branch_deposits LIMIT 1")
+    open_result = queries.run_sql("SELECT * FROM branch_deposits LIMIT 1")
     assert open_result.tables_read == ["analytics.branch_deposits"]
     assert open_result.restricted_data is False
 
-    restricted = tools._reading(
-        tools._summary_stats,
+    restricted = queries.summary_stats(
         "WITH l AS (SELECT * FROM risk.loan_applications) "
         "SELECT b.branch_id, l.amount FROM branches b JOIN l USING (branch_id)",
         "amount",

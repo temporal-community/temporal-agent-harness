@@ -13,21 +13,9 @@ No ``from __future__ import annotations`` here, as in the other examples' Tempor
 modules (stringized annotations trip the pydantic converter).
 """
 
-from pydantic import BaseModel, Field
-
 from temporal_agent_harness.harness import agent
 
-
-class ReportSection(BaseModel):
-    heading: str
-    body: str = Field(
-        description="Markdown. A line `[chart:<chart_id>]` embeds a chart drawn earlier."
-    )
-
-
-class PublishedReport(BaseModel):
-    report_id: str
-    url: str = Field(description="The report's public link, to give the user.")
+from examples.governed_analytics.models import PublishedReport, ReportSection
 
 
 @agent.callback_tool_defn()

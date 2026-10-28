@@ -159,11 +159,27 @@ when temporal {
   since within 30d Temporal::Action::"update/grant_access"::received{ input.arg0.table: context.input.arg0.table }
 };
 
+// The bank's branch reporting job (examples/governed_analytics/static) is entitled to read
+// risk data: it builds internal reports from it. Reading is all this grants. Whatever read it,
+// the rules under "publishing reports" still refuse a public report from the run.
+@id("branch-report-reads-risk")
+permit (
+  principal == Temporal::Worker::"BranchReport",
+  action == Temporal::Action::"bank-analyst/read_table",
+  resource
+)
+when {
+  context.input has arg0 &&
+  context.input.arg0 has table &&
+  context.input.arg0.table like "risk.*"
+};
+
 // Without access, a risk table is refused, and the reason tells the agent how to get it.
 @id("risk-needs-access")
 @reason("Risk tables need a person to grant access: call request_access with the table and your reason, then run the query again")
 forbid (principal, action == Temporal::Action::"bank-analyst/read_table", resource)
 when {
+  principal != Temporal::Worker::"BranchReport" &&
   context.input has arg0 &&
   context.input.arg0 has table &&
   context.input.arg0.table like "risk.*"

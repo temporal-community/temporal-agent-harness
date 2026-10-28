@@ -1,0 +1,54 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "activities",
+    srcs = ["activities.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/examples/governed_analytics:models",
+        "//python/examples/governed_analytics:queries",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "policy_gate",
+    srcs = ["policy_gate.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":activities",
+        ":workflow",
+        "//python/examples/governed_analytics:databases",
+        "//python/examples/governed_analytics:sql_analysis",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":activities",
+        ":policy_gate",
+        "//python/examples/governed_analytics:models",
+        "//python/examples/governed_analytics:sql_analysis",
+        "@pypi//temporalio",
+    ],
+)

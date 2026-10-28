@@ -64,12 +64,9 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
-        ":databases",
         ":models",
-        ":sql_analysis",
+        ":queries",
         "//python/temporal_agent_harness/harness:agent",
-        "@pypi//duckdb",
-        "@pypi//pydantic",
         "@pypi//temporalio",
     ],
 )
@@ -80,6 +77,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
+        ":models",
         "//python/temporal_agent_harness/harness:agent",
         "//python/temporal_agent_harness/harness:agent_workflow",
         "//python/temporal_agent_harness/harness/state:__init__",
@@ -206,7 +204,21 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
+        ":models",
         "//python/temporal_agent_harness/harness:agent",
+    ],
+)
+
+py_library(
+    name = "queries",
+    srcs = ["queries.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":databases",
+        ":models",
+        ":sql_analysis",
+        "@pypi//duckdb",
         "@pypi//pydantic",
     ],
 )

@@ -1,28 +1,28 @@
-# ABOUTME: Tests for the analytics tools' bodies on generated data: what they return, the
+# ABOUTME: Tests for the data queries the tools run, on generated data: what they return, the
 # connection's refusals that back up the policy (no file reads, no ATTACH, no SET, nothing but
 # a single SELECT), and the story the generated data has to tell for the demo.
 
 import duckdb
 import pytest
 
-from examples.governed_analytics import tools
+from examples.governed_analytics import queries
 from examples.governed_analytics.generate_data import QUARTERS, TROUBLED_COUNT
 
 
 def test_list_and_describe() -> None:
-    tables = {t.table for t in tools._list_tables("risk")}
+    tables = {t.table for t in queries.list_tables("risk")}
     assert tables == {"credit_scores", "loan_applications"}
-    described = tools._describe_table("risk.loan_applications")
+    described = queries.describe_table("risk.loan_applications")
     assert [c.name for c in described.columns][:3] == ["application_id", "applicant_id", "branch_id"]
     with pytest.raises(ValueError):
-        tools._list_tables("main")
+        queries.list_tables("main")
     with pytest.raises(ValueError):
-        tools._describe_table("loan_applications")
+        queries.describe_table("loan_applications")
 
 
 def test_run_sql_caps_rows() -> None:
-    result = tools._run_sql("SELECT * FROM transactions_daily")
-    assert result.truncated and len(result.rows) == tools.MAX_ROWS
+    result = queries.run_sql("SELECT * FROM transactions_daily")
+    assert result.truncated and len(result.rows) == queries.MAX_ROWS
     assert result.columns == ["branch_id", "day", "transactions", "volume"]
     assert isinstance(result.rows[0][1], str)  # dates as ISO strings
 
@@ -39,7 +39,7 @@ def test_run_sql_caps_rows() -> None:
 )
 def test_only_a_single_select_runs(sql: str) -> None:
     with pytest.raises(ValueError, match="single read-only SELECT"):
-        tools._run_sql(sql)
+        queries.run_sql(sql)
 
 
 @pytest.mark.parametrize(
@@ -52,12 +52,12 @@ def test_only_a_single_select_runs(sql: str) -> None:
 )
 def test_the_connection_refuses_files(sql: str) -> None:
     with pytest.raises(duckdb.PermissionException):
-        tools._run_sql(sql)
+        queries.run_sql(sql)
 
 
 def test_a_column_name_cannot_inject_sql() -> None:
     with pytest.raises(duckdb.BinderException):
-        tools._summary_stats(
+        queries.summary_stats(
             "SELECT * FROM branches", 'branch_id") FROM risk.loan_applications --'
         )
 
@@ -72,12 +72,12 @@ def _q3_change_sql() -> str:
 
 def test_statistics_tools() -> None:
     sql = _q3_change_sql()
-    stats = tools._summary_stats(sql, "change")
+    stats = queries.summary_stats(sql, "change")
     assert stats.count == 40 and stats.nulls == 0
     assert stats.min is not None and stats.min < -0.2
-    distribution = tools._calc_distribution(sql, "change", 5)
+    distribution = queries.calc_distribution(sql, "change", 5)
     assert sum(b.count for b in distribution.bins) == 40
-    correlation = tools._correlate(
+    correlation = queries.correlate(
         "SELECT deposit_volume, deposit_accounts FROM branch_deposits",
         ["deposit_volume", "deposit_accounts"],
     )
@@ -87,12 +87,12 @@ def test_statistics_tools() -> None:
 
 def test_the_data_tells_the_story() -> None:
     """A handful of branches lost deposits last quarter, and their loans default more."""
-    outliers = tools._detect_outliers(_q3_change_sql(), "change", "iqr")
+    outliers = queries.detect_outliers(_q3_change_sql(), "change", "iqr")
     troubled = {row[0] for row in outliers.rows}
     assert len(troubled) == TROUBLED_COUNT
 
     ids = ", ".join(str(b) for b in sorted(troubled))
-    comparison = tools._group_compare(
+    comparison = queries.group_compare(
         f"SELECT branch_id IN ({ids}) AS troubled, defaulted::INTEGER AS defaulted "
         "FROM risk.loan_applications WHERE approved",
         "troubled",

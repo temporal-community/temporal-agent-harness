@@ -9,6 +9,10 @@
 #   just dev               # 5. session manager + UI on :8000 + this example's worker
 #   just studio            # 6. optional: the studio UI on http://127.0.0.1:5173
 #
+# The branch report workflow (static/README.md), instead of 5 and 6:
+#   just static-worker     # its worker
+#   just static-start      # run it
+#
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`). First-time
 # setup: `cp .env.example .env.local` from the repo root and fill it in (Temporal connection +
 # GEMINI_API_KEY), and set DOGWOOD_VERIFIER_DIR to a checkout of temporal-untrusted-workers'
@@ -103,6 +107,17 @@ studio port="":
 # Type-check the studio against the generated client types, and test how it reads the stream.
 check-ui:
     bazel test //python/examples/governed_analytics/ui:all
+
+static_id := "branch-report"
+
+# Run the branch report workflow's worker: plain Temporal, no agent harness (needs `just data`).
+static-worker:
+    bazel run //python/examples/governed_analytics/static:worker
+
+# Run the branch report workflow and wait for its result (watch it in the Temporal UI).
+static-start id=static_id:
+    temporal workflow execute --type BranchReport \
+        --task-queue governed-analytics-static --workflow-id {{id}}-$(date +%H%M%S)
 
 # The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
 # temporal`). Ctrl-C stops them all.
