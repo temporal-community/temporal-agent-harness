@@ -18,6 +18,9 @@
   const headerPrefix = $derived(
     typeof data.headerPrefix === "string" ? data.headerPrefix : null
   );
+  const headerHeight = $derived(
+    typeof data.headerHeight === "number" ? `${data.headerHeight}px` : undefined
+  );
   const interfaces = $derived(
     Array.isArray(data.interfaces) ? data.interfaces : []
   );
@@ -44,7 +47,7 @@
 
 <div class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}>
   <Handle id="target-top" class="workflow-handle" type="target" position={Position.Top} />
-  <div class="workflow-head">
+  <div class="workflow-head" style:min-height={headerHeight}>
     <div class="workflow-title-group">
       <span class="workflow-title-row" data-tip={titleTip} data-tip-below>
         <StateGlyph kind={statusKind} {running} />

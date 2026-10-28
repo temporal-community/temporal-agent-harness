@@ -282,4 +282,25 @@ describe("an empty runtime boundary", () => {
       assert.ok(contains(boundaryOf(graph, "wf-parent"), container), "the container hangs out of the parent");
     }
   });
+
+  // --- an unreadable subagent's header fills the box its reason grew ----------
+  /* The reason line's text can be one line or two, so the header's own content
+     does not reach the height the layout reserved for it, and the box's body
+     showed as a strip under the header. The card is handed that height instead. */
+  it("hands an unreadable subagent's header the whole box its reason line grew", () => {
+    const unreadableParent = {
+      ...parent,
+      frames: [
+        ...parent.frames,
+        frame("subagent_stream_unavailable", { subagent_id: "s1", workflow_id: "wf-a", reason: "gave up" })
+      ]
+    };
+    const graph = buildAgentTreeGraph([unreadableParent, sub("wf-a", "s1", []), sub("wf-b", "s2", [])]);
+    const node = (workflowId) => graph.nodes.find((item) => item.id === `${workflowId}::agent-runtime`);
+
+    assert.ok(node("wf-a").data.reason, "the fixture should give wf-a a reason line");
+    assert.ok(boundaryOf(graph, "wf-a").height > headerHeight, "the reason line should grow the box");
+    assert.equal(node("wf-a").data.headerHeight, boundaryOf(graph, "wf-a").height);
+    assert.equal(node("wf-b").data.headerHeight, undefined, "a header with no reason keeps its own min-height");
+  });
 });

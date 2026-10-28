@@ -43,6 +43,8 @@ export interface AgentNodeData {
   detail?: string;
   /** A runtime boundary's one line on why its detail is missing. */
   reason?: string;
+  /** The header height the layout reserved around `reason`, which its text may not fill. */
+  headerHeight?: number;
   /** `detail` is a prose reply, drawn as markdown; decided by handlerReply's rule. */
   markdown?: boolean;
   active?: boolean;
@@ -2582,6 +2584,7 @@ function scopedGraph(
             tone: unreadableLooks[unreadable],
             state: unreadable,
             reason,
+            headerHeight: runtimeHeaderHeight + reasonShift,
             context: [
               unreadableContext(delegation, agent.executionStatus),
               ...(item.data.context ?? [])
