@@ -59,7 +59,7 @@ import { replayTimelineBuilder } from "./replayTimeline";
 import { replyRunAt, replyRunsBuilder } from "./replyRuns";
 import { agentName } from "./sessionHistory";
 import { buildStepBoundaries, stepTimelineBuilder } from "./stepTimeline";
-import { buildTranscript, transcriptBuilder, type TranscriptItem } from "./transcript";
+import { transcriptBuilder, type TranscriptItem } from "./transcript";
 import {
   appendRunFrames,
   claimRunWriter,
@@ -579,12 +579,11 @@ export class AgentRunController {
       return { items, logs, liveItems: items, liveLogs: logs, live: true, viewIndex: total, total };
     }
     const live = this.viewIndex >= this.replayTimeline.length;
+    const liveItems = this.chatTranscript;
     return {
-      items: live
-        ? this.chatTranscript
-        : buildTranscript(this.visibleReplayTimeline, this.#parentInterface),
+      items: live ? liveItems : this.#foldTranscript.at(this.viewIndex),
       logs: this.replayLog.rows,
-      liveItems: this.chatTranscript,
+      liveItems,
       liveLogs: this.fullReplayLog.rows,
       live,
       viewIndex: this.viewIndex,
