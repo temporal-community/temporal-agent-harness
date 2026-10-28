@@ -116,7 +116,6 @@ from functools import wraps
 from inspect import iscoroutinefunction, signature
 from typing import Any, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 from uuid import UUID
-from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from pydantic_core import to_jsonable_python
@@ -139,7 +138,7 @@ try:
     from langchain_core.outputs import ChatGenerationChunk, GenerationChunk, LLMResult
     from langchain_core.runnables import RunnableConfig
     from langchain_core.runnables.config import run_in_executor, var_child_runnable_config
-    from langgraph._internal._constants import CONFIG_KEY_RUNTIME
+    from langgraph._internal._constants import CONFIG_KEY_RUNTIME, CONFIG_KEY_SCRATCHPAD
     from langgraph._internal._runnable import RunnableCallable
     from langgraph.constants import TAG_NOSTREAM
     from langgraph.errors import GraphBubbleUp, GraphInterrupt
@@ -172,7 +171,6 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError, is_cancelled_exception
 
 _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
-_call_ids: WeakKeyDictionary[AgentWorkflowRunner, set[str]] = WeakKeyDictionary()
 
 __all__ = [
     "HarnessContext",
@@ -220,6 +218,7 @@ class HarnessContext(BaseModel):
     )
     stream_context: TurnStreamContext | None = None
     _task_calls: Counter[str | None] = PrivateAttr(default_factory=Counter)
+    _call_ids: set[str] = PrivateAttr(default_factory=set)
 
     @model_validator(mode="after")
     def _snapshot_stream_context(self) -> HarnessContext:
@@ -372,14 +371,15 @@ async def harness_tool_call(
         context._task_calls[task] += 1
         # Clients see the provider's id; a missing or repeated one gets a fresh id. A missing
         # one is written back into the AIMessage's dict, which reaches the state only when the
-        # node received the state itself, not a Send copy of the call. Ids are kept for the
-        # workflow, so a call re-run to resume its interrupt() is a new call to clients.
-        seen = _call_ids.setdefault(context.runner, set())
+        # node received the state itself, not a Send copy of the call. A call re-run to resume
+        # its interrupt() already ended in a tool_error, so it is a new call to clients too.
+        scratchpad = request.runtime.config.get("configurable", {}).get(CONFIG_KEY_SCRATCHPAD)
+        resumed = bool(getattr(scratchpad, "resume", None))
         call_id = call["id"] or ""
-        minted = not call_id or call_id in seen
+        minted = not call_id or call_id in context._call_ids or resumed
         if minted:
             call_id = str(workflow.uuid4())
-        seen.add(call_id)
+        context._call_ids.add(call_id)
         if not call["id"]:
             call["id"] = call_id  # the AIMessage's dict, so both messages carry it
         if minted:
