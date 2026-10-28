@@ -792,6 +792,7 @@ vitest_test(
     src = "replayLogFold.test.mjs",
     deps = [
         ":replayLog",
+        ":replayTimeline",
         "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
     ],

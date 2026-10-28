@@ -583,6 +583,7 @@ export class AgentRunController {
     return {
       items: live ? liveItems : this.#foldTranscript.at(this.viewIndex),
       logs: this.replayLog.rows,
+      logGroups: this.replayLog.groups,
       liveItems,
       liveLogs: this.fullReplayLog.rows,
       live,
