@@ -17,8 +17,10 @@ py_library(
     imports = ["../../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
+        ":_harness",
         ":_langgraph_config",
         ":_task_cache",
+        "//python/temporal_agent_harness/harness:stream_context",
         "@pypi//langgraph",
         "@pypi//temporalio",
     ],

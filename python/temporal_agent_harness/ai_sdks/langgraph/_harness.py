@@ -9,8 +9,9 @@ the inner loop, made durable by ``temporalio-langgraph``. This module connects t
 - ``graph(name, runner, injections=...)`` (and ``entrypoint`` for the Functional API) is the
   plugin's lookup bound to the harness: the compiled graph runs with a :class:`HarnessContext`,
   the graph's ``context_schema``, which carries the harness runner and tool injections inside the
-  workflow and the turn in flight's stream context into activity nodes. Everything else, the
-  checkpointer and its ``thread_id`` included, is the caller's, as in any LangGraph code.
+  workflow; the plugin sends the turn in flight's stream context to activity nodes beside it.
+  Everything else, the checkpointer and its ``thread_id`` included, is the caller's, as in any
+  LangGraph code.
 - An activity node with ``"stream_to_harness": True`` in its metadata (or a task's
   ``activity_options``) has its chat-model calls publish ``model_interaction_started``,
   ``reply_delta``, ``thought_summary`` and ``model_interaction_ended`` (with token usage) onto
@@ -108,6 +109,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextvars import ContextVar
 from contextlib import suppress
 from datetime import timedelta
 from functools import wraps
@@ -115,8 +117,7 @@ from inspect import iscoroutinefunction, signature
 from typing import Any, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializerFunctionWrapHandler
-from pydantic import SerializationInfo, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from pydantic_core import to_jsonable_python
 
 _INSTALL_MESSAGE = (
@@ -146,7 +147,7 @@ try:
     from langgraph.prebuilt import ToolNode
     from langgraph.prebuilt.tool_node import ToolCallRequest
     from langgraph.pregel import Pregel
-    from langgraph.runtime import Runtime, get_runtime
+    from langgraph.runtime import Runtime
     from langgraph.types import Command
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise RuntimeError(_INSTALL_MESSAGE) from exc
@@ -201,10 +202,10 @@ class _Publisher(Protocol):
 class HarnessContext(BaseModel):
     """LangGraph runtime context for a harness agent's graph.
 
-    Declare it as the graph's ``context_schema``; ``graph()`` makes one. Only
-    ``stream_context`` crosses into activity nodes, taken from ``runner`` for
-    the turn in flight each time the context is serialized; ``runner`` and
-    ``injections`` stay in the workflow for :func:`harness_tool_call`. A
+    Declare it as the graph's ``context_schema``; ``graph()`` makes one. It is
+    workflow-side state: ``runner`` and ``injections`` serve
+    :func:`harness_tool_call` and neither crosses into an activity node (the
+    plugin sends the turn's stream context beside the context instead). A
     subclass may add fields, passed as keywords to ``graph()``, but must then
     be the graph's declared ``context_schema``: activity nodes reject an
     unregistered context type.
@@ -216,20 +217,12 @@ class HarnessContext(BaseModel):
     injections: dict[str, object] = Field(
         default_factory=dict, exclude=True, repr=False
     )
-    # The activity side has no runner (it may be another worker): this is the one thing it
-    # needs from the turn, filled from the runner whenever the context is serialized.
-    stream_context: TurnStreamContext | None = None
     _call_ids: set[str] = PrivateAttr(default_factory=set)
 
-    @model_serializer(mode="wrap")
-    def _with_turn(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> Any:
-        data = handler(self)
-        if self.runner is not None and isinstance(data, dict):
-            stream_context = self.runner.current_stream_context
-            data["stream_context"] = (
-                None if stream_context is None else stream_context.model_dump(mode=info.mode)
-            )
-        return data
+
+activity_turn: ContextVar[TurnStreamContext | None] = ContextVar("activity_turn", default=None)
+"""The harness turn an activity node runs in: the plugin sets it from the runner's turn in
+flight on the workflow side and restores it on the activity side, where there is no runner."""
 
 
 def _turn_config(
@@ -461,8 +454,8 @@ def _stream_to_harness(
 
     @wraps(node)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        context = get_runtime().context
-        if not isinstance(context, HarnessContext) or context.stream_context is None:
+        turn = activity_turn.get()
+        if turn is None:
             return await node(*args, **kwargs)
         if not activity.in_activity():
             raise RuntimeError(
@@ -471,7 +464,7 @@ def _stream_to_harness(
         heartbeat = asyncio.create_task(_heartbeat())
         try:
             async with AgentWorkflowRunner.publisher_from_activity(
-                context.stream_context, batch_interval=batch_interval
+                turn, batch_interval=batch_interval
             ) as publisher:
                 config = var_child_runnable_config.get() or {}
                 token = var_child_runnable_config.set(

@@ -21,8 +21,8 @@ own module beside it, `ai_sdks/langgraph/_harness.py`, supplies the seams the pl
   "auto"}`; its summaries stream as `thought_summary` events the console shows while it thinks.
 - **`HarnessContext` as the graph's `context_schema`.** `init` calls
   `graph(GRAPH, self._runner, injections={"notes": self.notes})`, which binds one to the compiled
-  graph: it carries each turn's stream context to the activity node and keeps the runner and
-  the injections in the workflow for the tool node. The handler then calls `ainvoke` with the
+  graph: it keeps the runner and the injections in the workflow for the tool node, and the
+  plugin sends each turn's stream context to the activity node. The handler then calls `ainvoke` with the
   conversation's thread, as any LangGraph code would.
 - **One tool of each harness kind**, all in one prebuilt `ToolNode` that runs **in-workflow**;
   the plugin sets `harness_tool_call` as its `awrap_tool_call`, so every call goes through

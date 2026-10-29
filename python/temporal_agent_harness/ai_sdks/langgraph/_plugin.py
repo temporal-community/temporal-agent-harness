@@ -422,8 +422,8 @@ def graph(
             is bound to the harness: ``compile`` the result as the builder,
             once, in ``@agent.init``. The compiled graph runs with a
             ``HarnessContext`` (the graph's ``context_schema``; ``injections``
-            and ``fields`` fill it) that carries each turn's stream context
-            into activity nodes, so ``ainvoke`` takes no context. The
+            and ``fields`` fill it), so ``ainvoke`` takes no context, and each
+            activity node gets the turn in flight's stream context. The
             checkpointer and its ``thread_id`` stay the caller's.
         cache: Optional task result cache from a previous cache() call.
             Restores cached results so previously-completed nodes are

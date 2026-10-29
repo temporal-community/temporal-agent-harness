@@ -12,6 +12,8 @@ from langgraph.types import Command, Interrupt, Send, TimeoutPolicy
 
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
+from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_harness.ai_sdks.langgraph._harness import activity_turn
 from temporal_agent_harness.ai_sdks.langgraph._langgraph_config import (
     context_schema_id,
     get_langgraph_config,
@@ -151,6 +153,11 @@ def wrap_activity(
             if accepts_runtime:
                 kwargs["runtime"] = runtime
 
+            # Vendored: the harness turn this node streams to, if it runs in one.
+            turn = input.langgraph_config.get("harness_turn")
+            turn_token = activity_turn.set(
+                None if turn is None else TurnStreamContext.model_validate(turn)
+            )
             try:
                 if iscoroutinefunction(func):
                     result = await func(*input.args, **kwargs)
@@ -161,6 +168,8 @@ def wrap_activity(
                 return ActivityOutput(result=result)
             except GraphInterrupt as e:
                 return ActivityOutput(langgraph_interrupts=e.args[0])
+            finally:
+                activity_turn.reset(turn_token)
 
         if streaming_topic is None:
             return await run(stream_writer=None)
@@ -212,6 +221,11 @@ def wrap_execute_activity(
         langgraph_config = get_langgraph_config()
         if runtime is not None:
             langgraph_config["context"] = runtime.context
+        # Vendored: the harness turn's stream context rides beside the context, which holds
+        # workflow-side state only; the activity publishes its model events against it.
+        runner = getattr(langgraph_config.get("context"), "runner", None)
+        turn = getattr(runner, "current_stream_context", None)
+        langgraph_config["harness_turn"] = None if turn is None else turn.model_dump(mode="json")
         context_type = type(langgraph_config.get("context"))
         if is_context_schema(context_type):
             schema_id = context_schema_id(context_type)

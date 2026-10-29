@@ -72,6 +72,7 @@ with workflow.unsafe.imports_passed_through():
         _stream_to_harness,
         _token_usage,
         _with_handler,
+        activity_turn,
     )
     from temporal_agent_harness.plugin import AgentHarnessPlugin
 
@@ -812,7 +813,7 @@ async def test_harness_tool_call_guards(monkeypatch: pytest.MonkeyPatch):
         await harness_tool_call(request, cast(Any, None))
 
 
-async def test_stream_to_harness_guards(monkeypatch: pytest.MonkeyPatch):
+async def test_stream_to_harness_guards():
     def sync_node(state: dict[str, Any]) -> dict[str, Any]:
         return state
 
@@ -822,14 +823,15 @@ async def test_stream_to_harness_guards(monkeypatch: pytest.MonkeyPatch):
     async def node(state: dict[str, Any]) -> dict[str, Any]:
         return state
 
-    target = "temporal_agent_harness.ai_sdks.langgraph._harness.get_runtime"
-    context = HarnessContext.model_construct(stream_context=cast(Any, object()))
-    monkeypatch.setattr(target, lambda: SimpleNamespace(context=context))
-    with pytest.raises(RuntimeError, match="activity node"):
-        await _stream_to_harness(node)({})
+    # In a harness turn (the plugin set it for an activity) but not in an activity.
+    token = activity_turn.set(cast(Any, object()))
+    try:
+        with pytest.raises(RuntimeError, match="activity node"):
+            await _stream_to_harness(node)({})
+    finally:
+        activity_turn.reset(token)
 
     # Outside a harness turn, with or without options, the node runs unchanged.
-    monkeypatch.setattr(target, lambda: SimpleNamespace(context=None))
     streamed = _stream_to_harness(node, batch_interval=timedelta(seconds=1))
     assert await streamed({"a": 1}) == {"a": 1}
 
