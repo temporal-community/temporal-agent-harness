@@ -1,10 +1,10 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 
-# The npm release automation (prepare-/finish-/publish-npm.yml) against mocked GitHub calls. It runs
-# the pinned Node's own npm for `npm version`.
+# The release automation (prepare-/finish-release.yml, publish-npm.yml) against mocked GitHub
+# calls and a fixture repository. The check of the real README's pins against pyproject.toml
+# runs under `node --test scripts/release.test.mjs`, where those files are reachable.
 js_test(
-    name = "npm-release_test",
-    data = ["npm-release.mjs"],
-    entry_point = "npm-release.test.mjs",
-    include_npm = True,
+    name = "release_test",
+    data = ["release.mjs"],
+    entry_point = "release.test.mjs",
 )

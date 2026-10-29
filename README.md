@@ -219,7 +219,7 @@ Two artifacts come out of a release, and they pin differently:
 
 **This project is very early and experimental - `main` may break at any time.**
 
-Releases are cut manually, when the maintainers judge the state stable. This project is
+Releases are cut when the maintainers judge the state stable ([how](RELEASE.md)). This project is
 **experimental** and pre-1.0: APIs will change between releases, without warning. Pinning is what
 keeps that churn from reaching you unannounced — so pin, and upgrade deliberately when you want
 to try out new harness capabilities.
@@ -1114,3 +1114,5 @@ design documentation — the agent protocol, the streaming model, human-in-the-l
 agents-as-subagents — lives under [`docs/internal/`](docs/internal). Contributor setup
 (repository layout, the root `justfile`, UI development, and packaging) is in
 [`docs/internal/development.md`](docs/internal/development.md).
+Release readiness, SDK parity, versioning, and publishing steps are in
+[`RELEASE.md`](RELEASE.md).
