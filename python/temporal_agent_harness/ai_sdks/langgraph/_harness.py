@@ -7,9 +7,10 @@ The harness owns the session, the turn event stream, tool approvals and clients.
 the inner loop, made durable by ``temporalio-langgraph``. This module connects them:
 
 - ``graph(name, runner, injections=...)`` (and ``entrypoint`` for the Functional API) is the
-  plugin's lookup bound to the turn: the compiled graph runs on the workflow's checkpoint thread
-  with a :class:`HarnessContext`, the graph's ``context_schema``, which carries the harness runner
-  and tool injections inside the workflow and the turn's stream context into activity nodes.
+  plugin's lookup bound to the turn: the compiled graph runs with a :class:`HarnessContext`, the
+  graph's ``context_schema``, which carries the harness runner and tool injections inside the
+  workflow and the turn's stream context into activity nodes. Everything else, the checkpointer
+  and its ``thread_id`` included, is the caller's, as in any LangGraph code.
 - An activity node with ``"stream_to_harness": True`` in its metadata (or a task's
   ``activity_options``) has its chat-model calls publish ``model_interaction_started``,
   ``reply_delta``, ``thought_summary`` and ``model_interaction_ended`` (with token usage) onto
@@ -54,7 +55,11 @@ Build the graph with the harness context and the plugin's activity metadata:
 In the agent, keep one checkpointer and run one turn per message (``graph()`` binds the turn, so
 call it in the handler):
 
->>> g = graph("weather", self._runner).compile(checkpointer=self._checkpointer)
+>>> g = (
+...     graph("weather", self._runner)
+...     .compile(checkpointer=self._checkpointer)
+...     .with_config(configurable={"thread_id": self._thread_id})  # the conversation
+... )
 >>> result = await g.ainvoke({"messages": [HumanMessage(message.text)]})
 >>> reply = result["messages"][-1].text
 
@@ -225,7 +230,6 @@ def _turn_config(
     schema: object,
     runner: AgentWorkflowRunner,
     injections: Mapping[str, object] | None,
-    thread_id: str | None,
     fields: Mapping[str, object],
 ) -> RunnableConfig:
     if not (isinstance(schema, type) and issubclass(schema, HarnessContext)):
@@ -235,12 +239,8 @@ def _turn_config(
     # @agent.init ran in, where it would retain every node result for the
     # workflow's lifetime. The harness never continues-as-new: run without one.
     set_task_cache(None)
-    return {
-        "configurable": {
-            "thread_id": thread_id or workflow.info().workflow_id,
-            CONFIG_KEY_RUNTIME: Runtime(context=context),  # inherited by ainvoke(context=None)
-        }
-    }
+    # The context rides as the run's parent runtime, which ainvoke(context=None) inherits.
+    return {"configurable": {CONFIG_KEY_RUNTIME: Runtime(context=context)}}
 
 
 def adopt_prebuilt(

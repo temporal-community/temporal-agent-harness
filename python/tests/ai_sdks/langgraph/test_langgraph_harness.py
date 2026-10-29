@@ -328,12 +328,15 @@ class GraphAgent:
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
         self._checkpointer = InMemorySaver()
+        self._thread = {"configurable": {"thread_id": str(workflow.uuid4())}}
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask the agent something."""
-        g = graph("agent", self._runner, injections={"user": "alice"}).compile(
-            checkpointer=self._checkpointer
+        g = (
+            graph("agent", self._runner, injections={"user": "alice"})
+            .compile(checkpointer=self._checkpointer)
+            .with_config(self._thread)
         )
         return TextReply(text=await turn(g, message.text))
 
@@ -349,12 +352,15 @@ class FunctionalAgent:
         )
         # An entrypoint is built once at import, so give this workflow its own checkpointer.
         self._checkpointer = InMemorySaver()
+        self._thread = {"configurable": {"thread_id": str(workflow.uuid4())}}
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask the agent something."""
-        g = registered_entrypoint("functional", self._runner, injections={"user": "alice"}).copy(
-            {"checkpointer": self._checkpointer}
+        g = (
+            registered_entrypoint("functional", self._runner, injections={"user": "alice"})
+            .copy({"checkpointer": self._checkpointer})
+            .with_config(self._thread)
         )
         return TextReply(text=await turn(g, message.text))
 

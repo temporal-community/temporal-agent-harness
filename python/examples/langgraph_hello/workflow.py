@@ -13,8 +13,8 @@ harness owns approval and the ``tool_start`` / ``tool_end`` / ``tool_error`` eve
 * ``ask_user``: a callback tool with no worker body; the console draws an answer box.
 
 ``temporalio-langgraph`` runs the graph durably: each node with ``execute_in="activity"`` is an
-activity, the rest run in the workflow, and the graph is checkpointed in workflow memory with the
-workflow id as its thread. ``graph(name, runner, ...)`` binds each harness turn to that thread.
+activity, the rest run in the workflow, and the graph is checkpointed in workflow memory on one
+thread per conversation. ``graph(name, runner, ...)`` binds the harness turn's context to the run.
 
 Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is registered
 in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
@@ -159,12 +159,12 @@ class LangGraphHelloAgentWorkflow:
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the assistant: ask about the weather in a city, ask it to remember something,
         or ask something ambiguous and it will ask you back."""
-        # graph() binds the turn: the conversation's checkpoint thread, so each turn continues
-        # it, and the context that carries the runner and injections.
+        # graph() binds the turn's context (runner, injections) to the run; the checkpoint
+        # thread is the conversation, so each turn continues it.
         g = (
-            graph(GRAPH, self._runner, injections={"notes": self.notes}, thread_id=self._thread_id)
+            graph(GRAPH, self._runner, injections={"notes": self.notes})
             .compile(checkpointer=self._checkpointer)
-            .with_config(recursion_limit=25)
+            .with_config(recursion_limit=25, configurable={"thread_id": self._thread_id})
         )
         # ask_user is a callback tool: the harness holds the turn open until the console
         # answers it, so one message is one graph run.
