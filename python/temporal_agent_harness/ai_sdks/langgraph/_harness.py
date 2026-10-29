@@ -216,6 +216,8 @@ class HarnessContext(BaseModel):
     injections: dict[str, object] = Field(
         default_factory=dict, exclude=True, repr=False
     )
+    # The activity side has no runner (it may be another worker): this is the one thing it
+    # needs from the turn, filled from the runner whenever the context is serialized.
     stream_context: TurnStreamContext | None = None
     _call_ids: set[str] = PrivateAttr(default_factory=set)
 
