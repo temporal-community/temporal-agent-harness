@@ -95,8 +95,8 @@ is in ``python/examples/langgraph_hello/README.md``):
 - Ask the user through a harness callback tool (``@agent.callback_tool_defn``), not LangGraph's
   ``interrupt()``: the harness holds the turn open until the client answers, so one message is
   one graph run. An ``interrupt()`` pauses the graph instead, and nothing resumes it.
-- Set a ``recursion_limit`` on the compiled graph; ``run_turn`` takes no config, and a model can
-  re-call a denied tool indefinitely. Reaching the limit fails the turn.
+- Pass a ``recursion_limit`` in the invoke config: a model can re-call a denied tool
+  indefinitely, and reaching the limit fails the turn.
 
 .. warning::
     This integration is experimental and may change in future versions.
