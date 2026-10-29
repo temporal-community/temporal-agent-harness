@@ -1,0 +1,17 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"args": {"action": "deploy"}, "id": "call-deploy", "name": "gated", "step": "tool"}, {"args": {"action": "delete"}, "id": "call-delete", "name": "gated", "step": "tool"}, {"model": "scripted", "reply": ["Done."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-deploy", "tool_input": {"action": "deploy"}, "tool_name": "gated", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-deploy", "tool_input": {"action": "deploy"}, "tool_name": "gated", "type": "tool_approval_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"approved": true, "reason": null, "remember": false, "tool_id": "call-deploy", "tool_name": "gated", "type": "tool_approval_resolved"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-deploy", "tool_input": {"action": "deploy"}, "tool_name": "gated", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-deploy", "tool_name": "gated", "tool_output": "done: deploy", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-delete", "tool_input": {"action": "delete"}, "tool_name": "gated", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-delete", "tool_input": {"action": "delete"}, "tool_name": "gated", "type": "tool_approval_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"approved": false, "reason": "Not now.", "remember": false, "tool_id": "call-delete", "tool_name": "gated", "type": "tool_approval_resolved"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Done.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": "Done."}, "type": "message_handler_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}

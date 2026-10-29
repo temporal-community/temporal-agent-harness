@@ -1,0 +1,56 @@
+{
+  "description": "One gated call approved, one denied.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-deploy",
+            "name": "gated",
+            "args": {
+              "action": "deploy"
+            }
+          },
+          {
+            "step": "tool",
+            "id": "call-delete",
+            "name": "gated",
+            "args": {
+              "action": "delete"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Done."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "tool_approval_requested",
+      "tool_id": "call-deploy"
+    },
+    {
+      "action": "approve",
+      "tool_id": "call-deploy",
+      "approved": true
+    },
+    {
+      "action": "await",
+      "event": "tool_approval_requested",
+      "tool_id": "call-delete"
+    },
+    {
+      "action": "approve",
+      "tool_id": "call-delete",
+      "approved": false,
+      "reason": "Not now."
+    }
+  ]
+}

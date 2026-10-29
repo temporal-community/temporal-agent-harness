@@ -1,14 +1,22 @@
 package slackinbound
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	slackapi "github.com/slack-go/slack"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/interaction"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
@@ -37,36 +45,8 @@ func expectRouterWorkflowStart(t *testing.T, tc *mocks.Client, wfID string, requ
 		}),
 		router.WorkflowName,
 		mock.MatchedBy(func(input router.Input) bool {
-			return input.Message != nil && input.Message.RequiresExistingSession == requiresExistingSession
-		}),
-	).Return(nil, nil).Once()
-}
-
-// postSlashCommand sends a slash-command form body to handleSlashCommands.
-// It skips signature verification, like postEvent does.
-func postSlashCommand(t *testing.T, s *webhookServer, form url.Values) *httptest.ResponseRecorder {
-	t.Helper()
-	request := httptest.NewRequest(http.MethodPost, routeCommands, strings.NewReader(form.Encode()))
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response := httptest.NewRecorder()
-	s.handleSlashCommands(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", response.Code)
-	}
-	return response
-}
-
-// expectSlashWorkflowStart mocks the workflow start for a slash command.
-// It checks the final command name and arg, after prefix stripping.
-func expectSlashWorkflowStart(t *testing.T, tc *mocks.Client, name, arg string) {
-	t.Helper()
-	tc.On(
-		"ExecuteWorkflow",
-		mock.Anything,
-		mock.Anything,
-		router.WorkflowName,
-		mock.MatchedBy(func(input router.Input) bool {
-			return input.Slash != nil && input.Slash.Name == name && input.Slash.Arg == arg
+			m := input.Request.Message
+			return m != nil && m.RequiresExistingSession == requiresExistingSession
 		}),
 	).Return(nil, nil).Once()
 }
@@ -88,9 +68,6 @@ func expectThreadSessionLookup(t *testing.T, tc *mocks.Client, wfIDPrefix string
 	).Return(&workflowservice.ListWorkflowExecutionsResponse{Executions: executions}, nil).Once()
 }
 
-// TestHandleEventsForwardsMention covers both a mention on a fresh top-level
-// message and a mention on an existing thread reply - both should forward
-// immediately without probing for a prior session.
 func TestHandleEventsForwardsMention(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -105,7 +82,7 @@ func TestHandleEventsForwardsMention(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockClient := mocks.NewClient(t)
 			expectRouterWorkflowStart(t, mockClient, tc.wfID, false)
-			server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
+			server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
 
 			postEvent(t, server, `{
 				"type":"event_callback",
@@ -116,17 +93,12 @@ func TestHandleEventsForwardsMention(t *testing.T) {
 	}
 }
 
-// TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned covers both the
-// case where the thread root itself was the mention, and the trickier case where the
-// mention happened on some earlier reply deep in the thread (not the root) - in both
-// cases the router workflow that the mention started has a different workflow-ID
-// suffix than the root's own ts, so the lookup must match on the shared thread
-// prefix rather than reconstructing one specific ID.
+// Find prior bot interactions by the thread prefix, regardless of which reply mentioned the bot.
 func TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", true)
 	expectRouterWorkflowStart(t, mockClient, "connector-default-slack:C1:100.000-300.000", true)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -137,7 +109,7 @@ func TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned(t *testi
 func TestHandleEventsDropsUnmentionedReplyWhenThreadWasNeverMentioned(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", false)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -149,7 +121,7 @@ func TestHandleEventsDropsUnmentionedReplyWhenThreadWasNeverMentioned(t *testing
 
 func TestHandleEventsDropsUnmentionedTopLevelMessage(t *testing.T) {
 	mockClient := mocks.NewClient(t)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -160,15 +132,12 @@ func TestHandleEventsDropsUnmentionedTopLevelMessage(t *testing.T) {
 	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestHandleEventsForwardsAllowedBotMention checks that a mention from any
-// bot in allowedBotIDs is forwarded, same as a human mention - covers both
-// entries in a multi-bot allowlist, not just a single configured ID.
 func TestHandleEventsForwardsAllowedBotMention(t *testing.T) {
 	for _, botID := range []string{"HCBOT1", "HCBOT2"} {
 		t.Run(botID, func(t *testing.T) {
 			mockClient := mocks.NewClient(t)
 			expectRouterWorkflowStart(t, mockClient, "connector-default-slack:C1:100.000-100.000", false)
-			server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", []string{"HCBOT1", "HCBOT2"})
+			server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID, AllowedBotIDs: []string{"HCBOT1", "HCBOT2"}})
 
 			postEvent(t, server, `{
 				"type":"event_callback",
@@ -178,11 +147,9 @@ func TestHandleEventsForwardsAllowedBotMention(t *testing.T) {
 	}
 }
 
-// TestHandleEventsDropsOtherBotMentionEvenWhenSomeBotsAreAllowed checks the
-// allowlist doesn't open the door to every bot, only the configured ones.
 func TestHandleEventsDropsOtherBotMentionEvenWhenSomeBotsAreAllowed(t *testing.T) {
 	mockClient := mocks.NewClient(t)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", []string{"HCBOT1", "HCBOT2"})
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID, AllowedBotIDs: []string{"HCBOT1", "HCBOT2"}})
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -192,47 +159,200 @@ func TestHandleEventsDropsOtherBotMentionEvenWhenSomeBotsAreAllowed(t *testing.T
 	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestHandleSlashCommandsStripsConfiguredPrefix checks that a prefixed
-// command, like "/bot-build-name-cmd", resolves to "cmd".
-func TestHandleSlashCommandsStripsConfiguredPrefix(t *testing.T) {
-	mockClient := mocks.NewClient(t)
-	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-name", nil)
-
-	postSlashCommand(t, server, url.Values{
-		"command":    {"/bot-build-name-scope"},
-		"channel_id": {"C1"},
-		"trigger_id": {"T1"},
-		"text":       {"docs"},
-	})
+// expectInput mocks one workflow start and captures its input.
+func expectInput(tc *mocks.Client, wfID string) *router.Input {
+	var got router.Input
+	tc.On("ExecuteWorkflow", mock.Anything,
+		mock.MatchedBy(func(options client.StartWorkflowOptions) bool { return options.ID == wfID }),
+		router.WorkflowName, mock.Anything,
+	).Run(func(args mock.Arguments) { got = args.Get(3).(router.Input) }).Return(nil, nil).Once()
+	return &got
 }
 
-// TestHandleSlashCommandsLeavesCommandUnchangedWhenNoPrefixConfigured checks
-// that with no prefix set, the command name does not change.
-func TestHandleSlashCommandsLeavesCommandUnchangedWhenNoPrefixConfigured(t *testing.T) {
+func TestHandleEventsStripsTheBotMention(t *testing.T) {
 	mockClient := mocks.NewClient(t)
-	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
+	got := expectInput(mockClient, "connector-default-slack:C1:100.000-100.000")
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
 
-	postSlashCommand(t, server, url.Values{
-		"command":    {"/scope"},
-		"channel_id": {"C1"},
-		"trigger_id": {"T1"},
-		"text":       {"docs"},
-	})
+	postEvent(t, server, `{"type":"event_callback","event":{"type":"message","channel":"C1","user":"U1","ts":"100.000","text":"<@BOT123> /help"}}`)
+	require.NotNil(t, got.Request.Message)
+	assert.Equal(t, "/help", got.Request.Message.Text)
+	assert.JSONEq(t, `{"sessionId":"slack:C1:100.000","channel":"C1","threadTs":"100.000","userId":"U1"}`, string(got.Address))
 }
 
-// TestHandleSlashCommandsLeavesMismatchedPrefixUnstripped checks that a
-// command missing the expected prefix does not change. It is forwarded as-is.
-func TestHandleSlashCommandsLeavesMismatchedPrefixUnstripped(t *testing.T) {
-	mockClient := mocks.NewClient(t)
-	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-id", nil)
+func TestHandleEventsMarksFirstContact(t *testing.T) {
+	t.Run("top-level mention starts a session", func(t *testing.T) {
+		mockClient := mocks.NewClient(t)
+		got := expectInput(mockClient, "connector-default-slack:C1:100.000-100.000")
+		server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID, GuideOnFirstContact: true})
 
-	postSlashCommand(t, server, url.Values{
-		"command":    {"/scope"},
-		"channel_id": {"C1"},
-		"trigger_id": {"T1"},
-		"text":       {"docs"},
+		postEvent(t, server, `{"type":"event_callback","event":{"type":"message","channel":"C1","user":"U1","ts":"100.000","text":"<@BOT123> hi"}}`)
+		assert.True(t, got.Request.Message.FirstContact)
+		mockClient.AssertNotCalled(t, "ListWorkflow", mock.Anything, mock.Anything)
 	})
+
+	for _, known := range []bool{false, true} {
+		t.Run(fmt.Sprintf("in-thread mention, session known=%v", known), func(t *testing.T) {
+			mockClient := mocks.NewClient(t)
+			expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", known)
+			got := expectInput(mockClient, "connector-default-slack:C1:100.000-200.000")
+			server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID, GuideOnFirstContact: true})
+
+			postEvent(t, server, `{"type":"event_callback","event":{"type":"message","channel":"C1","user":"U1","ts":"200.000","thread_ts":"100.000","text":"<@BOT123> hi"}}`)
+			assert.Equal(t, !known, got.Request.Message.FirstContact)
+		})
+	}
+}
+
+func postInteraction(t *testing.T, s *webhookServer, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	form := url.Values{"payload": {string(body)}}
+	request := httptest.NewRequest(http.MethodPost, routeInteractions, strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	s.handleInteractions(response, request)
+	require.Equal(t, http.StatusOK, response.Code)
+	return response
+}
+
+func TestHandleInteractionsApprovalClick(t *testing.T) {
+	var replaced map[string]any
+	mockClient := mocks.NewClient(t)
+	got := expectInput(mockClient, "connector-default-slack:C1:1.0-approval-t1")
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
+	server.responseClient.Transport = responseTransport(func(r *http.Request) (*http.Response, error) {
+		assert.Equal(t, "https://hooks.slack.com/actions/T1/B1/token", r.URL.String())
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &replaced))
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	})
+
+	postInteraction(t, server, map[string]any{
+		"type":         "block_actions",
+		"user":         map[string]any{"id": "U9"},
+		"response_url": "https://hooks.slack.com/actions/T1/B1/token",
+		"actions": []any{map[string]any{
+			"block_id":  "tool_approval",
+			"action_id": interaction.ActionAlwaysAllow,
+			"value":     `{"s":"slack:C1:1.0","t":"t1","n":"search","a":true,"r":true}`,
+		}},
+	})
+
+	require.NotNil(t, got.Request.Approval)
+	assert.Equal(t, protocol.ApprovalDecision{
+		ToolID: "t1", ToolName: "search", Approved: true, Remember: true,
+		Reason: "Always allowed by <@U9> in Slack.",
+	}, *got.Request.Approval)
+	assert.Equal(t, true, replaced["replace_original"])
+	assert.Contains(t, replaced["text"], "Always allowed by <@U9>")
+}
+
+func TestHandleInteractionsFormClick(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	got := expectInput(mockClient, "connector-default-slack:C1:1.0-form-trig")
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
+
+	postInteraction(t, server, map[string]any{
+		"type":       "block_actions",
+		"user":       map[string]any{"id": "U9"},
+		"trigger_id": "trig",
+		"actions": []any{map[string]any{
+			"block_id":  "guide",
+			"action_id": interaction.ActionOpenFormPrefix + "set_model",
+			"value":     `{"s":"slack:C1:1.0","h":"set_model"}`,
+		}},
+	})
+
+	require.NotNil(t, got.Request.OpenForm)
+	assert.Equal(t, protocol.FormRequest{Handler: "set_model"}, *got.Request.OpenForm)
+	assert.JSONEq(t, `{"sessionId":"slack:C1:1.0","channel":"C1","threadTs":"1.0","userId":"U9","triggerId":"trig"}`, string(got.Address))
+}
+
+func TestHandleInteractionsFormClickWithFieldsOpensTheModalDirectly(t *testing.T) {
+	var opened string
+	slackAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/views.open", r.URL.Path)
+		body, _ := io.ReadAll(r.Body)
+		opened = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer slackAPI.Close()
+
+	mockClient := mocks.NewClient(t)
+	server := NewServer(mockClient, "task-queue", "", Options{
+		BotUserID: testBotUserID,
+		Slack:     slackapi.New("x", slackapi.OptionAPIURL(slackAPI.URL+"/")),
+	})
+
+	postInteraction(t, server, map[string]any{
+		"type":       "block_actions",
+		"user":       map[string]any{"id": "U9"},
+		"trigger_id": "trig",
+		"actions": []any{map[string]any{
+			"block_id":  "guide",
+			"action_id": interaction.ActionOpenFormPrefix + "set_model",
+			"value":     `{"s":"slack:C1:1.0","h":"set_model","i":true,"f":[{"n":"model","k":"enum","r":true,"o":["a","b"]}]}`,
+		}},
+	})
+
+	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	assert.Contains(t, opened, `"trigger_id":"trig"`)
+	assert.Contains(t, opened, `\"h\":\"set_model\"`, "the modal carries its metadata")
+}
+
+func formSubmission(values map[string]any) map[string]any {
+	return map[string]any{
+		"type": "view_submission",
+		"user": map[string]any{"id": "U9"},
+		"view": map[string]any{
+			"id":               "V1",
+			"callback_id":      interaction.FormCallbackID,
+			"private_metadata": `{"s":"slack:C1:1.0","th":"1.0","h":"configure"}`,
+			"state":            map[string]any{"values": values},
+		},
+	}
+}
+
+func TestHandleInteractionsFormSubmission(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	got := expectInput(mockClient, "connector-default-slack:C1:1.0-call-V1")
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
+
+	response := postInteraction(t, server, formSubmission(map[string]any{
+		"count": map[string]any{"field:integer": map[string]any{"value": "3"}},
+	}))
+
+	assert.Empty(t, response.Body.String(), "an empty 200 closes the modal")
+	require.NotNil(t, got.Request.Call)
+	assert.Equal(t, protocol.HandlerCall{Name: "configure", Payload: `{"count":3}`}, *got.Request.Call)
+	assert.JSONEq(t, `{"sessionId":"slack:C1:1.0","channel":"C1","threadTs":"1.0","userId":"U9"}`, string(got.Address))
+}
+
+func TestHandleInteractionsFormSubmissionErrorsKeepTheModalOpen(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	server := NewServer(mockClient, "task-queue", "", Options{BotUserID: testBotUserID})
+
+	response := postInteraction(t, server, formSubmission(map[string]any{
+		"tags": map[string]any{"field:json": map[string]any{"value": "[1,"}},
+	}))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	assert.Equal(t, "errors", body["response_action"])
+	assert.Contains(t, body["errors"].(map[string]any)["tags"], "Invalid JSON")
+	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestMentionIsNormalizedBeforeBackendDispatch(t *testing.T) {
+	tc := mocks.NewClient(t)
+	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, router.WorkflowName,
+		mock.MatchedBy(func(input router.Input) bool {
+			return input.Request.Message != nil && input.Request.Message.Text == "/set_model model=fast"
+		})).Return(nil, nil).Once()
+	server := NewServer(tc, "queue", "", Options{BotUserID: testBotUserID})
+	postEvent(t, server, `{"type":"event_callback","event":{"type":"message","channel":"C1","user":"U1","ts":"100.000","text":"<@BOT123> /set_model model=fast"}}`)
 }

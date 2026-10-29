@@ -1,0 +1,69 @@
+{
+  "$defs": {
+    "AgentRegistryEntry": {
+      "description": "One ``[[agents]]`` entry of an ``agents.toml`` registry: a launchable agent.\n\nKeys this model does not name are ignored, so an SDK may add its own (the TypeScript SDK's\n``agent`` reference).",
+      "properties": {
+        "key": {
+          "description": "Unique within the registries a server merges.",
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "workflow_type": {
+          "description": "The agent's workflow type.",
+          "minLength": 1,
+          "title": "Workflow Type",
+          "type": "string"
+        },
+        "task_queue": {
+          "description": "The task queue the agent's worker polls.",
+          "minLength": 1,
+          "title": "Task Queue",
+          "type": "string"
+        },
+        "label": {
+          "description": "The name the UI shows.",
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "description": "What the agent does, for the UI.",
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "schema": {
+          "description": "The agent's schema document (`temporal-agent-harness schema`), relative to this file. Its init data becomes the agent's start interface.",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "workflow_type",
+        "task_queue",
+        "label",
+        "description"
+      ],
+      "title": "AgentRegistryEntry",
+      "type": "object"
+    }
+  },
+  "description": "An ``agents.toml`` registry: the agents ``temporal-agent-harness serve`` offers.",
+  "properties": {
+    "agents": {
+      "items": {
+        "$ref": "#/$defs/AgentRegistryEntry"
+      },
+      "minItems": 1,
+      "title": "Agents",
+      "type": "array"
+    }
+  },
+  "required": [
+    "agents"
+  ],
+  "title": "AgentRegistryFile",
+  "type": "object"
+}

@@ -1,0 +1,1 @@
+The sandbox has no filesystem, no network, and no imports except `asyncio` and the host functions below.

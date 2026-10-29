@@ -1,0 +1,21 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+)
+
+harness_pytest_test(
+    name = "test_criteria",
+    srcs = ["test_criteria.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/auto_mode:workflow",
+        "//python/examples/monty:activities",
+        "//python/examples/monty:trip_board",
+        "//python/tests:conftest",
+    ],
+)

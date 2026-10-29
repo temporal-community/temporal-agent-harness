@@ -1,0 +1,54 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+
+# The workspace root: rules_js keeps the package store for every workspace package here.
+npm_link_all_packages(name = "node_modules")
+
+# `bazel run //typescript:pnpm -- --dir <package> <args>`: the pnpm package.json's packageManager
+# pins, on Bazel's Node (the scripts it runs get that Node too). The justfiles run every pnpm
+# command through it, so no recipe needs Node or pnpm installed on the machine.
+alias(
+    name = "pnpm",
+    actual = "@pnpm",
+    visibility = ["//visibility:public"],
+)
+
+#   bazel run //typescript:node_modules_link
+# links every workspace package's node_modules to the one Bazel builds, for IDEs; rerun it after a
+# dependency or a workspace package changes.
+NODE_MODULES_DIRS = [
+    "typescript",
+    "typescript/apps/chat-server",
+    "typescript/apps/ui",
+    "typescript/examples/monty",
+    "typescript/examples/openai_hello",
+    "typescript/packages/client",
+    "typescript/packages/codegen",
+    "typescript/packages/core",
+    "typescript/packages/react",
+    "typescript/packages/svelte",
+    "typescript/packages/worker",
+]
+
+js_binary(
+    name = "node_modules_link",
+    args = NODE_MODULES_DIRS,
+    data = ["//" + dir + ":node_modules" for dir in NODE_MODULES_DIRS],
+    entry_point = "node_modules_link.mjs",
+)
+
+exports_files([
+    "package.json",
+    "pnpm-workspace.yaml",
+])
+
+js_test(
+    name = "npm_translate_lock_data_matches_workspace_test",
+    data = [
+        "pnpm-lock.yaml",
+        "//:MODULE.bazel",
+    ],
+    entry_point = "npm_translate_lock_data_matches_workspace_test.mjs",
+    # Read from the source tree: rules_js copies only this package's files to bazel-bin.
+    no_copy_to_bin = ["//:MODULE.bazel"],
+)

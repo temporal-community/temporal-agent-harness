@@ -25,8 +25,8 @@ from typing import Any, TypeVar, cast, get_type_hints, overload
 import mcp.types
 import nexusrpc
 import nexusrpc.handler
-from nexusrpc.handler import StartOperationContext
 from pydantic import BaseModel, Field
+from temporalio import nexus
 
 from .internal_utils import (
     _NEXUS_MCP_TOOL_MARKER,
@@ -70,15 +70,20 @@ class MCPOverNexusServiceHandler:
 
     mcp_tool_defaults = MCPToolConfig()
 
-    @nexusrpc.handler.sync_operation
+    @nexus.temporal_operation
     async def list_tools(
-        self, ctx: StartOperationContext, input: None
-    ) -> ListToolsOutput:
+        self,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
+        input: None,
+    ) -> nexus.TemporalOperationResult[ListToolsOutput]:
         """Return the tools that this service exposes."""
         handler_type = type(self)
-        return ListToolsOutput(
-            tools=build_tool_dicts(handler_type),
-            routes=build_tool_routes(handler_type),
+        return nexus.TemporalOperationResult.sync(
+            ListToolsOutput(
+                tools=build_tool_dicts(handler_type),
+                routes=build_tool_routes(handler_type),
+            )
         )
 
 
@@ -151,24 +156,28 @@ def nexus_mcp_tool(
 
         @wraps(method)
         async def operation_method(
-            self: Any, ctx: StartOperationContext, input: BaseModel
-        ) -> Any:
+            self: Any,
+            ctx: nexus.TemporalStartOperationContext,
+            client: nexus.TemporalNexusClient,
+            input: BaseModel,
+        ) -> nexus.TemporalOperationResult[Any]:
             arguments = {
                 field_name: getattr(input, field_name)
                 for field_name in type(input).model_fields
             }
             result = method(self, **arguments)
             if inspect.isawaitable(result):
-                return await result
-            return result
+                result = await result
+            return nexus.TemporalOperationResult.sync(result)
 
         operation_method.__annotations__ = {
-            "ctx": StartOperationContext,
+            "ctx": nexus.TemporalStartOperationContext,
+            "client": nexus.TemporalNexusClient,
             "input": input_model,
-            "return": return_type,
+            "return": nexus.TemporalOperationResult[return_type],
         }
 
-        operation_decorator = nexusrpc.handler.sync_operation(name=tool_config.name)
+        operation_decorator = nexus.temporal_operation(name=tool_config.name)
         operation = operation_decorator(cast(Any, operation_method))
         setattr(operation, _NEXUS_MCP_TOOL_MARKER, tool_config)
         return cast("_NexusMcpToolFunc", operation)

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/teams"
 	"go.temporal.io/sdk/client"
 )
 
@@ -130,21 +132,21 @@ func messageWorkflowInput(act teamMessageActivity) (string, router.Input) {
 		timestamp = act.ID
 	}
 
-	msg := router.IncomingMessage{
-		MessageID:        act.ID,
-		Sender:           senderID(act),
-		Text:             act.Text,
-		Timestamp:        timestamp,
+	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, interactionID)
+	req := protocol.Request{SessionID: sessionID, Message: &protocol.Message{Text: act.Text, Sender: senderID(act)}}
+	return wfID, input(req, teams.Address{
+		SessionID:        sessionID,
+		SenderID:         senderID(act),
+		ThreadID:         timestamp,
 		ConversationType: act.Conversation.ConversationType,
 		ServiceURL:       act.ServiceURL,
 		ChannelID:        act.ChannelID,
-	}
-	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, interactionID)
-	return wfID, router.Input{
-		Identity:  defaultIdentity,
-		SessionID: sessionID,
-		Message:   &msg,
-	}
+	})
+}
+
+func input(req protocol.Request, addr teams.Address) router.Input {
+	address, _ := json.Marshal(addr)
+	return router.Input{Request: req, Address: address}
 }
 
 // decodeApprovalValue reports whether an activity's value field carries a
@@ -165,18 +167,17 @@ func decodeApprovalValue(raw json.RawMessage) (approvalButtonValue, bool) {
 
 func approvalWorkflowInput(act teamMessageActivity, val approvalButtonValue) (string, router.Input) {
 	wfID := router.RouterWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
-	return wfID, router.Input{
-		Identity:  defaultIdentity,
-		SessionID: val.SessionID,
-		Approval: &router.ApprovalDecision{
-			ToolID:     val.ToolID,
-			ToolName:   val.ToolName,
-			Approved:   val.Approved,
-			ActivityID: act.ReplyToID,
-			ServiceURL: act.ServiceURL,
-			ChannelID:  act.ChannelID,
-		},
-	}
+	req := protocol.Request{SessionID: val.SessionID, Approval: &protocol.ApprovalDecision{
+		ToolID:   val.ToolID,
+		ToolName: val.ToolName,
+		Approved: val.Approved,
+	}}
+	return wfID, input(req, teams.Address{
+		SessionID:  val.SessionID,
+		ActivityID: act.ReplyToID,
+		ServiceURL: act.ServiceURL,
+		ChannelID:  act.ChannelID,
+	})
 }
 
 func conversationID(act teamMessageActivity) string {

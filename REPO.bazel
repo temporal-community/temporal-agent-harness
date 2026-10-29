@@ -1,0 +1,24 @@
+"""Repository-wide settings: the directories Bazel never looks in."""
+
+ignore_directories([
+    # Nexus (Go connectors, nexus/mcp, nexgen) is not built by Bazel.
+    "nexus",
+    # Host-installed node_modules hold macOS binaries; rules_js installs its own under bazel-out.
+    "**/node_modules",
+    # Local environments, caches, and build outputs.
+    "**/.venv",
+    "**/__pycache__",
+    ".claude",
+    ".pnpm-store",
+    "**/.pytest_cache",
+    "**/.mypy_cache",
+    "**/.ruff_cache",
+    "**/.hypothesis",
+    "**/.benchmarks",
+    "build",
+    "dist",
+    "python/build",
+    "python/dist",
+    "typescript/packages/*/dist",
+    "typescript/apps/*/dist",
+])

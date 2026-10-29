@@ -1,0 +1,9 @@
+# What Python's worker publishes for each scenario, normalized (conformance/README.md).
+# `bazel run //python/tests/conformance:goldens_update` rewrites them;
+# //python/tests/conformance:test_goldens fails while they differ from a recording.
+
+filegroup(
+    name = "goldens",
+    srcs = glob(["*.jsonl"]),
+    visibility = ["//python/tests/conformance:__pkg__"],
+)

@@ -1,0 +1,445 @@
+<script lang="ts">
+  import type { Snippet } from "svelte";
+  import { ChevronsLeft, Pin, Rows2, SquareStack, X } from "@lucide/svelte";
+  import { resizeKeyIntent } from "$lib/components/primitives/resizeKeys";
+  import { PANE_META, titleBelongsInHead } from "$lib/panes/registry";
+  import type { Pane } from "$lib/state/paneStack.svelte";
+
+  interface Props {
+    pane: Pane;
+    /** Sharing its column, so the column folds and resizes as a whole. */
+    shared?: boolean;
+    /** Shared by being stacked with everything visible, rather than as tabs. */
+    split?: boolean;
+    title: string;
+    /** CSS custom property for the status dot, omitted when there is no status. */
+    statusTone?: string | null;
+    statusLabel?: string | null;
+    focused: boolean;
+    canClose: boolean;
+    canResize: boolean;
+    onFocus: () => void;
+    onToggleCollapse: () => void;
+    onTogglePin: () => void;
+    onClose: () => void;
+    onResize: (size: number | null) => void;
+    /** Flip the column between stacked and tabbed. Only shown on a shared one. */
+    onToggleSplit: () => void;
+    onDragStart: (event: DragEvent) => void;
+    onDragEnd: () => void;
+    content: Snippet;
+  }
+
+  let {
+    pane,
+    shared = false,
+    split = false,
+    title,
+    statusTone = null,
+    statusLabel = null,
+    focused,
+    canClose,
+    canResize,
+    onFocus,
+    onToggleCollapse,
+    onTogglePin,
+    onClose,
+    onResize,
+    onToggleSplit,
+    onDragStart,
+    onDragEnd,
+    content
+  }: Props = $props();
+
+  let element = $state<HTMLElement | null>(null);
+  let resizing = $state(false);
+
+  const meta = $derived(PANE_META[pane.kind]);
+
+  /* A pane whose subject has not resolved yet is titled after its own kind —
+     "Subagent" before the run names the agent — and the badge has said that. */
+  const showTitle = $derived(
+    titleBelongsInHead(pane.id) &&
+      title.trim().toLowerCase() !== meta.kindLabel.toLowerCase()
+  );
+
+  function currentSize(): number {
+    return Math.round(element?.getBoundingClientRect().width ?? pane.size ?? meta.defaultSize);
+  }
+
+  /* Where the press landed and how wide the pane was then. Moves are measured
+     from it, so pressing the 12px handle off its centre does not jump the seam
+     to the pointer, and a press with no move changes nothing. */
+  let grab = { x: 0, width: 0 };
+
+  function startResize(event: PointerEvent): void {
+    if (event.button !== 0 && event.pointerType !== "touch") return;
+    event.preventDefault();
+    resizing = true;
+    grab = { x: event.clientX, width: element?.getBoundingClientRect().width ?? currentSize() };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function moveResize(event: PointerEvent): void {
+    if (!resizing) return;
+    onResize(Math.max(meta.minSize, Math.round(grab.width + event.clientX - grab.x)));
+  }
+
+  function stopResize(event: PointerEvent): void {
+    resizing = false;
+    const handle = event.currentTarget as HTMLElement;
+    if (handle.hasPointerCapture(event.pointerId)) {
+      handle.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleResizeKeydown(event: KeyboardEvent): void {
+    const intent = resizeKeyIntent(event, "left-right");
+    if (intent == null) return;
+    event.preventDefault();
+    onResize(intent === "reset" ? null : Math.max(meta.minSize, currentSize() + intent));
+  }
+</script>
+
+{#if pane.collapsed}
+  <button
+    type="button"
+    class="spine"
+    title={statusLabel ? `Expand ${title} — ${statusLabel}` : `Expand ${title}`}
+    aria-label={statusLabel ? `Expand ${title}, ${statusLabel}` : `Expand ${title}`}
+    ondragover={(event) => event.preventDefault()}
+    onclick={onToggleCollapse}
+  >
+    <!-- A pip with no status to carry would be decoration, so it only appears
+         when the pane has state to report. -->
+    {#if statusLabel}
+      <span
+        class="spine-dot"
+        style={statusTone ? `background: var(${statusTone})` : undefined}
+      ></span>
+    {/if}
+    <span class="spine-title">{title}</span>
+    <span class="spine-kind" style={`color: var(${statusTone ?? meta.accent})`}>{meta.kindLabel}</span>
+  </button>
+{:else}
+  <section
+    class="pane"
+    class:focused
+    class:resizing
+    bind:this={element}
+    tabindex="-1"
+    aria-label={title.trim().toLowerCase() === meta.kindLabel.toLowerCase() ? meta.kindLabel : `${meta.kindLabel}: ${title}`}
+    onfocusin={onFocus}
+    onpointerdown={onFocus}
+    ondragover={(event) => event.preventDefault()}
+  >
+    <!-- The header is the pane's drag handle; the buttons inside it remain the
+         only focusable controls. -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <!-- The claim below is safe only while this header cannot take focus. resolveReplayAction
+         matches a claim on its last `+`-segment, so it reads these four as claims on bare
+         ArrowLeft/Right/Up/Down and declines every one of them on a focused target. The header
+         has no tabindex and so is never the event target; give it one — to reach the drag
+         handle by keyboard, say — and bare arrows die silently on a focused pane: no stepping,
+         no turn jumps, no speed ladder. Spell the modifiers out of the claim first. -->
+    <header
+      class="surface-head pane-head"
+      role="group"
+      aria-label={`${meta.kindLabel} controls`}
+      aria-keyshortcuts="Meta+Shift+ArrowLeft Meta+Shift+ArrowRight Meta+Shift+ArrowUp Meta+Shift+ArrowDown"
+      title="Drag to a column's side to move it, its top or bottom to split, its middle to tab — or Cmd+Shift+Arrows"
+      draggable="true"
+      ondragstart={onDragStart}
+      ondragend={onDragEnd}
+    >
+      <!-- One row: the badge names the kind, and the title follows it only when
+           it names something the badge does not. An `h2` on every pane, so each
+           is in a screen reader's heading list under the name the badge gives
+           it, whether or not the title beside it says anything further. -->
+      <h2 class="head-name">
+        <span class={["kicker head-kind", focused && "on"]} style={`--head-accent: var(${statusTone ?? meta.accent})`}>
+          {meta.kindLabel}
+        </span>
+        {#if showTitle}
+          <span class="head-title" title={title}>{title}</span>
+        {/if}
+      </h2>
+      <!-- Only on a shared column, which is the only place it means anything —
+           and it appears exactly when a reader has just made one, which is when
+           they want to know the other arrangement exists. -->
+      {#if shared}
+        <button
+          type="button"
+          class="head-button"
+          data-arrange={split ? "split" : "tabs"}
+          title={split ? "Show this column as tabs" : "Split the column, both visible"}
+          aria-label={split
+            ? `Show the column holding ${title} as tabs`
+            : `Split the column holding ${title} so every pane stays visible`}
+          onclick={onToggleSplit}
+        >
+          {#if split}
+            <SquareStack size={13} />
+          {:else}
+            <Rows2 size={13} />
+          {/if}
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="head-button"
+        class:on={pane.pinned}
+        aria-pressed={pane.pinned}
+        title={pane.pinned ? "Unpin pane" : "Pin pane open"}
+        onclick={onTogglePin}
+      >
+        <Pin size={12} />
+      </button>
+      <button
+        type="button"
+        class="head-button"
+        title={shared ? "Collapse the column to a spine" : "Collapse to a spine"}
+        aria-label={shared
+          ? `Collapse the column holding ${title} to a spine`
+          : `Collapse ${title} to a spine`}
+        onclick={onToggleCollapse}
+      >
+        <ChevronsLeft size={13} />
+      </button>
+      {#if canClose}
+        <button
+          type="button"
+          class="head-button danger"
+          title="Close pane"
+          aria-label={`Close ${title}`}
+          onclick={onClose}
+        >
+          <X size={13} />
+        </button>
+      {/if}
+    </header>
+
+    <div class="pane-body">
+      {@render content()}
+    </div>
+
+    {#if canResize}
+      <button
+        type="button"
+        class="resize-gutter"
+        aria-label={shared ? `Resize the column holding ${title}` : `Resize ${title}`}
+        aria-keyshortcuts="ArrowLeft ArrowRight Home"
+        title="Drag to resize — double-click to reset"
+        onpointerdown={startResize}
+        ondblclick={() => onResize(null)}
+        onpointermove={moveResize}
+        onpointerup={stopResize}
+        onpointercancel={stopResize}
+        onkeydown={handleResizeKeydown}
+      ></button>
+    {/if}
+  </section>
+{/if}
+
+<style>
+  /* The column owns its width and the rail owns its height; the shell fills what
+     it is given and scrolls its own content inside that. */
+  .pane {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    border-right: 1px solid var(--border);
+    background: var(--surface-1);
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity var(--duration-pane) var(--ease-pane),
+      transform var(--duration-pane) var(--ease-pane);
+  }
+
+  .pane.resizing,
+  .pane.resizing * {
+    user-select: none;
+  }
+
+  /* Panes arrive from the right, matching where they are inserted. A transition
+     with @starting-style stays interruptible when panes open in quick
+     succession; a keyframe would restart from zero. */
+  @starting-style {
+    .pane {
+      opacity: 0;
+      transform: translateX(14px);
+    }
+  }
+
+  /* The focused pane reads through its head fill — the structural hairline stays
+     identical across panes, so focus does not make the seam look thicker. */
+  .pane.focused .pane-head {
+    background: var(--surface-2);
+  }
+
+  /* Click focuses the section (`tabindex=-1`) and the UA paints a ring around
+     the whole pane. Keyboard walk still needs a ring the head tint does not
+     give; `:focus-visible` is that path. */
+  .pane:focus,
+  .pane-head:focus {
+    outline: none;
+  }
+
+  .pane:focus-visible,
+  .pane-head:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  /* One row, so the header is the row: every pane's chrome is the same height
+     whether or not it has a title to show, which is what lets a split column
+     read as two panes rather than two differently-framed ones. */
+  .pane-head {
+    cursor: grab;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  .pane-head:active {
+    cursor: grabbing;
+  }
+
+  .pane-body {
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    /* Whatever a pane stacks inside itself — tip layers, canvas panels — stays
+       under the sticky spines (z-index 4) sliding over it. Isolated here rather
+       than on the rail slot: the width gutters overhang the slot's edge by half
+       their width, and an isolated slot lets the next column cover that half. */
+    isolation: isolate;
+    /* Panes size their own type: a 380px pane and an 800px pane are different
+       rooms, and the viewport cannot tell them apart. */
+    container: pane / inline-size;
+  }
+
+  .resize-gutter {
+    position: absolute;
+    top: 0;
+    right: -6px;
+    width: 12px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 3;
+  }
+
+  /* The 5px that put a permanent horizontal scrollbar under both rails. Centring
+     the handle on the seam is right between two columns and wrong for the last
+     column in a rail: there is no seam out there, so half the handle hangs past
+     the rail's content edge and the rail — which scrolls horizontally on purpose
+     when columns genuinely outgrow it — was obliged to make those pixels
+     reachable. Sitting the handle inside its own pane keeps all 12px draggable
+     and removes the overflow rather than clipping it; `overflow-x: hidden` on the
+     rail would have hidden the real bar with the phantom one. Every pane in a
+     slot spans the slot's full width — a split stacks COLUMN-wise — so every
+     gutter in the last slot is on the rail's edge and none is on an inner seam. */
+  :global(.rail-slot:last-child) .resize-gutter {
+    right: 0;
+  }
+
+  .resize-gutter:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -4px;
+  }
+
+  .spine {
+    flex: 1;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--gap-md);
+    padding: var(--gap-lg) 0;
+    box-sizing: border-box;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: var(--surface-spine);
+    cursor: pointer;
+    overflow: hidden;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  .spine:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  .spine-dot {
+    flex: none;
+    width: var(--pip);
+    height: var(--pip);
+    background: var(--text-3);
+  }
+
+  .spine-title {
+    flex: 1;
+    min-height: 0;
+    max-width: 100%;
+    writing-mode: vertical-rl;
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The one label allowed off the register, and only on size: a 42px spine
+     cannot hold 10px at 0.13em turned sideways. Weight and tracking still
+     follow, so it reads as the same voice, quieter. Clip rather than widen. */
+  .spine-kind {
+    flex: none;
+    max-width: 100%;
+    writing-mode: vertical-rl;
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    font-weight: var(--label-weight);
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+    overflow: hidden;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .spine:hover {
+      background: var(--control-hover);
+    }
+
+    .resize-gutter:hover {
+      background: color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pane,
+    .pane-head,
+    .spine {
+      transition: none;
+    }
+
+    @starting-style {
+      .pane {
+        opacity: 0;
+        transform: none;
+      }
+    }
+  }
+</style>

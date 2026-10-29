@@ -1,0 +1,18 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@bazel_lib//lib:copy_directory.bzl", "copy_directory")
+
+# The packaged browser UI: packaged_ui_dist() finds dist/ beside __init__.py, here and in the wheel.
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    data = [":dist"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+)
+
+# The console's build (//typescript/apps/ui:dist) as this package's dist/.
+copy_directory(
+    name = "dist",
+    src = "//typescript/apps/ui:dist",
+    out = "dist",
+)

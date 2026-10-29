@@ -1,0 +1,12 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_select_observer",
+    srcs = ["test_select_observer.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks/integration_helpers:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)

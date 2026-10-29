@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/teams"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/mocks"
 )
@@ -36,7 +37,7 @@ func expectWorkflowStart(
 func TestHandleMessagesStartsMessageWorkflow(t *testing.T) {
 	tc := mocks.NewClient(t)
 	expectWorkflowStart(t, tc, "connector-default-teams:conversation-1-message-1", func(input router.Input) bool {
-		return input.Message != nil && input.Approval == nil && input.Message.Text == "question"
+		return input.Request.Message != nil && input.Request.Approval == nil && input.Request.Message.Text == "question"
 	})
 	server := NewServer(tc, "teams-task-queue")
 	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(`{
@@ -56,7 +57,7 @@ func TestHandleMessagesStartsMessageWorkflow(t *testing.T) {
 func TestHandleMessagesStartsApprovalWorkflowWithEmptyText(t *testing.T) {
 	tc := mocks.NewClient(t)
 	expectWorkflowStart(t, tc, "connector-default-teams:conversation-1-approval-tool-1", func(input router.Input) bool {
-		return input.Message == nil && input.Approval != nil && input.Approval.ToolID == "tool-1"
+		return input.Request.Message == nil && input.Request.Approval != nil && input.Request.Approval.ToolID == "tool-1"
 	})
 	server := NewServer(tc, "teams-task-queue")
 	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(`{
@@ -122,10 +123,11 @@ func TestMessageWorkflowInputPropagatesConversationType(t *testing.T) {
 			workflowID, input := messageWorkflowInput(activity)
 
 			assert.Equal(t, "connector-default-teams:conversation-1-message-1", workflowID)
-			require.NotNil(t, input.Message)
-			assert.Equal(t, conversationType, input.Message.ConversationType)
-			assert.Equal(t, "https://example.test/teams/", input.Message.ServiceURL)
-			assert.Equal(t, "msteams", input.Message.ChannelID)
+			require.NotNil(t, input.Request.Message)
+			addr := address(t, input)
+			assert.Equal(t, conversationType, addr.ConversationType)
+			assert.Equal(t, "https://example.test/teams/", addr.ServiceURL)
+			assert.Equal(t, "msteams", addr.ChannelID)
 		})
 	}
 }
@@ -146,8 +148,16 @@ func TestApprovalWorkflowInputPropagatesCardRouting(t *testing.T) {
 	workflowID, input := approvalWorkflowInput(activity, value)
 
 	assert.Equal(t, "connector-default-teams:conversation-1-approval-tool-1", workflowID)
-	require.NotNil(t, input.Approval)
-	assert.Equal(t, "card-1", input.Approval.ActivityID)
-	assert.Equal(t, "https://example.test/teams/", input.Approval.ServiceURL)
-	assert.Equal(t, "msteams", input.Approval.ChannelID)
+	require.NotNil(t, input.Request.Approval)
+	addr := address(t, input)
+	assert.Equal(t, "card-1", addr.ActivityID)
+	assert.Equal(t, "https://example.test/teams/", addr.ServiceURL)
+	assert.Equal(t, "msteams", addr.ChannelID)
+}
+
+func address(t *testing.T, input router.Input) teams.Address {
+	t.Helper()
+	var addr teams.Address
+	require.NoError(t, json.Unmarshal(input.Address, &addr))
+	return addr
 }

@@ -1,0 +1,39 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+
+# One target per file, depending on the files it imports. Nothing compiles them on their own:
+# svelte-package builds the package (//typescript/packages/svelte:dist), vitest transforms them for
+# a test, and svelte-check type-checks them.
+js_library(
+    name = "index",
+    srcs = ["index.ts"],
+    visibility = [
+        "//python/examples:__subpackages__",
+        "//typescript/packages/svelte:__subpackages__",
+    ],
+    deps = [
+        ":session.svelte",
+        ":state.svelte",
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+    ],
+)
+
+js_library(
+    name = "session.svelte",
+    srcs = ["session.svelte.ts"],
+    visibility = ["//typescript/packages/svelte:__subpackages__"],
+    deps = [
+        ":state.svelte",
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/svelte",
+    ],
+)
+
+js_library(
+    name = "state.svelte",
+    srcs = ["state.svelte.ts"],
+    visibility = ["//typescript/packages/svelte:__subpackages__"],
+    deps = [
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/svelte",
+    ],
+)

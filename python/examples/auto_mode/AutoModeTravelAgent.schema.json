@@ -1,0 +1,248 @@
+{
+  "agent": "AutoModeTravelAgent",
+  "source": "examples.auto_mode.workflow:AutoModeTravelAgentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the travel assistant. Describe the trip you want (flights, hotels,\ndates, traveler name) in plain text; the assistant converses, writes and runs Python\nscripts against a simulated travel backend as needed, and replies with the results.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "set_approval_policy": {
+      "description": "Set the agent's approval posture: what gets allow-listed, and therefore what still\ngoes to a human.\n\n`human_approval_only` allow-lists nothing — every call waits for you, and an auto mode\nevaluator is not consulted even though one is wired. `allow_safe` allow-lists tools\nthat declared themselves inherently safe. `auto_mode` hands each remaining call to the\nJev evaluator, which may allow it, deny it, or leave it to you anyway.\n`dangerously_skip_all` gates nothing at all.\n\nA posture REPLACES the policy, allow-list included — including anything an \"approve and\nstop asking\" added this session. That is the point of it being a posture rather than a\npatch: you get exactly what you asked for and nothing left over.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/PolicyUpdate"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "set_model": {
+      "description": "Set the model this session uses for subsequent turns. Takes effect on the next\nmodel call, so a turn already in flight finishes on the model it started with.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/SetModel"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "trip_board": {
+      "$ref": "#/$defs/TripBoard"
+    }
+  },
+  "$defs": {
+    "Booking": {
+      "additionalProperties": false,
+      "description": "A flight or hotel this trip has actually booked.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "flight",
+            "hotel"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "confirmation_code": {
+          "title": "Confirmation Code",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "price_usd": {
+          "default": 0.0,
+          "title": "Price Usd",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "confirmation_code",
+        "detail",
+        "price_usd"
+      ],
+      "title": "Booking",
+      "type": "object"
+    },
+    "PolicyUpdate": {
+      "description": "The agent's whole approval posture. One field, because these are alternatives.\n\nAuto mode is a way of ALLOW-LISTING — a dynamic one that reads a call's arguments rather\nthan only its name — so it is a peer of the static allow-lists, not an extra switch beside\nthem. Modelling it as one choice is what makes ``human_approval_only`` and ``auto_mode``\nimpossible to ask for together: \"nothing is allow-listed\" and \"calls are allow-listed by\nan evaluator\" are opposite answers to the same question, and a separate boolean switch\ncould only ever contradict whichever posture had just been named.\n\nWhatever a posture does not allow-list goes to a human — including every call auto mode\ndeclines to approve, so turning it on reduces what you are asked about without ever taking\nthe last word on an unclear call away from you.",
+      "properties": {
+        "posture": {
+          "enum": [
+            "human_approval_only",
+            "allow_safe",
+            "auto_mode",
+            "dangerously_skip_all"
+          ],
+          "title": "Posture",
+          "type": "string"
+        }
+      },
+      "required": [
+        "posture"
+      ],
+      "title": "PolicyUpdate",
+      "type": "object"
+    },
+    "SetModel": {
+      "description": "Which model this session should use for subsequent turns.",
+      "properties": {
+        "model": {
+          "enum": [
+            "gemini-3.8-flash",
+            "gemini-3.1-flash-lite"
+          ],
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SetModel",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    },
+    "Trip": {
+      "additionalProperties": false,
+      "description": "One trip the agent is collecting.",
+      "properties": {
+        "trip_id": {
+          "title": "Trip Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "traveler": {
+          "title": "Traveler",
+          "type": "string"
+        },
+        "status": {
+          "default": "collecting",
+          "enum": [
+            "collecting",
+            "booked",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "flights": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Booking"
+          },
+          "title": "Flights",
+          "type": "array"
+        },
+        "hotels": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Booking"
+          },
+          "title": "Hotels",
+          "type": "array"
+        },
+        "remaining": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TripTask"
+          },
+          "title": "Remaining",
+          "type": "array"
+        }
+      },
+      "required": [
+        "trip_id",
+        "description",
+        "traveler",
+        "status",
+        "flights",
+        "hotels",
+        "remaining"
+      ],
+      "title": "Trip",
+      "type": "object"
+    },
+    "TripBoard": {
+      "additionalProperties": false,
+      "description": "Every trip this session is working on, newest last.",
+      "properties": {
+        "trips": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Trip"
+          },
+          "title": "Trips",
+          "type": "array"
+        }
+      },
+      "required": [
+        "trips"
+      ],
+      "title": "TripBoard",
+      "type": "object"
+    },
+    "TripTask": {
+      "additionalProperties": false,
+      "description": "One thing the trip still needs, and whether it has been done.",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "done": {
+          "default": false,
+          "title": "Done",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "done"
+      ],
+      "title": "TripTask",
+      "type": "object"
+    }
+  }
+}

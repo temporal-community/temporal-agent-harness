@@ -1,0 +1,167 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_caller_chosen_session_id",
+    srcs = ["test_caller_chosen_session_id.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+# Loads the tic-tac-toe example by module path (the `# keep` deps).
+harness_pytest_test(
+    name = "test_cli",
+    srcs = ["test_cli.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/examples/tictactoe:board",  # keep
+        "//python/examples/tictactoe:workflow",  # keep
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/web:cli",
+        "//python/temporal_agent_harness/web:client",
+        "//python/temporal_agent_harness/web:registry",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_file_view",
+    srcs = ["test_file_view.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:activity_fs",
+        "//python/temporal_agent_harness/web:app",
+        "//python/temporal_agent_harness/web:file_view",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//httpx",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_packaged_ui",
+    srcs = ["test_packaged_ui.py"],
+    data = ["//python/examples/monty:agents_files"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/ui:__init__",
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:app",
+        "//python/temporal_agent_harness/web:serve",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+# Loads example agents by module path (the `# keep` deps).
+harness_pytest_test(
+    name = "test_session_init_data",
+    srcs = ["test_session_init_data.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/examples/react_agent:workflow",  # keep
+        "//python/examples/tictactoe:workflow",  # keep
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:agent_starts",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/temporal_agent_harness/web:task_queue_status",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_task_queue_status",
+    srcs = ["test_task_queue_status.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:task_queue_status",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//protobuf",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_serve",
+    srcs = ["test_serve.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:serve",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_registry",
+    srcs = ["test_registry.py"],
+    data = [
+        "//contract:registry_files",
+        "//python/examples/agent_dag:agents_files",
+        "//python/examples/auto_mode:agents_files",
+        "//python/examples/callback_tools/coding_agent:agents_files",
+        "//python/examples/callback_tools/wiki_agent:agents_files",
+        "//python/examples/code_mode_memory:agents_files",
+        "//python/examples/monty:agents_files",
+        "//python/examples/openai_hello:agents_files",
+        "//python/examples/pydantic_ai_hello:agents_files",
+        "//python/examples/react_agent:agents_files",
+        "//python/examples/tictactoe:agents_files",
+    ],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:registry",
+        "//python/tests:conftest",
+        "@pypi//jsonschema",
+        "@pypi//pytest",
+    ],
+)
+
+# Serves the TypeScript agent in //typescript/packages/worker/test/serving from its worker and
+# committed registry.
+harness_pytest_test(
+    name = "test_typescript_agents",
+    srcs = ["test_typescript_agents.py"],
+    data = [
+        "//typescript/packages/worker/test/serving:registry_files",
+        "//typescript/packages/worker/test/serving:worker",
+    ],
+    env = {"TYPESCRIPT_SERVING_WORKER": "$(rootpath //typescript/packages/worker/test/serving:worker)"},
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/tests:conftest",
+        "//python/tests/conformance:driver",
+        "@pypi//httpx",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+    ],
+)

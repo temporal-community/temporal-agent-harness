@@ -1,0 +1,13 @@
+--- a/temporalio/__init__.py
++++ b/temporalio/__init__.py
+@@ -11,3 +11,10 @@
+ from .service import __version__ as __sdk_version
+ 
+ __version__ = __sdk_version
++
++# Added under Bazel (bazel/temporalio_extend_path.patch): find temporalio's subpackages from other
++# wheels, such as temporalio-typesafe's temporalio.typesafe, which rules_py cannot merge into this
++# package (it ships native code) and puts on sys.path instead.
++from pkgutil import extend_path
++
++__path__ = extend_path(__path__, __name__)

@@ -1,0 +1,25 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# For //typescript/packages/svelte:svelte_check_test. TicTacToeBoard.svelte uses the tic-tac-toe
+# example's typed client through AgentSession; it is type-checked, never rendered.
+js_library(
+    name = "sources",
+    srcs = [
+        "TicTacToeBoard.svelte",
+        "session.svelte.test.ts",
+    ],
+    visibility = ["//typescript/packages/svelte:__pkg__"],
+    deps = ["//python/examples/tictactoe:client_sdk_types"],
+)
+
+# One target per test file; vitest transforms it and the sources it imports.
+vitest_test(
+    name = "session.svelte_test",
+    src = "session.svelte.test.ts",
+    deps = [
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/svelte",
+        "//typescript/packages/svelte/src/lib:index",
+    ],
+)

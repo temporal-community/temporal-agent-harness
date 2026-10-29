@@ -248,22 +248,20 @@ WrongOutput())`-class mistakes. Superseded.)
 **Locked design — typed message handlers the harness discovers and dispatches to.** The
 dev declares one async method per accepted message; its **param type is the input**, its
 **return type is the output**. No phantom types, no manual reply, no `match` loop — and
-strictly less dev code (each former `case` body is just a method, plus a one-line `run`).
+strictly less dev code (each former `case` body is just a method, and `@agent.defn` supplies `run`).
 
 ```python
 @agent.defn(name="QaAgent")
 class QaAgentWorkflow:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(   # discovers @agent.accepts methods on this class
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)          # internal loop: validate → route by type → publish return
+    # No run: @agent.defn generates it around runner.run(self), the internal loop
+    # (validate → route by type → publish return).
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def on_text(self, msg: TextMessage) -> TextReply:

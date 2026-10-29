@@ -1,0 +1,17 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "highlight",
+    srcs = ["highlight.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/@tanstack/highlight"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "highlight_test",
+    src = "highlight.test.mjs",
+    deps = [":highlight"],
+)

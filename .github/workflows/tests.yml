@@ -1,9 +1,15 @@
 name: Tests
 
-# Runs the Python suite on every pull request and every push to main.
+# Runs the suite on every pull request and every push to main. Python's tests (//python/...) run
+# once per Python version the package claims: `requires-python` is ">=3.11" and the classifiers
+# list 3.11 through 3.14, so a suite that only ran on one interpreter would not be testing what the
+# package claims to support. Everything else runs once, on the default interpreter: the Python
+# version cannot change a TypeScript test, but it is a build setting, so every version would
+# rebuild and rerun them all.
 #
-# The matrix is the other half. `requires-python` is ">=3.11", so a suite that only ever runs
-# on one interpreter is not testing what the package claims to support.
+# Caches are saved only by pushes to main and restored by every run, pull requests included: code
+# nobody has reviewed never writes a cache, a pull request still starts from main's latest build,
+# and the caches stay within the 10 GB GitHub Actions keeps per repository.
 
 on:
   pull_request:
@@ -19,32 +25,234 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SAVE_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
 jobs:
-  pytest:
-    name: pytest (Python ${{ matrix.python-version }})
+  bazel:
+    name: bazel test (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
-      # WHICH interpreters fail is the entire signal a matrix exists to give. Cancelling 3.13
-      # because 3.11 went red would throw that away and leave "is this version-specific?"
+      # WHICH interpreters fail is the entire signal a matrix exists to give. Cancelling py313
+      # because py311 went red would throw that away and leave "is this version-specific?"
       # needing a second run to answer.
       fail-fast: false
       matrix:
-        # Every version the package claims: requires-python is ">=3.11" and the classifiers
-        # list 3.11 through 3.14. All four run the identical 514 tests. Keep this list and
-        # those classifiers in lockstep.
+        # `config` is .bazelrc's --config=py3XX; keep the Python entries in lockstep with the
+        # python/pyproject.toml classifiers. Together the entries' `targets` cover //...: the last
+        # entry is everything outside python/, so a test anywhere else still runs.
+        include:
+          - { name: "python, py311", config: py311, cache: py311, targets: "//python/..." }
+          - { name: "python, py312", config: py312, cache: py312, targets: "//python/..." }
+          - { name: "python, py313", config: py313, cache: py313, targets: "//python/..." }
+          - { name: "python, py314", config: py314, cache: py314, targets: "//python/..." }
+          - { name: "everything else", config: py313, cache: other, targets: "//... -//python/..." }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: ${{ env.SAVE_CACHE }}
+
+      # The disk cache is restored and saved here rather than by setup-bazel, which keys it on the
+      # BUILD and MODULE files: a push to main that changes only sources keeps the same key, and
+      # since a cache key is never overwritten, main's cache would go stale. Keyed by commit
+      # instead, every push to main saves a new one, and a run restores the newest by prefix.
+      # Each entry builds its own targets in its own configuration, so each gets its own cache.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-${{ matrix.cache }}-${{ github.sha }}
+          restore-keys: bazel-disk-${{ matrix.cache }}-
+
+      - name: Note when the build starts
+        if: env.SAVE_CACHE == 'true'
+        run: touch "$RUNNER_TEMP/bazel-build-start"
+
+      # `--` so the `-//python/...` exclusion is read as a target pattern, not a flag.
+      - name: Run the tests
+        run: bazel test --config=${{ matrix.config }} --config=ci --disk_cache="$HOME/.cache/bazel-disk" -- ${{ matrix.targets }}
+
+      # Keep only what this build used, so the saved cache never grows past one build of main.
+      # Bazel refreshes a disk cache entry's mtime whenever it reads or writes it; what is left
+      # untouched is outputs of actions main no longer has (and the action descriptions stored
+      # beside each result, which only remote execution reads).
+      - name: Drop disk cache entries this build did not use
+        if: env.SAVE_CACHE == 'true' && !cancelled()
+        run: |
+          find ~/.cache/bazel-disk -type f ! -newer "$RUNNER_TEMP/bazel-build-start" -delete
+          du -sh ~/.cache/bazel-disk
+
+      - name: Save the Bazel disk cache
+        if: env.SAVE_CACHE == 'true' && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-${{ matrix.cache }}-${{ github.sha }}
+
+  bazel-build-files:
+    name: Bazel files are generated and formatted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: ${{ env.SAVE_CACHE }}
+
+      # MODULE.bazel.lock is left out: Bazel records platform-specific facts in it, so a Linux
+      # run may rewrite a lockfile written on macOS without anything being out of date.
+      - name: BUILD files and gazelle_python.yaml match what `just gazelle` writes
+        run: |
+          bazel run //python:gazelle_python_manifest.update
+          bazel run //:gazelle
+          changed="$(git status --porcelain -- . ':!MODULE.bazel.lock')"
+          if [ -n "$changed" ]; then
+            echo "::error::Generated Bazel files are out of date. Run \`just gazelle\` and commit the result."
+            echo "$changed"
+            git diff -- . ':!MODULE.bazel.lock'
+            exit 1
+          fi
+
+      - name: Bazel files are formatted and lint-free (`just buildifier` fixes most)
+        run: bazel run //:buildifier.check
+
+      # The TypeScript BUILD files are written by hand, so nothing else notices a test file
+      # without a target.
+      - name: Every TypeScript test file has a Bazel test target
+        run: scripts/check-ts-test-targets.sh
+
+      # The wheel ships what //python/temporal_agent_harness reaches; its entry points are listed
+      # by hand.
+      - name: Every library in the Python package ships in the wheel and sdist
+        run: scripts/check-python-package-entry-points.sh
+
+  # The release checks a maintainer used to run by hand, on every change instead: the built
+  # artifacts install into empty projects outside the repository and work there. The checks are
+  # scripts/check-installed-python.sh and scripts/check-installed-npm.sh; RELEASE.md relies on them.
+  installed-python:
+    name: Installed wheel works (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and newest interpreters the package claims (pyproject.toml's classifiers).
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
+
+      # main's newest disk cache for python/ on the default interpreter, which builds the wheel.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-py313-${{ github.sha }}
+          restore-keys: bazel-disk-py313-
+
+      # The wheel and sdist publish.yml would publish, and the pinned Temporal CLI for the dev
+      # server the conformance scenarios run on.
+      - name: Build the wheel and sdist
+        id: dists
+        run: |
+          flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
+          bazel build //python:dists //bazel/temporal:cli "${flags[@]}" --remote_download_toplevel
+          root="$(bazel info execution_root "${flags[@]}")"
+          echo "dists=$root/$(bazel cquery //python:dists "${flags[@]}" --output=files)" >> "$GITHUB_OUTPUT"
+          # The CLI is an external repository's file: stable under the output base, whereas the
+          # execution root's external/ is re-made per build.
+          echo "cli=$(bazel info output_base "${flags[@]}")/$(bazel cquery //bazel/temporal:cli "${flags[@]}" --output=files)" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: Install the wheel into an empty environment and run the conformance scenarios
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          TEMPORAL_CLI_PATH: ${{ steps.dists.outputs.cli }}
+        run: scripts/check-installed-python.sh "${{ steps.dists.outputs.dists }}"
+
+  installed-npm:
+    name: Installed npm packages work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
+
+      # main's newest disk cache for everything outside python/.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-other-${{ github.sha }}
+          restore-keys: bazel-disk-other-
+
+      # The tarballs publish-npm.yml would publish: every public package's :pkg_tgz.
+      - name: Build the tarballs
+        run: |
+          flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
+          directories="$(node scripts/release.mjs npm-packages)"
+          targets=()
+          for directory in $directories; do targets+=("//$directory:pkg_tgz"); done
+          bazel build "${targets[@]}" "${flags[@]}" --remote_download_toplevel
+          root="$(bazel info execution_root "${flags[@]}")"
+          mkdir "$RUNNER_TEMP/tarballs"
+          for directory in $directories; do
+            cp "$root/$(bazel cquery "//$directory:pkg_tgz" "${flags[@]}" --output=files)" \
+              "$RUNNER_TEMP/tarballs/$(basename "$directory").tgz"
+          done
+
+      - name: Install the tarballs into an empty project and type-check a consumer
+        run: scripts/check-installed-npm.sh "$RUNNER_TEMP/tarballs"
+
+  # TEMPORARY: the tests Bazel does not run yet, run under uv instead. Each group below says why.
+  # When Bazel runs a group, delete it here; when none are left, delete this job.
+  pytest-outside-bazel:
+    name: pytest outside Bazel (temporary, Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     env:
       UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
-          # The suite pulls a large dependency set (temporalio, openai-agents, pydantic-ai,
-          # moto, pydantic-monty) once per interpreter. Caching keeps the matrix cheap enough that
-          # nobody is tempted to trim it back to one interpreter.
           enable-cache: true
           cache-suffix: py${{ matrix.python-version }}
+          save-cache: ${{ env.SAVE_CACHE }}
 
-      - name: Run the test suite
-        run: uv run pytest -q
+      - name: Run the tests Bazel does not run
+        working-directory: python
+        run: |
+          tests=(
+            # Nexus (nexus/, the temporal-nexus-mcp package) is not built by Bazel.
+            tests/nexus_agent_adapter
+            tests/nexus_mcp
+            tests/ai_sdks/openai_agents/test_nexus_mcp.py
+            "tests/ai_sdks/openai_agents/test_harness_mcp_server.py::test_every_nexus_mcp_server_factory_returns_a_governed_server"
+            "tests/ai_sdks/openai_agents/test_harness_mcp_server.py::test_every_nexus_factory_passes_runner_and_inherently_safe"
+            "tests/harness/test_agent_schema.py::test_every_example_agent_has_a_deterministic_self_contained_schema[examples.nexus_hello.workflow:NexusHelloAgentWorkflow]"
+          )
+          uv run pytest -q "${tests[@]}"

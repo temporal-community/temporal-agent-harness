@@ -1,0 +1,25 @@
+{
+  "name": "@temporal-agent-harness/example-openai-hello",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A hello-world OpenAI Agents SDK agent on the TypeScript harness, with one tool call.",
+  "dependencies": {
+    "@openai/agents-core": "~0.14.3",
+    "@openai/agents-openai": "~0.14.3",
+    "@temporalio/agent-harness": "^0.1.0",
+    "@temporalio/agent-harness-worker": "^0.1.0",
+    "@temporalio/envconfig": "^1.24.0",
+    "@temporalio/openai-agents": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
+    "openai": "^6.46.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/testing": "^1.24.0",
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  }
+}

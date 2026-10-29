@@ -107,20 +107,21 @@ Nexus operation decorator.
 
 ```python
 import nexusrpc.handler
-import temporalio.nexus
+from temporalio import nexus
 from nexus_mcp.authoring import MCPOverNexusServiceHandler, nexus_mcp_operation
 
 
 @nexusrpc.handler.service_handler(name="weather")
 class WeatherTools(MCPOverNexusServiceHandler):
     @nexus_mcp_operation(title="Get a delayed forecast")
-    @temporalio.nexus.workflow_run_operation
+    @nexus.temporal_operation
     async def delayed_forecast(
         self,
-        ctx: temporalio.nexus.WorkflowRunOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: DelayedForecastInput,
-    ) -> temporalio.nexus.WorkflowHandle[DelayedForecastOutput]:
-        return await ctx.start_workflow(
+    ) -> nexus.TemporalOperationResult[DelayedForecastOutput]:
+        return await client.start_workflow(
             DelayedForecastWorkflow.run,
             input,
             id=f"delayed-forecast-{ctx.request_id}",
@@ -129,7 +130,10 @@ class WeatherTools(MCPOverNexusServiceHandler):
 
 The Nexus decorator defines the operation contract and execution behavior.
 `@nexus_mcp_operation` exposes the operation as an MCP tool and adds MCP
-metadata. The operation can be synchronous or workflow-backed. See the
+metadata. Generated synchronous operations use `@nexus.temporal_operation` and
+return `nexus.TemporalOperationResult.sync(...)`. Explicit operations use the same
+decorator and can return immediate values or start workflow or activity backings
+through the supplied Nexus-aware client. See the
 [Nexus hello service](../../examples/nexus_hello/nexus_tool_service.py) for a
 complete workflow-backed example.
 

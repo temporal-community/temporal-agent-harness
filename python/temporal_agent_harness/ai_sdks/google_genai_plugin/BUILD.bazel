@@ -1,0 +1,193 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_google_genai_plugin",
+        ":_interactions_conversation",
+        ":_interactions_workflow",
+        ":workflow",
+    ],
+)
+
+py_library(
+    name = "_errors",
+    srcs = ["_errors.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_gemini_activity",
+    srcs = ["_gemini_activity.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_errors",
+        ":_interactions_activity",
+        ":_models",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//google_auth",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_google_genai_plugin",
+    srcs = ["_google_genai_plugin.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_gemini_activity",
+        "@pypi//google_auth",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_interactions_activity",
+    srcs = ["_interactions_activity.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_errors",
+        ":_interactions_models",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_interactions_conversation",
+    srcs = ["_interactions_conversation.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@pypi//google_genai",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_interactions_models",
+    srcs = ["_interactions_models.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "_interactions_workflow",
+    srcs = ["_interactions_workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//google_genai"],
+)
+
+py_library(
+    name = "_models",
+    srcs = ["_models.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:stream_context",
+        "@pypi//google_genai",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "_temporal_api_client",
+    srcs = ["_temporal_api_client.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_models",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_async_client",
+    srcs = ["_temporal_async_client.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_temporal_api_client",
+        ":_temporal_file_search_stores",
+        ":_temporal_files",
+        ":_temporal_interactions",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_file_search_stores",
+    srcs = ["_temporal_file_search_stores.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_models",
+        ":_temporal_api_client",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_files",
+    srcs = ["_temporal_files.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_models",
+        ":_temporal_api_client",
+        "@pypi//google_auth",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_interactions",
+    srcs = ["_temporal_interactions.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_interactions_models",
+        ":_temporal_api_client",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_temporal_api_client",
+        ":_temporal_async_client",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)

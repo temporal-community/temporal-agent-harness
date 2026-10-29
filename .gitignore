@@ -9,11 +9,6 @@ wheels/
 .coverage
 htmlcov/
 
-# Packaged browser UI assets. Root-level dist/ and ui/dist/ stay ignored.
-!temporal_agent_harness/ui/
-!temporal_agent_harness/ui/dist/
-!temporal_agent_harness/ui/dist/**
-
 # Virtual environments
 .venv
 
@@ -26,6 +21,8 @@ htmlcov/
 temporal.toml
 
 # Node-generated files
+# A directory, or a link from `bazel run //typescript:node_modules_link`.
+node_modules
 .pnpm-store/
 
 # Local configs for IDEs
@@ -35,3 +32,8 @@ pyrightconfig.json
 
 # Local LLM configs
 .claude/
+
+# Bazel
+/bazel-*
+user.bazelrc
+.venv-bazel

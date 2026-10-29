@@ -1,0 +1,42 @@
+load("//bazel:agents.bzl", "harness_schema")
+load("//bazel:committed_files.bzl", "committed_files")
+
+# The files both SDKs are tested against (contract/README.md). Python generates each of them for
+# now; `bazel run //contract:<name>_update` rewrites one, and its `_up_to_date_test` fails while it
+# differs from what Python writes.
+
+# The event stream's wire types: `temporal-agent-harness schema --protocol`.
+harness_schema(
+    name = "protocol_schema",
+    args = [
+        "schema",
+        "--protocol",
+    ],
+)
+
+committed_files(
+    name = "protocol",
+    srcs = ["protocol.schema.json"],
+    generated = {"protocol.schema.json": ":protocol_schema"},
+    visibility = [
+        "//python/tests/conformance:__pkg__",
+        "//typescript/packages/client/src:__pkg__",
+    ],
+)
+
+# The agents.toml format, which every SDK's `serve` reads: `temporal-agent-harness schema
+# --registry`.
+harness_schema(
+    name = "registry_schema",
+    args = [
+        "schema",
+        "--registry",
+    ],
+)
+
+committed_files(
+    name = "registry",
+    srcs = ["registry.schema.json"],
+    generated = {"registry.schema.json": ":registry_schema"},
+    visibility = ["//python/tests/web:__pkg__"],
+)

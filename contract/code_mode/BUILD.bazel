@@ -1,0 +1,16 @@
+# Code Mode's model-facing text: what both SDKs tell the model about the sandbox
+# (contract/README.md). Each SDK generates a module of constants from these files (harness_texts).
+
+filegroup(
+    name = "texts",
+    srcs = [
+        "contract.txt",
+        "filesystem_stub.txt",
+        "no_filesystem.txt",
+        "with_filesystem.txt",
+    ],
+    visibility = [
+        "//python/temporal_agent_harness/harness/code_mode:__pkg__",
+        "//typescript/packages/core/src/harness/code-mode:__pkg__",
+    ],
+)

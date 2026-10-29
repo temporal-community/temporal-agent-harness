@@ -1,0 +1,378 @@
+<script lang="ts">
+  import type { Snippet } from "svelte";
+
+  /**
+   * The one chip in the app. Every tag, status pill, filter, and small chrome
+   * button renders through this so they cannot drift apart: two heights — xs for
+   * tags inline in content, sm for anything in the app chrome — three fills, one
+   * type recipe.
+   *
+   * Renders a link when given `href`, a button when given `onclick`, and a plain
+   * span otherwise, so callers do not have to reimplement the shape to make it
+   * interactive.
+   */
+  export type ChipTone =
+    | "neutral"
+    | "accent"
+    | "model"
+    | "reasoning"
+    | "tool"
+    | "queue"
+    | "retry"
+    | "success"
+    | "warning"
+    | "error"
+    | "live";
+
+  export type ChipSize = "xs" | "sm";
+
+  /**
+   * filled: toned wash, for a status. quiet: hairline only, for a control; without
+   * `onclick` or `href` it is a plain label. bare: no chrome at all. solid: the
+   * tone as a block, for the one primary action on a surface; it is the Chip
+   * counterpart of IconButton's `accent` tone, so a dialog's confirm and the
+   * composer's send read as the same weight.
+   */
+  export type ChipFill = "filled" | "quiet" | "bare" | "solid";
+
+  interface Props {
+    label?: string;
+    tone?: ChipTone;
+    size?: ChipSize;
+    fill?: ChipFill;
+    /** Selected state for filters and segmented rows. */
+    active?: boolean;
+    /**
+     * Keeps the tone hue on a `quiet` or `bare` chip, which otherwise fall back
+     * to --text-3. For controls that have to carry a semantic colour while
+     * staying lighter than a filled chip; the hue is used as-is rather than
+     * tinted, because those callers are matching an established action colour.
+     */
+    toned?: boolean;
+    /**
+     * Keeps the tone hue on the `lead` icon only, leaving the label neutral. For
+     * a row of sibling actions that should each signal without all shouting:
+     * the icon carries the meaning, the label stays in the row's register.
+     */
+    leadToned?: boolean;
+    /** Draws the breathing outline the live status chip uses. */
+    ring?: boolean;
+    /** Leading square pip, for chips that stand in for a status. */
+    pip?: boolean;
+    dense?: boolean;
+    disabled?: boolean;
+    href?: string | null;
+    onclick?: (event: MouseEvent) => void;
+    /** `submit` makes the chip its form's submit button (or another form's, with `form`). */
+    type?: "button" | "submit";
+    /** Icon slot, ahead of the label. */
+    lead?: Snippet;
+    children?: Snippet;
+    /** Merged with the chip's own classes rather than replacing them. */
+    class?: string;
+    /** Everything else (aria-*, title, data-*) lands on the rendered element. */
+    [key: string]: unknown;
+  }
+
+  let {
+    label = "",
+    tone = "neutral",
+    size = "sm",
+    fill = "filled",
+    active = false,
+    toned = false,
+    leadToned = false,
+    ring = false,
+    pip = false,
+    dense = false,
+    disabled = false,
+    href = null,
+    onclick,
+    type = "button",
+    lead,
+    children,
+    class: extraClass = "",
+    ...rest
+  }: Props = $props();
+
+  const interactive = $derived(Boolean(href) || Boolean(onclick) || type === "submit");
+  const classes = $derived(
+    [
+      "chip",
+      size,
+      fill,
+      tone,
+      active ? "active" : "",
+      toned ? "toned" : "",
+      leadToned ? "lead-toned" : "",
+      ring ? "ring" : "",
+      dense ? "dense" : "",
+      interactive ? "interactive" : "",
+      extraClass
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+</script>
+
+{#snippet body()}
+  {#if pip}
+    <span class="chip-pip" aria-hidden="true"></span>
+  {/if}
+  {#if lead}
+    <span class="chip-lead" aria-hidden="true">{@render lead()}</span>
+  {/if}
+  {#if children}
+    {@render children()}
+  {:else if label}
+    <span class="chip-label">{label}</span>
+  {/if}
+{/snippet}
+
+<!-- Callers own description, the primitive owns behaviour: `rest` is spread
+     first, so everything the chip is answerable for — the shape, the `rel` that
+     makes `target="_blank"` safe, whether it is a submit button — is written
+     after it and wins. IconButton spreads in the same order, for the same
+     reason. A behaviour a caller legitimately needs gets a named prop there
+     rather than being left overridable here. -->
+{#if href}
+  <a {...rest} class={classes} {href} target="_blank" rel="noreferrer noopener">
+    {@render body()}
+  </a>
+{:else if onclick || type === "submit"}
+  <button {...rest} class={classes} {type} {disabled} {onclick}>
+    {@render body()}
+  </button>
+{:else}
+  <span {...rest} class={classes}>
+    {@render body()}
+  </span>
+{/if}
+
+<style>
+  .chip {
+    --chip-color: var(--text-3);
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    color: color-mix(in srgb, var(--chip-color) 82%, var(--text-1));
+    font-family: var(--font-mono);
+    font-size: var(--label-size);
+    font-weight: var(--label-weight);
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+    text-decoration: none;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* --- rows ---------------------------------------------------------------- */
+  /* Only the box changes between the two rows. The label is the register at
+     both, so a badge in a pane and a chip in the topbar are the same words at
+     the same size — the height alone says which frame you are in. */
+  .chip.xs {
+    height: var(--control-height-xs);
+    gap: 5px;
+    padding: 0 7px;
+  }
+
+  .chip.sm {
+    height: var(--control-height);
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .chip.dense {
+    gap: 5px;
+    padding: 0 6px;
+  }
+
+  /* --- fills --------------------------------------------------------------- */
+  .chip.filled {
+    border-color: color-mix(in srgb, var(--chip-color) 40%, var(--border));
+    background: color-mix(in srgb, var(--chip-color) 10%, var(--surface-1));
+    box-shadow: var(--shadow-inset-mid);
+  }
+
+  .chip.quiet {
+    border-color: var(--border);
+    background: transparent;
+    color: var(--text-3);
+  }
+
+  .chip.bare {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-3);
+  }
+
+  /* The block fill. Same recipe as IconButton's accent tone: hue as background,
+     the page's darkest surface as text, no border to soften the edge. */
+  .chip.solid {
+    border-color: transparent;
+    background: var(--chip-color);
+    color: var(--surface-0);
+  }
+
+  /* A neutral solid chip would be a grey block nobody asked for; the fill
+     exists to carry a tone, so without one it borrows the accent. */
+  .chip.solid.neutral {
+    --chip-color: var(--accent);
+  }
+
+  /* Hue without chrome: the box stays neutral, the text carries the tone. */
+  .chip.quiet.toned,
+  .chip.bare.toned {
+    color: var(--chip-color);
+  }
+
+  .chip.lead-toned .chip-lead {
+    color: var(--chip-color);
+  }
+
+  .chip.quiet.active,
+  .chip.bare.active {
+    border-color: color-mix(in srgb, var(--chip-color) 45%, transparent);
+    background: color-mix(in srgb, var(--chip-color) 13%, var(--surface-2));
+    color: color-mix(in srgb, var(--chip-color) 82%, var(--text-1));
+  }
+
+  /* The hairline box is what a filter, a tab, a toggle and a chrome action
+     look like, so a quiet chip nobody can press drops it and reads as the
+     label it is. A filled chip keeps its box: the wash is the status. */
+  .chip.quiet:not(.interactive),
+  .chip.bare.active:not(.interactive) {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  /* Without a box there is nothing to pad, and padding would indent a label
+     that wraps to the start of a line. */
+  .chip.quiet:not(.interactive) {
+    padding-inline: 0;
+  }
+
+  .chip.ring::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border: 1px solid color-mix(in srgb, var(--chip-color) 38%, transparent);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  /* --- interaction --------------------------------------------------------- */
+  .chip.interactive {
+    cursor: pointer;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out),
+      transform var(--duration-press) var(--ease-out);
+  }
+
+  .chip.interactive:active:not(:disabled) {
+    transform: scale(var(--motion-scale));
+  }
+
+  .chip.interactive:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  .chip.bare.interactive:focus-visible {
+    border-color: var(--focus-ring);
+    outline: none;
+    background: var(--selected-bg);
+  }
+
+  .chip.interactive:disabled {
+    opacity: var(--disabled-opacity);
+    cursor: default;
+  }
+
+  /* Disabled, the block steps down to a neutral surface as IconButton does, so
+     a primary action that cannot be taken yet does not keep calling for it. */
+  .chip.solid:disabled {
+    color: var(--text-3);
+    background: var(--surface-3);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .chip.interactive:hover:not(:disabled) {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+    }
+
+    .chip.bare.interactive:hover:not(:disabled) {
+      background: var(--surface-2);
+    }
+
+    .chip.filled.interactive:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--chip-color) 55%, var(--border));
+      background: color-mix(in srgb, var(--chip-color) 16%, var(--surface-1));
+    }
+
+    /* A toned chip answers hover with its box, not by dropping its hue. */
+    .chip.toned.interactive:hover:not(:disabled) {
+      color: var(--chip-color);
+      border-color: color-mix(in srgb, var(--chip-color) 45%, var(--border));
+    }
+
+    .chip.lead-toned.interactive:hover:not(:disabled) .chip-lead {
+      color: var(--chip-color);
+    }
+
+    .chip.solid.interactive:hover:not(:disabled) {
+      color: var(--surface-0);
+      border-color: transparent;
+      background: color-mix(in srgb, var(--chip-color) 88%, var(--text-1));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chip.interactive {
+      transition: none;
+    }
+
+    .chip.interactive:active:not(:disabled) {
+      transform: none;
+    }
+  }
+
+  /* --- parts --------------------------------------------------------------- */
+  .chip-pip {
+    flex: 0 0 auto;
+    width: var(--pip);
+    height: var(--pip);
+    background: var(--chip-color);
+  }
+
+  .chip-lead {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+
+  .chip-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* --- tones -------------------------------------------------------------- */
+  .chip.accent { --chip-color: var(--accent); }
+  .chip.model { --chip-color: var(--model); }
+  .chip.reasoning { --chip-color: var(--reasoning); }
+  .chip.tool { --chip-color: var(--tool); }
+  .chip.retry { --chip-color: var(--retry); }
+  .chip.queue { --chip-color: var(--queue); }
+  .chip.success { --chip-color: var(--success); }
+  .chip.warning { --chip-color: var(--warning); }
+  .chip.error { --chip-color: var(--error); }
+  .chip.live { --chip-color: var(--live); }
+</style>

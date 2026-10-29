@@ -1,0 +1,27 @@
+# Every package here shares one pnpm-lock.yaml, which Bazel (rules_js) reads too. A new package
+# must also be added to npm_translate_lock's `data` in MODULE.bazel;
+# //typescript:npm_translate_lock_data_matches_workspace_test fails until it is.
+packages:
+  - packages/*
+  - apps/*
+  - examples/*
+
+# A dependency on a workspace package's version (the bindings' `^0.1.0` client) links the working
+# tree's copy, and Bazel links that package's `:pkg` (bazel/npm_package.bzl), so the bindings
+# build and test against the client in the same commit. The published package.json keeps the
+# version range.
+linkWorkspacePackages: true
+
+# Packages that load these without declaring them. pnpm's hoisting hides that in a checkout; Bazel's
+# strict node_modules does not: @temporalio/plugin's declarations import the Temporal packages.
+packageExtensions:
+  "@temporalio/plugin":
+    peerDependencies:
+      "@temporalio/client": "*"
+      "@temporalio/common": "*"
+      "@temporalio/worker": "*"
+
+# No dependency needs an install script. esbuild's only checks its platform binary, which it
+# also gets as an optional dependency.
+allowBuilds:
+  esbuild: false

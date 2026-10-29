@@ -1,0 +1,64 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_py//py:defs.bzl", "py_binary")
+load(":wheel_script.bzl", "wheel_script")
+
+# Applied to the temporalio wheel (uv.override_package in MODULE.bazel).
+exports_files(["temporalio_extend_path.patch"])
+
+# Checks published_npm_package targets' tarballs (bazel/npm_package.bzl). A js_library, so the
+# tests in other packages find it in the output tree.
+js_library(
+    name = "npm_tarball_test",
+    srcs = ["npm_tarball_test.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+# Serve and check static_page targets (bazel/static_page.bzl).
+js_library(
+    name = "static_page_server",
+    srcs = ["static_page_server.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "static_page_imports_test",
+    srcs = ["static_page_imports_test.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+# The binary Code Mode runs scripts in. pydantic-monty finds it through MONTY_BIN.
+wheel_script(
+    name = "monty",
+    visibility = ["//visibility:public"],
+    whl = "@pypi//pydantic_monty_runtime:whl",
+)
+
+# Runs harness_dev targets' programs (bazel/dev.bzl).
+py_binary(
+    name = "dev_runner",
+    srcs = ["dev_runner.py"],
+    main = "dev_runner.py",
+    visibility = ["//visibility:public"],
+)
+
+# Builds python_dists targets' wheel and sdist (bazel/python_dists.bzl).
+py_binary(
+    name = "python_dists",
+    srcs = ["python_dists.py"],
+    main = "python_dists.py",
+    deps = ["@pypi//setuptools"],
+)
+
+# Writes harness_agent_registry targets' agents.toml (bazel/agents.bzl).
+py_binary(
+    name = "agents_toml",
+    srcs = ["agents_toml.py"],
+    main = "agents_toml.py",
+)
+
+# Writes harness_texts targets' modules (bazel/texts.bzl).
+py_binary(
+    name = "texts_module",
+    srcs = ["texts_module.py"],
+    main = "texts_module.py",
+)

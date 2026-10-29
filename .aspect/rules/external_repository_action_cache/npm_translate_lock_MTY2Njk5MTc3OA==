@@ -1,0 +1,16 @@
+# @generated
+# Input hashes for repository rule npm_translate_lock(name = "npm", pnpm_lock = "@@//typescript:pnpm-lock.yaml").
+# This file should be checked into version control along with the pnpm-lock.yaml file.
+typescript/apps/chat-server/package.json=1658478481
+typescript/apps/ui/package.json=180090902
+typescript/examples/monty/package.json=1328539702
+typescript/examples/openai_hello/package.json=1236370740
+typescript/package.json=-1773980838
+typescript/packages/client/package.json=-797444727
+typescript/packages/codegen/package.json=-221192931
+typescript/packages/core/package.json=1805941459
+typescript/packages/react/package.json=534641429
+typescript/packages/svelte/package.json=-726498556
+typescript/packages/worker/package.json=-1873671752
+typescript/pnpm-lock.yaml=2016990550
+typescript/pnpm-workspace.yaml=-1916117215

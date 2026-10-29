@@ -1,0 +1,7 @@
+# The scenarios every SDK's worker is run through (conformance/README.md).
+
+filegroup(
+    name = "scenarios",
+    srcs = glob(["*.json"]),
+    visibility = ["//python/tests/conformance:__pkg__"],
+)

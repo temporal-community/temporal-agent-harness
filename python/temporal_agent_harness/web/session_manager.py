@@ -1,0 +1,165 @@
+"""Agent-agnostic session-manager workflow for the harness web API.
+
+The manager owns browser-visible agent sessions and starts each selected agent
+as a child workflow on that agent's configured task queue. It intentionally
+knows only the standard harness protocol, not any concrete example agent.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from temporalio import workflow
+from temporalio.exceptions import ApplicationError
+
+with workflow.unsafe.imports_passed_through():
+    from temporal_agent_harness.harness.agent_protocol import AgentConfig
+
+SESSION_MANAGER_ID = "session-manager"
+SESSION_MANAGER_TASK_QUEUE = "session-manager"
+
+
+@dataclass
+class AgentStart:
+    """What an agent takes to start, after its config: its ``@agent.init`` init data."""
+
+    # {"required": bool, "schema": {...}}: the init data's JSON Schema, self-contained for a form
+    # (agent_init_data_schema). ``None`` when the agent takes no init data.
+    init_data: dict[str, Any] | None = None
+
+
+@dataclass
+class AgentDescriptor:
+    """One launchable agent in the web session registry."""
+
+    key: str
+    workflow_type: str
+    task_queue: str
+    label: str
+    description: str
+    # The agent's start interface, read from its generated schema document (the registry's
+    # ``schema``). ``None`` when the registry does not say; the agent still validates its start.
+    start: AgentStart | None = None
+
+
+@dataclass
+class AgentRegistry:
+    """The launchable agents known to one session manager."""
+
+    agents: list[AgentDescriptor] = field(default_factory=list)
+
+    def by_workflow_type(self, workflow_type: str) -> AgentDescriptor | None:
+        return next(
+            (agent for agent in self.agents if agent.workflow_type == workflow_type),
+            None,
+        )
+
+    def by_key(self, key: str) -> AgentDescriptor | None:
+        return next((agent for agent in self.agents if agent.key == key), None)
+
+
+@dataclass
+class CreateSessionRequest:
+    """Request to launch one child agent workflow."""
+
+    agent_workflow_type: str
+    config: AgentConfig
+    task_queue: str | None = None
+    # The agent's init data, as JSON, passed as its second workflow argument. The agent
+    # validates it; the manager only forwards it.
+    data: dict[str, Any] | None = None
+    # Caller-chosen workflow id for the session, instead of a minted
+    # ``agent-session-{uuid4}``. For an integration whose conversation identity is minted
+    # elsewhere — a Slack thread, a Discord channel, a ticket — where the session id must be
+    # *derivable* from that identity rather than looked up: without this the caller would have
+    # to keep its own external-id -> session-id table, because a minted uuid cannot be
+    # rediscovered on the next inbound event.
+    #
+    # Creation is idempotent when this is set: a request naming a session that already exists
+    # returns that session rather than failing, so a caller handling a redelivered webhook
+    # does not have to check first (and could not do so without racing itself).
+    session_id: str | None = None
+
+
+@dataclass
+class Session:
+    """A single child agent session tracked by the manager."""
+
+    workflow_id: str
+    created_at: float
+    label: str
+    agent_workflow_type: str
+    is_discovered: bool = False
+    """True if this session wasn't started via ``create_session`` but was found already running
+    in the namespace (see ``_discover_untracked_sessions`` in ``web/app.py``)."""
+
+
+@workflow.defn
+class SessionManagerWorkflow:
+    """Long-running parent workflow that manages agent sessions."""
+
+    @workflow.init
+    def __init__(self, registry: AgentRegistry) -> None:
+        self._sessions: list[Session] = []
+        self._next_number = 1
+        self._registry = registry
+
+    @workflow.query
+    def available_agents(self) -> AgentRegistry:
+        return self._registry
+
+    @workflow.update
+    async def create_session(self, request: CreateSessionRequest) -> Session:
+        """Launch one child agent workflow and track it.
+
+        Idempotent when ``request.session_id`` names a session this manager already started:
+        that session is returned untouched, so a caller that cannot know whether it has been
+        here before (a chat integration handling a possibly-redelivered webhook) can simply
+        ask every time.
+        """
+        descriptor = self._registry.by_workflow_type(request.agent_workflow_type)
+        if descriptor is None:
+            known = [agent.workflow_type for agent in self._registry.agents]
+            raise ApplicationError(
+                f"Unknown agent type {request.agent_workflow_type!r}. "
+                f"Known agents: {known}",
+                type="UnknownAgentType",
+                non_retryable=True,
+            )
+
+        task_queue = request.task_queue or descriptor.task_queue
+
+        if request.session_id:
+            existing = next(
+                (known for known in self._sessions if known.workflow_id == request.session_id),
+                None,
+            )
+            if existing is not None:
+                return existing
+
+        session_id = request.session_id or f"agent-session-{workflow.uuid4()}"
+        await workflow.start_child_workflow(
+            request.agent_workflow_type,
+            args=[request.config] if request.data is None else [request.config, request.data],
+            id=session_id,
+            task_queue=task_queue,
+        )
+
+        session = Session(
+            workflow_id=session_id,
+            created_at=workflow.time(),
+            label=f"Session {self._next_number}",
+            agent_workflow_type=request.agent_workflow_type,
+        )
+        self._next_number += 1
+        self._sessions.append(session)
+        return session
+
+    @workflow.query
+    def list_sessions(self) -> list[Session]:
+        return list(self._sessions)
+
+    @workflow.run
+    async def run(self, registry: AgentRegistry) -> None:
+        await workflow.wait_condition(lambda: False)

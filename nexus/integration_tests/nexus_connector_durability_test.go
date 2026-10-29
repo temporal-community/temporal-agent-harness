@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent"
 	harnessgen "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent/generated"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/activity"
@@ -57,13 +59,13 @@ func TestConnector_TwoMessagesDeliveredAcrossWorkerRestart(t *testing.T) {
 	worker1 := startConnectorWorker(t, temporalClient, connectorTaskQueue, platform)
 	defer worker1.Stop()
 
-	msg1 := router.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
+	msg1 := testMessage{ID: "m1", Text: "hello"}
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C001", msg1))
 	platform.waitCompletions(t, 1, 30*time.Second)
 
 	worker0.Stop()
 
-	msg2 := router.IncomingMessage{MessageID: "m2", Sender: "user", Text: "world", Timestamp: "2000.0"}
+	msg2 := testMessage{ID: "m2", Text: "world"}
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C001", msg2))
 	platform.waitCompletions(t, 1, 30*time.Second)
 
@@ -87,7 +89,7 @@ func TestConnector_MultipleSessionsSurviveWorkerDeath(t *testing.T) {
 
 	sessions := []string{"slack:C101", "slack:C102"}
 	for _, sess := range sessions {
-		msg := router.IncomingMessage{MessageID: "r1", Sender: "user", Text: "ping", Timestamp: "1000.0"}
+		msg := testMessage{ID: "r1", Text: "ping"}
 		require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", sess, msg))
 	}
 	platform.waitCompletions(t, len(sessions), 30*time.Second)
@@ -95,7 +97,7 @@ func TestConnector_MultipleSessionsSurviveWorkerDeath(t *testing.T) {
 	worker0.Stop()
 
 	for _, sess := range sessions {
-		msg := router.IncomingMessage{MessageID: "r2", Sender: "user", Text: "pong", Timestamp: "2000.0"}
+		msg := testMessage{ID: "r2", Text: "pong"}
 		require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", sess, msg))
 	}
 	platform.waitCompletions(t, len(sessions), 30*time.Second)
@@ -121,8 +123,8 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 
 	worker0 := startConnectorWorker(t, temporalClient, connectorTaskQueue, blocker)
 
-	msg := router.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
-	wfID := router.RouterWorkflowID("integ", "slack:C003", msg.MessageID)
+	msg := testMessage{ID: "m1", Text: "hello"}
+	wfID := router.RouterWorkflowID("integ", "slack:C003", msg.ID)
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C003", msg))
 
 	select {
@@ -149,14 +151,20 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 
 // -- helpers -----------------------------------------------------------------
 
+// testMessage is one chat message for a test.
+type testMessage struct{ ID, Text string }
+
 // startMessageConnector starts a fresh RouterWorkflow for one message.
-func startMessageConnector(t *testing.T, tc client.Client, taskQueue, identity, sessionID string, msg router.IncomingMessage) error {
+func startMessageConnector(t *testing.T, tc client.Client, taskQueue, identity, sessionID string, msg testMessage) error {
 	t.Helper()
-	wfID := router.RouterWorkflowID(identity, sessionID, msg.MessageID)
+	wfID := router.RouterWorkflowID(identity, sessionID, msg.ID)
 	_, err := tc.ExecuteWorkflow(context.Background(),
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: taskQueue},
 		router.WorkflowName,
-		router.Input{Identity: identity, SessionID: sessionID, Message: &msg},
+		router.Input{
+			Request: protocol.Request{SessionID: sessionID, Message: &protocol.Message{Text: msg.Text, Sender: "user"}},
+			Address: json.RawMessage(`{}`),
+		},
 	)
 	return err
 }
@@ -254,71 +262,89 @@ func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string,
 	return w
 }
 
-// testOutboundActivities is satisfied by anything providing the raw (context.Context)
-// activity implementations this test registers on the connector worker — the test
-// double standing in for a real platform driver's activities (cf. SlackPlatform).
+// testOutboundActivities is the test's platform: the activities that the test
+// outbound driver calls. It stands in for a real platform's API calls.
 type testOutboundActivities interface {
-	// Streaming APIs are intended to be used together to start/update/end a streamed response.
-	BeginStream(ctx context.Context, input router.BeginStreamInput) (router.StreamHandle, error)
-	UpdateStream(ctx context.Context, input router.UpdateStreamInput) error
-	FinishStream(ctx context.Context, input router.FinishStreamInput) error
-
-	PostMessage(ctx context.Context, input router.TextMetadata) error
-	PostApprovalPrompt(ctx context.Context, input router.ApprovalPromptInput) error
+	BeginStream(ctx context.Context, chunks []protocol.Chunk) (string, error)
+	AppendStream(ctx context.Context, in appendInput) error
+	FinishStream(ctx context.Context, stream string) error
+	PostMessage(ctx context.Context, m timeline.Message) error
 }
 
-// Activity name constants for this test's outbound driver, private to this file — a
-// real driver (e.g. slack.Driver) is free to choose its own.
+type appendInput struct {
+	Stream string
+	Chunks []protocol.Chunk
+}
+
 const (
-	testBeginStreamActivity        = "TestBeginStream"
-	testUpdateStreamActivity       = "TestUpdateStream"
-	testFinishStreamActivity       = "TestFinishStream"
-	testPostMessageActivity        = "TestPostMessage"
-	testPostApprovalPromptActivity = "TestPostApprovalPrompt"
+	testBeginStreamActivity  = "TestBeginStream"
+	testAppendStreamActivity = "TestAppendStream"
+	testFinishStreamActivity = "TestFinishStream"
+	testPostMessageActivity  = "TestPostMessage"
 )
 
-// testOutboundDriver implements router.OutboundDriver by dispatching to whichever
-// testOutboundActivities implementation the test registered on the worker.
+// testOutboundDriver implements router.Outbound. It runs the timeline in workflow
+// code and calls the test activities.
 type testOutboundDriver struct{}
 
-func (testOutboundDriver) SupportsStreaming(router.Input) bool {
-	return true
-}
+var _ router.Outbound = testOutboundDriver{}
 
-func (testOutboundDriver) activityOptions(ctx workflow.Context) workflow.Context {
-	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+func (testOutboundDriver) Deliver(ctx workflow.Context, _ router.Address, state router.State, events []protocol.Event) (router.State, error) {
+	return applyTimeline(ctx, state, func(s timeline.Sink, st *timeline.State) {
+		timeline.Apply(timeline.Config{Streaming: true}, s, st, events)
 	})
 }
 
-func (d testOutboundDriver) BeginStream(ctx workflow.Context, input router.BeginStreamInput) (router.StreamHandle, error) {
-	var handle router.StreamHandle
-	err := workflow.ExecuteActivity(d.activityOptions(ctx), testBeginStreamActivity, input).Get(ctx, &handle)
-	return handle, err
+func (testOutboundDriver) Done(ctx workflow.Context, _ router.Address, state router.State) error {
+	if len(state) == 0 {
+		return nil
+	}
+	_, err := applyTimeline(ctx, state, func(s timeline.Sink, st *timeline.State) {
+		timeline.End(timeline.Config{Streaming: true}, s, st)
+	})
+	return err
 }
 
-func (d testOutboundDriver) UpdateStream(ctx workflow.Context, input router.UpdateStreamInput) error {
-	return workflow.ExecuteActivity(d.activityOptions(ctx), testUpdateStreamActivity, input).Get(ctx, nil)
+func applyTimeline(ctx workflow.Context, state router.State, run func(timeline.Sink, *timeline.State)) (router.State, error) {
+	var st timeline.State
+	if len(state) > 0 {
+		if err := json.Unmarshal(state, &st); err != nil {
+			return nil, err
+		}
+	}
+	run(testSink{ctx: workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})}, &st)
+	return json.Marshal(st)
 }
 
-func (d testOutboundDriver) FinishStream(ctx workflow.Context, input router.FinishStreamInput) error {
-	return workflow.ExecuteActivity(d.activityOptions(ctx), testFinishStreamActivity, input).Get(ctx, nil)
-}
+type testSink struct{ ctx workflow.Context }
 
-func (d testOutboundDriver) PostMessage(ctx workflow.Context, input router.TextMetadata) error {
-	return workflow.ExecuteActivity(d.activityOptions(ctx), testPostMessageActivity, input).Get(ctx, nil)
+func (s testSink) Now() time.Time { return workflow.Now(s.ctx) }
+func (s testSink) Warn(msg string, err error) {
+	workflow.GetLogger(s.ctx).Warn(msg, "error", err)
 }
-
-func (d testOutboundDriver) PostApprovalPrompt(ctx workflow.Context, input router.ApprovalPromptInput) error {
-	return workflow.ExecuteActivity(d.activityOptions(ctx), testPostApprovalPromptActivity, input).Get(ctx, nil)
+func (s testSink) Open(chunks []protocol.Chunk) (string, error) {
+	var id string
+	err := workflow.ExecuteActivity(s.ctx, testBeginStreamActivity, chunks).Get(s.ctx, &id)
+	return id, err
 }
-
-// AcknowledgeApproval is a no-op — none of these durability tests exercise the
-// tool-approval acknowledgement path.
-func (testOutboundDriver) AcknowledgeApproval(workflow.Context, router.ApprovalAcknowledgementInput) error {
-	return nil
+func (s testSink) Append(stream string, chunks []protocol.Chunk) error {
+	return workflow.ExecuteActivity(s.ctx, testAppendStreamActivity, appendInput{Stream: stream, Chunks: chunks}).Get(s.ctx, nil)
 }
+func (s testSink) Finish(stream string, _ timeline.Message) error {
+	return workflow.ExecuteActivity(s.ctx, testFinishStreamActivity, stream).Get(s.ctx, nil)
+}
+func (s testSink) Post(m timeline.Message) error {
+	return workflow.ExecuteActivity(s.ctx, testPostMessageActivity, m).Get(s.ctx, nil)
+}
+func (testSink) Status(timeline.Status) error                              { return nil }
+func (testSink) Prompt(protocol.ApprovalRequest) (string, error)           { return "", nil }
+func (testSink) Settle(timeline.Prompt, protocol.ApprovalResolution) error { return nil }
+func (testSink) Guide([]protocol.Handler) error                            { return nil }
+func (testSink) Form(protocol.Handler) error                               { return nil }
+func (testSink) Error(string) error                                        { return nil }
 
 func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue string, platform testOutboundActivities) sdkworker.Worker {
 	t.Helper()
@@ -326,10 +352,9 @@ func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue str
 	w := sdkworker.New(tc, connectorTaskQueue, sdkworker.Options{})
 	w.RegisterWorkflowWithOptions(routerWorkflow.Run, workflow.RegisterOptions{Name: router.WorkflowName})
 	w.RegisterActivityWithOptions(platform.BeginStream, activity.RegisterOptions{Name: testBeginStreamActivity})
-	w.RegisterActivityWithOptions(platform.UpdateStream, activity.RegisterOptions{Name: testUpdateStreamActivity})
+	w.RegisterActivityWithOptions(platform.AppendStream, activity.RegisterOptions{Name: testAppendStreamActivity})
 	w.RegisterActivityWithOptions(platform.FinishStream, activity.RegisterOptions{Name: testFinishStreamActivity})
 	w.RegisterActivityWithOptions(platform.PostMessage, activity.RegisterOptions{Name: testPostMessageActivity})
-	w.RegisterActivityWithOptions(platform.PostApprovalPrompt, activity.RegisterOptions{Name: testPostApprovalPromptActivity})
 	require.NoError(t, w.Start())
 	return w
 }
@@ -372,25 +397,21 @@ func newmockMsgPlatform() *mockMsgPlatform {
 	return &mockMsgPlatform{completions: make(chan struct{}, 64)}
 }
 
-func (p *mockMsgPlatform) BeginStream(_ context.Context, in router.BeginStreamInput) (router.StreamHandle, error) {
+func (p *mockMsgPlatform) BeginStream(_ context.Context, _ []protocol.Chunk) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.starts++
-	return router.StreamHandle{
-		ID:            "stream-1",
-		SessionID:     in.SessionID,
-		TransportMode: "native",
-	}, nil
+	return "stream-1", nil
 }
 
-func (p *mockMsgPlatform) UpdateStream(_ context.Context, _ router.UpdateStreamInput) error {
+func (p *mockMsgPlatform) AppendStream(_ context.Context, _ appendInput) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.appends++
 	return nil
 }
 
-func (p *mockMsgPlatform) FinishStream(_ context.Context, _ router.FinishStreamInput) error {
+func (p *mockMsgPlatform) FinishStream(_ context.Context, _ string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stops++
@@ -398,17 +419,11 @@ func (p *mockMsgPlatform) FinishStream(_ context.Context, _ router.FinishStreamI
 	return nil
 }
 
-func (p *mockMsgPlatform) PostMessage(_ context.Context, _ router.TextMetadata) error {
+func (p *mockMsgPlatform) PostMessage(_ context.Context, _ timeline.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.posts++
 	p.completions <- struct{}{}
-	return nil
-}
-
-// PostApprovalPrompt is a no-op here — none of these durability tests exercise
-// the tool-approval flow, but the mock must still satisfy testOutboundActivities.
-func (p *mockMsgPlatform) PostApprovalPrompt(_ context.Context, _ router.ApprovalPromptInput) error {
 	return nil
 }
 
@@ -439,25 +454,21 @@ type blockOnStart struct {
 	once      sync.Once
 }
 
-func (b *blockOnStart) BeginStream(ctx context.Context, in router.BeginStreamInput) (router.StreamHandle, error) {
+func (b *blockOnStart) BeginStream(ctx context.Context, _ []protocol.Chunk) (string, error) {
 	// Block the start call until the context is cancelled (simulates worker crash).
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
-	return router.StreamHandle{}, ctx.Err()
+	return "", ctx.Err()
 }
 
-func (b *blockOnStart) UpdateStream(ctx context.Context, in router.UpdateStreamInput) error {
-	return b.recording.UpdateStream(ctx, in)
+func (b *blockOnStart) AppendStream(ctx context.Context, in appendInput) error {
+	return b.recording.AppendStream(ctx, in)
 }
 
-func (b *blockOnStart) FinishStream(ctx context.Context, in router.FinishStreamInput) error {
-	return b.recording.FinishStream(ctx, in)
+func (b *blockOnStart) FinishStream(ctx context.Context, stream string) error {
+	return b.recording.FinishStream(ctx, stream)
 }
 
-func (b *blockOnStart) PostMessage(ctx context.Context, in router.TextMetadata) error {
-	return b.recording.PostMessage(ctx, in)
-}
-
-func (b *blockOnStart) PostApprovalPrompt(ctx context.Context, in router.ApprovalPromptInput) error {
-	return b.recording.PostApprovalPrompt(ctx, in)
+func (b *blockOnStart) PostMessage(ctx context.Context, m timeline.Message) error {
+	return b.recording.PostMessage(ctx, m)
 }

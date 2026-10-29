@@ -1,0 +1,694 @@
+# ABOUTME: Stateless agent-turn client for Temporal workflow_streams workflows.
+#
+# Abstracts a single agent turn — sending a user message to a Temporal workflow,
+# streaming intermediate tool events, and terminating when the turn ends (the
+# workflow's turn_end event) — into a single async iterator. Designed to be
+# resumable via a stream offset so that disconnects don't lose events.
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Callable
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
+
+from temporalio.client import Client, WithStartWorkflowOperation, WorkflowUpdateFailedError
+from temporalio.contrib.workflow_streams import WorkflowStreamClient
+
+from temporalio.common import WorkflowIDConflictPolicy
+
+from temporal_agent_harness.harness.agent_protocol import (
+    AGENT_INTERFACE_QUERY,
+    AGENT_STATUS_QUERY,
+    PROVIDE_CALLBACK_RESULT_UPDATE,
+    SEND_AGENT_MESSAGE_UPDATE,
+    TOOL_APPROVAL_UPDATE,
+    AcceptedFunction,
+    AgentConfig,
+    AgentEvent,
+    AgentEventType,
+    AgentMessage,
+    AgentStatus,
+    CallbackResult,
+    MessageDisposition,
+    CallbackResultAck,
+    PendingApproval,
+    PendingCallback,
+    ToolApprovalDecision,
+    ToolApprovalResult,
+    AgentMessageReply,
+)
+from temporal_agent_harness.harness.stream_merge import (
+    DEFAULT_STALL_GRACE_SECONDS,
+    merge_stream,
+    select_live,
+    select_replay,
+)
+from temporal_agent_harness.harness.stream_merge.cursor import Cursor
+
+# Client default: maximum seconds to wait for a turn to complete.
+DEFAULT_TURN_TIMEOUT = 300.0
+
+T = TypeVar("T")
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class AgentTurnTimeout(Exception):
+    """Turn did not produce a terminal event before the timeout elapsed."""
+
+
+class AgentTurnError(Exception):
+    """Workflow published a terminal error event for the turn."""
+
+
+class MidTurnRejectedError(Exception):
+    """The target handler declares ``mid_turn=MidTurn.REJECT`` and a turn is already open.
+
+    Retrying immediately will not help — the handler's author declared that this message
+    must not pile up behind in-flight work. The caller should wait for the agent to go idle
+    (``turn_end``, or ``agent_status`` reporting ``turn_active == False``) and send again, or
+    send a different message whose handler declares ``ENQUEUE`` or ``ACCEPT``.
+    """
+
+
+class JoinedTurnError(Exception):
+    """The message was admitted, but it JOINED an open turn — so it has no turn to stream.
+
+    Raised by :meth:`AgentClient.send_message`, whose whole shape is "one message, one turn,
+    one stream". A ``MidTurn.ACCEPT`` message sent to a busy agent joins the turn already
+    running: its ``turn_started`` is *behind* its ``accepted_offset``, so the merge's skip
+    preamble would never match and the caller would sit in silence until the turn timeout.
+    Failing here instead makes that a fast, legible error.
+
+    **The message is running.** This is not a rejection and there is nothing to retry: the
+    agent accepted it, the handler is executing, and its reply will be published on the stream
+    under :attr:`reply`'s ``message_id``. Only the streaming half is unavailable. A caller that
+    needs to observe it uses the documented client contract instead — :meth:`submit_message`
+    for every send, one :meth:`attach` stream kept open — which is what an interactive client
+    should be doing anyway (see ``stream_merge/README.md``).
+    """
+
+    def __init__(self, message: str, *, reply: AgentMessageReply) -> None:
+        super().__init__(message)
+        self.reply = reply
+        """The accepted reply — ``message_id`` / ``turn_number`` / ``turn_id`` for the message
+        that is now running, so the caller can find it on a stream it opens itself."""
+
+
+class ToolApprovalError(Exception):
+    """A tool-approval decision was rejected by the workflow.
+
+    Raised by :meth:`AgentClient.approve_tool` when the workflow's update validator
+    rejects the decision — the ``tool_id`` is unknown, or the approval was already
+    resolved (a double-submit). ``error_type`` carries the workflow-side type
+    (``UnknownToolApproval`` / ``ToolApprovalAlreadyResolved``).
+    """
+
+    def __init__(self, message: str, *, error_type: str | None = None) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
+class CallbackResultError(Exception):
+    """A callback tool result was rejected by the workflow.
+
+    Raised by :meth:`AgentClient.provide_callback_result` when the workflow's update validator
+    rejects the submission — the ``tool_id`` is unknown, the callback was already resolved (a
+    double-submit), or the result payload does not match the tool's declared output type.
+    ``error_type`` carries the workflow-side type (``UnknownCallback`` /
+    ``CallbackAlreadyResolved`` / ``MalformedCallbackResult``).
+    """
+
+    def __init__(self, message: str, *, error_type: str | None = None) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
+# Must be defined after the exception classes since it references them at runtime.
+AgentStreamOutput = AgentEvent | AgentTurnError | AgentTurnTimeout
+
+# The callback signature: (item, resume_offset) -> T
+# ``resume_offset`` is the merge's ROOT-stream resume CURSOR as of this item — a value the consumer
+# records and hands back as ``attach(from_offset=...)`` to resume. It is NOT the event's own
+# per-stream offset and NOT a merged display ordinal: it advances only on ROOT events, so every event
+# within one subagent turn carries the same value (the cursor as of that turn's dispatch). See
+# ``stream_merge.merge.MergedItem``.
+OnItemCallback = Callable[[AgentStreamOutput, int], T]
+
+
+# ---------------------------------------------------------------------------
+# AgentClient
+# ---------------------------------------------------------------------------
+
+
+class AgentClient:
+    """Stateless client for interacting with an agent workflow.
+
+    All durable state lives in the workflow (turn counter, liveness,
+    stream log). This client is cheap to construct per-request.
+
+    Args:
+        temporal: Connected Temporal client.
+        workflow_id: ID of the agent workflow to interact with.
+    """
+
+    def __init__(
+        self,
+        temporal: Client,
+        workflow_id: str,
+    ) -> None:
+        self._temporal = temporal
+        self._workflow_id = workflow_id
+
+    @property
+    def workflow_id(self) -> str:
+        return self._workflow_id
+
+    async def get_status(self) -> AgentStatus:
+        """Query the workflow for its current status."""
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        return await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+
+    async def get_pending_approvals(self) -> list[PendingApproval]:
+        """The gated tool calls currently awaiting a human decision.
+
+        A convenience over :meth:`get_status` — lets a client that attached after the
+        ``tool_approval_requested`` event was published still discover and act on
+        outstanding approvals (the event may have streamed by before it connected).
+        """
+        status = await self.get_status()
+        return status.pending_approvals
+
+    async def approve_tool(
+        self,
+        tool_id: str,
+        *,
+        approved: bool,
+        reason: str | None = None,
+        remember: bool = False,
+        update_id: str | None = None,
+    ) -> ToolApprovalResult:
+        """Resolve a pending tool approval (see :class:`ToolApprovalRequested`).
+
+        ``tool_id`` is the id carried by the ``tool_approval_requested`` event and listed
+        under :attr:`AgentStatus.pending_approvals`. On approval the gated call dispatches
+        immediately; on denial the model receives ``reason`` as the tool's error result.
+        Resolving an unknown id, or one already resolved, raises :class:`ToolApprovalError`
+        (the decision is idempotent — a double-submit fails rather than flipping it).
+
+        ``remember=True`` (only meaningful with ``approved=True``) is "approve, and stop
+        asking me about this tool": it adds the tool to the agent's live
+        :class:`ToolApprovalPolicy` allow-list, so future calls of it skip the gate and any
+        other call of that tool currently waiting auto-resolves. Read the updated policy
+        back via :meth:`get_status` (``approval_policy``) to persist it for next session.
+
+        ``update_id`` lets a caller supply its own idempotency key (e.g. a retried Nexus
+        request) instead of an auto-generated one, so retries resolve the same update
+        instead of double-submitting.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        try:
+            return await handle.execute_update(
+                TOOL_APPROVAL_UPDATE,
+                ToolApprovalDecision(
+                    tool_id=tool_id, approved=approved, reason=reason, remember=remember
+                ),
+                id=update_id,
+                result_type=ToolApprovalResult,
+            )
+        except WorkflowUpdateFailedError as e:
+            cause = e.cause
+            error_type = getattr(cause, "type", None) if cause else None
+            if error_type in ("UnknownToolApproval", "ToolApprovalAlreadyResolved"):
+                raise ToolApprovalError(str(cause), error_type=error_type) from e
+            raise
+
+    async def get_pending_callbacks(self) -> list[PendingCallback]:
+        """The callback tool calls currently awaiting a client-supplied result.
+
+        A convenience over :meth:`get_status` — lets a client that attached after the
+        ``callback_requested`` event was published still discover and fulfill outstanding
+        callback calls (each carries the ``output_schema`` the result must match).
+        """
+        status = await self.get_status()
+        return status.pending_callbacks
+
+    async def provide_callback_result(
+        self,
+        tool_id: str,
+        *,
+        result: Any = None,
+        error: str | None = None,
+        update_id: str | None = None,
+    ) -> CallbackResultAck:
+        """Fulfill a pending callback tool call (see :class:`CallbackRequested`).
+
+        A callback tool has no worker-side body — the agent paused in-workflow while THIS client
+        executed the tool on its own machine (e.g. read a local file, captured a photo). Submit
+        the outcome here, keyed by the ``tool_id`` from the ``callback_requested`` event (also
+        listed under :attr:`AgentStatus.pending_callbacks`):
+
+          * ``result`` — the value produced, as JSON-native data (a dict for a pydantic-model
+            output, or a scalar/list). It is validated against the tool's declared output type
+            and becomes the tool's return value.
+          * ``error`` — set instead when the tool could not be fulfilled; the model receives it
+            as the tool's error result rather than the turn crashing.
+
+        Resolving an unknown id, one already resolved, or a result that fails output-type
+        validation raises :class:`CallbackResultError` (idempotent — a double-submit fails
+        rather than overwriting a settled result; a malformed result can be corrected and
+        resubmitted, since it does not consume the pending gate).
+
+        ``update_id`` — see :meth:`approve_tool`'s note on caller-supplied idempotency keys.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        try:
+            return await handle.execute_update(
+                PROVIDE_CALLBACK_RESULT_UPDATE,
+                CallbackResult(tool_id=tool_id, result=result, error=error),
+                id=update_id,
+                result_type=CallbackResultAck,
+            )
+        except WorkflowUpdateFailedError as e:
+            cause = e.cause
+            error_type = getattr(cause, "type", None) if cause else None
+            if error_type in (
+                "UnknownCallback",
+                "CallbackAlreadyResolved",
+                "MalformedCallbackResult",
+            ):
+                raise CallbackResultError(str(cause), error_type=error_type) from e
+            raise
+
+    async def get_agent_interface(self) -> list[AcceptedFunction]:
+        """Query the workflow for its callable surface — the ``@agent.accepts`` handlers.
+
+        Returns one :class:`AcceptedFunction` per handler (``name`` / ``description`` /
+        input ``parameters`` schema / ``output`` schema), Gemini-tool-shaped. Callers
+        introspect this to construct a valid :class:`AgentMessage` for any handler (the
+        ``name`` is the envelope ``type``), or — for a parent agent — to model each handler
+        as a subagent tool, so the contract can evolve without client-side changes.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        return await handle.query(AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction])
+
+    async def _submit_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        update_id: str | None = None,
+    ) -> AgentMessageReply:
+        """Submit one message to the agent's front door, WITHOUT streaming the turn.
+
+        Internal harness primitive — phase 1 of a turn. Public callers use :meth:`send_message`
+        (the send-and-stream convenience); this and :meth:`_stream_turn` are the composable
+        halves it is built from, reused in-package (e.g. by the subagent-turn activity, which
+        sends then streams with its own dedup/heartbeat in between). Names the target
+        ``@agent.accepts`` handler (``msg_type``) and carries its input-model JSON
+        (``payload``), builds the ``AgentMessage`` envelope internally, and forwards it as the
+        ``send_agent_message`` update. Returns the accepted :class:`AgentMessageReply`
+        (``message_id`` / ``turn_id`` / ``turn_number`` / ``disposition``).
+
+        ``update_id`` is for retrying callers (e.g. the harness's own ``run_subagent_turn``
+        activity), which key it on an identity stable across their retries so a re-issued send
+        after a lost reply gets the original acceptance back rather than dispatching a second
+        message. Left ``None``, Temporal mints one.
+
+        Raises:
+            MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        try:
+            return await handle.execute_update(
+                SEND_AGENT_MESSAGE_UPDATE,
+                AgentMessage(type=msg_type, payload=payload),
+                id=update_id,
+                result_type=AgentMessageReply,
+            )
+        except WorkflowUpdateFailedError as e:
+            cause = e.cause
+            error_type = getattr(cause, "type", None) if cause else None
+            if error_type == "MidTurnRejected":
+                raise MidTurnRejectedError(str(cause)) from e
+            raise
+
+    async def submit_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        update_id: str | None = None,
+    ) -> AgentMessageReply:
+        """Submit one message to the agent without streaming the accepted turn.
+
+        This is the send half of the client contract: an interactive client sends EVERY message
+        this way and keeps at most one :meth:`attach` stream, ensured live *after* the send
+        returns (see ``stream_merge/README.md``, "The client contract"). Doing it the other way
+        round — one :meth:`send_message` stream per message — opens a long-lived stream per
+        queued message and cannot observe a joined one at all.
+
+        The returned :class:`AgentMessageReply` carries the message's ``message_id`` (which
+        every event of its dispatch is stamped with), the ``turn_number`` / ``turn_id`` it
+        belongs to, and the ``disposition`` saying whether it opened, joined or queued behind
+        a turn.
+
+        ``update_id`` is an idempotency key for a caller whose delivery can be repeated — a
+        chat-platform webhook is redelivered routinely — keyed on an identity stable across
+        those repeats (the platform's own event id). A re-issued send then gets the original
+        acceptance back instead of dispatching the message a second time. Left ``None``,
+        Temporal mints one and every delivery is a fresh dispatch.
+        """
+        return await self._submit_message(msg_type, payload, update_id=update_id)
+
+    async def start_and_submit_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        workflow_name: str,
+        task_queue: str,
+        start_config: AgentConfig,
+        start_data: BaseModel | dict[str, Any] | None = None,
+        update_id: str | None = None,
+    ) -> AgentMessageReply:
+        """Like :meth:`_submit_message`, but starts the workflow first if it isn't already
+        running — for callers that can't assume it exists (e.g. Nexus's
+        ``sendAgentMessage``, which must create-or-reuse a session in one call). Needs
+        ``workflow_name``/``task_queue`` since every other method assumes the workflow is
+        already running and never needs them.
+
+        ``start_data`` is the agent's init data, passed as its second workflow argument when the
+        workflow is started (ignored when it is already running).
+
+        ``update_id`` — see :meth:`approve_tool`'s note.
+
+        Raises:
+            MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
+        """
+        start_op = WithStartWorkflowOperation(
+            workflow_name,
+            args=[start_config] if start_data is None else [start_config, start_data],
+            id=self._workflow_id,
+            task_queue=task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+        try:
+            return await self._temporal.execute_update_with_start_workflow(
+                SEND_AGENT_MESSAGE_UPDATE,
+                AgentMessage(type=msg_type, payload=payload),
+                start_workflow_operation=start_op,
+                id=update_id,
+                result_type=AgentMessageReply,
+            )
+        except WorkflowUpdateFailedError as e:
+            cause = e.cause
+            error_type = getattr(cause, "type", None) if cause else None
+            if error_type == "MidTurnRejected":
+                raise MidTurnRejectedError(str(cause)) from e
+            raise
+
+    async def send_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        on_item: OnItemCallback[T],
+        timeout: float | None = DEFAULT_TURN_TIMEOUT,
+        subagent_stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
+        update_id: str | None = None,
+    ) -> AsyncIterator[T]:
+        """Send a message and stream the resulting turn — including any subagents — as ONE stream.
+
+        PRECONDITION — this is for a caller that holds NO stream, sending a message that gets a
+        turn OF ITS OWN (a script or connector doing one request/response). It is NOT the mid-turn
+        surface. A ``MidTurn.ACCEPT`` message that JOINS an open turn has that turn's
+        ``turn_started`` *behind* its ``accepted_offset``, so the merge's skip preamble would
+        never match and nothing would ever be emitted. The reply's ``disposition`` says which
+        happened, so that case FAILS FAST with :class:`JoinedTurnError` (carrying the accepted
+        reply — the message is running regardless) rather than going silent for ``timeout``
+        seconds. An interactive client sends every message with :meth:`submit_message` and keeps
+        ONE :meth:`attach` stream open instead — see ``stream_merge/README.md``, "The client
+        contract".
+
+        Phase 1, :meth:`_submit_message`, runs eagerly here so ``MidTurnRejectedError``
+        is raised *before* any streaming begins (and before the merge is
+        even constructed — there is no failure path after the agent has accepted). The update returns an
+        ``accepted_offset``; phase 2 then drives the client-side stream-merge from there: it skips
+        to this turn's ``turn_started`` (a quiescent start) and yields every event of the turn,
+        coalescing the agent's own stream with each subagent stream it drives (recursively), in a
+        semantically-valid order — through to this turn's ``turn_end``. The caller never tracks or
+        passes an offset.
+
+        Args:
+            msg_type: Name of the target ``@agent.accepts`` handler.
+            payload: JSON of that handler's input model.
+            on_item: Callback ``(AgentStreamOutput, resume_offset) -> T`` applied to each output.
+                ``resume_offset`` is the merge's ROOT-stream resume cursor as of this item (see
+                :meth:`attach`); the per-turn path doesn't resume on it (the chat path reattaches via
+                :meth:`attach`), but it is passed through uniformly so a caller's bookkeeping is
+                consistent across both entry points.
+            timeout: Max seconds to wait for the turn to complete (``None`` = no limit).
+            subagent_stall_grace_seconds: Liveness backstop (seconds) for the stream merge — how
+                long a subagent whose reply the parent is already waiting on may stay silent on its
+                OWN stream before the merge presumes it unreachable, gives up on its detail, and
+                lets the parent's reply flow. NOT an ordering input (ordering is clock-free); it
+                only bounds the wait on a close-gate-blocking subagent. Raise it on slow/overloaded
+                workers (a healthy-but-laggy subagent is given up only if it exceeds this); lower it
+                for snappier degradation. A genuinely idle/slow subagent that ISN'T blocking the
+                parent's reply is never affected.
+            update_id: Idempotency key for the send, for a caller whose delivery can be
+                repeated (a redelivered chat-platform webhook). A repeat gets the original
+                acceptance back — and therefore streams the ORIGINAL turn — rather than
+                dispatching the message twice. See :meth:`submit_message`.
+
+        Returns:
+            An async iterator of ``T``.
+
+        Raises:
+            MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
+            JoinedTurnError: The message was accepted, but it joined an open turn — it is
+                running, and there is no per-turn stream for it (see the precondition above).
+        """
+        reply = await self._submit_message(msg_type, payload, update_id=update_id)
+        if reply.disposition is MessageDisposition.JOINED:
+            raise JoinedTurnError(
+                f"message {reply.message_id} joined open turn {reply.turn_number} and is "
+                f"running; send_message cannot stream a joined turn — submit_message + "
+                f"attach is the mid-turn surface",
+                reply=reply,
+            )
+        return self._merged_turn(
+            reply,
+            on_item=on_item,
+            timeout=timeout,
+            stall_grace_seconds=subagent_stall_grace_seconds,
+        )
+
+    async def _merged_turn(
+        self,
+        reply: AgentMessageReply,
+        *,
+        on_item: OnItemCallback[T],
+        timeout: float | None,
+        stall_grace_seconds: float,
+    ) -> AsyncIterator[T]:
+        """Phase 2 of :meth:`send_message`: drive the merge for one submitted turn.
+
+        Reads from ``reply.accepted_offset`` and skips to ``reply.turn_id``'s ``turn_started``,
+        then merges live (arrival-order interleaving) until that turn's ``turn_end`` on the ROOT
+        agent — by which point, via the close gate, every subagent turn it triggered has already
+        been emitted. THIS MESSAGE's ``message_handler_error`` is surfaced as an
+        :class:`AgentTurnError` — a sibling participant's is not, since it says nothing about
+        the caller's own message; on timeout an :class:`AgentTurnTimeout` is yielded last.
+        """
+        target_turn_id = reply.turn_id
+        target_message_id = reply.message_id
+
+        async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
+            return (
+                not cursor.is_child
+                and ev.turn_id == target_turn_id
+                and ev.event.type == AgentEventType.TURN_END
+            )
+
+        # ``aclosing`` closes the merge (and its open subscriptions) as soon as this generator is
+        # closed or times out, rather than whenever asyncio finalizes the abandoned generator.
+        merged = merge_stream(
+            client=self._temporal,
+            root_workflow_id=self._workflow_id,
+            root_from_offset=reply.accepted_offset,
+            skip_until_turn_id=target_turn_id,
+            select=select_live,
+            should_stop=should_stop,
+            stall_grace_seconds=stall_grace_seconds,
+        )
+        try:
+            async with contextlib.aclosing(merged), asyncio.timeout(timeout):
+                # ``resume_offset`` is the merge's ROOT-stream resume cursor; for a single
+                # send_message turn it isn't used to resume (the chat path reattaches via ``attach``),
+                # but we pass it through uniformly so the consumer's bookkeeping stays consistent.
+                async for ev, resume_offset in merged:
+                    # Match on OUR MESSAGE, not our turn: a ``MidTurn.ACCEPT`` message can join
+                    # the turn we opened, and its failure is not ours to raise. ``message_id`` is
+                    # a globally-unique uuid, so it alone identifies our message's terminal error
+                    # — no need to also match turn_id or agent_id.
+                    if (
+                        ev.message_id == target_message_id
+                        and ev.event.type == AgentEventType.MESSAGE_HANDLER_ERROR
+                    ):
+                        # Surface OUR message's error as the caller's failure signal in place of
+                        # the raw event (the merge already streamed the subtree; turn_end still
+                        # follows as the real terminal).
+                        yield on_item(
+                            AgentTurnError(ev.event.message or "agent turn failed"),
+                            resume_offset,
+                        )
+                    else:
+                        yield on_item(ev, resume_offset)
+        except TimeoutError:
+            yield on_item(
+                AgentTurnTimeout(f"turn {reply.turn_number} did not complete within {timeout}s"),
+                -1,
+            )
+
+    async def attach(
+        self,
+        *,
+        on_item: OnItemCallback[T],
+        from_offset: int = 0,
+        subagent_stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
+    ) -> AsyncIterator[T]:
+        """Reattach to a session and stream it as ONE merged logical stream, then tail live.
+
+        ``from_offset`` controls where the merge starts (and ANY offset is valid — see below):
+
+        * **0 (default)** — full replay from the beginning, for a blank-slate consumer (a freshly
+          loaded tab) that has no prior state. Replays past events deterministically (mount-order
+          interleaving), then follows live until the agent is idle.
+        * **any prior resume offset** — resume: stream from exactly that ROOT offset onward, so
+          already-seen events are not re-sent. The one consequence of resuming *inside* a subagent's
+          turn (an offset after that subagent's ``subagent_message_sent`` but before its
+          ``subagent_reply_received``): that subagent's OWN events are absent from the resumed stream
+          (the merge never saw its turn start, so it can't mount its stream), though the parent's
+          ``subagent_reply_received`` and everything after it still flow. Subagents dispatched at or
+          after ``from_offset`` merge normally.
+
+        ``on_item`` receives ``(item, resume_offset)``. **``resume_offset`` is a ROOT-stream offset
+        and advances ONLY on root events** — record the latest and pass it back as ``from_offset`` to
+        resume. Two consequences a caller must not miss:
+
+        * It is the root-stream position, NOT the merge's display ordinal — the cross-stream
+          interleaving itself is not a resumable position.
+        * Resume granularity is therefore **per-root-event, not per-subagent-event**. Every subagent
+          event between two root events carries the SAME ``resume_offset`` (the position just past
+          the preceding root event). So a consumer that disconnects *mid a subagent's turn* and
+          resumes will NOT re-receive the rest of that subagent's turn detail — on resume the merge
+          starts past that subagent's ``subagent_message_sent`` and so never re-mounts it (and emits
+          NO ``subagent_stream_unavailable`` marker — it treats the detail as already delivered). The
+          parent's reply and everything after it still flow. This is intended: a scalar root offset
+          is a *valid* resume point (never a broken ordering, never a wedge), but it is lossless only
+          at root-event granularity. A consumer that needs every subagent event across a mid-turn
+          reconnect should re-attach from 0.
+
+        Returns immediately (yields nothing) if there's nothing new to stream.
+
+        ``subagent_stall_grace_seconds`` — see :meth:`send_message`; same liveness backstop, applied
+        to the merge that backs this attach.
+
+        Termination mirrors the per-turn close: on each root ``turn_end`` we re-query status
+        and stop once the workflow is idle and this attach has emitted every root event that
+        existed when it started. ``turn_end`` is the only terminal there is — it fires when
+        the last participant of a turn finishes, so it is a true quiescence signal — which is
+        what lets a caller safely disconnect instead of holding the stream open forever.
+        """
+        stream = WorkflowStreamClient.create(self._temporal, self._workflow_id)
+        status = await self.get_status()
+        head = await stream.get_offset()
+        # Already caught up (no events past from_offset) and the agent is idle — nothing to stream.
+        if head <= from_offset and not status.turn_active and not status.pending_turns:
+            return self._empty()
+        return self._merged_attach(
+            on_item=on_item,
+            from_offset=from_offset,
+            stop_at_root_offset=head,
+            stall_grace_seconds=subagent_stall_grace_seconds,
+        )
+
+    async def _empty(self) -> AsyncIterator[T]:
+        """An async iterator that yields nothing (the no-history, idle ``attach`` case)."""
+        return
+        yield  # pragma: no cover — unreachable; makes this an async generator
+
+    async def _merged_attach(
+        self,
+        *,
+        on_item: OnItemCallback[T],
+        from_offset: int,
+        stop_at_root_offset: int,
+        stall_grace_seconds: float,
+    ) -> AsyncIterator[T]:
+        """Phase 2 of :meth:`attach`: drive the merge from ``from_offset`` to the next idle point.
+
+        No skip at any offset: the merge starts the root exactly at ``from_offset`` (0 = replay
+        everything). Resuming mid-stream is safe — a subagent whose turn began before ``from_offset``
+        is never mounted (its detail is absent, its ``reply_received`` released by the merge's
+        unmounted-stuck give-up), while subagents dispatched at/after it merge normally."""
+        root_id = self._workflow_id
+        highest_completed_turn = 0
+
+        async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
+            nonlocal highest_completed_turn
+            if cursor.is_child:
+                return False
+            # Every terminal is a turn_end now: a turn is the interval the agent is
+            # non-idle, so there is no out-of-band action that completes without one.
+            #
+            # State registration is the one exception, because it publishes BEFORE any
+            # turn exists: declared state is registered when the runner is built in
+            # `@agent.init`, so its snapshot lands at the very front of the stream stamped
+            # `turn_number=0`,
+            # which is why it is matched on that rather than on being a snapshot. It is
+            # the only event a replay can end on that no `turn_end` will ever follow, so
+            # it has to be able to end one. Without this, attach delivered a brand-new
+            # session's one-event history and then blocked forever -- and in the console
+            # that closed a loop, because `creatingSession` is cleared when the first
+            # attach goes idle and it gates the composer, so the session just created
+            # could not be sent the message that would have ended the attach. (An agent
+            # registering several states puts one of these at each of offsets 0..n-1; the
+            # head guard below is what keeps all but the last from ending the replay early.)
+            registration_snapshot = (
+                ev.event.type == AgentEventType.STATE_SNAPSHOT and ev.turn_number == 0
+            )
+            if ev.event.type != AgentEventType.TURN_END and not registration_snapshot:
+                return False
+            highest_completed_turn = max(highest_completed_turn, ev.turn_number)
+            if cursor.head_offset + 1 < stop_at_root_offset:
+                return False
+            try:
+                status = await self.get_status()
+            except Exception:  # noqa: BLE001 — workflow gone (e.g. failed after an errored turn)
+                return True
+            return (
+                not status.turn_active
+                and not status.pending_turns
+                and highest_completed_turn >= status.current_turn
+            )
+
+        merged = merge_stream(
+            client=self._temporal,
+            root_workflow_id=root_id,
+            root_from_offset=from_offset,
+            skip_until_turn_id=None,
+            select=select_replay,
+            should_stop=should_stop,
+            stall_grace_seconds=stall_grace_seconds,
+        )
+        async with contextlib.aclosing(merged):
+            async for ev, resume_offset in merged:
+                yield on_item(ev, resume_offset)

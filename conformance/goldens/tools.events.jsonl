@@ -1,0 +1,18 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"args": {"a": 2, "b": 3}, "id": "call-add", "name": "add", "step": "tool"}, {"args": {"text": "hi"}, "id": "call-echo", "name": "echo", "step": "tool"}, {"args": {"message": "broken"}, "id": "call-fail", "name": "fail", "step": "tool"}, {"model": "scripted", "reply": ["Done."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_input": {"a": 2, "b": 3}, "tool_name": "add", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_input": {"a": 2, "b": 3}, "tool_name": "add", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_name": "add", "tool_output": "5", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-echo", "tool_input": {"text": "hi"}, "tool_name": "echo", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-echo", "tool_input": {"text": "hi"}, "tool_name": "echo", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-echo", "tool_name": "echo", "tool_output": "hi", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-fail", "tool_input": {"message": "broken"}, "tool_name": "fail", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-fail", "tool_input": {"message": "broken"}, "tool_name": "fail", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"message": "broken", "tool_id": "call-fail", "tool_name": "fail", "type": "tool_error"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Done.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": "Done."}, "type": "message_handler_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}

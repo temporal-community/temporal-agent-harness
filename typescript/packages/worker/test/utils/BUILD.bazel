@@ -1,0 +1,28 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# Tests of the payload stores (src/utils/large-payload.ts, src/utils/s3.ts) and of oversized
+# payloads on a running agent.
+ts_project(
+    name = "payload.test",
+    testonly = True,
+    srcs = ["payload.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@aws-sdk/client-s3",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src/utils:large-payload",
+        "//typescript/packages/worker/src/utils:s3",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+harness_js_test(
+    name = "payload_test",
+    data = [":payload.test"],
+    entry_point = "payload.test.js",
+)

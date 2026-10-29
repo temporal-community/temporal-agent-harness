@@ -110,8 +110,9 @@ Full mechanics and durability guarantees:
 
 ## The two loops (don't conflate them)
 
-- **Outer turn loop — the harness's.** `await self._runner.run(self)` waits for messages, runs the
-  turn lifecycle, publishes the reply, and loops. It owns message intake, queuing, turn events,
+- **Outer turn loop — the harness's.** `runner.run(self)`, called by the `run` method that
+  `@agent.defn` generates, waits for messages, runs the turn lifecycle, publishes the reply, and
+  loops. It owns message intake, queuing, turn events,
   and the `agent_status`/`agent_interface` queries.
 - **Inner agentic loop — the author's (or the SDK's).** The model↔tools loop lives *inside* your
   `@agent.accepts` handler. You write it by hand (Gemini: a tool-calling `while` loop) or delegate

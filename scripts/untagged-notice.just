@@ -1,5 +1,5 @@
 # Shared "you're on an untagged commit" notice, imported by the root justfile and by each
-# examples/*/justfile so every entry point carries it.
+# python/examples/*/justfile so every entry point carries it.
 #
 # This is a variable assignment rather than a recipe dependency on purpose: just evaluates it once
 # per invocation, before any recipe runs, so a single line per justfile covers every recipe. It is

@@ -1,0 +1,38 @@
+load("@npm//typescript/packages/svelte:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+load("//bazel:static_page.bzl", "static_page")
+
+# The board, served with the client and the Svelte binding: `bazel run :play` (`just play`). Nothing
+# builds the page itself; the browser compiles each .svelte file (svelte-sw.js).
+static_page(
+    name = "play",
+    srcs = [
+        "App.svelte",
+        "index.html",
+        "style.css",
+        "svelte-sw.js",
+    ],
+    packages = {
+        "//typescript/packages/client:pkg": "harness-client",
+        "//typescript/packages/svelte:pkg": "harness-svelte",
+    },
+)
+
+# Type-checks the board, App.svelte, against the Svelte binding's sources and the agent's generated
+# client (tsconfig.json's `paths` point into typescript/packages/svelte).
+svelte_check_bin.svelte_check_test(
+    name = "svelte_check_test",
+    args = [
+        "--tsconfig",
+        "./tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = [
+        "App.svelte",
+        "tsconfig.json",
+        "//python/examples/tictactoe:client_sdk_types",
+        "//typescript/packages/svelte:node_modules/svelte",
+        "//typescript/packages/svelte/src/lib:index",
+    ],
+    # The client's declarations, which a test's runfiles leave out by default.
+    include_transitive_types = True,
+)

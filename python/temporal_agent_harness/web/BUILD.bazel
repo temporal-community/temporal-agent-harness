@@ -1,0 +1,143 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":app",
+        ":registry",
+        ":session_manager",
+        ":session_manager_worker",
+    ],
+)
+
+py_library(
+    name = "agent_starts",
+    srcs = ["agent_starts.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [":session_manager"],
+)
+
+py_library(
+    name = "app",
+    srcs = ["app.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_starts",
+        ":file_view",
+        ":registry",
+        ":session_manager",
+        ":task_queue_status",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/ui:__init__",
+        "//python/temporal_agent_harness/utils:large_payload",
+        "@pypi//fastapi",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_module_binary(
+    name = "cli",
+    srcs = ["cli.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":client",
+        ":registry",
+        ":serve",
+        ":session_manager",
+        ":session_manager_worker",
+        "//python/temporal_agent_harness/harness:agent_schema",
+    ],
+)
+
+py_library(
+    name = "client",
+    srcs = ["client.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness:plugin",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "file_view",
+    srcs = ["file_view.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/code_mode:activity_fs",
+        "//python/temporal_agent_harness/harness/code_mode:okf",
+        "//python/temporal_agent_harness/harness/code_mode:vfs",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "registry",
+    srcs = ["registry.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":session_manager",
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "serve",
+    srcs = ["serve.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":__init__",
+        ":client",
+        ":registry",
+        "//python/temporal_agent_harness/ui:__init__",
+        "@pypi//fastapi",
+        "@pypi//uvicorn",
+    ],
+)
+
+py_library(
+    name = "session_manager",
+    srcs = ["session_manager.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "session_manager_worker",
+    srcs = ["session_manager_worker.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":client",
+        ":session_manager",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "task_queue_status",
+    srcs = ["task_queue_status.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//temporalio"],
+)

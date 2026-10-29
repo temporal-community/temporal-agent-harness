@@ -1,0 +1,69 @@
+# @temporal-agent-harness/codegen
+
+Generates TypeScript types for one harness agent from the JSON Schema document the Python
+package prints for it (from `python/`):
+
+```sh
+uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
+  | harness-codegen - -o TicTacToeAgent.ts
+```
+
+The output has an interface per model the agent exposes (its `@agent.accepts` input and output
+models and its `agent.state(...)` types) and one mapping type naming them:
+
+```ts
+export interface TicTacToeAgent {
+  handlers: {
+    new_game: { input: NewGame; output: TextReply };
+    play: { input: PlayMove; output: TextReply };
+  };
+  states: {
+    board: Board;
+  };
+}
+```
+
+Handler inputs are typed as a sender writes them (a field with a default is optional); handler
+outputs and states as they arrive on the wire (every field present). Tool inputs and outputs are
+not typed.
+
+Options: `-o <file>` writes to a file instead of stdout; `--name <TypeName>` renames the mapping
+type, which defaults to the agent's workflow type name.
+
+`--json-schemas` also writes `<TypeName>Schemas`: each handler's input and output as JSON Schema,
+so you can check a message or a reply at runtime with any validator. Each schema is
+self-contained (a `$ref` plus just the `$defs` it reaches), and the constant is `as const` for
+tools that derive types from schemas. For example, with Ajv:
+
+```ts
+import Ajv from "ajv";
+import { TicTacToeAgentSchemas } from "./TicTacToeAgent";
+
+const validPlay = new Ajv().compile(TicTacToeAgentSchemas.play.input);
+if (!validPlay(move)) console.warn(validPlay.errors);
+```
+
+It is off by default, so the generated files examples commit stay as they are.
+
+## The event protocol
+
+With `--protocol`, it reads `temporal-agent-harness schema --protocol` instead and writes the
+event stream's types. The client package (`typescript/packages/client`) commits that output as
+its `src/protocol.ts`; `bazel run //typescript/packages/client/src:protocol_codegen_update` regenerates it.
+
+## Development
+
+```sh
+bazel test //typescript/packages/codegen/...   # one target per test file, e.g. //typescript/packages/codegen/test:generate_test
+```
+
+Without Bazel, from this directory:
+
+```sh
+pnpm install
+pnpm test   # compiles src/ and test/ (including compile-time type checks), then runs node --test
+```
+
+`test/golden/TicTacToeAgent.ts` is generated from the tic-tac-toe example's committed schema,
+`python/examples/tictactoe/TicTacToeAgent.schema.json`;
+`bazel run //typescript/packages/codegen/test/golden:golden_update` regenerates it.

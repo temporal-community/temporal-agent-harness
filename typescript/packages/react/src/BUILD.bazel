@@ -1,0 +1,39 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+ts_project(
+    name = "index",
+    srcs = ["index.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/react:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":session",
+        ":state",
+        "//typescript/packages/react:node_modules/@temporalio/agent-harness-client",
+    ],
+)
+
+ts_project(
+    name = "session",
+    srcs = ["session.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/react:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":state",
+        "//typescript/packages/react:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/react:node_modules/@types/react",
+        "//typescript/packages/react:node_modules/react",
+    ],
+)
+
+ts_project(
+    name = "state",
+    srcs = ["state.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/react:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = ["//typescript/packages/react:node_modules/@temporalio/agent-harness-client"],
+)

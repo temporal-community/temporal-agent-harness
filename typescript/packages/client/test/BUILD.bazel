@@ -1,0 +1,242 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per test file (and per compile-time type check, *.types.ts), depending on the files it
+# imports.
+ts_project(
+    name = "coreDeps.test",
+    testonly = True,
+    srcs = ["coreDeps.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+)
+
+ts_project(
+    name = "jsonPatch.test",
+    testonly = True,
+    srcs = ["jsonPatch.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:jsonPatch",
+    ],
+)
+
+ts_project(
+    name = "partialJson.test",
+    testonly = True,
+    srcs = ["partialJson.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = ["//typescript/packages/client/src:partialJson"],
+)
+
+ts_project(
+    name = "projection.test",
+    testonly = True,
+    srcs = ["projection.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/client/src:messages",
+        "//typescript/packages/client/src:projection",
+    ],
+)
+
+ts_project(
+    name = "protocol.types",
+    testonly = True,
+    srcs = ["protocol.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = ["//typescript/packages/client/src:protocol"],
+)
+
+ts_project(
+    name = "scale",
+    testonly = True,
+    srcs = ["scale.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:plainState",
+        "//typescript/packages/client/src:session",
+        "//typescript/packages/client/src:transport",
+        "//typescript/packages/client/src:views",
+    ],
+)
+
+ts_project(
+    name = "scale.test",
+    testonly = True,
+    srcs = ["scale.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [":scale"],
+)
+
+ts_project(
+    name = "schemaForm.test",
+    testonly = True,
+    srcs = ["schemaForm.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = ["//typescript/packages/client/src:schemaForm"],
+)
+
+ts_project(
+    name = "session.test",
+    testonly = True,
+    srcs = ["session.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/client/src:inspect",
+        "//typescript/packages/client/src:plainState",
+        "//typescript/packages/client/src:schema",
+        "//typescript/packages/client/src:session",
+    ],
+)
+
+ts_project(
+    name = "start.test",
+    testonly = True,
+    srcs = ["start.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:start",
+        "//typescript/packages/client/src:transport",
+    ],
+)
+
+ts_project(
+    name = "start.types",
+    testonly = True,
+    srcs = ["start.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = ["//typescript/packages/client/src:start"],
+)
+
+ts_project(
+    name = "support",
+    testonly = True,
+    srcs = ["support.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:transport",
+    ],
+)
+
+ts_project(
+    name = "tabs.test",
+    testonly = True,
+    srcs = ["tabs.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/client/src:plainState",
+        "//typescript/packages/client/src:session",
+    ],
+)
+
+ts_project(
+    name = "transport.test",
+    testonly = True,
+    srcs = ["transport.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:transport",
+    ],
+)
+
+ts_project(
+    name = "typed.types",
+    testonly = True,
+    srcs = ["typed.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:inspect",
+        "//typescript/packages/client/src:messages",
+        "//typescript/packages/client/src:plainState",
+        "//typescript/packages/client/src:session",
+    ],
+)
+
+js_test(
+    name = "coreDeps_test",
+    data = [
+        ":coreDeps.test",
+        "//typescript/packages/client:package_json",
+        "//typescript/packages/codegen:package_json",
+        "//typescript/packages/react:package_json",
+        "//typescript/packages/svelte:config",
+    ],
+    entry_point = "coreDeps.test.js",
+)
+
+js_test(
+    name = "jsonPatch_test",
+    data = [":jsonPatch.test"],
+    entry_point = "jsonPatch.test.js",
+)
+
+js_test(
+    name = "partialJson_test",
+    data = [":partialJson.test"],
+    entry_point = "partialJson.test.js",
+)
+
+js_test(
+    name = "projection_test",
+    data = [":projection.test"],
+    entry_point = "projection.test.js",
+)
+
+js_test(
+    name = "scale_test",
+    data = [":scale.test"],
+    entry_point = "scale.test.js",
+)
+
+js_test(
+    name = "schemaForm_test",
+    data = [":schemaForm.test"],
+    entry_point = "schemaForm.test.js",
+)
+
+js_test(
+    name = "session_test",
+    data = [":session.test"],
+    entry_point = "session.test.js",
+)
+
+js_test(
+    name = "start_test",
+    data = [":start.test"],
+    entry_point = "start.test.js",
+)
+
+js_test(
+    name = "tabs_test",
+    data = [":tabs.test"],
+    entry_point = "tabs.test.js",
+)
+
+js_test(
+    name = "transport_test",
+    data = [":transport.test"],
+    entry_point = "transport.test.js",
+)

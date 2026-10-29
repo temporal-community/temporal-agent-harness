@@ -1,8 +1,8 @@
 # Human-in-the-Loop Tool Approvals
 
 **Status:** ✅ Implemented (see `harness/test_tool_approvals.py`, `harness/test_runner_builder.py`).
-**Scope:** `harness/` (decorators, runner, builder, protocol, `jev_approvals/`), `google_genai_plugin/` (schema adapter), and the agent tool definitions + worker wiring.
-**Also see:** `harness/test_jev_approvals.py` for the builtin AI approval gate.
+**Scope:** `harness/` (decorators, runner, builder, protocol), `ai_sdks/jev/`, `google_genai_plugin/` (schema adapter), and the agent tool definitions + worker wiring.
+**Also see:** `tests/ai_sdks/jev/test_jev_evaluator.py` for the Jev-backed AI approval gate.
 
 > ## ⚠️ Read first — approvals are SAFE-BY-DEFAULT and POLICY-DRIVEN
 >
@@ -60,8 +60,8 @@
 >   `ToolApprovalRequested`, and *then* awaits `runner._run_auto_mode_evaluator(...)`;
 >   (3) whatever is still unresolved runs the same unbounded `wait_condition` gate as before.
 > - **Public API:** `from harness.agent import ToolApprovalPolicy, AutoApprovalContext,
->   AutoModeEvaluator, AutoApprovalVerdict, AutoApprovalDecision, jev_evaluator`
->   (re-exported alongside the decorators). `client.approve_tool(..., remember=False)`.
+>   AutoModeEvaluator, AutoApprovalVerdict, AutoApprovalDecision` (re-exported alongside
+>   the decorators); `from temporal_agent_harness.ai_sdks.jev import jev_evaluator`. `client.approve_tool(..., remember=False)`.
 >
 > ### Auto mode evaluators — async, three-valued
 >
@@ -197,7 +197,7 @@
 >   caller's `AgentConfig` or a handler's `set_approval_policy` can ask for it, not just the
 >   author. `_assert_auto_mode_has_an_evaluator` raises a non-retryable `ApplicationError`
 >   (`type="AutoModeWithoutEvaluator"`) wherever a policy is installed: from
->   `@workflow.init` that fails the workflow cleanly, from a handler it fails that message
+>   `@agent.init` that fails the workflow cleanly, from a handler it fails that message
 >   and leaves the live policy untouched.
 > - **The allow-list outranks the machine.** A call layers 0–2 approved never reaches the
 >   evaluator, so an explicit human "always allow this tool" (`remember=True`) permanently
@@ -259,11 +259,14 @@
 >   needs — whether the machine is deciding — rides on `approval_policy.auto_mode_enabled`.
 >   Revisit if tools ever register with the runner up front.
 >
-> ### `jev_evaluator` — the builtin AI auto mode evaluator
+> ### `jev_evaluator` — the Jev-backed auto mode evaluator
 >
-> `harness/jev_approvals/`, exported as `agent.jev_evaluator(model="jev-latest",
-> extra_state=None, activity_config=None)`. Returns an `AutoModeEvaluator`. Optional
-> `jev` extra (`typesafe-sdk`), **worker-side only**.
+> `ai_sdks/jev/`, exported as `ai_sdks.jev.jev_evaluator(model="jev-latest",
+> extra_state=None, activity_config=None)`. Returns an `AutoModeEvaluator`. Needs the
+> `typesafe` extra; the model call is a typed `temporalio.typesafe` System One call
+> (`TemporalTypeSafe`), so the worker registers `TypeSafePlugin`, which owns the client and
+> the `system_one` activity. A worker without it fails the bounded attempts of
+> `DEFAULT_ACTIVITY_CONFIG` and the call escalates.
 >
 > - **It holds no rules and no thresholds.** Those were constructor args (`policy=`,
 >   `min_confidence=`, `escalate_if_irreversible_above=`) and are now the operator's, read off
@@ -288,7 +291,7 @@
 >   `auto_approval_evaluation_ended`. The thresholds are what let a stored decision be re-read
 >   under different ones; the set name and version are what keep it readable once the rules
 >   behind it have been edited. It does NOT carry the request state — the decision is what is
->   being audited, not the prompt (the activity's input in history is the prompt).
+>   being audited, not the prompt (the `system_one` activity's input in history is the prompt).
 > - **A TypeSafe failure is not caught** by the approver. It propagates to the runner, which
 >   publishes `auto_approval_evaluation_error` and substitutes an escalate — so a failure
 >   stays typed as a failure on the stream instead of being flattened into a verdict.
@@ -301,7 +304,7 @@
 > - **Not reachable by the agent.** Dispatched as a bare `workflow.execute_activity` by name,
 >   never through `run_tool` — so it is not a tool, the model cannot call it or influence what
 >   is asked about its own call, and the gate does not recurse into itself.
-> - **Registered unconditionally by `AgentHarnessPlugin`**, like the Code Mode activities, with
+> - **Registered unconditionally by `AgentHarnessPlugin`**, with
 >   the extra checked per call: an unregistered activity name is a *retryable* Temporal error,
 >   which would hang every gated call mid-approval instead of failing once.
 > - Splits along the workflow boundary: `approver.py`/`models.py` are workflow-safe (plain
@@ -834,7 +837,7 @@ _run_one_tool except → function_result{call_id=X, is_error:true, result:"<reas
 - **Conditional approval — DONE.** The auto mode evaluator judges a call against the
   operator's own ruleset (it receives `tool_input`, so "only gate `delete` of protected
   ids" is expressible), is async, and answers approve / deny / escalate.
-  `agent.jev_evaluator` is the builtin AI implementation of it. Still future: predicates
+  `ai_sdks.jev.jev_evaluator` is the Jev-backed AI implementation of it. Still future: predicates
   attached per-tool, and serializable conditional rules.
 - **Deny-list / `remember` on denial.** `remember=True` only allow-lists on *approval*
   today; a "never allow this tool" deny-list is not built.

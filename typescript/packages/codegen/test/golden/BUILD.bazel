@@ -1,0 +1,20 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:codegen.bzl", "harness_types")
+
+ts_project(
+    name = "TicTacToeAgent",
+    testonly = True,
+    srcs = ["TicTacToeAgent.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/codegen:tsconfig",
+    visibility = ["//typescript/packages/codegen/test:__pkg__"],
+)
+
+# The generator's golden, TicTacToeAgent.ts: the tic-tac-toe agent's types, which the tests compare
+# and type-check. `bazel run //typescript/packages/codegen/test/golden:golden_update` rewrites it.
+harness_types(
+    name = "golden",
+    src = "TicTacToeAgent.ts",
+    schema = "//python/examples/tictactoe:TicTacToeAgent",
+    visibility = ["//typescript/packages/codegen/test:__pkg__"],
+)

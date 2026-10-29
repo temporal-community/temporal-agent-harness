@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+
+    // No outDir: Bazel emits beside the sources, so a test package finds the sources'
+    // declarations. `check` passes --noEmit, and tsconfig.build.json writes dist.
+    "declaration": true
+  },
+  "include": ["src", "test"]
+}

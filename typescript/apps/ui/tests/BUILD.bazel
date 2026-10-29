@@ -1,0 +1,389 @@
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "brand-mark_test",
+    src = "brand-mark.test.mjs",
+    deps = [
+        "//typescript/apps/ui/public:temporal-logo",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+    ],
+)
+
+vitest_test(
+    name = "contrast_test",
+    src = "contrast.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
+        "//typescript/apps/ui/src/lib/components/flow:usageChart",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+    ],
+)
+
+vitest_test(
+    name = "conventions_test",
+    src = "conventions.test.mjs",
+    deps = [
+        "//typescript/apps/ui:build_file",
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:PendingBannerStack",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
+        "//typescript/apps/ui/src/lib/components/flow:WorkflowTimeline",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:LongContent",
+        "//typescript/apps/ui/src/lib/components/primitives:SafeImage",
+        "//typescript/apps/ui/src/lib/components/primitives:Select",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:TraceRow",
+        "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "deep-nesting_test",
+    src = "deep-nesting.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:FileViewerDialog",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
+        "//typescript/apps/ui/src/lib/components/primitives:nest",
+    ],
+)
+
+# Checks the AGENTS.md files and the README against the justfile and files across the repo,
+# which a sandbox leaves out; `pnpm --dir typescript/apps/ui run check` runs it.
+vitest_test(
+    name = "docs-drift_test",
+    src = "docs-drift.test.mjs",
+    tags = ["manual"],
+)
+
+vitest_test(
+    name = "drawer-default_test",
+    src = "drawer-default.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+        "//typescript/apps/ui/src/lib/panes:launcher",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
+)
+
+vitest_test(
+    name = "drawer-fit_test",
+    src = "drawer-fit.test.mjs",
+    deps = ["//typescript/apps/ui/src:App"],
+)
+
+vitest_test(
+    name = "drawer-open_test",
+    src = "drawer-open.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+    ],
+)
+
+vitest_test(
+    name = "empty-runtime-boundary_test",
+    src = "empty-runtime-boundary.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "empty-states_test",
+    src = "empty-states.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
+    ],
+)
+
+vitest_test(
+    name = "end-session_test",
+    src = "end-session.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/chat:EndSessionDialog",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "first-paint-motion_test",
+    src = "first-paint-motion.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:AutoFitView",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+    ],
+)
+
+vitest_test(
+    name = "graph-focus-toggle_test",
+    src = "graph-focus-toggle.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/components/flow:AgentStateFlow"],
+)
+
+vitest_test(
+    name = "graph-streaming-tokens_test",
+    src = "graph-streaming-tokens.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "input-turn-label_test",
+    src = "input-turn-label.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/state:flowProjection"],
+)
+
+vitest_test(
+    name = "long-text-containment_test",
+    src = "long-text-containment.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:CallInput",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:PendingCallbackCard",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
+        "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:TraceRow",
+    ],
+)
+
+vitest_test(
+    name = "mock-split_test",
+    src = "mock-split.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:main",
+        "//typescript/apps/ui/src/lib/api:mockClient",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+    ],
+)
+
+vitest_test(
+    name = "modal-surfaces_test",
+    src = "modal-surfaces.test.mjs",
+    deps = [
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
+    ],
+)
+
+vitest_test(
+    name = "narrow-rail_test",
+    src = "narrow-rail.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/panes:PaneRail"],
+)
+
+vitest_test(
+    name = "node-context_test",
+    src = "node-context.test.mjs",
+    deps = [
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "node-inspector_test",
+    src = "node-inspector.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "node-result-height_test",
+    src = "node-result-height.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "paneCost_test",
+    src = "paneCost.test.mjs",
+    tags = ["exclusive"],
+    deps = [
+        "//typescript/apps/ui/src/lib/components/flow:usageChart",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replayTimeline",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
+)
+
+vitest_test(
+    name = "parent-runtime-subtitle_test",
+    src = "parent-runtime-subtitle.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/state:flowProjection"],
+)
+
+vitest_test(
+    name = "projectionCost_test",
+    src = "projectionCost.test.mjs",
+    tags = ["exclusive"],
+    deps = [
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replayTimeline",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:transcript",
+    ],
+)
+
+vitest_test(
+    name = "reply-xss_test",
+    src = "reply-xss.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "runtime-grid-overlap_test",
+    src = "runtime-grid-overlap.test.mjs",
+    deps = ["//typescript/apps/ui/src/lib/state:flowProjection"],
+)
+
+vitest_test(
+    name = "session-drawer_test",
+    src = "session-drawer.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:agentRunStorage",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "session-launcher_test",
+    src = "session-launcher.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "session-list-error_test",
+    src = "session-list-error.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "session-status-headline_test",
+    src = "session-status-headline.test.mjs",
+    deps = [
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "subagent-flow-edges_test",
+    src = "subagent-flow-edges.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "surface-head_test",
+    src = "surface-head.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+    ],
+)
+
+vitest_test(
+    name = "svelte5-syntax_test",
+    src = "svelte5-syntax.test.mjs",
+    deps = ["//typescript/apps/ui:sources"],
+)
+
+vitest_test(
+    name = "tool-identity_test",
+    src = "tool-identity.test.mjs",
+    deps = ["//typescript/apps/ui:sources"],
+)

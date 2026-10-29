@@ -1,0 +1,140 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:codegen.bzl", "harness_client_sdk")
+
+py_library(
+    name = "editor_tools",
+    srcs = ["editor_tools.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["//python/temporal_agent_harness/harness:agent"],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "step_agent",
+    srcs = ["step_agent.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":models",
+        ":step_tools",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//openai_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "step_tools",
+    srcs = ["step_tools.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":models",
+        "//python/examples/monty:activities",
+        "//python/examples/openai_hello:workflow",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":step_agent",
+        ":step_tools",
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":editor_tools",
+        ":models",
+        ":step_agent",
+        ":step_tools",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//openai_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "DagBuilderAgent",
+    agent = "examples.agent_dag.workflow:DagBuilderAgentWorkflow",
+    description = """
+Describe a job and an OpenAI agent writes a *flow*: a Python script wiring fresh agents into a
+DAG, each set up by the script with its own name, system prompt, tools and model. The script
+lives in your editor, which the agent changes through callback tools. `execute` runs it in Code
+Mode, where each `run_agent` call starts a DagStepAgent subagent. Best driven from the studio UI
+(`just studio`).""",
+    key = "agent-dag",
+    label = "Agent DAG Studio",
+    task_queue = "agent-dag",
+    deps = [":workflow"],
+)
+
+# Step agents are started by a running flow, as its subagents, never as sessions of their own, so
+# the registry does not list one; its schema is for its client SDK.
+harness_agent(
+    name = "DagStepAgent",
+    agent = "examples.agent_dag.step_agent:DagStepAgentWorkflow",
+    deps = [":step_agent"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/agent_dag:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "DagBuilderAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":DagBuilderAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)
+
+# Both agents' typed TypeScript clients, client_sdk/<Agent>.ts:
+# `bazel run //python/examples/agent_dag:client_sdk_update` rewrites them.
+harness_client_sdk(
+    name = "client_sdk",
+    srcs = [
+        "client_sdk/DagBuilderAgent.ts",
+        "client_sdk/DagStepAgent.ts",
+    ],
+    agents = [
+        ":DagBuilderAgent",
+        ":DagStepAgent",
+    ],
+    visibility = [
+        ":__subpackages__",
+        "//typescript:__subpackages__",
+    ],
+)

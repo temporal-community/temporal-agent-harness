@@ -1,0 +1,892 @@
+<script lang="ts" module>
+  import type { ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import {
+    STATUS_TONES,
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
+  import type {
+    ApprovalDecision,
+    ApprovalProbabilities,
+    ApprovalVerdict
+  } from "$lib/state/approvalDecisionTree";
+
+  /** The one verdict-to-hue map: the status words, the tree and the pane header all read it. */
+  const VERDICT_STATUS: Record<ApprovalVerdict, StatusKind> = {
+    approve: "complete",
+    deny: "error",
+    escalate: "approval"
+  };
+
+  export function verdictTone(verdict: ApprovalVerdict): ChipTone {
+    return STATUS_TONES[VERDICT_STATUS[verdict]];
+  }
+
+  const verdictColor = (verdict: ApprovalVerdict) => `var(--${verdictTone(verdict)})`;
+
+  function percent(value: number): string {
+    const scaled = value * 100;
+    return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}%`;
+  }
+
+  function outcomeLabel(verdict: ApprovalVerdict): string {
+    if (verdict === "approve") return "Auto-approved";
+    if (verdict === "deny") return "Call denied";
+    return "Human review";
+  }
+
+  function criteriaLabel(decision: ApprovalDecision): string | null {
+    if (!decision.criteriaSet) return null;
+    return decision.criteriaVersion === null
+      ? decision.criteriaSet
+      : `${decision.criteriaSet} · v${decision.criteriaVersion}`;
+  }
+
+  /** The trace as plain text, for pasting into a bug report or a policy review. */
+  export function traceText(decision: ApprovalDecision): string {
+    return [
+      `tool: ${decision.toolName}`,
+      `tool_id: ${decision.toolId}`,
+      `evaluator: ${decision.evaluator}`,
+      `evaluator_verdict: ${decision.evaluatorVerdict}`,
+      `outcome: ${outcomeLabel(decision.verdict)}`,
+      decision.confidence === null ? "" : `confidence: ${percent(decision.confidence)}`,
+      decision.reason ? `reason: ${decision.reason}` : "",
+      criteriaLabel(decision) ? `criteria: ${criteriaLabel(decision)}` : "",
+      decision.model ? `model: ${decision.model}` : "",
+      `evaluation_id: ${decision.evaluationId}`,
+      decision.requestId ? `request_id: ${decision.requestId}` : "",
+      `workflow_id: ${decision.workflowId}`,
+      `turn: ${decision.turnNumber}`
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+</script>
+
+<script lang="ts">
+  import { CheckCircle2, ShieldAlert, XCircle } from "@lucide/svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
+  import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import WindowedRows from "$lib/components/primitives/WindowedRows.svelte";
+  import { windowedFocus } from "$lib/components/primitives/windowedFocus";
+
+  interface Props {
+    decisions: ApprovalDecision[];
+    /**
+     * Completed decisions further along the run than the replay cursor.
+     *
+     * This pane reads the run AT the cursor, so a reader parked behind the
+     * evaluations sees an empty panel beside a run that has them. That is what
+     * this counts, and the empty state says.
+     */
+    ahead?: number;
+    onJumpToLive?: () => void;
+  }
+
+  let { decisions, ahead = 0, onJumpToLive }: Props = $props();
+  let chosenKey = $state<string | null>(null);
+  let listElement = $state<HTMLElement | null>(null);
+  let rowList = $state<{ scrollToIndex(index: number): void } | null>(null);
+
+  const newestFirst = $derived([...decisions].reverse());
+  /* A long run judges thousands of calls; only the rows in view are drawn. */
+  const decisionFocus = windowedFocus(
+    (index) => rowList?.scrollToIndex(index),
+    () => newestFirst.length
+  );
+  /* Null follows the live edge; a deliberate selection stays put until that
+     decision disappears because the cursor or session moved behind it. */
+  const current = $derived(
+    decisions.find((decision) => decision.key === chosenKey) ?? decisions.at(-1) ?? null
+  );
+
+  function verdictLabel(verdict: ApprovalVerdict): string {
+    if (verdict === "approve") return "Approve";
+    if (verdict === "deny") return "Deny";
+    return "Escalate";
+  }
+
+  function probability(
+    probabilities: ApprovalProbabilities,
+    verdict: ApprovalVerdict
+  ): number | null {
+    return probabilities[verdict];
+  }
+
+  function approveDestination(decision: ApprovalDecision): string {
+    return decision.irreversibleThreshold === null ? "Approve" : "Risk check";
+  }
+</script>
+
+<section class="approval-decisions" class:empty={!current} aria-label="Automatic approval decisions">
+  {#if !current}
+    {#if ahead > 0}
+      <EmptyState
+        title={`${ahead} approval ${ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor`}
+      >
+        <p>
+          This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
+          is parked before {ahead === 1 ? "it" : "them"} — so there is nothing to show
+          <em>yet</em>.
+        </p>
+        <Chip label="Jump to latest step" tone="accent" size="xs" onclick={onJumpToLive} />
+      </EmptyState>
+    {:else}
+      <EmptyState title="No completed approval decisions">
+        <p>
+          Completed <code>auto_approval_evaluation_ended</code> events will appear here as
+          the replay cursor reaches them.
+        </p>
+      </EmptyState>
+    {/if}
+  {:else}
+    <div class="decision-layout">
+      <nav class="evaluation-list" aria-label="Completed approval evaluations">
+        <div class="list-head">
+          <span class="kicker">Completed</span>
+          <span class="list-count">{decisions.length}</span>
+        </div>
+        <div class="evaluation-items" tabindex="-1" bind:this={listElement} {@attach decisionFocus}>
+          <WindowedRows
+            items={newestFirst}
+            getKey={(decision) => decision.key}
+            scroller={listElement}
+            start={0}
+            estimateSize={58}
+            gap={1}
+            bind:this={rowList}
+          >
+            {#snippet children(decision, index)}
+              <button
+                type="button"
+                class="evaluation"
+                class:chosen={decision.key === current.key}
+                aria-pressed={decision.key === current.key}
+                data-index={index}
+                data-tip={decision.toolName}
+                data-tip-below
+                onclick={() => (chosenKey = decision.key)}
+              >
+                <span class="evaluation-main">
+                  <span class="tool-name">{decision.toolName}</span>
+                  <span class="evaluation-meta">
+                    turn {decision.turnNumber} · <bdi>{decision.agentLabel}</bdi>
+                  </span>
+                </span>
+                <span class="evaluation-signal">
+                  {#if decision.confidence !== null}
+                    <span class="confidence-figure">{percent(decision.confidence)}</span>
+                  {/if}
+                  <StatusChip
+                    label={verdictLabel(decision.verdict)}
+                    kind={VERDICT_STATUS[decision.verdict]}
+                    plain
+                  />
+                </span>
+              </button>
+            {/snippet}
+          </WindowedRows>
+        </div>
+      </nav>
+
+      <article class="trace" aria-label={`Decision path for ${current.toolName}`}>
+        <header class="trace-head">
+          <div class="trace-title">
+            <Copyable value={traceText(current)} label="Copy decision trace" data-tip-below>
+              <span class="kicker">Decision trace</span>
+            </Copyable>
+            <h3>{current.toolName}</h3>
+            <p class="trace-meta">
+              <bdi>{current.evaluator}</bdi>, turn {current.turnNumber}{#if current.role === "subagent"}
+                , <bdi>{current.agentLabel}</bdi>{/if}
+            </p>
+          </div>
+          <StatusChip label={outcomeLabel(current.verdict)} kind={VERDICT_STATUS[current.verdict]} plain />
+        </header>
+
+        <ol class="decision-tree" aria-label="Decision stages">
+          {#each current.stages as stage (stage.kind)}
+            <li
+              class={`stage ${stage.kind}`}
+              style:--outcome-color={stage.kind === "outcome" ? verdictColor(stage.verdict) : undefined}
+            >
+              <span class="stage-marker" aria-hidden="true"></span>
+
+              {#if stage.kind === "confidence"}
+                <section class="decision-node">
+                  <div class="node-head">
+                    <div>
+                      <p class="kicker">Confidence gate</p>
+                      <h4>Is the verdict certain enough?</h4>
+                    </div>
+                    <strong class="score">{percent(stage.score)}</strong>
+                  </div>
+
+                  <div
+                    class:gate-failed={stage.passed === false}
+                    class="meter"
+                    style={`--score: ${stage.score}; --threshold: ${stage.threshold ?? 0}`}
+                    role="meter"
+                    aria-label="Verdict confidence"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={stage.score * 100}
+                    aria-valuetext={`${percent(stage.score)} confidence${stage.threshold === null ? "" : `; ${percent(stage.threshold)} required`}`}
+                  >
+                    <span class="meter-fill"></span>
+                    {#if stage.threshold !== null}
+                      <span class="threshold-mark" aria-hidden="true"></span>
+                    {/if}
+                  </div>
+                  <div class="meter-scale">
+                    <span>0%</span>
+                    {#if stage.threshold !== null}
+                      <span>{percent(stage.threshold)} bar</span>
+                    {:else}
+                      <span>bar not reported</span>
+                    {/if}
+                    <span>100%</span>
+                  </div>
+
+                  {#if stage.threshold === null}
+                    <div class="branch-grid one">
+                      <div class="branch taken neutral">
+                        <span class="branch-label">No threshold in event</span>
+                        <strong>Use evaluator verdict</strong>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="branch-grid">
+                      <div class="branch error" class:taken={stage.passed === false}>
+                        <span class="branch-label">Below {percent(stage.threshold)}</span>
+                        <strong>Escalate</strong>
+                      </div>
+                      <div class="branch success" class:taken={stage.passed === true}>
+                        <span class="branch-label">At least {percent(stage.threshold)}</span>
+                        <strong>Continue</strong>
+                      </div>
+                    </div>
+                  {/if}
+                </section>
+              {:else if stage.kind === "verdict"}
+                <section class="decision-node">
+                  <div class="node-head">
+                    <div>
+                      <p class="kicker">Evaluator verdict</p>
+                      <h4>Which policy branch applies?</h4>
+                    </div>
+                    <strong class="verdict-word" style:color={verdictColor(stage.verdict)}>
+                      {verdictLabel(stage.verdict)}
+                    </strong>
+                  </div>
+
+                  <div class="branch-grid three">
+                    {#each ["approve", "deny", "escalate"] as branchVerdict (branchVerdict)}
+                      {@const typedVerdict = branchVerdict as ApprovalVerdict}
+                      {@const branchProbability = probability(stage.probabilities, typedVerdict)}
+                      <div
+                        class="branch"
+                        class:taken={stage.verdict === typedVerdict}
+                        style:--branch-color={verdictColor(typedVerdict)}
+                        data-verdict={typedVerdict}
+                      >
+                        <span class="branch-label">
+                          {verdictLabel(typedVerdict)}{#if branchProbability !== null}
+                            · {percent(branchProbability)}{/if}
+                        </span>
+                        <strong>
+                          {typedVerdict === "approve"
+                            ? approveDestination(current)
+                            : typedVerdict === "deny"
+                              ? "Deny call"
+                              : "Human review"}
+                        </strong>
+                      </div>
+                    {/each}
+                  </div>
+                </section>
+              {:else if stage.kind === "irreversibility"}
+                <section class="decision-node">
+                  <div class="node-head">
+                    <div>
+                      <p class="kicker">Effect gate</p>
+                      <h4>Can the action be safely automated?</h4>
+                    </div>
+                    <strong class="score risk-score">{percent(stage.score)}</strong>
+                  </div>
+
+                  <div
+                    class:gate-failed={!stage.passed}
+                    class="meter risk-meter"
+                    style={`--score: ${stage.score}; --threshold: ${stage.threshold}`}
+                    role="meter"
+                    aria-label="Estimated irreversibility"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={stage.score * 100}
+                    aria-valuetext={`${percent(stage.score)} irreversible; ${percent(stage.threshold)} ceiling`}
+                  >
+                    <span class="meter-fill"></span>
+                    <span class="threshold-mark" aria-hidden="true"></span>
+                  </div>
+                  <div class="meter-scale">
+                    <span>Reversible</span>
+                    <span>{percent(stage.threshold)} ceiling</span>
+                    <span>Irreversible</span>
+                  </div>
+
+                  <div class="branch-grid">
+                    <div class="branch success" class:taken={stage.passed}>
+                      <span class="branch-label">At or below ceiling</span>
+                      <strong>Approve</strong>
+                    </div>
+                    <div class="branch error" class:taken={!stage.passed}>
+                      <span class="branch-label">Above ceiling</span>
+                      <strong>Escalate</strong>
+                    </div>
+                  </div>
+                </section>
+              {:else}
+                <section class="decision-node outcome-node" data-verdict={stage.verdict}>
+                  <div class="outcome-icon" aria-hidden="true">
+                    {#if stage.verdict === "approve"}
+                      <CheckCircle2 size={20} />
+                    {:else if stage.verdict === "deny"}
+                      <XCircle size={20} />
+                    {:else}
+                      <ShieldAlert size={20} />
+                    {/if}
+                  </div>
+                  <div class="outcome-copy">
+                    <p class="kicker">Final verdict</p>
+                    <h4>{outcomeLabel(stage.verdict)}</h4>
+                    {#if current.reason}
+                      <div class="reason"><MarkdownMessage text={current.reason} compact /></div>
+                    {/if}
+                  </div>
+                </section>
+              {/if}
+            </li>
+          {/each}
+        </ol>
+
+        <dl class="audit-meta">
+          {#if criteriaLabel(current)}
+            <div>
+              <dt class="kicker">Criteria</dt>
+              <dd>{criteriaLabel(current)}</dd>
+            </div>
+          {/if}
+          {#if current.model}
+            <div>
+              <dt class="kicker">Model</dt>
+              <dd>{current.model}</dd>
+            </div>
+          {/if}
+          <div>
+            <dt class="kicker">Tool call</dt>
+            <dd>
+              <Copyable value={current.toolId} label="Copy tool call ID">{current.toolId}</Copyable>
+            </dd>
+          </div>
+          <div>
+            <dt class="kicker">Evaluation</dt>
+            <dd>
+              <Copyable value={current.evaluationId} label="Copy evaluation ID">
+                {current.evaluationId}
+              </Copyable>
+            </dd>
+          </div>
+          {#if current.requestId}
+            <div>
+              <dt class="kicker">Request</dt>
+              <dd>
+                <Copyable value={current.requestId} label="Copy request ID">
+                  {current.requestId}
+                </Copyable>
+              </dd>
+            </div>
+          {/if}
+        </dl>
+      </article>
+    </div>
+  {/if}
+</section>
+
+<style>
+  .approval-decisions {
+    container: approval-panel / inline-size;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    padding: var(--pane-inset);
+    background: var(--surface-1);
+    overflow: hidden;
+  }
+
+  .approval-decisions.empty {
+    overflow: auto;
+  }
+
+  /* Stacked at the pane's resting width; side by side only once both columns
+     fit, so the panel never asks the rail for more room than its siblings. */
+  .decision-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(132px, 0.5fr) minmax(0, 1.5fr);
+    gap: var(--gutter);
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .evaluation-list,
+  .trace {
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--border);
+    background: var(--surface-0);
+  }
+
+  .evaluation-list {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .list-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: var(--control-height);
+    padding-inline: var(--gutter-tight);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .list-count,
+  .confidence-figure {
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--figure-size);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The 1px between rows is WindowedRows' gap over this background. */
+  .evaluation-items {
+    position: relative;
+    min-height: 0;
+    overflow: auto;
+    background: var(--border);
+  }
+
+  .evaluation {
+    display: grid;
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--gap-md);
+    min-height: 58px;
+    padding: var(--gutter-tight);
+    border: 0;
+    background: var(--surface-1);
+    color: var(--text-1);
+    text-align: start;
+    cursor: pointer;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out),
+      transform var(--duration-press) var(--ease-out);
+  }
+
+  .evaluation:active {
+    transform: scale(0.99);
+  }
+
+  /* Over its own surface: the gaps between rows are the list's background. */
+  .evaluation.chosen {
+    background: linear-gradient(var(--selected-bg), var(--selected-bg)), var(--surface-1);
+  }
+
+  .evaluation:focus-visible {
+    position: relative;
+    z-index: 1;
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  .evaluation-main,
+  .evaluation-signal {
+    min-width: 0;
+  }
+
+  .evaluation-main {
+    display: grid;
+    gap: var(--gap-xs);
+  }
+
+  /* An Arabic name keeps its own order without reordering what sits beside it. */
+  .tool-name,
+  .trace-title h3 {
+    unicode-bidi: isolate;
+  }
+
+  .tool-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-1);
+    font-size: var(--font-lg);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .evaluation-meta,
+  .trace-meta {
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    line-height: 1.4;
+  }
+
+  .evaluation-signal {
+    display: grid;
+    justify-items: end;
+    gap: var(--gap-xs);
+  }
+
+  .trace {
+    overflow: auto;
+    padding: var(--gutter);
+  }
+
+  .trace-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--gutter);
+    padding-bottom: var(--gutter);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trace-title {
+    min-width: 0;
+  }
+
+  .trace-title > :is(p, h3) {
+    margin: 0;
+  }
+
+  .trace-title h3 {
+    margin-top: var(--gap-xs);
+    overflow-wrap: anywhere;
+    color: var(--text-1);
+    font-size: var(--font-title);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+  }
+
+  .trace-meta {
+    margin-top: var(--gap-sm) !important;
+  }
+
+  .decision-tree {
+    position: relative;
+    display: grid;
+    gap: var(--gutter);
+    margin: var(--gutter) 0 0;
+    padding: 0 0 0 30px;
+    list-style: none;
+  }
+
+  .decision-tree::before {
+    content: "";
+    position: absolute;
+    inset-block: 10px;
+    inset-inline-start: 9px;
+    width: 1px;
+    background: var(--border-strong);
+  }
+
+  .stage {
+    position: relative;
+    min-width: 0;
+  }
+
+  .stage-marker {
+    position: absolute;
+    inset-block-start: 17px;
+    inset-inline-start: -25px;
+    z-index: 1;
+    width: 9px;
+    height: 9px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-0);
+  }
+
+  .stage.outcome .stage-marker {
+    border-color: color-mix(in srgb, var(--outcome-color) 55%, var(--border));
+    background: var(--outcome-color);
+  }
+
+  .decision-node {
+    min-width: 0;
+    padding: var(--gutter);
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+  }
+
+  .node-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--gutter);
+  }
+
+  .node-head :is(p, h4),
+  .outcome-copy :is(p, h4) {
+    margin: 0;
+  }
+
+  .node-head h4,
+  .outcome-copy h4 {
+    margin-top: var(--gap-xs);
+    color: var(--text-1);
+    font-size: var(--font-xl);
+    font-weight: 600;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .score,
+  .verdict-word {
+    flex: none;
+    color: var(--accent-soft);
+    font-family: var(--font-mono);
+    font-size: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .risk-score {
+    color: var(--warning);
+  }
+
+  .verdict-word {
+    font-size: var(--font-lg);
+    letter-spacing: var(--letter-tight);
+    text-transform: uppercase;
+  }
+
+  .meter {
+    position: relative;
+    height: 10px;
+    margin-top: var(--gutter);
+    border: 1px solid var(--border-strong);
+    background: var(--surface-0);
+    overflow: visible;
+  }
+
+  .meter-fill {
+    position: absolute;
+    inset: 0;
+    background: var(--accent);
+    transform: scaleX(var(--score));
+    transform-origin: left center;
+  }
+
+  .risk-meter .meter-fill {
+    background: var(--warning);
+  }
+
+  .meter.gate-failed .meter-fill {
+    background: var(--error);
+  }
+
+  .threshold-mark {
+    position: absolute;
+    inset-block: -5px;
+    inset-inline-start: calc(var(--threshold) * 100%);
+    width: 1px;
+    background: var(--text-1);
+    box-shadow: 0 0 0 1px var(--surface-0);
+  }
+
+  .meter-scale {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--gap-md);
+    margin-top: var(--gap-xs);
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .branch-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--gap-sm);
+    margin-top: var(--gutter);
+  }
+
+  .branch-grid.three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .branch-grid.one {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .branch {
+    --branch-color: var(--text-3);
+    display: grid;
+    align-content: center;
+    gap: var(--gap-xs);
+    min-width: 0;
+    min-height: 48px;
+    padding: var(--gap-sm) var(--gutter-tight);
+    border: 1px solid var(--border);
+    border-block-start: 2px solid color-mix(in srgb, var(--branch-color) 34%, var(--border));
+    background: var(--surface-0);
+    color: var(--text-3);
+  }
+
+  .branch.success {
+    --branch-color: var(--success);
+  }
+
+  .branch.error {
+    --branch-color: var(--error);
+  }
+
+  .branch.taken {
+    border-color: color-mix(in srgb, var(--branch-color) 45%, var(--border));
+    border-block-start-color: var(--branch-color);
+    background: color-mix(in srgb, var(--branch-color) 8%, var(--surface-0));
+    color: var(--text-1);
+  }
+
+  .branch-label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: inherit;
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.35;
+  }
+
+  .branch strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: inherit;
+    font-size: var(--font-sm);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .outcome-node {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--gutter-tight);
+    border-color: color-mix(in srgb, var(--outcome-color) 48%, var(--border));
+    background: color-mix(in srgb, var(--outcome-color) 8%, var(--surface-1));
+  }
+
+  .outcome-icon {
+    display: inline-flex;
+    color: var(--outcome-color);
+  }
+
+  .reason {
+    margin-top: var(--gutter-tight);
+    max-width: 72ch;
+    color: var(--text-2);
+    font-size: var(--font-sm);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+
+  .audit-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: var(--gap-xs);
+    margin: var(--gutter) 0 0 30px;
+  }
+
+  .audit-meta > div {
+    min-width: 0;
+    padding: var(--gutter-tight);
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+  }
+
+  .audit-meta :is(dt, dd) {
+    margin: 0;
+  }
+
+  .audit-meta dd {
+    margin-top: var(--gap-xs);
+    overflow-wrap: anywhere;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    line-height: 1.45;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .evaluation:hover {
+      background: var(--control-hover);
+    }
+  }
+
+  @container approval-panel (min-width: 640px) {
+    .decision-layout {
+      grid-template-columns: minmax(176px, 0.62fr) minmax(340px, 1.38fr);
+      grid-template-rows: minmax(0, 1fr);
+    }
+  }
+
+  @container approval-panel (max-width: 380px) {
+    .trace {
+      padding: var(--gutter-tight);
+    }
+
+    .trace-head,
+    .node-head {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: var(--gutter-tight);
+    }
+
+    .decision-tree {
+      padding-inline-start: 26px;
+    }
+
+    .stage-marker {
+      inset-inline-start: -22px;
+    }
+
+    .branch-grid,
+    .branch-grid.three {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .audit-meta {
+      margin-inline-start: 26px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .evaluation {
+      transition: none;
+    }
+  }
+</style>

@@ -1,0 +1,25 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+)
+
+harness_pytest_test(
+    name = "test_board_state",
+    srcs = ["test_board_state.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/tictactoe:activities",
+        "//python/examples/tictactoe:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//jsonpatch",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

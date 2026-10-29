@@ -1,0 +1,74 @@
+{
+  "description": "The opener finishes first; the turn stays open until the joined message finishes.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-opener",
+            "name": "ask_client",
+            "args": {
+              "question": "Continue?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Opener done."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-opener"
+    },
+    {
+      "action": "send",
+      "handler": "run_accept",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-joined",
+            "name": "ask_client",
+            "args": {
+              "question": "Continue?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Joined done."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-joined"
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-opener",
+      "result": "Yes."
+    },
+    {
+      "action": "await",
+      "event": "message_handler_end",
+      "send": 1
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-joined",
+      "result": "Yes."
+    }
+  ]
+}

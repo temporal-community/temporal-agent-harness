@@ -1,0 +1,102 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per test file, depending on the files it imports.
+ts_project(
+    name = "activity.test",
+    testonly = True,
+    srcs = ["activity.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = ["//typescript/apps/chat-server/src:activity"],
+)
+
+ts_project(
+    name = "approval-card.test",
+    testonly = True,
+    srcs = ["approval-card.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = [
+        "//typescript/apps/chat-server:node_modules/chat",
+        "//typescript/apps/chat-server/src:app",
+    ],
+)
+
+ts_project(
+    name = "command.test",
+    testonly = True,
+    srcs = ["command.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = ["//typescript/apps/chat-server/src:command"],
+)
+
+ts_project(
+    name = "schema-to-modal.test",
+    testonly = True,
+    srcs = ["schema-to-modal.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = ["//typescript/apps/chat-server/src:schema-to-modal"],
+)
+
+ts_project(
+    name = "state.test",
+    testonly = True,
+    srcs = ["state.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = [
+        "//typescript/apps/chat-server/src:routing",
+        "//typescript/apps/chat-server/src:state",
+    ],
+)
+
+ts_project(
+    name = "text-form.test",
+    testonly = True,
+    srcs = ["text-form.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = [
+        "//typescript/apps/chat-server/src:schema-to-modal",
+        "//typescript/apps/chat-server/src:text-form",
+    ],
+)
+
+js_test(
+    name = "activity_test",
+    data = [":activity.test"],
+    entry_point = "activity.test.js",
+)
+
+js_test(
+    name = "approval-card_test",
+    data = [":approval-card.test"],
+    entry_point = "approval-card.test.js",
+)
+
+js_test(
+    name = "command_test",
+    data = [":command.test"],
+    entry_point = "command.test.js",
+)
+
+js_test(
+    name = "schema-to-modal_test",
+    data = [":schema-to-modal.test"],
+    entry_point = "schema-to-modal.test.js",
+)
+
+js_test(
+    name = "state_test",
+    data = [":state.test"],
+    entry_point = "state.test.js",
+)
+
+js_test(
+    name = "text-form_test",
+    data = [":text-form.test"],
+    entry_point = "text-form.test.js",
+)

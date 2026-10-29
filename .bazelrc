@@ -1,0 +1,54 @@
+# Python: 3.13 and the `dev` dependency group (what `uv run pytest` installs) unless asked otherwise.
+# The interpreter is a build setting: opt into another for a whole invocation with
+# --config=py311|py312|py314 (e.g. `bazel test //... --config=py311`). Each version is its own
+# configuration, so CI runs the matrix as one invocation per version.
+# rules_py rewrites rules_python's version flag to match its own inside Python targets; setting
+# both here keeps the rest of the build in that same configuration (see rules_py's
+# docs/interpreter.md).
+common --@aspect_rules_py//py:python_version=3.13
+common --@rules_python//python/config_settings:python_version=3.13
+common --@pypi//dep_group=dev
+
+# A command-line build setting does not change the output directory, so without a suffix every
+# version writes the same bazel-out tree and switching versions rebuilds and reruns everything.
+# 3.13, the default, keeps the unsuffixed tree that plain invocations use.
+common:py311 --@aspect_rules_py//py:python_version=3.11
+common:py311 --@rules_python//python/config_settings:python_version=3.11
+common:py311 --platform_suffix=py311
+common:py312 --@aspect_rules_py//py:python_version=3.12
+common:py312 --@rules_python//python/config_settings:python_version=3.12
+common:py312 --platform_suffix=py312
+common:py313 --@aspect_rules_py//py:python_version=3.13
+common:py313 --@rules_python//python/config_settings:python_version=3.13
+common:py314 --@aspect_rules_py//py:python_version=3.14
+common:py314 --@rules_python//python/config_settings:python_version=3.14
+common:py314 --platform_suffix=py314
+
+# Tests run hermetically: no inherited PATH entries or credentials leak in from the shell.
+common --incompatible_strict_action_env
+test --test_output=errors
+
+# ts_project emits JavaScript with tsc itself, so Bazel builds the same files `tsc -p` does.
+common --@aspect_rules_ts//ts:default_to_tsc_transpiler
+
+# Opt out of aspect's ruleset usage telemetry.
+common --repo_env=DO_NOT_TRACK=1
+
+# Every checkout and worktree on a machine shares one action cache, so a new worktree reuses
+# results instead of rebuilding. CI passes its own --disk_cache, which overrides this; opt out in
+# user.bazelrc with `common --disk_cache=`.
+common --disk_cache=~/.cache/bazel-disk
+common --experimental_disk_cache_gc_max_size=20G
+
+# CI (--config=ci) starts every run from a fresh output base and a restored disk cache, so nothing
+# it skips is ever needed later:
+#   * --nobuild_runfile_links: builds a runfiles tree only for a test that runs or a tool an action
+#     runs. Every test and binary has one, re-created from scratch each run and never cacheable, so
+#     a run whose tests all hit the cache otherwise spends much of its time creating them.
+#   * --remote_download_minimal: leaves cache hits in the disk cache instead of copying them into
+#     bazel-out; an action that needs one fetches it then. It still refreshes every entry it hits,
+#     so the workflow's prune step keeps them.
+common:ci --nobuild_runfile_links
+common:ci --remote_download_minimal
+
+try-import %workspace%/user.bazelrc

@@ -1,0 +1,357 @@
+# ABOUTME: Python implementation of the AgentService Nexus handler.
+#
+# Replaces a Go handler (see git history) that only existed because pollMessages needs
+# update-with-callback, unsupported in Python until sdk-python#1631. All operations except
+# pollMessages just delegate to AgentClient (see _agent_client).
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+
+from nexusrpc import HandlerError, HandlerErrorType
+from nexusrpc.handler import StartOperationContext, service_handler, sync_operation
+from temporalio import nexus
+from temporalio.client import Client
+from temporalio.contrib.workflow_streams import PollInput
+from temporalio.service import RPCError
+
+from temporal_agent_harness.harness.agent_client import (
+    AgentClient,
+    CallbackResultError,
+    ToolApprovalError,
+)
+from temporal_agent_harness.harness.agent_protocol import (
+    TURN_EVENTS_TOPIC,
+    AgentConfig,
+    MessageDisposition,
+    PendingCallback,
+    PendingTurn,
+    SubagentInfo,
+    ToolApprovalPolicy,
+)
+
+# Aliased with a Nexus* prefix where the name collides with an agent_protocol type of the
+# same name but a different (reshaped, wire-friendly) shape.
+from .generated import (
+    AcceptedFunction as NexusAcceptedFunction,
+    AgentInterfaceOutput,
+    ApprovalPolicy as NexusApprovalPolicy,
+    AgentStatusOutput,
+    ApproveToolCallInput,
+    ApproveToolCallOutput,
+    ExecuteOperatorCommandInput,
+    ExecuteOperatorCommandOutput,
+    OperatorCommand as NexusOperatorCommand,
+    OperatorCommandArgument as NexusOperatorCommandArgument,
+    PendingApproval as NexusPendingApproval,
+    PendingCallback as NexusPendingCallback,
+    PendingTurn as NexusPendingTurn,
+    PollMessagesInput,
+    PollMessagesOutput,
+    ProvideCallbackResultInput,
+    ProvideCallbackResultOutput,
+    QueryOperatorInterfaceOutput,
+    QuerySessionInput,
+    SendAgentMessageInput,
+    SendMessageOutput,
+    SubagentInfo as NexusSubagentInfo,
+)
+from .generated import AgentService as AgentServiceDefinition
+
+# WorkflowStream's private poll-update name (not part of its public API), hardcoded since
+# pollMessages must attach to it for any agent without importing that agent's workflow code.
+_WORKFLOW_STREAM_POLL_UPDATE = "__temporal_workflow_stream_poll"
+
+
+def _is_workflow_already_completed(exc: Exception) -> bool:
+    """True when the target agent workflow has already finished (see poll_messages)."""
+    return "already completed" in str(exc).lower()
+
+
+def _nexus_pending_callback(pc: PendingCallback) -> NexusPendingCallback:
+    return NexusPendingCallback(
+        tool_id=pc.tool_id,
+        tool_name=pc.tool_name,
+        tool_input=json.dumps(pc.tool_input),
+        output_schema=json.dumps(pc.output_schema),
+        turn_number=pc.turn_number,
+    )
+
+
+def _nexus_pending_turn(pt: PendingTurn) -> NexusPendingTurn:
+    return NexusPendingTurn(
+        turn_number=pt.turn_number, turn_id=pt.turn_id, message=pt.message
+    )
+
+
+def _nexus_subagent_info(info: SubagentInfo) -> NexusSubagentInfo:
+    return NexusSubagentInfo(
+        subagent_id=info.subagent_id,
+        agent_key=info.agent_key,
+        workflow_id=info.workflow_id,
+        # The IDL requires this field but the harness tracks no per-subagent turn counter
+        # (turn state is the child's own; query its agent_status). 0 is the explicit "not
+        # tracked" value until the contract is regenerated with the rest of the Nexus
+        # surface; no consumer reads it.
+        next_expected_turn=0,
+    )
+
+
+def _nexus_approval_policy(policy: ToolApprovalPolicy) -> NexusApprovalPolicy:
+    return NexusApprovalPolicy(
+        dangerously_skip_all_approvals=policy.dangerously_skip_all_approvals,
+        auto_approve_inherently_safe=policy.auto_approve_inherently_safe,
+        auto_approve_tools=list(policy.auto_approve_tools),
+    )
+
+
+@dataclass(frozen=True)
+class Config:
+    """Per-deployment settings for AgentServiceHandler."""
+
+    agent_task_queue: str
+    workflow_name: str
+    workflow_id_prefix: str
+
+
+@service_handler(service=AgentServiceDefinition)
+class AgentServiceHandler:
+    """Exposes an agent session to external callers (e.g. the Slack connector).
+
+    The connector calls ``sendAgentMessage`` to deliver user input and ``pollMessages`` to
+    consume the agent's response stream.
+    """
+
+    def __init__(self, client: Client, config: Config) -> None:
+        self._client = client
+        self._config = config
+
+    def _workflow_id(self, session_id: str) -> str:
+        return self._config.workflow_id_prefix + session_id
+
+    def _agent_client(self, session_id: str) -> AgentClient:
+        """Cheap to construct per-call. Every operation but pollMessages delegates to it."""
+        return AgentClient(self._client, self._workflow_id(session_id))
+
+    # -----------------------------------------------------------------------
+    # sendAgentMessage — AgentClient.start_and_submit_message()'s caller
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def send_agent_message(
+        self, ctx: StartOperationContext, input: SendAgentMessageInput
+    ) -> SendMessageOutput:
+        try:
+            payload = json.loads(input.payload)
+        except json.JSONDecodeError as e:
+            raise HandlerError(
+                f"invalid payload JSON: {e}", type=HandlerErrorType.BAD_REQUEST
+            ) from e
+
+        start_config = AgentConfig()
+        client = self._agent_client(input.session_id)
+
+        # The Nexus request id is the idempotency key: a retried operation re-issues the same
+        # update and gets the original acceptance back rather than a second dispatch.
+        reply = await client.start_and_submit_message(
+            input.msg_type,
+            payload,
+            workflow_name=self._config.workflow_name,
+            task_queue=self._config.agent_task_queue,
+            start_config=start_config,
+            update_id=f"send-{ctx.request_id}",
+        )
+        return SendMessageOutput(
+            turn_number=reply.turn_number,
+            turn_id=reply.turn_id,
+            stream_head_offset=reply.accepted_offset,
+            pending=reply.disposition is MessageDisposition.QUEUED,
+            message_id=reply.message_id,
+        )
+
+    # -----------------------------------------------------------------------
+    # executeOperatorCommand — REMOVED from the harness; see the body
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def execute_operator_command(
+        self, ctx: StartOperationContext, input: ExecuteOperatorCommandInput
+    ) -> ExecuteOperatorCommandOutput:
+        # NOT IMPLEMENTED — operator commands are no longer a harness concept. Every
+        # control is an ordinary @agent.accepts handler reachable through
+        # sendAgentMessage, and queryAgentInterface returns them all (with each
+        # handler's midTurn + modelCallable). These two operations remain declared only
+        # because the IDL still lists them and nexusrpc requires a complete service
+        # handler; they are removed when the contract is regenerated.
+        raise HandlerError(
+            "operator commands have been removed from the harness — send the message to "
+            "the target @agent.accepts handler via sendAgentMessage instead, and use "
+            "queryAgentInterface to discover the available handlers.",
+            type=HandlerErrorType.NOT_IMPLEMENTED,
+        )
+
+    # -----------------------------------------------------------------------
+    # approveToolCall — resolve a pending tool-approval gate
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def approve_tool_call(
+        self, ctx: StartOperationContext, input: ApproveToolCallInput
+    ) -> ApproveToolCallOutput:
+        try:
+            result = await self._agent_client(input.session_id).approve_tool(
+                input.tool_id,
+                approved=input.approved,
+                reason=input.reason,
+                remember=input.remember or False,
+                update_id=f"approve-{ctx.request_id}",
+            )
+        except ToolApprovalError as e:
+            raise HandlerError(str(e), type=HandlerErrorType.BAD_REQUEST) from e  # caller's fault
+        return ApproveToolCallOutput(tool_id=result.tool_id, accepted=result.accepted)
+
+    # -----------------------------------------------------------------------
+    # queryOperatorInterface — REMOVED from the harness; see the body
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def query_operator_interface(
+        self, ctx: StartOperationContext, input: QuerySessionInput
+    ) -> QueryOperatorInterfaceOutput:
+        # NOT IMPLEMENTED — operator commands are no longer a harness concept. Every
+        # control is an ordinary @agent.accepts handler reachable through
+        # sendAgentMessage, and queryAgentInterface returns them all (with each
+        # handler's midTurn + modelCallable). These two operations remain declared only
+        # because the IDL still lists them and nexusrpc requires a complete service
+        # handler; they are removed when the contract is regenerated.
+        raise HandlerError(
+            "operator commands have been removed from the harness — send the message to "
+            "the target @agent.accepts handler via sendAgentMessage instead, and use "
+            "queryAgentInterface to discover the available handlers.",
+            type=HandlerErrorType.NOT_IMPLEMENTED,
+        )
+
+    # -----------------------------------------------------------------------
+    # queryAgentInterface — discover @agent.accepts handlers
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def query_agent_interface(
+        self, ctx: StartOperationContext, input: QuerySessionInput
+    ) -> AgentInterfaceOutput:
+        functions = await self._agent_client(input.session_id).get_agent_interface()
+        return AgentInterfaceOutput(
+            handlers=[
+                NexusAcceptedFunction(
+                    name=fn.name,
+                    description=fn.description,
+                    parameters=json.dumps(fn.parameters),
+                    output=json.dumps(fn.output),
+                    mid_turn=fn.mid_turn.value,
+                )
+                for fn in functions
+            ]
+        )
+
+    # -----------------------------------------------------------------------
+    # queryAgentStatus — session state snapshot
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def query_agent_status(
+        self, ctx: StartOperationContext, input: QuerySessionInput
+    ) -> AgentStatusOutput:
+        status = await self._agent_client(input.session_id).get_status()
+        return AgentStatusOutput(
+            agent_id=status.agent_id,
+            current_turn=status.current_turn,
+            turn_active=status.turn_active,
+            # The harness no longer has an agent-level queuing switch — mid-turn behavior
+            # is declared per handler. The generated wire shape still requires this field,
+            # so report False until the contract is regenerated without it.
+            is_message_queuing_enabled=False,
+            pending_turns=[_nexus_pending_turn(pt) for pt in status.pending_turns],
+            pending_approvals=[
+                NexusPendingApproval(
+                    tool_id=pa.tool_id,
+                    tool_name=pa.tool_name,
+                    tool_input=json.dumps(pa.tool_input),
+                    turn_number=pa.turn_number,
+                )
+                for pa in status.pending_approvals
+            ],
+            pending_callbacks=[
+                _nexus_pending_callback(pc) for pc in status.pending_callbacks
+            ],
+            subagents=[_nexus_subagent_info(s) for s in status.subagents],
+            approval_policy=_nexus_approval_policy(status.approval_policy),
+            # The Nexus contract (agent.nexusrpc.yaml) is a CROSS-LANGUAGE wire contract
+            # mirrored from remote and spoken by non-Python services, so its field keeps
+            # its original name; the rename to "auto mode evaluator" is internal to
+            # this package. Renaming it here would silently break every other consumer.
+            has_custom_approval_fallback=status.has_auto_approval_evaluator,
+        )
+
+    # -----------------------------------------------------------------------
+    # provideCallbackResult — fulfill a pending callback tool call
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def provide_callback_result(
+        self, ctx: StartOperationContext, input: ProvideCallbackResultInput
+    ) -> ProvideCallbackResultOutput:
+        # nex-gen wraps the object-shaped result in a named type instead of a plain dict.
+        callback_result = (
+            input.result.additional_properties if input.result is not None else None
+        )
+        try:
+            result = await self._agent_client(input.session_id).provide_callback_result(
+                input.tool_id,
+                result=callback_result,
+                error=input.error,
+                update_id=f"callback-{ctx.request_id}",
+            )
+        except CallbackResultError as e:
+            raise HandlerError(str(e), type=HandlerErrorType.BAD_REQUEST) from e  # caller's fault
+        return ProvideCallbackResultOutput(
+            tool_id=result.tool_id, accepted=result.accepted
+        )
+
+    # -----------------------------------------------------------------------
+    # pollMessages — async operation backed by WorkflowStream's poll update
+    # -----------------------------------------------------------------------
+
+    @nexus.temporal_operation
+    async def poll_messages(
+        self,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
+        input: PollMessagesInput,
+    ) -> nexus.TemporalOperationResult[PollMessagesOutput]:
+        """Long-polls WorkflowStream via update-with-callback. Returns closed=True
+        synchronously if the target workflow has already completed.
+
+        Note that this bypasses the WorkflowStream abstraction and directly calling the
+        update handler for the stream, since we haven't implemented Nexus + WorkflowStreamh
+        higher-level APIs.
+
+        TODO(long-nt-tran): implement + use higher level utils when available
+        """
+        try:
+            return await client.start_workflow_update(
+                self._workflow_id(input.session_id),
+                _WORKFLOW_STREAM_POLL_UPDATE,
+                PollInput(from_offset=input.cursor, topics=[TURN_EVENTS_TOPIC]),
+                result_type=PollMessagesOutput,
+            )
+        except RPCError as e:
+            if not _is_workflow_already_completed(e):
+                raise
+            # In case the workflow (aka the agent) is already closed, we can propagate
+            # this to the caller via the `closed=True` field.
+            return nexus.TemporalOperationResult.sync(
+                PollMessagesOutput(
+                    items=[], more_ready=False, next_offset=input.cursor, closed=True
+                )
+            )

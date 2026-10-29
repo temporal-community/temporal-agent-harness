@@ -1,0 +1,70 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "tools",
+    srcs = ["tools.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "@pypi//pydantic",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":tools",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//google_genai",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "CodingAgent",
+    agent = "examples.callback_tools.coding_agent.workflow:CodingAgentWorkflow",
+    description = """
+A conversational coding agent that works on your project. Ask it to explain code, fix a bug, add a
+feature, write tests, or run a command; an LLM reasons and calls bash / read / write / edit / grep
+/ glob. Those are CALLBACK tools: the agent has no disk of its own, so a client on your machine
+(the OpenCode shim) executes each call — after you approve it — against your local project.""",
+    key = "coding",
+    label = "Coding Agent (Callback Tools)",
+    task_queue = "coding-agent",
+    deps = [":workflow"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/callback_tools/coding_agent:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "CodingAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":CodingAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)

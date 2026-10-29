@@ -1,0 +1,34 @@
+{
+  "description": "Model, tool, model in one turn.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Let me add those."
+            ]
+          },
+          {
+            "step": "tool",
+            "id": "call-add",
+            "name": "add",
+            "args": {
+              "a": 2,
+              "b": 3
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "It is 5."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

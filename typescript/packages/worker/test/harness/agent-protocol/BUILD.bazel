@@ -1,0 +1,42 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# Tests of the protocol types (core's src/harness/agent-protocol) and the Jev approver over them.
+ts_project(
+    name = "agent-interface.test",
+    testonly = True,
+    srcs = ["agent-interface.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/fast-check",
+    ],
+)
+
+ts_project(
+    name = "protocol.test",
+    testonly = True,
+    srcs = ["protocol.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker:node_modules/zod",
+        "//typescript/packages/worker/src:index",
+    ],
+)
+
+js_test(
+    name = "agent-interface_test",
+    data = [":agent-interface.test"],
+    entry_point = "agent-interface.test.js",
+)
+
+js_test(
+    name = "protocol_test",
+    data = [":protocol.test"],
+    entry_point = "protocol.test.js",
+)

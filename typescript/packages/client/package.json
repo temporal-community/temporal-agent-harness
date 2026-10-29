@@ -1,0 +1,34 @@
+{
+  "name": "@temporalio/agent-harness-client",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "A framework-independent client for temporal-agent-harness agents: a session over an agent's event stream, projected into messages and observable state.",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --outDir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json --outDir dist && node --test dist/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
+    "directory": "typescript/packages/client"
+  }
+}

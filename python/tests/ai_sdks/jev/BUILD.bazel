@@ -1,0 +1,22 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_jev_evaluator",
+    srcs = ["test_jev_evaluator.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks/jev:__init__",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//httpx2",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
+    ],
+)

@@ -1,0 +1,33 @@
+{
+  "description": "Observable state: the snapshot, then a patch per change.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "state_set",
+            "key": "a",
+            "value": "1"
+          },
+          {
+            "step": "state_set",
+            "key": "b",
+            "value": "2"
+          },
+          {
+            "step": "state_delete",
+            "key": "a"
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Done."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

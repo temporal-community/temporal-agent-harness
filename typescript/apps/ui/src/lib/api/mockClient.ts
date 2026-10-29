@@ -1,0 +1,333 @@
+import type {
+  CallbackResultRequest,
+  CallbackResultResponse,
+  AgentInterfaceFunction,
+  AgentStatusResponse,
+  AgentRegistryResponse,
+  AgentSseFrame,
+  ChatRequest,
+  CreateSessionRequest,
+  CreateSessionResponse,
+  FileChunk,
+  FileViewRequest,
+  OKFConcept,
+  OKFGraph,
+  OKFGraphRequest,
+  Session,
+  SubmitMessageResponse,
+  ToolApprovalRequest,
+  ToolApprovalResponse,
+  WorkflowExecutionState,
+  WorkflowId
+} from "./types";
+import type { AgentApi } from "./client";
+import { frame, meta, realisticQaScenario, type MockScenario } from "$lib/mock/scenarios";
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const qaInterface: AgentInterfaceFunction[] = [
+  {
+    name: "ask",
+    description: "Ask a free-form natural-language question.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      },
+      required: ["text"]
+    },
+    output: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      }
+    },
+    mid_turn: "enqueue",
+    model_callable: true
+  }
+];
+
+// Deliberately varied so the composer's schema-driven rendering is exercised by the mock:
+// a single-string handler (renders as the plain text box), an enum-constrained one (renders
+// as a dropdown), and a multi-field one (renders as a form). None of these names is special
+// to the UI — it reads them all from this discovery payload.
+const montyInterface: AgentInterfaceFunction[] = [
+  {
+    name: "run_script",
+    description: "Execute a Python script in the Monty sandbox.",
+    parameters: {
+      type: "object",
+      properties: {
+        script: { type: "string", title: "Script" }
+      },
+      required: ["script"]
+    },
+    output: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      }
+    },
+    mid_turn: "enqueue",
+    model_callable: true
+  },
+  {
+    name: "set_model",
+    description: "Set the model this session uses for subsequent turns.",
+    parameters: {
+      type: "object",
+      title: "SetModel",
+      properties: {
+        model: {
+          title: "Model",
+          type: "string",
+          enum: ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        }
+      },
+      required: ["model"]
+    },
+    output: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      }
+    },
+    mid_turn: "accept",
+    model_callable: false
+  },
+  {
+    name: "start_batch",
+    description: "Kick off a batch run. Refuses to start while the agent is busy.",
+    parameters: {
+      type: "object",
+      title: "Batch",
+      properties: {
+        label: { title: "Label", type: "string" },
+        size: { title: "Size", type: "integer", minimum: 1, maximum: 100, default: 10 },
+        dry_run: { title: "Dry Run", type: "boolean", default: false }
+      },
+      required: ["label"]
+    },
+    output: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      }
+    },
+    mid_turn: "reject",
+    model_callable: true
+  }
+];
+
+export class MockAgentApi implements AgentApi {
+  #scenario: MockScenario;
+  #sessions: Session[];
+
+  constructor(scenario: MockScenario = realisticQaScenario) {
+    this.#scenario = scenario;
+    this.#sessions = [...scenario.sessions];
+  }
+
+  async listAgents(): Promise<AgentRegistryResponse> {
+    return { agents: this.#scenario.agents };
+  }
+
+  async listSessions(): Promise<Session[]> {
+    return this.#sessions;
+  }
+
+  async createSession(
+    request: CreateSessionRequest
+  ): Promise<CreateSessionResponse> {
+    const number = this.#sessions.length + 1;
+    const session: Session = {
+      workflow_id: `agent-session-mock-${number}`,
+      created_at: Date.now() / 1000,
+      label: `Session ${number}`,
+      agent_workflow_type: request.agent_workflow_type,
+      initial_user_message: null,
+      execution_status: "RUNNING",
+      closed: false
+    };
+    this.#sessions = [...this.#sessions, session];
+    return session;
+  }
+
+  async workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState> {
+    const session = this.#sessions.find((item) => item.workflow_id === workflowId);
+    return {
+      workflow_id: workflowId,
+      execution_status: session?.execution_status ?? "RUNNING",
+      closed: Boolean(session?.closed)
+    };
+  }
+
+  async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
+    if (this.#scenario.agentInterface) return this.#scenario.agentInterface;
+    return sessionId.toLowerCase().includes("monty") ? montyInterface : qaInterface;
+  }
+
+  async agentStatus(sessionId: WorkflowId): Promise<AgentStatusResponse> {
+    return {
+      current_turn: 0,
+      turn_active: false,
+      turn_participants: 0,
+      pending_turns: [],
+      pending_approvals: [],
+      subagents: [],
+      approval_policy: {
+        dangerously_skip_all_approvals: false,
+        auto_approve_inherently_safe: true,
+        auto_approve_tools: [],
+        auto_mode_enabled: false
+      },
+      has_auto_approval_evaluator: false
+    };
+  }
+
+  async closeSession(sessionId: WorkflowId): Promise<void> {
+    // Mirrors the real close signal's observable effect, so the mock UI's stop control
+    // behaves the same way it does against a live workflow.
+    this.#sessions = this.#sessions.map((item) =>
+      item.workflow_id === sessionId
+        ? { ...item, execution_status: "COMPLETED", closed: true }
+        : item
+    );
+  }
+
+  async *attach(
+    sessionId: WorkflowId,
+    fromOffset = 0,
+    signal?: AbortSignal
+  ): AsyncIterable<AgentSseFrame> {
+    const stream = this.#scenario.streams?.[sessionId] ?? this.#scenario.frames;
+    if (stream === "silent") {
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      return;
+    }
+    const instant = this.#scenario.instantFrames ?? 0;
+    /* A real server has already made durable everything it streamed before a reload, so it
+       replays that at once, flagged, instead of pacing the tail out a second time. */
+    const durableKey = `temporal-agent-ui.mock-durable:${sessionId}`;
+    const durable = Number(globalThis.sessionStorage?.getItem(durableKey)) || 0;
+    for (const [index, item] of stream.entries()) {
+      if (signal?.aborted) return;
+      if (item.data.resume_offset <= fromOffset) continue;
+      const replay = index < instant || item.data.resume_offset <= durable;
+      /* A backfill lands in network-sized chunks, not one macrotask per frame. */
+      if (!replay) await sleep(this.#scenario.liveIntervalMs ?? 40);
+      else if (index % 100 === 0) await sleep(0);
+      if (signal?.aborted) return;
+      if (!replay) globalThis.sessionStorage?.setItem(durableKey, String(item.data.resume_offset));
+      yield replay ? ({ ...item, data: { ...item.data, replay: true } } as AgentSseFrame) : item;
+    }
+    if (!this.#scenario.answersApprovals) return;
+    for (let next = 0; !signal?.aborted; ) {
+      const item = this.#answers[next];
+      if (!item) {
+        await new Promise<void>((wake) => {
+          this.#wake = wake;
+          signal?.addEventListener("abort", () => wake(), { once: true });
+        });
+        continue;
+      }
+      next += 1;
+      if (item.data.resume_offset > fromOffset) yield item;
+    }
+  }
+
+  #answers: AgentSseFrame[] = [];
+  #wake: (() => void) | null = null;
+
+  #submitted = 0;
+
+  async submitMessage(_request: ChatRequest): Promise<SubmitMessageResponse> {
+    // A mark per submit, so a browser check can count sends the transcript doesn't echo.
+    performance.mark("mock-submit");
+    await sleep(this.#scenario.submitDelayMs ?? 80);
+    // Every submit gets a fresh turn; the UI correlates its outstanding messages by
+    // `message_id` alone, so that is all the mock needs to keep distinct.
+    const turn = ++this.#submitted;
+    return {
+      turn_number: turn,
+      turn_id: `mock-turn-${turn}`,
+      message_id: `mock-msg-${turn}`,
+      accepted_offset: 0,
+      disposition: "opened"
+    };
+  }
+
+  async *chat(_request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {
+    yield* this.attach("agent-session-mock-qa", 0, signal);
+  }
+
+  async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
+    await sleep(120);
+    if (this.#scenario.answersApprovals) {
+      this.#answers.push(
+        frame("tool_approval_resolved", {
+          type: "tool_approval_resolved",
+          ...meta(2, 60),
+          tool_id: request.tool_id,
+          tool_name: "",
+          approved: request.approved,
+          reason: request.reason ?? null,
+          remember: request.remember ?? false
+        })
+      );
+      this.#wake?.();
+    }
+    return { tool_id: request.tool_id, accepted: true };
+  }
+
+  async provideCallbackResult(
+    request: CallbackResultRequest
+  ): Promise<CallbackResultResponse> {
+    await sleep(120);
+    if (this.#scenario.answersApprovals) {
+      const error = request.error ?? null;
+      this.#answers.push(frame("callback_resolved", { type: "callback_resolved", ...meta(1, 60), tool_id: request.tool_id, tool_name: "", outcome: error ? "error" : "ok", error }));
+      this.#wake?.();
+    }
+    return { tool_id: request.tool_id, accepted: true };
+  }
+
+  async viewFile(request: FileViewRequest): Promise<FileChunk> {
+    await sleep(120);
+    const content = `Contents of ${request.path}, read just now.\n`;
+    return { content, encoding: "utf-8", offset: 0, size: content.length, mtime: Date.now() / 1000 };
+  }
+
+  async okfGraph(_request: OKFGraphRequest): Promise<OKFGraph> {
+    await sleep(120);
+    if (this.#scenario.okfGraph) return this.#scenario.okfGraph;
+    const concept = (id: string, type: string, title: string, extra: Partial<OKFConcept> = {}) => ({
+      id,
+      path: `${id}.md`,
+      type,
+      title,
+      description: "",
+      tags: [],
+      status: "stable",
+      trust_tier: "unverified" as const,
+      stale: false,
+      size: 200,
+      problem: null,
+      ...extra
+    });
+    return {
+      concepts: [
+        concept("people/ana", "Person", "Ana", { description: "The user's sister, in Denver." }),
+        concept("plans/denver-trip", "Plan", "Denver trip", { stale: true }),
+        concept("favorite-coffee", "Preference", "Favorite coffee", { trust_tier: "human-reviewed" })
+      ],
+      links: [
+        { source: "plans/denver-trip", target: "people/ana", dangling: false },
+        { source: "people/ana", target: "favorite-coffee", dangling: false },
+        { source: "plans/denver-trip", target: "plans/flights", dangling: true }
+      ],
+      truncated: false,
+      walked_at: Date.now() / 1000
+    };
+  }
+}

@@ -1,0 +1,4080 @@
+# ABOUTME: Workflow-side utilities for building agent workflows that integrate
+# with AgentClient. Provides turn lifecycle management, tool execution with
+# automatic event publishing, and the update/query/signal handlers that the
+# AgentClient protocol requires.
+#
+# Usage: declare accepted messages as ``@agent.accepts`` handler methods
+# (``async def name(self, msg: InputModel) -> OutputModel``); construct an
+# AgentWorkflowRunner(config, stream=..., approval_policy_default=...) in your
+# @agent.init; the @workflow.run that @agent.defn generates drives the turn loop.
+# The runner discovers the handlers, routes
+# each inbound ``send_agent_message`` envelope to the one its ``type`` names, validates the
+# payload into that handler's input model, publishes the handler's return value as the
+# reply, and announces the callable surface via the ``agent_interface`` query.
+
+from __future__ import annotations
+
+import ast
+import asyncio
+import contextvars
+import functools
+import inspect
+import textwrap
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import timedelta
+from enum import StrEnum
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    ParamSpec,
+    TypeVar,
+    cast,
+    get_args,
+    get_type_hints,
+    overload,
+)
+
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from temporalio import activity, workflow
+from temporalio.common import VersioningBehavior
+from temporalio.contrib.workflow_streams import (
+    TopicHandle,
+    WorkflowStream,
+    WorkflowStreamClient,
+    WorkflowTopicHandle,
+)
+from temporalio.exceptions import ApplicationError
+from temporalio.workflow import ActivityConfig
+
+from temporal_agent_harness.harness.state import StateRef
+from temporal_agent_harness.harness.state.decl import declared_states, state_ref
+from temporal_agent_harness.harness.state.events import StateEvent, StateSnapshot
+from temporal_agent_harness.harness.agent_protocol import (
+    AGENT_ID_LENGTH,
+    APPROVAL_SHORT_ID_LENGTH,
+    AGENT_INTERFACE_QUERY,
+    AGENT_STATUS_QUERY,
+    PROVIDE_CALLBACK_RESULT_UPDATE,
+    DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
+    DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
+    RUN_SUBAGENT_TURN_ACTIVITY,
+    SEND_AGENT_MESSAGE_UPDATE,
+    TOOL_APPROVAL_UPDATE,
+    TURN_EVENTS_TOPIC,
+    AcceptedFunction,
+    AgentConfig,
+    AgentEvent,
+    AgentMessage,
+    AgentStatePatch,
+    AgentStateSnapshot,
+    AgentStatus,
+    AgentStreamItem,
+    AutoApprovalVerdict,
+    AutoApprovalDecision,
+    CallbackRequested,
+    CallbackResolved,
+    CallbackResult,
+    CallbackResultAck,
+    MessageAccepted,
+    MessageContext,
+    MessageDisposition,
+    MessageHandlerEnd,
+    MessageHandlerError,
+    MessageHandlerStart,
+    MidTurn,
+    PendingApproval,
+    PendingCallback,
+    PendingTurn,
+    RunSubagentTurnInput,
+    SubagentInfo,
+    SubagentReplyReceived,
+    SubagentStarted,
+    SubagentStopped,
+    SubagentTurnResult,
+    AutoApprovalContext,
+    AutoApprovalCriteria,
+    ToolApprovalDecision,
+    AutoApprovalEvaluationEnded,
+    AutoApprovalEvaluationError,
+    AutoApprovalEvaluationStarted,
+    AutoApprovalEvaluationSuperseded,
+    ToolApprovalPolicy,
+    ToolApprovalRequested,
+    ToolApprovalResolved,
+    ToolApprovalResult,
+    ToolEndEvent,
+    ToolErrorEvent,
+    ToolStartEvent,
+    TextReply,
+    TurnEnded,
+    TurnStarted,
+    AgentMessageReply,
+)
+
+# TurnStreamContext (the activity-side stream-publishing carrier this runner builds + consumes)
+# lives in its own leaf module so the sandbox-safe activity contracts in agent_protocol can embed
+# it without a circular import back through this module.
+from temporal_agent_harness.harness.stream_context import TurnStreamContext
+
+# ParamSpec/return-type vars for the tool decorators. They let each be typed as an
+# identity over the wrapped callable (``Callable[P, Awaitable[R]] -> Callable[P,
+# Awaitable[R]]``), so a decorated tool's call signature stays byte-for-byte the
+# developer's own — full editor type-checking, the decorator invisible at the type
+# level. The injected ``tool_ctx`` lives only on the activity body's runtime
+# ``__signature__`` (for ``@activity.defn``), never in this static type.
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+# The agent workflow class decorated by ``defn`` — bound to ``type`` and preserved
+# through the decorator so the decorated class keeps its concrete type for callers.
+_WorkflowClass = TypeVar("_WorkflowClass", bound=type)
+
+
+# ---------------------------------------------------------------------------
+# Injected[...] — mark a tool parameter as workflow-supplied (hidden from the model)
+# ---------------------------------------------------------------------------
+
+
+class _InjectedMarker:
+    """Sentinel placed in an ``Annotated`` to tag a tool parameter as injected."""
+
+
+_INJECTED = _InjectedMarker()
+
+# A developer-supplied auto mode evaluator — the layer between the serializable
+# ``ToolApprovalPolicy`` and the human gate, consulted only when the policy did not already
+# auto-approve the call. Passed to the runner via its ``auto_mode_evaluator=``
+# constructor arg; it is non-serializable (a closure), so it is never carried in
+# ``AgentConfig`` or status — only the ``has_auto_approval_evaluator`` bit is.
+#
+# It answers with an ``AutoApprovalDecision``: the three-valued verdict (approve / DENY
+# outright / escalate to a human), the ``reason`` published on the resolution, and the
+# ``details`` published on its evaluation event.
+#
+# IT MUST BE ASYNC — enforced at runner construction. Two reasons, and the second is the
+# load-bearing one:
+#
+#   1. Asking a *model* is an activity call, which no synchronous predicate can make. An
+#      AI evaluator is not expressible otherwise.
+#   2. A coroutine can be CANCELLED. The gate is published before the evaluator runs
+#      precisely so a human can answer while it thinks — and when they do, the evaluator
+#      must stop rather than keep burning a model call on a settled question. A synchronous
+#      predicate would run to completion inside one workflow activation with no such seam.
+#
+# See ``temporal_agent_harness.ai_sdks.jev.jev_evaluator`` — a Jev-backed evaluator,
+# which is exactly a value of this type.
+AutoModeEvaluator = Callable[
+    [AutoApprovalContext], Awaitable[AutoApprovalDecision]
+]
+
+# Attribute an evaluator may set on ITSELF to name what is doing the judging, published as
+# ``evaluator`` on all three of its evaluation events. Read off the callable rather than a
+# returned decision because two of those three events have no decision to read it from: the
+# started event is published before the evaluator runs, and the error event is published
+# because it never returned one. ``jev_evaluator`` stamps it; anything else falls back
+# to the callable's qualified name.
+AUTO_MODE_EVALUATOR_ATTR = "__auto_mode_evaluator__"
+
+
+def _evaluator_label(evaluator: AutoModeEvaluator) -> str:
+    """What to publish as an evaluation's ``evaluator``."""
+    stamped = getattr(evaluator, AUTO_MODE_EVALUATOR_ATTR, None)
+    if isinstance(stamped, str) and stamped:
+        return stamped
+    return getattr(evaluator, "__qualname__", None) or repr(evaluator)
+
+
+# How many links of an exception's ``__cause__`` chain ``_exception_text`` will render.
+# Deep enough for the wrappers a real failure accumulates (ActivityError → ApplicationError
+# → the original), short enough that one pathological chain cannot bloat an event.
+_MAX_CAUSE_DEPTH = 5
+
+
+def _exception_text(e: BaseException) -> str:
+    """``e`` and its ``__cause__`` chain rendered as one line.
+
+    Not ``str(e)``. The failure an approval evaluator most often hits is a Temporal
+    ``ActivityError``, which stringifies to the useless "Activity task failed" — the
+    ``ApplicationError`` underneath it is the part an operator needs to read off the
+    published event. Duplicate texts are collapsed, because Temporal wraps the same message
+    at more than one level.
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = e
+    while current is not None and id(current) not in seen and len(parts) < _MAX_CAUSE_DEPTH:
+        seen.add(id(current))
+        text = str(current) or type(current).__name__
+        if text not in parts:
+            parts.append(text)
+        current = current.__cause__
+    return ": ".join(parts)
+
+
+def _assert_async_auto_mode_evaluator(
+    evaluator: AutoModeEvaluator | None,
+) -> None:
+    """Raise unless ``evaluator`` is a coroutine function.
+
+    Checked at runner construction — inside the agent's ``@agent.init`` — so the error
+    lands next to the developer's own wiring rather than deep inside the first gated tool
+    call, which might not happen until production.
+
+    The requirement is not stylistic. The gate races an evaluator against a human decision
+    and CANCELS the loser; only a coroutine can be cancelled. A synchronous predicate would
+    run to completion inside a single workflow activation, so a human answering mid-flight
+    could not stop it, and an activity-backed evaluator is not expressible at all.
+
+    A callable object whose ``__call__`` is async counts — that is a perfectly good
+    evaluator, and rejecting it would only push authors toward a bare function.
+    """
+    if evaluator is None:
+        return
+    if inspect.iscoroutinefunction(evaluator) or inspect.iscoroutinefunction(
+        getattr(evaluator, "__call__", None)
+    ):
+        return
+    name = getattr(evaluator, "__qualname__", None) or repr(evaluator)
+    raise TypeError(
+        f"auto_mode_evaluator={name} must be an async function (`async def`). The "
+        "approval gate races the evaluator against a human decision and cancels whichever "
+        "loses, which is only possible for a coroutine."
+    )
+
+
+def _assert_auto_mode_has_an_evaluator(
+    policy: ToolApprovalPolicy, evaluator: AutoModeEvaluator | None
+) -> None:
+    """Raise if ``policy`` switches auto mode on for an agent with no evaluator wired.
+
+    Rejected rather than tolerated because the combination misrepresents a security
+    posture: ``AgentStatus.approval_policy`` would report auto mode ON, and a client would
+    render it that way, while no call was ever being judged. It is also reachable by
+    someone other than the author — a caller's ``AgentConfig.approval_policy``, or a
+    handler's runtime ``set_approval_policy`` — so it is checked wherever a policy is
+    installed, not only at construction.
+
+    An :class:`ApplicationError`, non-retryable, because that is how a bad input fails
+    cleanly on both paths: raised from ``@agent.init`` it fails the workflow with this
+    message instead of retrying the workflow task forever, and raised from a message
+    handler it fails that one message and leaves the live policy untouched.
+
+    The opposite combination — an evaluator wired with auto mode off — stays legal: it
+    is "available now, switched on later by a handler", and the policy reports it
+    truthfully as off.
+    """
+    if evaluator is not None or not policy.auto_mode_enabled:
+        return
+    raise ApplicationError(
+        "ToolApprovalPolicy has auto_mode_enabled=True, but this agent has no "
+        "auto_mode_evaluator wired, so nothing could ever judge a call while the policy "
+        "reported auto mode on. Either pass auto_mode_evaluator= to the AgentWorkflowRunner "
+        "(temporal_agent_harness.ai_sdks.jev.jev_evaluator() is one), or use a policy "
+        "with auto mode off.",
+        type="AutoModeWithoutEvaluator",
+        non_retryable=True,
+    )
+
+
+async def _cancel_and_settle(task: asyncio.Future[Any]) -> None:
+    """Cancel ``task`` and wait for it to actually finish unwinding.
+
+    Awaited rather than fired and forgotten: an abandoned task is a task Temporal may still
+    be driving, and for an activity-backed evaluator the cancellation is what releases the
+    worker. Whatever it raises on the way out is discarded — the gate has already been
+    settled by someone else, so there is no longer any question this task could answer.
+
+    ``CancelledError`` is a ``BaseException``, so it is caught by name; catching bare
+    ``BaseException`` would also swallow a cancellation of the WORKFLOW, which must keep
+    propagating.
+    """
+    task.cancel()
+    try:
+        await task
+    except (Exception, asyncio.CancelledError):
+        pass
+
+# Harness default publish-flush cadence for activity-side stream publishers (see
+# ``AgentWorkflowRunner.publisher_from_activity``). Each flush is one Signal into the
+# workflow, so this is the knob that trades UI snappiness against workflow-history
+# volume. It is only the fallback: a caller that has its own configured cadence — an SDK
+# plugin threading ``streaming_batch_interval``, say — passes that instead.
+DEFAULT_PUBLISH_BATCH_INTERVAL = timedelta(milliseconds=50)
+
+_InjectedT = TypeVar("_InjectedT")
+
+# Annotate a tool parameter ``x: Injected[Foo]`` to have the *workflow* supply it per
+# call (via ``run_tool(injections=...)``) rather than the model. Such parameters are
+# hidden from the model's tool schema and filled at dispatch. Statically it's just
+# ``Foo`` (``Annotated`` metadata is invisible to type checkers and to pydantic), so the
+# tool body sees the unwrapped type.
+Injected = Annotated[_InjectedT, _INJECTED]
+
+
+class ToolApprovalDenied(Exception):
+    """Raised in-workflow when a gated tool call is denied (or auto-denied because the
+    agent closed while it was pending).
+
+    Propagates out of the tool's in-workflow invocation and is caught by the agent
+    loop's per-call error handling, which surfaces it to the model as an ``is_error``
+    function result — so a denied tool does not run, yet the agent turn continues. The
+    activity is never dispatched, so this never consumes the tool's execution timeout.
+    """
+
+    def __init__(self, tool_name: str, reason: str | None) -> None:
+        self.tool_name = tool_name
+        self.reason = reason
+        detail = f": {reason}" if reason else ""
+        super().__init__(f"tool {tool_name!r} was not approved{detail}")
+
+
+class CallbackToolError(Exception):
+    """Raised in-workflow when a callback tool call cannot produce a result — the fulfilling
+    client reported an error, the wait timed out, or the agent closed while it was pending.
+
+    Raised from :meth:`AgentWorkflowRunner.await_callback_result` (the generic callback body),
+    so it propagates out through the tool's :func:`tool_defn` wrapper, which publishes a
+    ``tool_error`` and surfaces it to the model as an ``is_error`` function result — so a failed
+    callback does not run and does not crash the turn.
+    """
+
+    def __init__(self, tool_name: str, reason: str | None) -> None:
+        self.tool_name = tool_name
+        self.reason = reason
+        detail = f": {reason}" if reason else ""
+        super().__init__(f"callback tool {tool_name!r} failed{detail}")
+
+
+def _injected_param_names(fn: Callable[..., Any]) -> tuple[str, ...]:
+    """Names of ``fn``'s parameters annotated ``Injected[...]`` — i.e. supplied by the
+    workflow and hidden from the model. Resolves string annotations, so it works under
+    ``from __future__ import annotations`` too."""
+    try:
+        hints = get_type_hints(fn, include_extras=True)
+    except Exception:
+        hints = getattr(fn, "__annotations__", {})
+    return tuple(
+        name
+        for name, hint in hints.items()
+        if name != "return" and _INJECTED in getattr(hint, "__metadata__", ())
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ambient per-run / per-tool-call context (sealed inside the harness)
+# ---------------------------------------------------------------------------
+#
+# Two module-level ContextVars carry state the tool machinery needs without the
+# developer threading it through call sites. They are safe across concurrent
+# workflows: each Temporal workflow instance runs its body as its own asyncio Task
+# (its own copied ``contextvars.Context``), and an ``asyncio.gather`` child copies
+# the parent context at creation — so a ``.set()`` in one workflow (or one tool
+# call) can never bleed into another. NEITHER is touched by code outside the harness:
+# they are set/reset only by ``run_tool`` and read only within this module (the
+# workflow-tool path and ``AgentToolContext.for_current_tool_id``).
+
+# Both are set together by ``run_tool``, scoped tightly around the single tool
+# invocation (one synchronous frame, one ``await``), then reset — never held across
+# the long-lived ``async with start()`` body, whose awaits Temporal's event loop runs
+# in copied contexts that would defeat a Token.reset(). They are only ever READ during
+# a tool call (by the workflow-tool path / the plugin's dispatch), which is exactly
+# the window ``run_tool`` keeps them set, so this scope is sufficient.
+
+# The active runner for the in-flight tool call — read to resolve the live turn stream
+# context (``AgentToolContext.for_current_tool_id`` / workflow-tool publishing).
+_CURRENT_RUNNER: contextvars.ContextVar[AgentWorkflowRunner | None] = contextvars.ContextVar(
+    "agent_workflow_runner", default=None
+)
+
+# The id of the tool call currently being executed. Per-invocation (so the same tool
+# requested several times in one turn each gets its own id).
+_CURRENT_TOOL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_tool_id", default=None
+)
+
+# The id of the inbound message whose dispatch is running in THIS asyncio task — the ambient
+# source for ``AgentEvent.message_id``. Unlike the two above it is NOT scoped to a tool call:
+# ``_run_participant`` sets it once for the whole participant task, so every event that task
+# causes (deltas, tool lifecycle, approvals, subagent brackets, the handler's own terminal) is
+# attributed without a single call site threading it. That is the whole point of putting
+# ``message_id`` on the envelope rather than in event bodies.
+#
+# Task-scoped is exactly the right scope, and it is what makes a SHARED turn attributable:
+# each participant is its own ``asyncio`` task (copying the run loop's context, where this is
+# unset), so two ``MidTurn.ACCEPT`` handlers streaming concurrently under one ``turn_id``
+# still stamp different ids. It reads ``None`` outside a participant — in the run loop and in
+# update handlers — which is precisely where events belong to no one message (``turn_started``
+# / ``turn_end``, and the entry-carried approval/callback resolutions).
+_CURRENT_MESSAGE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_message_id", default=None
+)
+
+
+class _Ambient:
+    """Sentinel for ``_pub(message_id=...)`` meaning "read :data:`_CURRENT_MESSAGE_ID`".
+
+    A distinct type rather than ``None`` because ``None`` is itself a meaningful value there:
+    the events that belong to no message pass it deliberately, and conflating the two would
+    make "unattributed" indistinguishable from "not specified".
+    """
+
+
+_AMBIENT = _Ambient()
+
+# Workflow-supplied values for the in-flight tool call's *injected* parameters, keyed
+# by parameter name. Set by ``run_tool`` and read at dispatch by the tool machinery
+# (the ``activity_tool_defn`` dispatcher for activity tools, or the ``tool_defn`` path
+# for inline tools) to fill parameters the caller injects rather than the model — see
+# ``_current_tool_injections`` and ``Injected[...]``.
+_CURRENT_TOOL_INJECTIONS: contextvars.ContextVar[Mapping[str, Any] | None] = contextvars.ContextVar(
+    "agent_tool_injections", default=None
+)
+
+
+def _current_tool_injections() -> Mapping[str, Any]:
+    """The injected-parameter values for the in-flight tool call (empty if none).
+
+    Read at tool dispatch to fill parameters the workflow supplies rather than the
+    model (declared via ``Injected[...]``). Backed by the ambient
+    ``_CURRENT_TOOL_INJECTIONS`` that ``run_tool`` sets for the duration of one call.
+    """
+    return _CURRENT_TOOL_INJECTIONS.get() or {}
+
+
+def _current_tool_id() -> str:
+    """Return the tool id of the in-flight tool call, or raise if there is none.
+
+    Private harness helper backing :meth:`AgentToolContext.for_current_tool_id` — it
+    reads the ambient ``_CURRENT_TOOL_ID`` that ``run_tool`` sets for the duration of
+    one tool invocation. Raises if called outside a ``run_tool`` invocation (i.e. when
+    no tool call is currently being dispatched).
+    """
+    tool_id = _CURRENT_TOOL_ID.get()
+    if tool_id is None:
+        raise RuntimeError(
+            "no current tool id — _current_tool_id() must be called within a "
+            "run_tool(...) invocation"
+        )
+    return tool_id
+
+
+def _current_runner() -> AgentWorkflowRunner:
+    """The runner executing the in-flight tool call, or raise if there is none.
+
+    Private harness helper. Reads the ambient ``_CURRENT_RUNNER`` that ``run_tool`` parks for the
+    duration of one tool invocation. The generated subagent tools (``subagent_toolset``) call
+    this to reach the live runner — and thus its subagent registry + ``start_/stop_/
+    run_subagent_turn`` methods — without a holder object or ``has_self`` plumbing (see the
+    subagent-toolset design). Raises if called outside a ``run_tool(...)`` invocation."""
+    runner = _CURRENT_RUNNER.get()
+    if runner is None:
+        raise RuntimeError(
+            "no current runner — _current_runner() must be called within a run_tool(...) invocation"
+        )
+    return runner
+
+
+async def _apply_approval_policy(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    *,
+    inherently_safe: bool,
+    tool_description: str | None = None,
+    auto_approval_criteria: str | None = None,
+) -> None:
+    """Enforce the agent's tool-approval policy for the in-flight tool call.
+
+    Runs IN-WORKFLOW at the top of every tool dispatch (never in the tool's activity).
+    Three layers decide, in this order:
+
+      1. **The live** :class:`ToolApprovalPolicy` — the serializable, operator-owned
+         layers. If it auto-approves, the call dispatches immediately and NOTHING is
+         published: an allow-listed call is not an approval event, it is simply not gated.
+      2. **AUTO MODE** — the agent's auto mode evaluator, consulted only when the live
+         policy has ``auto_mode_enabled`` AND an evaluator is wired. It is a *mode the
+         policy owns*, not a fallback that activates because an evaluator happens to exist:
+         an operator who wants nothing but their explicit allow-list plus their own eyes
+         leaves it off, and no machine is ever asked. Unlike the policy this layer is a
+         *decision-maker*, so it is consulted only after the call has been registered
+         PENDING and :class:`ToolApprovalRequested` published (see below), and it answers
+         with the full :class:`AutoApprovalVerdict`: approve, deny, or escalate to a human.
+         It runs in its own cancellable task, bracketed by its own events — see
+         :meth:`AgentWorkflowRunner._run_auto_mode_evaluator`.
+      3. **The human gate** — an unbounded ``wait_condition`` for a ``tool_approval``
+         decision, a *relaxing policy update* (which flips this entry to approved; see
+         :meth:`AgentWorkflowRunner._apply_policy_update`), or agent close. Reached when
+         auto mode is off, or there is no evaluator, or it escalated, failed, or was
+         superseded.
+
+    ``auto_approval_criteria`` is the NAME of the criteria set the tool's own decorator
+    declared — its default, which a runtime assignment or the operator's config outranks.
+    It rides the call because the runner keeps no tool registry to look it up from; the
+    precedence between the three sources is applied once, in
+    :meth:`AutoApprovalCriteria.set_name_for`.
+
+    On any resolution :class:`ToolApprovalResolved` is published and, if denied (or
+    auto-denied on close), :class:`ToolApprovalDenied` is raised.
+
+    WHY THE EVALUATOR IS CONSULTED *AFTER* REGISTERING+PUBLISHING, not before: an evaluator
+    may be slow and may itself be an AI (see
+    :func:`~temporal_agent_harness.ai_sdks.jev.jev_evaluator`, which spends an
+    activity round-trip asking Jev). Registering first buys three things that matter
+    exactly when a model, not a person, is deciding:
+
+      * the call shows up on ``agent_status`` and in the event stream *while* the evaluator
+        deliberates, instead of being invisible in-flight;
+      * a human can beat the evaluator to the decision — whoever resolves the entry first
+        wins, and the evaluator is then CANCELLED rather than left running on a settled
+        question;
+      * the verdict and its ``reason`` land in the stream as a normal
+        ``tool_approval_requested`` → ``tool_approval_resolved`` pair, so "who let this
+        call through, and why" is answerable from history for an automatic decision
+        exactly as it is for a human one.
+
+    An evaluator that RAISES escalates to the human gate rather than failing the call: the
+    guardrail must never fail *open*, and a broken evaluator must never wedge a turn that a
+    person could still unblock. The exception is logged, not swallowed silently.
+
+    Safe-by-default: with the baseline policy and auto mode off nothing is auto-approved, so
+    every tool call is gated. The tool's own ``inherently_safe`` claim is just an input to
+    that decision — the *policy* decides.
+
+    Concurrency: each gated call runs as its own asyncio task (the agent dispatches a
+    turn's tool calls under ``asyncio.gather``), so many of these waits coexist, each
+    keyed on its own ``tool_id``. Temporal re-evaluates every wait condition after each
+    update, so whichever id is approved first unblocks immediately — independent of the
+    order the calls were requested.
+    """
+    runner = _CURRENT_RUNNER.get()
+    if runner is None:
+        raise RuntimeError(
+            f"tool {tool_name!r} has no active runner — it must be invoked via "
+            f"run_tool within an active turn"
+        )
+    if runner._policy_auto_approves(tool_name, inherently_safe=inherently_safe):
+        return  # the serializable policy approves — dispatch, ungated and unpublished.
+    tool_id = _current_tool_id()
+    ctx = runner.current_stream_context
+    if ctx is None:
+        raise RuntimeError(
+            f"gated tool {tool_name!r} has no active turn to publish its approval against"
+        )
+
+    # ``ctx`` is the runner's stream context, which already resolved the ambient message_id
+    # of the participant this tool call belongs to — so the entry records who to attribute the
+    # eventual resolution to, however it is resolved.
+    runner._status.register_pending_approval(
+        tool_id,
+        tool_name,
+        tool_input,
+        ctx.turn_number,
+        ctx.turn_id,
+        ctx.message_id,
+        inherently_safe=inherently_safe,
+    )
+    runner._pub(
+        ctx.turn_id,
+        ctx.turn_number,
+        ToolApprovalRequested(tool_id=tool_id, tool_name=tool_name, tool_input=tool_input),
+    )
+
+    # ``auto_ctx`` is ``None`` when auto mode must not decide this call at all — it is off,
+    # or no criteria set governs this tool. The harness settles that BEFORE any evaluator is
+    # asked, so "there are no rules for this" can never become a model call, and opens no
+    # bracket since nothing was evaluated. ``decision`` is additionally ``None`` when the
+    # evaluator failed or was superseded; those close their own bracket saying which.
+    auto_ctx = runner._auto_mode_context(
+        tool_name,
+        tool_input,
+        inherently_safe=inherently_safe,
+        tool_description=tool_description,
+        declared_criteria_set=auto_approval_criteria,
+    )
+    decision = (
+        await runner._run_auto_mode_evaluator(auto_ctx, tool_id=tool_id, stream=ctx)
+        if auto_ctx is not None
+        else None
+    )
+    if decision is not None:
+        if decision.verdict is AutoApprovalVerdict.APPROVE:
+            runner._resolve_and_publish(tool_id, approved=True, reason=decision.reason)
+        elif decision.verdict is AutoApprovalVerdict.DENY:
+            runner._resolve_and_publish(tool_id, approved=False, reason=decision.reason)
+        # ESCALATE: leave it PENDING and fall through to the human gate below.
+
+    await workflow.wait_condition(
+        lambda: runner._status.is_approval_resolved(tool_id) or runner._closed
+    )
+
+    # CAUSAL ORDERING: the ToolApprovalResolved event is published at the RESOLUTION SITE
+    # (the ``tool_approval`` handler, the policy-update cascade, and the auto-mode
+    # verdict just above), in the synchronous order resolutions actually happen — so when
+    # one decision causes another (an "approve & remember" allow-lists a tool and
+    # auto-resolves its sibling pending calls), the causing call's resolution is published
+    # before the caused ones. It must NOT be published here: many gates wake in the SAME
+    # workflow task and resume in registration order, which need not match causal order.
+    # The ONE case the resolution sites can't cover is waking on agent close while still
+    # PENDING (no decision resolved it) — only then does the gate finalize the auto-deny
+    # and publish it.
+    if not runner._status.is_approval_resolved(tool_id):
+        outcome = runner._status.finalize_approval(tool_id, closed=runner._closed)
+        runner._publish_approval_resolved(tool_id)
+    else:
+        outcome = runner._status.finalize_approval(tool_id, closed=runner._closed)
+    if not outcome.approved:
+        raise ToolApprovalDenied(tool_name, outcome.reason)
+
+
+def _render_message(message: AgentMessage) -> str:
+    """Render an inbound message envelope to a display string for ``PendingTurn.message``.
+
+    Compacts the ``{type, payload}`` envelope content to JSON so that ``str``-typed status
+    field stays a clean representation of the message. Consumers that want structure can parse
+    it back — or read the ``message_accepted`` event, which carries ``function`` + ``payload``
+    structurally and needs no rendering at all.
+    """
+    return message.model_dump_json(include={"type", "payload"})
+
+
+# ---------------------------------------------------------------------------
+# Standardized agent-input contract enforcement
+# ---------------------------------------------------------------------------
+#
+# Every agent that builds an AgentWorkflowRunner takes a single AgentConfig, plus optionally one
+# agent-specific data model. Standardizing the input is what lets harness agents be
+# composed/substituted (top-level or sub-agent) knowing only AgentConfig. @agent.defn checks it
+# at import; the runner re-checks it at construction as a backstop for a bare @workflow.defn.
+
+_CONTRACT = (
+    "__init__(self, config: AgentConfig), optionally with a second `data` parameter typed to "
+    "a pydantic model: `data: YourModel` if required, `data: YourModel | None = None` if not"
+)
+
+
+def _validate_agent_arg_types(workflow_name: str, arg_types: list[type] | None) -> None:
+    """Raise ``TypeError`` unless ``arg_types`` is an ``AgentConfig``, optionally followed by
+    one more argument (the agent's data).
+
+    Pure (no introspection) so the wiring that finds the workflow's resolved argument
+    types lives in :func:`_assert_standardized_agent_signature`.
+    """
+    types = list(arg_types or [])
+    if not 1 <= len(types) <= 2 or types[0] is not AgentConfig:
+        got = ", ".join(getattr(t, "__name__", repr(t)) for t in types) or "no arguments"
+        raise TypeError(
+            f"Agent workflow {workflow_name!r} violates the harness contract: it must take "
+            f"{_CONTRACT}; it takes ({got}). A uniform input is what lets harness agents be "
+            f"substituted as parent or sub-agents."
+        )
+
+
+def _enclosing_workflow_instance() -> object | None:
+    """Walk the call stack for the nearest ``self`` that is a ``@workflow.defn`` instance.
+
+    Runner construction happens inside the workflow's ``@agent.init``, so the
+    workflow instance is an enclosing frame's ``self``; the runner reads its class to
+    validate the construction signature and discover handlers, and the instance itself to
+    attach its declared state. Returns ``None`` if none is found.
+    """
+    frame: Any = inspect.currentframe()
+    while frame is not None:
+        candidate = frame.f_locals.get("self")
+        if candidate is not None and workflow._Definition.from_class(type(candidate)):
+            return candidate
+        frame = frame.f_back
+    return None
+
+
+def _enclosing_workflow_class() -> type | None:
+    """The class of :func:`_enclosing_workflow_instance`, or ``None``."""
+    instance = _enclosing_workflow_instance()
+    return type(instance) if instance is not None else None
+
+
+def _assert_standardized_agent_signature() -> None:
+    """Enforce the uniform agent-input contract for the workflow building this runner.
+
+    Recovers the enclosing ``@workflow.defn`` class and validates its resolved run
+    argument types (which Temporal keeps consistent with ``__init__``) against
+    :func:`_validate_agent_arg_types`. Raises if no enclosing workflow is found, or if
+    that workflow's signature breaks the contract.
+
+    Only meaningful when actually constructing inside a workflow — which is the only
+    way a real agent is built. When called outside one (e.g. an offline unit test that
+    stubs the workflow handler registration), there's no agent contract to enforce, so
+    it's a no-op.
+    """
+    if not workflow.in_workflow():
+        return
+    cls = _enclosing_workflow_class()
+    if cls is None:
+        raise RuntimeError(
+            "AgentWorkflowRunner must be built inside an @workflow.defn class's "
+            "@agent.init; no enclosing workflow was found on the call stack."
+        )
+    if getattr(cls, _INIT_DATA_ATTR, _UNSET) is not _UNSET:
+        return  # @agent.defn already checked __init__, and its run takes untyped input
+    defn = workflow._Definition.from_class(cls)
+    assert defn is not None  # guaranteed by _enclosing_workflow_class's own check
+    _validate_agent_arg_types(cls.__name__, defn.arg_types)
+
+
+@dataclass(frozen=True)
+class AgentInitData:
+    """The data model an agent's ``@agent.init`` takes after its ``AgentConfig``, and whether a
+    caller must supply it (``data: Model``) or may omit it (``data: Model | None = None``)."""
+
+    model: type[BaseModel]
+    required: bool
+
+
+def _data_model(annotation: Any) -> tuple[type[BaseModel], bool] | None:
+    """``(model, nullable)`` for an annotation of ``Model`` or ``Model | None``, else ``None``."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation, False
+    args = get_args(annotation)
+    rest = [a for a in args if a is not type(None)]
+    if len(rest) == 1 and len(args) == 2 and isinstance(rest[0], type) and issubclass(rest[0], BaseModel):
+        return rest[0], True
+    return None
+
+
+def _agent_init_spec(cls: type) -> AgentInitData | None:
+    """Validate the class's ``@agent.init`` ``__init__`` against the agent contract and return
+    its data parameter's spec (``None`` if it takes only the config).
+
+    Resolves string annotations via the method's own globals, so it works under
+    ``from __future__ import annotations``."""
+    init_fn = cls.__init__
+    if not getattr(init_fn, "__temporal_workflow_init", False):
+        raise TypeError(
+            f"@agent.defn requires {cls.__name__!r} to define an __init__(self, config: "
+            f"AgentConfig) decorated with @agent.init — that is where the agent builds its "
+            f"AgentWorkflowRunner."
+        )
+    hints = get_type_hints(init_fn)
+    params = [p for p in inspect.signature(init_fn).parameters.values() if p.name != "self"]
+    positional = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+
+    def violation(detail: str) -> TypeError:
+        return TypeError(
+            f"Agent workflow {cls.__name__!r} violates the harness contract: its @agent.init "
+            f"must be {_CONTRACT}. {detail}"
+        )
+
+    if not 1 <= len(params) <= 2 or any(p.kind not in positional for p in params):
+        raise violation(f"It takes ({', '.join(p.name for p in params) or 'no arguments'}).")
+    if hints.get(params[0].name) is not AgentConfig:
+        raise violation(f"Its first parameter is annotated {hints.get(params[0].name)!r}.")
+    if len(params) == 1:
+        return None
+    data_param = params[1]
+    found = _data_model(hints.get(data_param.name))
+    if found is None:
+        raise violation(f"`{data_param.name}` is annotated {hints.get(data_param.name)!r}.")
+    model, nullable = found
+    has_default = data_param.default is not inspect.Parameter.empty
+    if nullable and not (has_default and data_param.default is None):
+        raise violation(f"`{data_param.name}` accepts None, so it must default to None.")
+    if not nullable and has_default:
+        raise violation(f"`{data_param.name}` is required, so it cannot have a default.")
+    return AgentInitData(model=model, required=not nullable)
+
+
+_INIT_DATA_ATTR = "__agent_init_data__"
+_UNSET: Any = object()
+
+
+def agent_init_data(cls: type) -> AgentInitData | None:
+    """The data an agent class's ``@agent.init`` takes after its config, or ``None`` if it
+    takes none. Read from the attribute :func:`defn` stamps at import; falls back to
+    inspecting an ``@agent.init`` ``__init__``, and to ``None`` for a class with neither
+    (e.g. an offline test class)."""
+    stamped = getattr(cls, _INIT_DATA_ATTR, _UNSET)
+    if stamped is not _UNSET:
+        return stamped
+    if getattr(cls.__init__, "__temporal_workflow_init", False):
+        return _agent_init_spec(cls)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# @agent.accepts — declare a message handler the runner discovers and dispatches to
+# ---------------------------------------------------------------------------
+#
+# Each accepted message is an ``async def (self, msg: InputModel) -> OutputModel`` method
+# marked ``@agent.accepts``. The harness discovers them (validating the contract at import
+# time via ``defn``), routes an inbound ``send_agent_message`` to the handler whose name
+# matches the envelope ``type``, validates the ``payload`` into the handler's input model,
+# and publishes the handler's RETURN value as the turn's reply. No phantom types, no manual
+# reply, no ``turns()`` loop — the dev's ``(self, msg) -> Output`` signature is fully typed.
+
+_ACCEPTS_MARKER = "__agent_accepts__"
+_ACCEPTS_MID_TURN = "__agent_accepts_mid_turn__"
+_ACCEPTS_MODEL_CALLABLE = "__agent_accepts_model_callable__"
+_HANDLERS_ATTR = "__agent_handlers__"
+
+
+@overload
+def accepts(fn: Callable[_P, Awaitable[_R]], /) -> Callable[_P, Awaitable[_R]]: ...
+@overload
+def accepts(
+    *, mid_turn: MidTurn = ..., model_callable: bool = ...
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]: ...
+def accepts(
+    fn: Callable[..., Awaitable[Any]] | None = None,
+    /,
+    *,
+    mid_turn: MidTurn = MidTurn.REJECT,
+    model_callable: bool = True,
+) -> Any:
+    """Mark an agent method as a message handler (returned unchanged).
+
+    Usable bare or called — ``@agent.accepts`` and
+    ``@agent.accepts(mid_turn=..., model_callable=...)`` are both valid::
+
+        @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+        async def ask(self, msg: TextMessage) -> TextReply: ...
+
+    The method must be ``async def name(self, msg: InputModel) -> OutputModel`` where both
+    ``InputModel`` and ``OutputModel`` are pydantic models with docstrings (the input
+    model's fields become the tool ``parameters`` schema; the handler's own docstring is
+    its tool ``description``). The function name is the tool name and the value a caller
+    sends in :attr:`AgentMessage.type`. It may declare ONE extra parameter annotated
+    ``Injected[MessageContext]``, which the workflow fills and the model never sees — use
+    it to tell whether this message opened its turn or joined one.
+
+    ``mid_turn`` (default :attr:`MidTurn.REJECT`) declares what happens when this message
+    arrives while a turn is already open — queue, fail, or join it. See :class:`MidTurn`;
+    all three behave identically when the agent is idle. ``REJECT`` is the default because
+    it is the only mode that cannot silently surprise an author: queuing delays work the
+    caller thought it had dispatched, and joining opts the handler into concurrency with
+    the open turn.
+
+    ``model_callable`` (default ``True``) is a HINT that a parent agent's model may drive
+    this handler. It is not an access decision — the parent's ``SubagentToolPolicy`` is
+    authoritative and may honor, narrow, or ignore the hints (see :func:`subagent_toolset`).
+    Set it ``False`` for a handler meant only for a human/operator surface, so the default
+    policy leaves it out of a generated toolset.
+
+    Discovery + validation happen at import time in :func:`defn`; a malformed handler
+    raises :class:`TypeError` then.
+    """
+
+    def decorate(f: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        setattr(f, _ACCEPTS_MARKER, True)
+        setattr(f, _ACCEPTS_MID_TURN, MidTurn(mid_turn))
+        setattr(f, _ACCEPTS_MODEL_CALLABLE, bool(model_callable))
+        return f
+
+    return decorate(fn) if fn is not None else decorate
+
+
+@dataclass(frozen=True)
+class _AcceptedHandler:
+    """One discovered ``@agent.accepts`` handler — the unit of dispatch + introspection."""
+
+    name: str
+    input_type: type[BaseModel]
+    output_type: type[BaseModel]
+    description: str
+    method: Callable[..., Awaitable[Any]]
+    # Declared mid-turn arrival behavior — read by the update validator (REJECT) and by
+    # admission (ACCEPT joins the open turn; ENQUEUE queues behind it).
+    mid_turn: MidTurn = MidTurn.REJECT
+    # The author's hint that a parent model may drive this handler. Advisory only: the
+    # parent's SubagentToolPolicy decides what actually reaches its model.
+    model_callable: bool = True
+    # Name of the handler's ``Injected[MessageContext]`` parameter, or None if it declared
+    # none. Excluded from the ``parameters`` schema and filled at dispatch.
+    ctx_param: str | None = None
+
+
+def _discover_handlers(cls: type) -> dict[str, _AcceptedHandler]:
+    """Find + validate every ``@agent.accepts`` handler on ``cls`` (no instance/workflow).
+
+    Pure reflection over the class — the single source for both runtime dispatch and the
+    ``agent_interface`` discovery query (and the subagent toolset generator). Raises
+    ``TypeError`` on any contract violation so a malformed agent fails at import.
+    """
+    handlers: dict[str, _AcceptedHandler] = {}
+    for name, fn in inspect.getmembers(cls, inspect.isfunction):
+        if not getattr(fn, _ACCEPTS_MARKER, False):
+            continue
+        hints = get_type_hints(fn)
+        params = [p for p in inspect.signature(fn).parameters if p != "self"]
+        # A handler may declare ONE ``Injected[MessageContext]`` parameter alongside its
+        # input model. It is workflow-supplied and excluded from the ``parameters`` schema
+        # callers introspect, so it is separated out here before the arity check — leaving
+        # the contract "exactly one MODEL argument" intact.
+        injected = set(_injected_param_names(fn))
+        ctx_params = [p for p in params if p in injected]
+        if len(ctx_params) > 1:
+            raise TypeError(
+                f"@agent.accepts {name!r} may declare at most one Injected[...] parameter "
+                f"(the MessageContext); got {ctx_params}."
+            )
+        for p in ctx_params:
+            if hints.get(p) is not MessageContext:
+                raise TypeError(
+                    f"@agent.accepts {name!r}: its injected parameter {p!r} must be "
+                    f"annotated Injected[MessageContext]; got {hints.get(p)!r}."
+                )
+        params = [p for p in params if p not in injected]
+        if len(params) != 1:
+            raise TypeError(
+                f"@agent.accepts {name!r} must take exactly one argument besides self "
+                f"(the input message model), plus at most one Injected[MessageContext]; "
+                f"got {params}."
+            )
+        input_type = hints.get(params[0])
+        output_type = hints.get("return")
+        if not (isinstance(input_type, type) and issubclass(input_type, BaseModel)):
+            raise TypeError(
+                f"@agent.accepts {name!r}: its argument must be annotated with a pydantic "
+                f"model (the input message type); got {input_type!r}."
+            )
+        if not (isinstance(output_type, type) and issubclass(output_type, BaseModel)):
+            raise TypeError(
+                f"@agent.accepts {name!r}: its return type must be a pydantic model "
+                f"(no scalar/None returns); got {output_type!r}."
+            )
+        for who in (fn, input_type, output_type):
+            if not (getattr(who, "__doc__", None) or "").strip():
+                raise TypeError(
+                    f"@agent.accepts {name!r}: {who.__name__} must have a docstring "
+                    f"(handler docstring → tool description; model docstrings → schema docs)."
+                )
+        handlers[name] = _AcceptedHandler(
+            name=name,
+            input_type=input_type,
+            output_type=output_type,
+            description=inspect.cleandoc(fn.__doc__ or ""),
+            method=fn,
+            # Defaults mirror the decorator's, so a handler marked by a bare
+            # ``@agent.accepts`` (or by an older stamp) still resolves.
+            mid_turn=getattr(fn, _ACCEPTS_MID_TURN, MidTurn.REJECT),
+            model_callable=getattr(fn, _ACCEPTS_MODEL_CALLABLE, True),
+            ctx_param=ctx_params[0] if ctx_params else None,
+        )
+    return handlers
+
+
+def agent_handlers(cls: type) -> dict[str, _AcceptedHandler]:
+    """The discovered handler map for an agent class (empty if it has none).
+
+    Read from the attribute ``defn`` stamps at import; falls back to discovering on the fly
+    (so a bare ``@workflow.defn`` agent, or an offline call, still works)."""
+    discovered = getattr(cls, _HANDLERS_ATTR, None)
+    if discovered is None:
+        discovered = _discover_handlers(cls)
+    return discovered
+
+
+# ---------------------------------------------------------------------------
+# Agent lifecycle — @agent.init, the optional @agent.setup / @agent.teardown hooks, and the
+# @workflow.run that @agent.defn generates around them
+# ---------------------------------------------------------------------------
+
+init = workflow.init
+"""Mark an agent's ``__init__(self, config: AgentConfig)``, where it builds its
+``AgentWorkflowRunner``. The same decorator as ``@workflow.init``, re-exported so an agent is
+written in ``agent.*`` decorators throughout."""
+
+_SETUP_MARKER = "__agent_setup__"
+_TEARDOWN_MARKER = "__agent_teardown__"
+_GENERATED_RUN_MARKER = "__agent_generated_run__"
+_RUNNER_ATTR = "__agent_runner__"
+
+
+def setup(fn: Callable[[Any], Awaitable[None]], /) -> Callable[[Any], Awaitable[None]]:
+    """Mark an ``async def (self) -> None`` method to run once, after ``@agent.init`` and
+    before the agent handles its first message. Optional; at most one per agent.
+
+    Use it for setup that must await (an activity, a child workflow) or that should not run
+    in ``__init__``. Messages that arrive while it runs are admitted and wait for it. If it
+    raises, the agent never opens a turn and the workflow fails as any workflow would."""
+    setattr(fn, _SETUP_MARKER, True)
+    return fn
+
+
+def teardown(fn: Callable[[Any], Awaitable[None]], /) -> Callable[[Any], Awaitable[None]]:
+    """Mark an ``async def (self) -> None`` method to run once when the agent stops: after
+    ``close`` has drained every in-flight message, or when the workflow is cancelled. Optional;
+    at most one per agent.
+
+    It runs only if setup completed, and not when the workflow fails."""
+    setattr(fn, _TEARDOWN_MARKER, True)
+    return fn
+
+
+def _lifecycle_hook(cls: type, marker: str, decorator: str) -> str | None:
+    """The name of the class's method marked ``marker``, validated, or ``None`` if it has
+    none. Returned by name so the generated ``run`` calls it bound, honoring overrides."""
+    marked = [
+        (name, fn)
+        for name, fn in inspect.getmembers(cls, inspect.isfunction)
+        if getattr(fn, marker, False)
+    ]
+    if not marked:
+        return None
+    if len(marked) > 1:
+        raise TypeError(
+            f"{cls.__name__!r} declares more than one @agent.{decorator} method: "
+            f"{sorted(name for name, _ in marked)}."
+        )
+    name, fn = marked[0]
+    if getattr(fn, _ACCEPTS_MARKER, False):
+        raise TypeError(f"@agent.{decorator} {name!r} cannot also be an @agent.accepts handler.")
+    params = [p for p in inspect.signature(fn).parameters if p != "self"]
+    if not inspect.iscoroutinefunction(fn) or params:
+        raise TypeError(
+            f"@agent.{decorator} {name!r} must be `async def {name}(self) -> None`."
+        )
+    return name
+
+
+def _runner_of(instance: object) -> AgentWorkflowRunner:
+    """The runner an agent built in its ``@agent.init`` (it registers itself on the instance)."""
+    runner = getattr(instance, _RUNNER_ATTR, None)
+    if runner is None:
+        raise RuntimeError(
+            f"{type(instance).__name__} built no AgentWorkflowRunner in its @agent.init; an "
+            f"agent must construct one there for @agent.defn's run to drive."
+        )
+    return runner
+
+
+def _invalid_input(message: str, type_: str = "InvalidAgentInput") -> ApplicationError:
+    """Non-retryable, so bad input fails the workflow instead of failing its task forever."""
+    return ApplicationError(message, type=type_, non_retryable=True)
+
+
+def _validated(cls: type, model: type[BaseModel], value: Any, what: str) -> BaseModel:
+    try:
+        return model.model_validate(value)
+    except ValidationError as e:
+        raise _invalid_input(f"{cls.__name__} was started with an invalid {what}: {e}") from None
+
+
+def _validating_init(cls: type, spec: AgentInitData | None) -> Callable[..., None]:
+    """Wrap the agent's ``__init__`` so it receives validated input.
+
+    The generated ``run`` declares its inputs untyped, so Temporal always decodes them to plain
+    JSON values; validation happens here instead, where a failure can be raised as a
+    non-retryable error. Decoding against the models would fail the workflow TASK on bad input,
+    which Temporal retries forever. A missing required ``data`` fails the same way."""
+    init_fn = cls.__init__
+    max_args = 1 if spec is None else 2
+
+    @functools.wraps(init_fn)
+    def __init__(self: Any, *args: Any) -> None:
+        if not 1 <= len(args) <= max_args:
+            raise _invalid_input(
+                f"{cls.__name__} takes an AgentConfig"
+                f"{'' if spec is None else ' and its data'}; it was started with {len(args)} "
+                f"argument(s)."
+            )
+        config = _validated(cls, AgentConfig, args[0], "AgentConfig")
+        if spec is None:
+            return init_fn(self, config)
+        data = args[1] if len(args) == 2 else None
+        if data is None:
+            if spec.required:
+                raise _invalid_input(
+                    f"{cls.__name__} requires init data ({spec.model.__name__}), and none was "
+                    f"given.",
+                    type_="InitDataRequired",
+                )
+            return init_fn(self, config, None)
+        return init_fn(self, config, _validated(cls, spec.model, data, spec.model.__name__))
+
+    return __init__
+
+
+def _generated_run(
+    cls: type, setup_name: str | None, teardown_name: str | None
+) -> Callable[..., Awaitable[None]]:
+    """Build the ``@workflow.run`` for an agent class: setup, the turn loop, teardown.
+
+    Temporal requires ``run`` and ``__init__`` to have identical parameters, comparing the raw
+    ``inspect.signature``, so the method copies ``__init__``'s signature verbatim. Temporal
+    decodes the input from ``run``'s type hints, which are ``Any`` here so that bad input
+    reaches :func:`_validating_init` instead of failing the decode."""
+
+    async def run(self: Any, *args: Any) -> None:
+        runner = _runner_of(self)
+        if setup_name is not None:
+            await getattr(self, setup_name)()
+        try:
+            await runner.run(self)
+        except asyncio.CancelledError:
+            if teardown_name is not None:
+                await getattr(self, teardown_name)()
+            raise
+        if teardown_name is not None:
+            await getattr(self, teardown_name)()
+
+    init_params = [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+    run.__qualname__ = f"{cls.__qualname__}.run"
+    run.__module__ = cls.__module__
+    run.__signature__ = inspect.signature(cls.__init__)  # type: ignore[attr-defined]
+    run.__annotations__ = {name: Any for name in init_params} | {"return": None}
+    setattr(run, _GENERATED_RUN_MARKER, True)
+    return workflow.run(run)
+
+
+def _reject_authored_run(cls: type) -> None:
+    """``run`` belongs to the harness: an agent declares ``@agent.setup`` / ``@agent.teardown``
+    instead. A ``run`` generated for a decorated base class is fine — it is regenerated."""
+    existing = getattr(cls, "run", None)
+    if existing is not None and not getattr(existing, _GENERATED_RUN_MARKER, False):
+        raise TypeError(
+            f"{cls.__name__!r} defines `run`, but @agent.defn provides the workflow's run "
+            f"method. Put one-time setup in an `@agent.setup` method and cleanup in an "
+            f"`@agent.teardown` method (both optional) instead."
+        )
+
+
+@dataclass(frozen=True)
+class WorkflowDefnOptions:
+    """Options :func:`defn` forwards to the ``@workflow.defn`` it applies.
+
+    Grouped apart from the agent-level parameters so a Temporal workflow setting (e.g.
+    ``sandboxed``, the workflow sandbox) is never mistaken for an agent-level one. The
+    workflow name is not here: it is the agent's identity, so it is ``defn``'s own
+    ``name=``. ``dynamic`` is not offered: a dynamic workflow takes ``Sequence[RawValue]``,
+    which the agent contract rules out.
+    """
+
+    sandboxed: bool = True
+    failure_exception_types: Sequence[type[BaseException]] = ()
+    versioning_behavior: VersioningBehavior = VersioningBehavior.UNSPECIFIED
+
+
+@overload
+def defn(cls: _WorkflowClass, /) -> _WorkflowClass: ...
+@overload
+def defn(
+    *,
+    name: str | None = None,
+    workflow_options: WorkflowDefnOptions = WorkflowDefnOptions(),
+) -> Callable[[_WorkflowClass], _WorkflowClass]: ...
+def defn(
+    cls: type | None = None,
+    /,
+    *,
+    name: str | None = None,
+    workflow_options: WorkflowDefnOptions = WorkflowDefnOptions(),
+) -> Any:
+    """Declare an agent workflow class: validate that it honors the standardized agent
+    contract, generate its ``@workflow.run``, then register it as a Temporal workflow via
+    ``@workflow.defn``. Use it IN PLACE of ``@workflow.defn`` — stacking both raises, since
+    Temporal refuses to define a class twice::
+
+        @agent.defn(name="MyAgent")
+        class MyAgent:
+            @agent.init
+            def __init__(self, config: AgentConfig) -> None:
+                self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
+
+            @agent.setup       # optional
+            async def setup(self) -> None: ...
+
+            @agent.teardown    # optional
+            async def teardown(self) -> None: ...
+
+    The agent does not write ``run``: the generated one awaits the ``@agent.setup`` method (if
+    any), drives the runner's turn loop until ``close`` drains, then awaits the
+    ``@agent.teardown`` method (if any). Defining ``run`` yourself raises.
+
+    ``name`` is the workflow type name (defaults to the class name). Any other
+    ``@workflow.defn`` setting goes in ``workflow_options`` (see
+    :class:`WorkflowDefnOptions`).
+
+    The checks run at definition (import) time: ``__init__`` must be ``@agent.init`` and take
+    one :class:`AgentConfig`, plus optionally one ``data`` model — ``data: YourModel`` if
+    required, ``data: YourModel | None = None`` if not. A misconfigured
+    agent therefore raises :class:`TypeError` the moment its module is imported (e.g. at
+    worker startup), with a clear message — instead of starting and then hanging by
+    repeatedly failing its first workflow task at execution time (where the caller would
+    only ever see a timeout). The contract is checked before ``@workflow.defn`` runs, so
+    Temporal's own definition errors only surface for a class that is a valid agent.
+
+    At start, ``config`` and ``data`` are validated against their models before ``__init__``
+    runs. Invalid input, or a missing required ``data``, fails the workflow with a
+    non-retryable ``ApplicationError`` (type ``InvalidAgentInput`` / ``InitDataRequired``).
+
+    The same contract is re-checked when the runner is built
+    (:func:`_assert_standardized_agent_signature`), as a backstop for any agent declared
+    with a bare ``@workflow.defn``.
+    """
+
+    def decorate(c: type) -> type:
+        _reject_authored_run(c)
+        init_data = _agent_init_spec(c)
+        # Discover + validate the @agent.accepts handlers now (import time), and stamp them
+        # so the runner / agent_interface query / subagent generator read them without
+        # re-introspecting (and a malformed handler fails fast at import).
+        setattr(c, _HANDLERS_ATTR, _discover_handlers(c))
+        setattr(c, _INIT_DATA_ATTR, init_data)
+        c.run = _generated_run(  # type: ignore[attr-defined]
+            c,
+            _lifecycle_hook(c, _SETUP_MARKER, "setup"),
+            _lifecycle_hook(c, _TEARDOWN_MARKER, "teardown"),
+        )
+        c.__init__ = _validating_init(c, init_data)  # type: ignore[misc]
+        return workflow.defn(
+            name=name,
+            sandboxed=workflow_options.sandboxed,
+            failure_exception_types=workflow_options.failure_exception_types,
+            versioning_behavior=workflow_options.versioning_behavior,
+        )(c)
+
+    return decorate(cls) if cls is not None else decorate
+
+
+# ---------------------------------------------------------------------------
+# AgentToolContext — the {stream context + tool id} ferried into a tool activity
+# ---------------------------------------------------------------------------
+
+
+class AgentToolContext(BaseModel):
+    """The bundle a tool needs to publish its own lifecycle events from inside its
+    activity: which turn to publish against (:attr:`stream_context`) and the id that
+    correlates this one invocation's events (:attr:`tool_id`).
+
+    A ``ContextVar`` cannot cross the activity process boundary, so for an activity
+    tool this value is serialized and passed as the trailing activity argument by the
+    :func:`activity_tool_defn` dispatcher; the decorator's activity body reads it back to
+    open a :meth:`AgentWorkflowRunner.publisher_from_activity`. (A pure in-workflow tool —
+    :func:`tool_defn` — needs no such carrier, as it publishes in-process, so this type is
+    only built for the activity path.)
+    """
+
+    stream_context: TurnStreamContext
+    tool_id: str
+
+    @classmethod
+    def for_current_tool_id(cls) -> AgentToolContext:
+        """Build the context for the in-flight tool call — both fields resolved implicitly.
+
+        The tool id (the model's per-call id) and the turn (stream context) are both
+        read from the ambient state ``run_tool`` parked for this invocation, so the
+        caller threads nothing. Raises if there is no current tool call or active turn.
+        """
+        tool_id = _current_tool_id()
+        runner = _CURRENT_RUNNER.get()
+        stream_context = runner.current_stream_context if runner is not None else None
+        if stream_context is None:
+            raise RuntimeError(
+                "no active agent turn — AgentToolContext.for_current_tool_id() must "
+                "be called while a turn is in flight"
+            )
+        return cls(stream_context=stream_context, tool_id=tool_id)
+
+
+# ---------------------------------------------------------------------------
+# TurnEventPublisher — minimal activity-side publish interface
+# ---------------------------------------------------------------------------
+
+
+class TurnEventPublisher:
+    """Activity-side handle that publishes events to a workflow's stream.
+
+    Bound to a :class:`TurnStreamContext` at construction so call sites
+    don't have to re-thread turn metadata on every publish. Obtain one
+    via :meth:`AgentWorkflowRunner.publisher_from_activity` (an async
+    context manager that owns the underlying
+    :class:`WorkflowStreamClient` lifecycle so deltas batch and drain
+    correctly).
+    """
+
+    def __init__(
+        self,
+        events: TopicHandle[AgentEvent],
+        context: TurnStreamContext,
+    ) -> None:
+        self._events = events
+        self._context = context
+
+    def publish(self, event: AgentStreamItem) -> None:
+        """Wrap ``event`` in an :class:`AgentEvent` envelope and publish it.
+
+        Producers build the typed payload (e.g. ``ReplyDelta(text=…)``); the
+        envelope adds the routing metadata only the harness controls — ``turn_id``
+        / ``turn_number`` / ``message_id`` / ``agent_id`` (all from the bound
+        :class:`TurnStreamContext`, which the workflow side threaded into the activity) and
+        ``timestamp`` (wall-clock; the workflow side uses ``workflow.time()`` — both
+        serialize identically).
+
+        ``message_id`` rides in on the carrier because a ``ContextVar`` cannot cross the
+        activity boundary: the workflow side resolved the ambient one when it built the
+        context, so an activity streaming a model call attributes its deltas to the right
+        message without ever knowing there is such a thing.
+        """
+        self._events.publish(
+            AgentEvent(
+                event=event,
+                agent_id=self._context.agent_id,
+                turn_id=self._context.turn_id,
+                turn_number=self._context.turn_number,
+                message_id=self._context.message_id,
+                timestamp=time.time(),
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Internal status tracker
+# ---------------------------------------------------------------------------
+
+
+class _ApprovalStatus(StrEnum):
+    """Lifecycle of one gated tool call's human-approval decision."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+
+
+@dataclass
+class _ApprovalEntry:
+    """One gated tool call's approval record, keyed by its per-call tool id.
+
+    Created PENDING when the gated tool is invoked; flipped to APPROVED/DENIED by the
+    ``tool_approval`` update (or auto-DENIED if the agent closes while still pending).
+    Resolved entries are RETAINED (status flips, the entry is not removed) so the update
+    validator can tell "unknown id" from "already resolved".
+    """
+
+    tool_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    turn_number: int
+    # Short, session-unique alias for ``tool_id`` — see :attr:`PendingApproval.short_id` for what
+    # it is for. Minted here, at registration, so it is stable for the life of the entry.
+    short_id: str
+    # The turn this call belongs to — retained so the resolution can be published against
+    # the owning turn even from an update handler that isn't itself "in" that turn.
+    turn_id: str
+    # The message whose dispatch made this call — retained for the same reason as ``turn_id``:
+    # the resolution must be published against the call's OWN message even when it is a policy
+    # cascade in an update handler doing the publishing, where there is no ambient message. A
+    # cascade is bound to no one message; the CALL it resolves always is.
+    message_id: str | None
+    # The tool's static ``inherently_safe`` self-assertion, retained so a runtime policy
+    # change can re-evaluate this still-PENDING call against the new policy.
+    inherently_safe: bool
+    status: _ApprovalStatus = _ApprovalStatus.PENDING
+    reason: str | None = None
+    # Whether the resolving decision asked to be remembered (allow-list this tool). False
+    # for one-off decisions and for calls auto-resolved by a policy change.
+    remember: bool = False
+
+
+@dataclass
+class _ApprovalOutcome:
+    """The terminal result of an approval wait — what the gate acts on."""
+
+    approved: bool
+    reason: str | None = None
+    remember: bool = False
+
+
+class _CallbackStatus(StrEnum):
+    """Lifecycle of one callback tool call's external-result fulfillment."""
+
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
+@dataclass
+class _CallbackEntry:
+    """One pending callback tool call, keyed by its per-call tool id.
+
+    A callback tool has no worker-side body: it pauses in-workflow while an attached client
+    executes it and returns a result via the ``provide_callback_result`` update. Created PENDING
+    when the tool body registers the wait; flipped to RESOLVED by that update (or finalized as a
+    timeout / close by the gate itself). Resolved entries are RETAINED (status flips, the entry is
+    not removed) so the update validator can tell "unknown id" from "already resolved".
+
+    ``output_adapter`` is a runtime pydantic :class:`TypeAdapter` for the tool's declared output
+    type — used to validate the client's payload. It lives only in workflow memory (rebuilt on
+    replay when the tool body re-runs) and is never serialized.
+    """
+
+    tool_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    output_schema: dict[str, Any]
+    turn_number: int
+    # The turn this call belongs to — retained so the resolution can be published against the
+    # owning turn even from an update handler that isn't itself "in" that turn.
+    turn_id: str
+    # The message whose dispatch made this call — retained for the same reason as ``turn_id``:
+    # the resolution must be published against the call's OWN message.
+    message_id: str | None
+    output_adapter: TypeAdapter[Any]
+    status: _CallbackStatus = _CallbackStatus.PENDING
+    outcome: Literal["ok", "error", "timeout"] = "ok"
+    # The validated output object on ``ok`` (the tool's return value); None otherwise.
+    result: Any = None
+    # The client-reported failure ('error'), or the timeout/close note ('timeout'); None on 'ok'.
+    error: str | None = None
+
+
+@dataclass
+class _CallbackOutcome:
+    """The terminal result of a callback wait — what the gate acts on."""
+
+    outcome: Literal["ok", "error", "timeout"]
+    result: Any = None
+    error: str | None = None
+
+
+@dataclass
+class _SubagentInstance:
+    """One running subagent this agent drives, keyed by its short model-facing ``handle``.
+
+    ``handle`` is a short, tree-unique id the model uses to reference this subagent in
+    ``send_<function>`` / ``stop_<key>`` calls (this agent's own id plus one fresh segment — see
+    :meth:`AgentWorkflowRunner._fresh_subagent_handle`) — far cheaper for the model to reproduce
+    than the full child ``workflow_id`` (which it never sees). The workflow-side code maps
+    ``handle`` → ``workflow_id`` and passes the real ``workflow_id`` to the ``run_subagent_turn``
+    activity.
+
+    Holds the per-subagent bookkeeping the ``send_<function>`` tool threads to the
+    ``run_subagent_turn`` activity: ``last_consumed_offset`` (the child stream position to
+    resume the next turn from — a perf hint).
+
+    It also owns a **FIFO gate** that serializes this subagent's turns ON THE CALLER SIDE: when
+    a parent issues several ``send_<function>`` calls to the same subagent at once (e.g.
+    ``asyncio.gather``), each takes a monotonically increasing ticket (synchronously, in call
+    order) and waits until it is the one being served. Only one turn runs at a time, so the
+    turn number read after the wait is always exact — no prediction, no arrival-order race.
+    Gates are per-subagent, so different subagents still run concurrently. (A subagent processes
+    turns sequentially regardless, so this serialization costs no throughput.)
+    """
+
+    handle: str
+    workflow_id: str
+    agent_key: str
+    last_consumed_offset: int = 0
+    # FIFO gate: tickets handed out in call order; the holder whose ticket == _serving runs.
+    _next_ticket: int = 0
+    _serving: int = 0
+
+    def take_ticket(self) -> int:
+        """Reserve the next gate position. MUST be called synchronously (before any await) so
+        gathered callers are ordered by the model's call order, not by await scheduling."""
+        ticket = self._next_ticket
+        self._next_ticket += 1
+        return ticket
+
+    def is_serving(self, ticket: int) -> bool:
+        """Whether ``ticket`` is the one currently allowed through the gate."""
+        return self._serving == ticket
+
+    def release_gate(self) -> None:
+        """Pass the gate to the next ticket. Called by the holder when its turn finishes."""
+        self._serving += 1
+
+
+@dataclass(frozen=True)
+class _Admission:
+    """One admitted message, from the synchronous admission prologue to its dispatch.
+
+    Whatever a message's disposition, admission settles the same facts about it — the envelope,
+    the turn it will run in, and its freshly minted ``message_id`` — so both hand-off queues
+    (``_WorkflowStatus._pending_turns`` for a queued message, the runner's ``_joining`` for one
+    that joined the open turn) carry this rather than a widening tuple.
+
+    ``turn_number`` is settled at admission too, in every case: the already-open turn's number
+    for a join, the reserved slot otherwise. Carrying it means dispatch never has to re-read
+    "the current turn" and hope it still means the same thing.
+    """
+
+    message: AgentMessage
+    turn_id: str
+    turn_number: int
+    message_id: str
+
+
+class _WorkflowStatus:
+    """Internal workflow state that owns all status fields and the pending queue.
+
+    All fields are private. Mutations go through methods so state
+    transitions stay consistent (e.g. opening a turn always increments current_turn and
+    seeds the participant count atomically).
+
+    A TURN IS REFCOUNTED. It is the interval during which the agent is non-idle, not the
+    span of one message: :meth:`open_next_turn` starts it with one participant, and a
+    ``MidTurn.ACCEPT`` message can :meth:`join_turn` to run inside it. The turn closes only
+    when the LAST participant calls :meth:`leave_turn` — which is when ``_current_turn_id``
+    is cleared and the runner publishes ``turn_end``.
+
+    ``approval_policy`` is the live :class:`ToolApprovalPolicy`. It is *mutable* —
+    :meth:`set_approval_policy` swaps it for a runtime policy update — and is surfaced on
+    the ``agent_status`` query. ``has_auto_approval_evaluator`` records only whether an
+    auto mode evaluator is wired (for the status query); the evaluator itself lives on the
+    runner, never here.
+    """
+
+    def __init__(
+        self,
+        *,
+        agent_id: str,
+        approval_policy: ToolApprovalPolicy,
+        auto_approval_criteria: AutoApprovalCriteria | None = None,
+        has_auto_approval_evaluator: bool = False,
+    ) -> None:
+        # This agent's own short id — stamped on every event (via current_stream_context for
+        # activity publishes, and _pub for in-workflow ones) and surfaced on the status query.
+        self._agent_id: str = agent_id
+        self._current_turn: int = 0
+        self._current_turn_id: str | None = None
+        # How many messages are running inside the open turn. 0 == idle. Incremented in the
+        # SYNCHRONOUS admission prologue (never when a handler body starts) so a join can
+        # never race a concurrent drop-to-zero and split one turn into two brackets.
+        self._turn_participants: int = 0
+        self._pending_turns: list[_Admission] = []
+        self._approval_policy: ToolApprovalPolicy = approval_policy
+        # The auto-mode rulebook, and a counter of how many times it has been swapped. The
+        # counter is stamped on every ``AutoApprovalContext`` so a recorded verdict names the
+        # generation of rules that produced it — criteria change over an agent's life, so
+        # "which rules decided this call" is otherwise unanswerable. Not surfaced on
+        # ``AgentStatus``; see the note there.
+        self._auto_approval_criteria: AutoApprovalCriteria = (
+            auto_approval_criteria if auto_approval_criteria is not None else AutoApprovalCriteria()
+        )
+        self._auto_approval_criteria_version: int = 0
+        self._has_auto_approval_evaluator: bool = has_auto_approval_evaluator
+        # Gated tool calls awaiting a human decision, keyed by per-call tool id.
+        # Entries are retained after resolution (status flips) for idempotency.
+        self._approvals: dict[str, _ApprovalEntry] = {}
+        # Callback tool calls awaiting a client-supplied result, keyed by per-call tool id.
+        # Entries are retained after resolution (status flips) for idempotency.
+        self._callbacks: dict[str, _CallbackEntry] = {}
+        # Subagents this agent is driving, keyed by child ``subagent_id``.
+        self._subagents: dict[str, _SubagentInstance] = {}
+
+    @property
+    def current_turn(self) -> int:
+        return self._current_turn
+
+    @property
+    def current_stream_context(self) -> TurnStreamContext | None:
+        """Stream-publishing carrier for the in-flight turn, or ``None`` if idle.
+
+        Distinct from :attr:`current_turn`, which is the monotonic counter
+        and stays pinned at the last turn's number even after that turn
+        completes.
+        """
+        if self._current_turn_id is None:
+            return None
+        return TurnStreamContext(
+            turn_id=self._current_turn_id,
+            turn_number=self._current_turn,
+            agent_id=self._agent_id,
+        )
+
+    @property
+    def turn_active(self) -> bool:
+        """Whether a turn is open — i.e. at least one participant is still running."""
+        return self._turn_participants > 0
+
+    @property
+    def turn_participants(self) -> int:
+        """How many messages are currently running inside the open turn (0 when idle)."""
+        return self._turn_participants
+
+    @property
+    def has_pending_work(self) -> bool:
+        return self.turn_active or len(self._pending_turns) > 0
+
+    @property
+    def has_pending_turns(self) -> bool:
+        return len(self._pending_turns) > 0
+
+    @property
+    def can_open_turn(self) -> bool:
+        """Whether the runner may open the next queued turn — i.e. a message is waiting and
+        no turn is currently open (turns never overlap; joins share the open one)."""
+        return len(self._pending_turns) > 0 and not self.turn_active
+
+    def reserve_turn_number(self) -> int:
+        """The turn number the next enqueued message will get — its reserved slot.
+
+        Read during admission to stamp :attr:`_Admission.turn_number` before enqueueing, so a
+        queued message knows its own turn from the moment it is accepted."""
+        return self._current_turn + len(self._pending_turns) + 1
+
+    def enqueue_message(self, admission: _Admission) -> None:
+        """Add an admitted message to the pending queue (at its reserved turn number)."""
+        self._pending_turns.append(admission)
+
+    def open_next_turn(self) -> _Admission:
+        """Pop the next pending message and OPEN a turn for it (one participant).
+
+        Only legal when :attr:`can_open_turn` — a turn never opens while one is already
+        open, which is what makes nested/interleaved turn brackets unconstructible."""
+        admitted = self._pending_turns.pop(0)
+        self._current_turn += 1
+        self._current_turn_id = admitted.turn_id
+        self._turn_participants = 1
+        return admitted
+
+    def join_turn(self) -> tuple[str, int]:
+        """Add a participant to the OPEN turn and return its ``(turn_id, turn_number)``.
+
+        The admission path for a ``MidTurn.ACCEPT`` message arriving mid-turn. MUST be
+        called synchronously during update admission (see ``_turn_participants``). Raises
+        if no turn is open — the caller checks :attr:`turn_active` first."""
+        if self._current_turn_id is None:
+            raise RuntimeError("join_turn() called with no open turn")
+        self._turn_participants += 1
+        return self._current_turn_id, self._current_turn
+
+    def leave_turn(self) -> bool:
+        """Drop one participant. Returns True if that CLOSED the turn (count hit zero).
+
+        The turn id is cleared only at zero, never on the first participant's completion —
+        otherwise a still-running joined handler's next tool call would find no active turn
+        and hard-raise (``_apply_approval_policy`` / ``AgentToolContext``)."""
+        self._turn_participants -= 1
+        if self._turn_participants > 0:
+            return False
+        self._turn_participants = 0
+        self._current_turn_id = None
+        return True
+
+    # -- Tool-approval registry ---------------------------------------------
+
+    def register_pending_approval(
+        self,
+        tool_id: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        turn_number: int,
+        turn_id: str,
+        message_id: str | None,
+        *,
+        inherently_safe: bool,
+    ) -> None:
+        """Record a gated tool call as PENDING approval. Called by the gate when the
+        active policy does not auto-approve the call."""
+        self._approvals[tool_id] = _ApprovalEntry(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            turn_number=turn_number,
+            short_id=self._fresh_approval_short_id(),
+            turn_id=turn_id,
+            message_id=message_id,
+            inherently_safe=inherently_safe,
+        )
+
+    def _fresh_approval_short_id(self) -> str:
+        """Mint an approval ``short_id`` unused by ANY entry of this session.
+
+        Mirrors ``AgentWorkflowRunner._fresh_subagent_handle``: reroll until unique. The reroll
+        is checked against every entry, not just the PENDING ones, because resolved entries are
+        retained — reusing a resolved call's alias would let a stale approve/deny card posted for
+        that call resolve a *different* one. ``workflow.uuid4`` is deterministic in-workflow."""
+        used = {e.short_id for e in self._approvals.values()}
+        while True:
+            candidate = workflow.uuid4().hex[:APPROVAL_SHORT_ID_LENGTH]
+            if candidate not in used:
+                return candidate
+
+    def approval_entry(self, tool_id: str) -> _ApprovalEntry | None:
+        """The approval record for ``tool_id`` (any status), or ``None`` if unknown."""
+        return self._approvals.get(tool_id)
+
+    def is_approval_resolved(self, tool_id: str) -> bool:
+        """True once ``tool_id``'s approval is no longer PENDING. The gate's wait
+        condition reads this; an unknown id counts as unresolved."""
+        entry = self._approvals.get(tool_id)
+        return entry is not None and entry.status is not _ApprovalStatus.PENDING
+
+    def resolve_approval(
+        self, tool_id: str, *, approved: bool, reason: str | None, remember: bool = False
+    ) -> None:
+        """Apply a human decision to a PENDING approval. The update validator has
+        already rejected unknown / already-resolved ids, so this just flips status.
+        ``remember`` records whether the decision asked to allow-list the tool."""
+        entry = self._approvals[tool_id]
+        entry.status = _ApprovalStatus.APPROVED if approved else _ApprovalStatus.DENIED
+        entry.reason = reason
+        entry.remember = remember
+
+    def finalize_approval(self, tool_id: str, *, closed: bool) -> _ApprovalOutcome:
+        """Resolve the gate's wait into an outcome. If the entry is still PENDING the
+        wait must have woken on agent close — auto-deny it so the workflow winds down."""
+        entry = self._approvals[tool_id]
+        if entry.status is _ApprovalStatus.PENDING:
+            # Woke because the agent is closing, not because of a decision.
+            reason = "agent closed before approval" if closed else "approval unresolved"
+            entry.status = _ApprovalStatus.DENIED
+            entry.reason = reason
+        return _ApprovalOutcome(
+            approved=entry.status is _ApprovalStatus.APPROVED,
+            reason=entry.reason,
+            remember=entry.remember,
+        )
+
+    def pending_approvals(self) -> list[PendingApproval]:
+        """All gated tool calls still awaiting a decision (for the status query)."""
+        return [
+            PendingApproval(
+                tool_id=e.tool_id,
+                tool_name=e.tool_name,
+                tool_input=e.tool_input,
+                turn_number=e.turn_number,
+                short_id=e.short_id,
+            )
+            for e in self._approvals.values()
+            if e.status is _ApprovalStatus.PENDING
+        ]
+
+    def pending_approval_entries(self) -> list[_ApprovalEntry]:
+        """The live PENDING approval entries (full records, including ``inherently_safe``).
+
+        Used by a runtime policy update to re-evaluate each still-waiting call against the
+        new policy — distinct from :meth:`pending_approvals`, which projects the trimmed,
+        client-facing :class:`PendingApproval` view."""
+        return [e for e in self._approvals.values() if e.status is _ApprovalStatus.PENDING]
+
+    @property
+    def approval_policy(self) -> ToolApprovalPolicy:
+        """The live tool-approval policy (swapped by :meth:`set_approval_policy`)."""
+        return self._approval_policy
+
+    def set_approval_policy(self, policy: ToolApprovalPolicy) -> None:
+        """Replace the live approval policy. The runner re-evaluates pending approvals
+        against it — see :meth:`AgentWorkflowRunner._apply_policy_update`."""
+        self._approval_policy = policy
+
+    @property
+    def auto_approval_criteria(self) -> AutoApprovalCriteria:
+        """The live auto-mode rulebook (swapped by :meth:`set_auto_approval_criteria`)."""
+        return self._auto_approval_criteria
+
+    @property
+    def auto_approval_criteria_version(self) -> int:
+        """How many times the criteria have been swapped since the session started."""
+        return self._auto_approval_criteria_version
+
+    def set_auto_approval_criteria(self, criteria: AutoApprovalCriteria) -> None:
+        """Replace the live criteria and bump the version.
+
+        The version is bumped on every swap, even one that happens to be value-equal to
+        what it replaced: it counts *changes an operator made*, which is what an audit of a
+        past decision wants to correlate against, not distinct values."""
+        self._auto_approval_criteria = criteria
+        self._auto_approval_criteria_version += 1
+
+    # -- Callback-tool registry ---------------------------------------------
+
+    def register_pending_callback(
+        self,
+        tool_id: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        output_schema: dict[str, Any],
+        turn_number: int,
+        turn_id: str,
+        message_id: str | None,
+        output_adapter: TypeAdapter[Any],
+    ) -> None:
+        """Record a callback tool call as PENDING a client-supplied result. Called by the
+        callback tool's body when it parks to await external fulfillment."""
+        self._callbacks[tool_id] = _CallbackEntry(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            output_schema=output_schema,
+            turn_number=turn_number,
+            turn_id=turn_id,
+            message_id=message_id,
+            output_adapter=output_adapter,
+        )
+
+    def callback_entry(self, tool_id: str) -> _CallbackEntry | None:
+        """The callback record for ``tool_id`` (any status), or ``None`` if unknown."""
+        return self._callbacks.get(tool_id)
+
+    def is_callback_resolved(self, tool_id: str) -> bool:
+        """True once ``tool_id``'s callback is no longer PENDING. The gate's wait condition
+        reads this; an unknown id counts as unresolved."""
+        entry = self._callbacks.get(tool_id)
+        return entry is not None and entry.status is not _CallbackStatus.PENDING
+
+    def resolve_callback(
+        self,
+        tool_id: str,
+        *,
+        outcome: Literal["ok", "error", "timeout"],
+        result: Any,
+        error: str | None,
+    ) -> None:
+        """Apply an external result to a PENDING callback. The update validator has already
+        rejected unknown / already-resolved ids and (on ``ok``) checked the payload against
+        the output type, so this just flips status and records the outcome."""
+        entry = self._callbacks[tool_id]
+        entry.status = _CallbackStatus.RESOLVED
+        entry.outcome = outcome
+        entry.result = result
+        entry.error = error
+
+    def finalize_callback(
+        self, tool_id: str, *, closed: bool, timed_out: bool = False
+    ) -> _CallbackOutcome:
+        """Resolve the gate's wait into an outcome. If the entry is still PENDING the wait must
+        have woken on timeout or agent close — record it as a failure so the tool can raise."""
+        entry = self._callbacks[tool_id]
+        if entry.status is _CallbackStatus.PENDING:
+            if timed_out:
+                reason = "callback timed out before a result arrived"
+            elif closed:
+                reason = "agent closed before the callback result arrived"
+            else:
+                reason = "callback unresolved"
+            entry.status = _CallbackStatus.RESOLVED
+            entry.outcome = "timeout"
+            entry.error = reason
+        return _CallbackOutcome(outcome=entry.outcome, result=entry.result, error=entry.error)
+
+    def pending_callbacks(self) -> list[PendingCallback]:
+        """All callback tool calls still awaiting a client result (for the status query)."""
+        return [
+            PendingCallback(
+                tool_id=e.tool_id,
+                tool_name=e.tool_name,
+                tool_input=e.tool_input,
+                output_schema=e.output_schema,
+                turn_number=e.turn_number,
+            )
+            for e in self._callbacks.values()
+            if e.status is _CallbackStatus.PENDING
+        ]
+
+    # -- Subagent registry --------------------------------------------------
+
+    def has_subagent(self, handle: str) -> bool:
+        """Whether ``handle`` is already in use — used to keep generated handles unique."""
+        return handle in self._subagents
+
+    def register_subagent(self, handle: str, workflow_id: str, agent_key: str) -> _SubagentInstance:
+        """Record a freshly-started subagent under its short ``handle`` and return its entry."""
+        inst = _SubagentInstance(handle=handle, workflow_id=workflow_id, agent_key=agent_key)
+        self._subagents[handle] = inst
+        return inst
+
+    def subagent(self, handle: str) -> _SubagentInstance:
+        """The tracking entry for ``handle``, or raise if the parent never started it.
+
+        Guards the ``send_<function>`` / ``stop_<key>`` tools against a model-supplied handle
+        that doesn't name a subagent this agent is driving (its own, or one already stopped)."""
+        inst = self._subagents.get(handle)
+        if inst is None:
+            raise ApplicationError(
+                f"Unknown subagent {handle!r}. Known subagents: {sorted(self._subagents)}.",
+                {"handle": handle, "known": sorted(self._subagents)},
+                type="UnknownSubagent",
+                non_retryable=True,
+            )
+        return inst
+
+    def remove_subagent(self, handle: str) -> None:
+        """Drop a subagent from the registry (after it is stopped). Idempotent."""
+        self._subagents.pop(handle, None)
+
+    def active_subagents(self) -> list[SubagentInfo]:
+        """The active subagents projected for the ``agent_status`` query.
+
+        Surfaces the subagent_id / agent_key / real ``workflow_id`` — deliberately NOT the
+        gate's ticket counters (an internal turn-ordering detail, not status)."""
+        return [
+            SubagentInfo(
+                subagent_id=inst.handle,
+                agent_key=inst.agent_key,
+                workflow_id=inst.workflow_id,
+            )
+            for inst in self._subagents.values()
+        ]
+
+    def to_agent_status(self) -> AgentStatus:
+        return AgentStatus(
+            agent_id=self._agent_id,
+            current_turn=self._current_turn,
+            turn_active=self.turn_active,
+            turn_participants=self._turn_participants,
+            pending_turns=[
+                PendingTurn(
+                    turn_number=self._current_turn + i + 1,
+                    turn_id=admitted.turn_id,
+                    message_id=admitted.message_id,
+                    message=_render_message(admitted.message),
+                )
+                for i, admitted in enumerate(self._pending_turns)
+            ],
+            pending_approvals=self.pending_approvals(),
+            pending_callbacks=self.pending_callbacks(),
+            subagents=self.active_subagents(),
+            approval_policy=self._approval_policy,
+            has_auto_approval_evaluator=self._has_auto_approval_evaluator,
+        )
+
+
+# ---------------------------------------------------------------------------
+# AgentWorkflowRunner
+# ---------------------------------------------------------------------------
+
+
+class AgentWorkflowRunner:
+    """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
+
+    Construct it directly inside ``@agent.init`` with the agent's :class:`AgentConfig`
+    plus the agent's defaults (``stream`` and ``approval_policy_default`` are required); see
+    :meth:`__init__`.
+
+    Registers the update, query, and signal handlers the ``AgentClient`` protocol requires;
+    routes each inbound ``send_agent_message`` envelope to the handler named by its ``type``
+    (rejecting an unknown function or a malformed payload at the update boundary); answers
+    the ``agent_interface`` discovery query (the handlers described tool-style); and drives
+    the turn loop via :meth:`run`, publishing each handler's return value as the reply.
+    """
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        *,
+        stream: WorkflowStream,
+        approval_policy_default: ToolApprovalPolicy,
+        auto_approval_criteria_default: AutoApprovalCriteria | None = None,
+        auto_mode_evaluator: AutoModeEvaluator | None = None,
+    ) -> None:
+        """Construct the runner inside the agent's ``@agent.init``::
+
+            self._runner = AgentWorkflowRunner(
+                config,
+                stream=WorkflowStream(),
+                approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
+            )
+
+        ``config`` is the standardized agent input; the runner resolves each universal
+        knob as *the caller's config value if given, else the agent's default*
+        (``approval_policy_default`` is required — the author must make a deliberate
+        safe-by-default choice).
+
+        ``auto_approval_criteria_default`` is the agent's built-in auto-mode rulebook (see
+        :class:`AutoApprovalCriteria`) — the named criteria sets its own tools point at, and
+        optionally a catch-all. Optional, and supplying it turns nothing on by itself:
+        criteria are the RULES, ``approval_policy.auto_mode_enabled`` is the SWITCH, and
+        ``auto_mode_evaluator`` is the MECHANISM. All three are needed before a machine
+        decides anything. A policy with auto mode ON and no evaluator is REJECTED (here, and
+        on every later ``set_approval_policy``), since it would report a machine deciding
+        while none was; with the switch off or no criteria for a tool, gated calls simply
+        reach the human gate exactly as they would have.
+
+        The accepted messages are NOT configured here — they are
+        discovered from the agent's ``@agent.accepts`` handler methods, which also declare
+        their own mid-turn behavior, so there is no agent-level queuing knob. Registers the
+        workflow's update/query/signal handlers.
+        """
+        # The runner is built inside the agent's @agent.init; enforce here that the
+        # enclosing workflow honors the standardized agent-input contract (run/__init__
+        # takes a single AgentConfig) so it stays substitutable as a parent or sub-agent.
+        _assert_standardized_agent_signature()
+        # Discover the @agent.accepts handlers off the enclosing agent class (stamped by
+        # @agent.defn at import). Outside a workflow (offline unit tests) there is no
+        # enclosing agent class, so there are simply no handlers.
+        instance = _enclosing_workflow_instance()
+        cls = type(instance) if instance is not None else None
+        if instance is not None:
+            setattr(instance, _RUNNER_ATTR, self)
+        self._handlers: dict[str, _AcceptedHandler] = agent_handlers(cls) if cls is not None else {}
+        # Resolve each knob: the caller's config value wins when given; otherwise fall back
+        # to the agent's default. The caller can never be overridden — the agent only fills
+        # gaps.
+        approval_policy = (
+            config.approval_policy
+            if config.approval_policy is not None
+            else approval_policy_default
+        )
+        auto_approval_criteria = (
+            config.auto_approval_criteria
+            if config.auto_approval_criteria is not None
+            else auto_approval_criteria_default
+        )
+        # This agent's short id, stamped on every event it publishes and reported on its status
+        # query. A parent assigns it when starting a subagent (pushing down the same short handle
+        # it references the child by — see start_subagent); a top-level agent left with no id
+        # generates its own. workflow.uuid4 is deterministic in-workflow (offline unit tests patch
+        # it). Distinct from the full workflow_id, which the model/UI never needs to reproduce.
+        self._agent_id: str = config.agent_id or workflow.uuid4().hex[:AGENT_ID_LENGTH]
+        # Retain the WorkflowStream itself (not just the topic handle) so the runner can read
+        # the stream's current head offset in-workflow — see ``_handle_send_agent_message``,
+        # which returns it as ``AgentMessageReply.accepted_offset`` for the client stream-merge.
+        self._stream = stream
+        self._events: WorkflowTopicHandle[AgentEvent] = stream.topic(
+            TURN_EVENTS_TOPIC, type=AgentEvent
+        )
+        _assert_async_auto_mode_evaluator(auto_mode_evaluator)
+        _assert_auto_mode_has_an_evaluator(approval_policy, auto_mode_evaluator)
+        self._auto_mode_evaluator = auto_mode_evaluator
+        self._status = _WorkflowStatus(
+            agent_id=self._agent_id,
+            approval_policy=approval_policy,
+            auto_approval_criteria=auto_approval_criteria,
+            has_auto_approval_evaluator=auto_mode_evaluator is not None,
+        )
+        # An evaluator that can never be reached is almost always a wiring slip, but it is a
+        # LEGAL posture — "available now, switched on later by a message handler" — so this
+        # warns rather than raising. ``workflow.logger`` raises outside the workflow event
+        # loop, and the runner is legitimately constructed offline (unit tests), so the guard
+        # is required rather than defensive.
+        if (
+            auto_mode_evaluator is not None
+            and not approval_policy.auto_mode_enabled
+            and workflow.in_workflow()
+        ):
+            workflow.logger.warning(
+                "An auto_mode_evaluator is wired but the live ToolApprovalPolicy has "
+                "auto_mode_enabled=False, so it will never be consulted and every gated "
+                "call goes to the human gate. Enable auto mode on the policy "
+                "(ToolApprovalPolicy.auto_mode(...), or .with_auto_mode(True) from "
+                "a handler) if that is not what you intended."
+            )
+        self._closed = False
+        # Observable state declared on the agent class with ``agent.state(...)``, keyed by
+        # state id; registered at the end of construction, once publishing works.
+        self._states: dict[str, StateRef[Any]] = {}
+        # Messages admitted as JOINS of the currently-open turn, awaiting dispatch by the run
+        # loop. The participant refcount was already incremented during admission, so an entry
+        # here is accounted for even before it runs.
+        self._joining: list[_Admission] = []
+        # Strong references to in-flight participant tasks. Held only so a spawned task is not
+        # garbage-collected mid-flight; turn accounting lives in the refcount, not here.
+        self._participant_tasks: set[asyncio.Future[None]] = set()
+
+        # Register protocol handlers dynamically so the containing workflow doesn't need to.
+        workflow.set_update_handler(
+            SEND_AGENT_MESSAGE_UPDATE,
+            self._handle_send_agent_message,
+            validator=self._validate_send_agent_message,
+        )
+        # ``tool_approval`` is a SEPARATE update on purpose — do NOT merge it into
+        # ``send_agent_message``. They serve opposite roles and that separation is
+        # load-bearing:
+        #
+        #   * ``send_agent_message`` is the agent's FRONT DOOR. It routes a message into one
+        #     of the agent author's ``@agent.accepts`` handlers, and the callable surface is
+        #     advertised via the ``agent_interface`` discovery query so any caller —
+        #     including a *parent (non-human) agent* — can drive this agent through it.
+        #   * ``tool_approval`` is handled ENTIRELY by this harness — the agent author never
+        #     sees it; ``_apply_approval_policy`` resolves the gate in-process. It is a
+        #     human-in-the-loop guardrail keeping the model from acting unilaterally on a
+        #     gated tool.
+        #
+        # It is therefore DELIBERATELY NOT in ``agent_interface``: an automating parent agent
+        # that discovers and speaks this agent's contract must not be able to rubber-stamp
+        # its child's tool approvals — that would defeat the guardrail. Approvals come from a
+        # human/operator surface out-of-band (the UI's approve/deny), not the agent-to-agent
+        # front door. See ``_handle_tool_approval`` and ``_handle_agent_interface``.
+        workflow.set_update_handler(
+            TOOL_APPROVAL_UPDATE,
+            self._handle_tool_approval,
+            validator=self._validate_tool_approval,
+        )
+        # ``provide_callback_result`` is a SEPARATE update from ``tool_approval`` on purpose,
+        # even though both resolve a pending gate keyed by ``tool_id``. A callback tool call
+        # passes through BOTH gates in sequence on the same id — first the approval gate in the
+        # dispatch prologue, then the callback gate in the tool body — so one shared "resolve"
+        # handler would be ambiguous about which gate a submission targets. Two focused handlers
+        # (each with its own typed payload and registry) keep the two sequential gates clean.
+        # Like ``tool_approval``, this is harness-owned and NOT advertised via ``agent_interface``
+        # (see ``_handle_agent_interface``): a callback result comes from the attached client
+        # fulfilling the tool on its own machine, an out-of-band control-plane surface — not the
+        # agent-to-agent front door a parent agent drives.
+        workflow.set_update_handler(
+            PROVIDE_CALLBACK_RESULT_UPDATE,
+            self._handle_provide_callback_result,
+            validator=self._validate_provide_callback_result,
+        )
+        workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
+        workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
+        workflow.set_signal_handler("close", self._handle_close)
+        if instance is not None:
+            self._register_declared_states(instance)
+
+    # -- Protocol handlers --------------------------------------------------
+
+    async def _handle_send_agent_message(self, message: AgentMessage) -> AgentMessageReply:
+        """Admit one message and return immediately — the ADMISSION half of dispatch.
+
+        This body is deliberately synchronous (declared ``async`` only because Temporal
+        requires it): it contains no ``await`` that yields, so it completes inside a single
+        workflow task. Two invariants ride on that:
+
+          * ``accepted_offset`` is captured before anything for this message is published,
+            guaranteeing ``accepted_offset <= turn_started`` — all the client stream-merge
+            requires, since it discards events up to ``turn_started``.
+          * a join's participant increment cannot race the open turn dropping to zero, so
+            one logical turn can never split into two brackets.
+
+        It does NOT run the handler. Execution is the other half, in :meth:`run` — which is
+        what lets the caller have ``accepted_offset`` (and thus start streaming) while the
+        work is still in flight.
+
+        The message's ``message_id`` is minted HERE, before anything about it is published, so
+        the ``message_accepted`` event and every later event of its dispatch share one id — and
+        the sender gets that id back on the reply without having to read the stream for it.
+        """
+        # Read the real log head (``_on_offset``), not a publish counter: activity-published
+        # events enter the same global log via signals and would be missed by a counter.
+        accepted_offset = self._stream._on_offset()
+        handler = self._handlers[message.type]  # validator rejected an unknown type
+        message_id = str(workflow.uuid4())
+
+        # A MidTurn.ACCEPT message arriving while a turn is OPEN joins it: same turn_id, one
+        # more participant, runs concurrently. Anything else takes a queue slot and will open
+        # (or wait for) a turn of its own. MidTurn.REJECT never reaches here while busy — the
+        # validator already failed it.
+        if handler.mid_turn is MidTurn.ACCEPT and self._status.turn_active:
+            turn_id, turn_number = self._status.join_turn()
+            disposition = MessageDisposition.JOINED
+            self._joining.append(
+                _Admission(
+                    message=message,
+                    turn_id=turn_id,
+                    turn_number=turn_number,
+                    message_id=message_id,
+                )
+            )
+        else:
+            turn_id = str(workflow.uuid4())
+            turn_number = self._status.reserve_turn_number()
+            disposition = (
+                MessageDisposition.QUEUED
+                if self._status.has_pending_work
+                else MessageDisposition.OPENED
+            )
+            self._status.enqueue_message(
+                _Admission(
+                    message=message,
+                    turn_id=turn_id,
+                    turn_number=turn_number,
+                    message_id=message_id,
+                )
+            )
+
+        # Published for EVERY admitted message, not only a queued one: it is the only event
+        # carrying what was sent, and a joining message gets no ``turn_started`` of its own to
+        # be inferred from. Explicit ``message_id`` because there is no ambient one — this
+        # runs in the update handler's task, not the participant's.
+        self._pub(
+            turn_id,
+            turn_number,
+            MessageAccepted(
+                handler=message.type,
+                payload=message.payload,
+                disposition=disposition,
+            ),
+            message_id=message_id,
+        )
+
+        return AgentMessageReply(
+            turn_number=turn_number,
+            turn_id=turn_id,
+            message_id=message_id,
+            disposition=disposition,
+            accepted_offset=accepted_offset,
+        )
+
+    def _validate_send_agent_message(self, message: AgentMessage) -> None:
+        # Route by the envelope ``type`` (the handler's function name); reject an unknown
+        # function, then validate the ``payload`` against that handler's input model. So the
+        # dispatch loop only ever sees a known handler + an already-coerced input.
+        handler = self._handlers.get(message.type)
+        if handler is None:
+            raise ApplicationError(
+                f"Unknown function {message.type!r}. Known functions: {sorted(self._handlers)}.",
+                {"name": message.type, "known": sorted(self._handlers)},
+                type="UnknownFunction",
+                non_retryable=True,
+            )
+        try:
+            handler.input_type.model_validate(message.payload)
+        except ValidationError as e:
+            raise ApplicationError(
+                f"Payload for function {message.type!r} does not match its input "
+                f"model {handler.input_type.__name__}. Validation error: {e}",
+                {"function": message.type, "error": str(e)},
+                type="MalformedMessage",
+                non_retryable=True,
+            )
+        # Mid-turn arrival is the handler's own declared decision — there is no global busy
+        # check. Rejecting HERE (in the validator, not the handler) means the message is
+        # never admitted: no turn is reserved, nothing enters history, and the caller gets a
+        # typed failure it can act on rather than silently waiting behind work it can't see.
+        # Safe to read turn state synchronously: the validator and the admission prologue run
+        # in the same workflow task, so this cannot go stale between the two.
+        if handler.mid_turn is MidTurn.REJECT and self._status.has_pending_work:
+            raise ApplicationError(
+                f"Function {message.type!r} declares mid_turn={MidTurn.REJECT.value!r} and "
+                f"the agent is busy.",
+                {
+                    "function": message.type,
+                    "current_turn": self._status.current_turn,
+                    "turn_participants": self._status.turn_participants,
+                },
+                type="MidTurnRejected",
+                non_retryable=True,
+            )
+
+    def _validate_tool_approval(self, decision: ToolApprovalDecision) -> None:
+        """Reject an approval for an unknown tool id, or one already resolved.
+
+        The latter is the idempotency guard: once a human has approved or denied a
+        gated call, a second ``tool_approval`` update for the same id fails rather than
+        flipping the settled decision. Runs before :meth:`_handle_tool_approval`."""
+        entry = self._status.approval_entry(decision.tool_id)
+        if entry is None:
+            raise ApplicationError(
+                f"no pending tool approval for tool_id={decision.tool_id!r}",
+                type="UnknownToolApproval",
+                non_retryable=True,
+            )
+        if entry.status is not _ApprovalStatus.PENDING:
+            raise ApplicationError(
+                f"tool approval for tool_id={decision.tool_id!r} is already {entry.status.value}",
+                type="ToolApprovalAlreadyResolved",
+                non_retryable=True,
+            )
+
+    async def _handle_tool_approval(self, decision: ToolApprovalDecision) -> ToolApprovalResult:
+        """Record a human approval decision; the gate's wait condition observes it on
+        the next workflow task and unblocks (approved → dispatch, denied → error).
+
+        DESIGN INVARIANT — keep this distinct from :meth:`_handle_send_agent_message`, and do
+        not advertise it via :meth:`_handle_agent_interface`. ``send_agent_message`` is the
+        front door that routes a message to the agent author's handler and is part of the
+        discovered interface; this handler is internal harness machinery the author
+        never sees (the gate resolves in-process). The separation is the human-in-the-loop
+        guardrail itself: a parent (non-human) agent drives a child only through the
+        front-door ``send_agent_message`` it discovers via ``agent_interface`` — so by
+        excluding approvals from that surface, an automating parent cannot approve its
+        child's gated tool calls. Approvals are intended to flow from a human/operator
+        out-of-band, never from the agent-to-agent channel; merging or publicizing this
+        would let the AI rubber-stamp its own dangerous calls, defeating the point.
+
+        ``remember`` ("approve, and stop asking me about this tool"): an approved decision
+        carrying it adds the tool to the live policy's allow-list, which also auto-resolves
+        any *other* still-pending call of the same tool (via :meth:`_apply_policy_update`).
+        It is a no-op on denial (there is no deny-list yet).
+
+        This decision is resolved AND its event published here, before the cascade — so its
+        ``tool_approval_resolved`` is causally ordered before the events of any call the
+        cascade auto-resolves as a consequence (see :meth:`_resolve_and_publish`)."""
+        entry = self._status.approval_entry(decision.tool_id)
+        self._resolve_and_publish(
+            decision.tool_id,
+            approved=decision.approved,
+            reason=decision.reason,
+            remember=decision.remember,
+        )
+        if decision.approved and decision.remember and entry is not None:
+            self._apply_policy_update(
+                self._status.approval_policy.with_tool_allowed(entry.tool_name)
+            )
+        return ToolApprovalResult(tool_id=decision.tool_id, accepted=True)
+
+    # -- Tool-approval policy ----------------------------------------------
+
+    @property
+    def current_approval_policy(self) -> ToolApprovalPolicy:
+        """The live :class:`ToolApprovalPolicy` the agent is running under."""
+        return self._status.approval_policy
+
+    @property
+    def current_status(self) -> AgentStatus:
+        """A current :class:`AgentStatus` snapshot for in-workflow handlers."""
+        return self._status.to_agent_status()
+
+    def set_approval_policy(self, policy: ToolApprovalPolicy) -> None:
+        """Swap the agent's tool-approval policy at runtime.
+
+        The public entry point for an agent author to relax (or tighten) approvals on the
+        fly — e.g. from a custom accepted-message handler that lets the user say "trust
+        this tool from now on". Relaxing the policy auto-resolves any pending call the new
+        policy now allows (see :meth:`_apply_policy_update`); the updated policy is
+        reflected on the ``agent_status`` query so a client can read and persist it. The
+        auto mode evaluator itself is separate and is not affected — though auto mode's
+        on/off switch is a field of this policy, so swapping one can turn the machine off.
+
+        This is also how AUTO MODE is switched on and off at runtime, since the switch is a
+        policy field: ``runner.set_approval_policy(runner.approval_policy.with_auto_mode(
+        False))`` hands every gated call back to the human gate without disturbing the
+        explicit allow-list the user has built up.
+        """
+        self._apply_policy_update(policy)
+
+    @property
+    def approval_policy(self) -> ToolApprovalPolicy:
+        """The live tool-approval policy — read it to derive the next one.
+
+        Exposed because a runtime toggle is almost always a modification of the CURRENT
+        policy rather than a fresh one: replacing it wholesale would silently discard an
+        allow-list that "approve & remember" had grown.
+        """
+        return self._status.approval_policy
+
+    @property
+    def auto_approval_criteria(self) -> AutoApprovalCriteria:
+        """The live auto-mode rulebook — read it to derive the next one."""
+        return self._status.auto_approval_criteria
+
+    def set_auto_approval_criteria(self, criteria: AutoApprovalCriteria) -> None:
+        """Swap the agent's auto-mode rulebook at runtime.
+
+        The public entry point for letting an end user set their own security posture
+        mid-session — add a criteria set, redefine what an existing one MEANS for every
+        tool pointed at it, change the catch-all, or retarget tools wholesale. Typically
+        called from an ``@agent.accepts`` handler that takes the user's posture as its
+        input model.
+
+        Takes effect on the NEXT gated call. An evaluation already in flight completes
+        against the criteria it started with: it is a cancellable task, but cancelling and
+        re-asking would charge a second model call for a question already being answered,
+        and the verdict it produces records the criteria version it applied — so a decision
+        made under superseded rules is identifiable rather than silently misattributed.
+
+        Unlike :meth:`set_approval_policy` this does NOT cascade over pending approvals.
+        Every pending call has already been put to the evaluator once and got back
+        ``ESCALATE`` (or it would not still be pending), and re-asking is structurally
+        impossible from a synchronous update handler anyway — so new criteria never
+        retroactively release a call that is already waiting on a person.
+        """
+        self._status.set_auto_approval_criteria(criteria)
+
+    def assign_tool_criteria(self, tool_name: str, criteria_set: str) -> None:
+        """Point ``tool_name`` at the criteria set named ``criteria_set``, at runtime.
+
+        Sugar over :meth:`set_auto_approval_criteria` with
+        :meth:`AutoApprovalCriteria.with_tool_assigned`, and the call a message handler
+        usually wants: retargeting ONE tool without touching the rule bodies. Works for
+        tools the agent author never wrote (an MCP server's, say), since assignment is by
+        name. Assigning a set that is not registered is not an error here — it resolves to
+        nothing at the gate, which escalates to a human, and the dangling name is recorded
+        on the evaluation so the typo is diagnosable.
+        """
+        self._status.set_auto_approval_criteria(
+            self._status.auto_approval_criteria.with_tool_assigned(tool_name, criteria_set)
+        )
+
+    def _policy_auto_approves(self, tool_name: str, *, inherently_safe: bool) -> bool:
+        """Whether the live serializable :class:`ToolApprovalPolicy` alone auto-approves
+        this call — i.e. it dispatches with no gate and no approval events at all.
+
+        The FIRST approval layer, and the only one that is synchronous and free. The
+        auto mode evaluator is deliberately NOT consulted here: it is a decision-maker
+        that may deny, may escalate, and may take an activity round-trip to answer, so it is
+        consulted from the gate (:func:`_apply_approval_policy`) — after the call has been
+        registered and published — rather than folded into a cheap boolean check."""
+        return self._status.approval_policy.auto_approves(
+            tool_name, inherently_safe=inherently_safe
+        )
+
+    def _policy_consults_auto_mode(self, tool_name: str, *, inherently_safe: bool) -> bool:
+        """Whether the live policy has AUTO MODE on for this call AND an evaluator to run.
+
+        Both halves are required. An evaluator with the switch off must not run; a switch
+        with no evaluator is rejected wherever a policy is installed
+        (:func:`_assert_auto_mode_has_an_evaluator`), so that half is a backstop rather than
+        a live branch. Checked here, at the gate, rather than folded into the policy,
+        because whether an evaluator is wired is a property of the agent's code and not of
+        its serializable policy.
+
+        Says nothing about CRITERIA — that is :meth:`_auto_mode_context`, which is the
+        one authority on whether an evaluator is invoked."""
+        if self._auto_mode_evaluator is None:
+            return False
+        return self._status.approval_policy.consults_auto_mode(
+            tool_name, inherently_safe=inherently_safe
+        )
+
+    def _auto_mode_context(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        *,
+        inherently_safe: bool,
+        tool_description: str | None,
+        declared_criteria_set: str | None,
+    ) -> AutoApprovalContext | None:
+        """The context to put to the evaluator, or ``None`` if auto mode must not decide
+        this call.
+
+        THE SINGLE AUTHORITY on whether an evaluator runs, and the reason
+        :attr:`AutoApprovalContext.criteria_set` can be non-optional. Three conditions, all
+        required:
+
+          1. the live :class:`ToolApprovalPolicy` has auto mode on for this call, and did
+             not already auto-approve it;
+          2. an evaluator is actually wired;
+          3. **a configured criteria set governs this tool** — a per-tool assignment, the
+             tool's own declared default, or the catch-all.
+
+        Condition 3 is enforced HERE, not by the evaluator. "Nobody wrote rules for this
+        tool" is not a judgment call: there is nothing to judge, so the answer is the human
+        gate, and asking a model to discover that would cost a call to learn what the
+        configuration already says. Leaving it to each implementation would make a safety
+        property of auto mode depend on every evaluator author remembering it — and an
+        evaluator that forgot would send an empty rulebook to a model, which is precisely
+        the input most likely to come back a confident approve.
+
+        No event is published when this returns ``None``: nothing was evaluated, so there
+        is no evaluation to bracket. That matches auto mode being off, and differs from an
+        ESCALATE, which is a verdict and does get a bracket."""
+        if not self._policy_consults_auto_mode(tool_name, inherently_safe=inherently_safe):
+            return None
+
+        criteria = self._status.auto_approval_criteria
+        criteria_set = criteria.for_tool(tool_name, declared=declared_criteria_set)
+        if criteria_set is None:
+            self._warn_ungoverned_tool(tool_name, criteria, declared_criteria_set)
+            return None
+
+        name = criteria.set_name_for(tool_name, declared=declared_criteria_set)
+        return AutoApprovalContext(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            inherently_safe=inherently_safe,
+            tool_description=tool_description,
+            criteria=criteria,
+            criteria_version=self._status.auto_approval_criteria_version,
+            # ``name`` cannot be None here: for_tool() resolved a set, which it only does
+            # after set_name_for() returned a name that is registered and non-empty.
+            criteria_set=criteria_set,
+            criteria_set_name=name or "",
+        )
+
+    def _warn_ungoverned_tool(
+        self,
+        tool_name: str,
+        criteria: AutoApprovalCriteria,
+        declared_criteria_set: str | None,
+    ) -> None:
+        """Warn when auto mode skipped a call because of a DANGLING set name.
+
+        Only for the dangling case. A tool with no set assigned anywhere and no catch-all
+        configured is a deliberate posture — the operator simply has not automated it — and
+        warning on every such call would be noise. A name that was assigned but is not
+        registered is a typo in the configuration, silently costing the operator the
+        automation they thought they had configured, so it is worth saying out loud."""
+        name = criteria.set_name_for(tool_name, declared=declared_criteria_set)
+        if name is None or not workflow.in_workflow():
+            return
+        workflow.logger.warning(
+            "Auto mode skipped tool %r: the criteria set %r it is assigned to is not "
+            "registered (or carries no rules), so there is nothing to judge it against and "
+            "the call went to the human gate. Register %r in AutoApprovalCriteria.sets, or "
+            "reassign the tool.",
+            tool_name,
+            name,
+            name,
+        )
+
+    async def _run_auto_mode_evaluator(
+        self,
+        ctx: AutoApprovalContext,
+        *,
+        tool_id: str,
+        stream: TurnStreamContext,
+    ) -> AutoApprovalDecision | None:
+        """Run the agent's auto mode evaluator over one gated call, publishing the
+        evaluation bracket around it.
+
+        Returns the verdict the GATE should act on, or ``None`` when there is nothing to act
+        on — no evaluator wired, the evaluator failed, or it was superseded. In every
+        ``None`` case the bracket has already been closed here with the terminal that says
+        which it was.
+
+        THE BRACKET IS PUBLISHED HERE, BY THE HARNESS, around ANY evaluator — so a developer
+        gets the observability by wiring one at all, not by remembering to instrument it.
+        ``auto_approval_evaluation_started`` goes out before the call and exactly one of
+        ``..._ended`` / ``..._superseded`` / ``..._error`` closes it. An evaluator does
+        arbitrarily slow work — the builtin Jev evaluator spends a model round-trip per
+        gated call — and a bracket is the only shape that makes that work visible while it
+        is happening, times it exactly off the two envelope timestamps, and leaves a hung
+        evaluator showing as an open bracket rather than as silence.
+
+        CANCELLATION. The evaluator runs as its OWN asyncio task, and this method races it
+        against the gate being settled by anyone else — a human's ``tool_approval``, a
+        relaxing policy cascade, or the agent closing. If the gate settles first the task is
+        cancelled: the guardrail has its answer, and an evaluator left running would keep
+        paying for a model call nobody is waiting for (and, for a Temporal activity, hold a
+        worker slot). That race is the entire reason an evaluator is required to be async —
+        a synchronous predicate runs to completion inside one activation with no seam to
+        cancel at. A cancelled evaluation closes on ``..._superseded``, never on
+        ``..._ended``: a verdict published as ended is one that was ACTED ON.
+
+        FAIL-SAFE, NOT FAIL-OPEN: an evaluator that raises — or returns something that is
+        not an :class:`AutoApprovalDecision`, which is the same kind of bug — escalates to
+        the human gate, never approves. A guardrail whose decision-maker is broken must fall back to the
+        human — and must not wedge the turn either, which is what letting the exception
+        propagate out of the gate would do (the call would fail with an error that is not an
+        approval decision, leaving its entry PENDING forever). The failure is published as
+        ``..._error`` and logged, never silently swallowed.
+        """
+        evaluator_fn = self._auto_mode_evaluator
+        if evaluator_fn is None:
+            return None
+        evaluation_id = workflow.uuid4().hex
+        evaluator = _evaluator_label(evaluator_fn)
+
+        def close(event: AgentStreamItem) -> None:
+            self._pub(stream.turn_id, stream.turn_number, event)
+
+        close(
+            AutoApprovalEvaluationStarted(
+                tool_id=tool_id,
+                tool_name=ctx.tool_name,
+                evaluation_id=evaluation_id,
+                evaluator=evaluator,
+            )
+        )
+
+        # Its own task, so the wait below can be interrupted and the evaluator cancelled.
+        # Started eagerly here rather than awaited inline: that is what makes "settled by
+        # someone else" an outcome the gate can reach at all.
+        task = asyncio.ensure_future(evaluator_fn(ctx))
+        settled = lambda: self._status.is_approval_resolved(tool_id) or self._closed  # noqa: E731
+        await workflow.wait_condition(lambda: task.done() or settled())
+
+        if settled():
+            # Someone else answered. Their decision stands whether or not the evaluator got
+            # far enough to disagree — first decision wins — but a verdict it DID reach is
+            # published anyway: an evaluator that would have denied a call a human waved
+            # through is exactly what an audit is looking for.
+            reached: AutoApprovalVerdict | None = None
+            if task.done() and not task.cancelled() and task.exception() is None:
+                reached = task.result().verdict
+            await _cancel_and_settle(task)
+            close(
+                AutoApprovalEvaluationSuperseded(
+                    tool_id=tool_id,
+                    tool_name=ctx.tool_name,
+                    evaluation_id=evaluation_id,
+                    evaluator=evaluator,
+                    verdict=reached,
+                )
+            )
+            return None
+
+        try:
+            decision = await task
+            if not isinstance(decision, AutoApprovalDecision):
+                raise TypeError(
+                    f"auto mode evaluator {evaluator!r} returned "
+                    f"{type(decision).__name__}; it must return an AutoApprovalDecision"
+                )
+        except Exception as e:
+            # ``workflow.logger`` is replay-aware but needs the workflow event loop, which
+            # an offline unit test of an evaluator does not have. Guarded rather than
+            # wrapped in another try/except so nothing — least of all the logging — can keep
+            # the fail-safe from running.
+            if workflow.in_workflow():
+                workflow.logger.exception(
+                    "auto mode evaluator %r raised for tool %r; escalating to the "
+                    "human approval gate",
+                    evaluator,
+                    ctx.tool_name,
+                )
+            close(
+                AutoApprovalEvaluationError(
+                    tool_id=tool_id,
+                    tool_name=ctx.tool_name,
+                    evaluation_id=evaluation_id,
+                    evaluator=evaluator,
+                    message=_exception_text(e),
+                )
+            )
+            return None
+
+        close(
+            AutoApprovalEvaluationEnded(
+                tool_id=tool_id,
+                tool_name=ctx.tool_name,
+                evaluation_id=evaluation_id,
+                evaluator=evaluator,
+                verdict=decision.verdict,
+                reason=decision.reason,
+                details=decision.details,
+            )
+        )
+        return decision
+
+    def _apply_policy_update(self, new_policy: ToolApprovalPolicy) -> None:
+        """Install ``new_policy`` and release any pending call it now auto-approves.
+
+        Swaps the live policy, then re-evaluates every still-PENDING approval against it:
+        each one the new policy now auto-approves is resolved AND its
+        :class:`ToolApprovalResolved` published here, in iteration order. Publishing at the
+        resolution site (rather than letting each parked gate publish on wake) is what keeps
+        causal order: gates wake together in registration order, which need not match the
+        order resolutions happened — so when this update is itself the consequence of an
+        explicit decision (an "approve & remember"), that decision's event has already been
+        published before any of these. A more *restrictive* update simply leaves pending
+        calls pending (they still need an explicit decision).
+
+        Only the POLICY is re-evaluated, never auto mode. Every pending entry has
+        already been put to the evaluator once, at its gate, and got back ``ESCALATE`` (or it
+        would not still be pending) — re-asking could not change the answer, and for an AI
+        approver it would mean paying for a second model call, per pending call, on every
+        policy change. It is also structurally impossible: this runs synchronously inside an
+        update handler, and an async evaluator cannot be awaited from there."""
+        _assert_auto_mode_has_an_evaluator(new_policy, self._auto_mode_evaluator)
+        self._status.set_approval_policy(new_policy)
+        for entry in self._status.pending_approval_entries():
+            if self._policy_auto_approves(
+                entry.tool_name, inherently_safe=entry.inherently_safe
+            ):
+                self._resolve_and_publish(
+                    entry.tool_id,
+                    approved=True,
+                    reason="auto-approved by updated policy",
+                )
+
+    def _resolve_and_publish(
+        self,
+        tool_id: str,
+        *,
+        approved: bool,
+        reason: str | None,
+        remember: bool = False,
+    ) -> None:
+        """Flip a pending approval to its decision and publish its resolution event NOW.
+
+        The single resolution site for explicit decisions and policy-update cascades, so
+        :class:`ToolApprovalResolved` events are emitted in the synchronous order the
+        decisions are made — preserving causal order across calls that resolve one another
+        (see :meth:`_apply_policy_update`). The close-while-pending auto-deny is the only
+        resolution NOT routed through here; the gate publishes that one itself."""
+        self._status.resolve_approval(tool_id, approved=approved, reason=reason, remember=remember)
+        self._publish_approval_resolved(tool_id)
+
+    def _publish_approval_resolved(self, tool_id: str) -> None:
+        """Publish the :class:`ToolApprovalResolved` for an already-resolved entry, against
+        the turn AND message that own the call — not the publisher's own ambient context. An
+        update handler driving a policy cascade is bound to neither: it may resolve several
+        calls belonging to different messages at once, so the routing has to come off each
+        entry, exactly as ``turn_id`` already did."""
+        entry = self._status.approval_entry(tool_id)
+        if entry is None:
+            return
+        self._pub(
+            entry.turn_id,
+            entry.turn_number,
+            ToolApprovalResolved(
+                tool_id=entry.tool_id,
+                tool_name=entry.tool_name,
+                approved=entry.status is _ApprovalStatus.APPROVED,
+                reason=entry.reason,
+                remember=entry.remember,
+            ),
+            message_id=entry.message_id,
+        )
+
+    # -- Callback tools -----------------------------------------------------
+
+    def _validate_provide_callback_result(self, result: CallbackResult) -> None:
+        """Reject a callback result for an unknown tool id, one already resolved, or (when a
+        result rather than an error is supplied) a payload that fails the tool's output type.
+
+        The unknown/already-resolved checks are the idempotency guard (a double-submit fails
+        rather than overwriting a settled result). The type check runs HERE, at the update
+        boundary, so a malformed payload is rejected synchronously WITHOUT consuming the
+        one-shot gate — the client learns immediately and can resubmit a corrected result.
+        Runs before :meth:`_handle_provide_callback_result`."""
+        entry = self._status.callback_entry(result.tool_id)
+        if entry is None:
+            raise ApplicationError(
+                f"no pending callback for tool_id={result.tool_id!r}",
+                type="UnknownCallback",
+                non_retryable=True,
+            )
+        if entry.status is not _CallbackStatus.PENDING:
+            raise ApplicationError(
+                f"callback for tool_id={result.tool_id!r} is already {entry.status.value}",
+                type="CallbackAlreadyResolved",
+                non_retryable=True,
+            )
+        # A client-reported error is a valid resolution regardless of the output type; only a
+        # positive result must match the declared output.
+        if result.error is None:
+            try:
+                entry.output_adapter.validate_python(result.result)
+            except ValidationError as e:
+                raise ApplicationError(
+                    f"callback result for tool_id={result.tool_id!r} does not match the "
+                    f"tool's declared output type. Validation error: {e}",
+                    {"tool_id": result.tool_id, "error": str(e)},
+                    type="MalformedCallbackResult",
+                    non_retryable=True,
+                )
+
+    async def _handle_provide_callback_result(self, result: CallbackResult) -> CallbackResultAck:
+        """Record an external client's result for a pending callback tool call; the tool's
+        in-workflow wait observes it on the next workflow task and unblocks (result → return
+        the validated value, error → raise to the model).
+
+        DESIGN INVARIANT — like :meth:`_handle_tool_approval`, this is internal harness
+        machinery kept OFF the ``agent_interface`` surface. A callback result is supplied by
+        the attached client that opted into implementing the tool on its own machine, an
+        out-of-band control-plane action — never by the agent-to-agent front door. Excluding it
+        from the discovered interface means a parent agent driving this one cannot fabricate a
+        callback result on its child's behalf.
+
+        The resolution event is published HERE (the resolution site), mirroring
+        :meth:`_resolve_and_publish` — so the ``ok``/``error`` :class:`CallbackResolved` is
+        emitted in the order results actually arrive. The timeout/close case, which no update
+        resolves, is published by the gate itself (:meth:`await_callback_result`)."""
+        entry = self._status.callback_entry(result.tool_id)
+        assert entry is not None  # guaranteed by the validator
+        if result.error is not None:
+            self._status.resolve_callback(
+                result.tool_id, outcome="error", result=None, error=result.error
+            )
+        else:
+            # Re-validate to obtain the coerced output object; the validator already confirmed
+            # it matches, so this cannot raise here.
+            validated = entry.output_adapter.validate_python(result.result)
+            self._status.resolve_callback(
+                result.tool_id, outcome="ok", result=validated, error=None
+            )
+        self._publish_callback_resolved(result.tool_id)
+        return CallbackResultAck(tool_id=result.tool_id, accepted=True)
+
+    def _publish_callback_resolved(self, tool_id: str) -> None:
+        """Publish the :class:`CallbackResolved` for an already-resolved entry, against the turn
+        AND message that own the call — not the publisher's own ambient context, since the
+        update handler resolving a callback is "in" neither (see
+        :meth:`_publish_approval_resolved`)."""
+        entry = self._status.callback_entry(tool_id)
+        if entry is None:
+            return
+        self._pub(
+            entry.turn_id,
+            entry.turn_number,
+            CallbackResolved(
+                tool_id=entry.tool_id,
+                tool_name=entry.tool_name,
+                outcome=entry.outcome,
+                error=entry.error,
+            ),
+            message_id=entry.message_id,
+        )
+
+    async def await_callback_result(
+        self,
+        *,
+        tool_id: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        output_adapter: TypeAdapter[Any],
+        output_schema: dict[str, Any],
+        timeout: timedelta | None,
+    ) -> Any:
+        """Park the current (callback) tool call until an external client supplies its result.
+
+        The generic body of every ``@agent.callback_tool_defn`` tool. Runs IN-WORKFLOW inside
+        the tool's :func:`tool_defn` wrapper — so it sits AFTER the approval gate and the
+        ``tool_start`` publish — and:
+
+          * registers the call as PENDING (also exposed via ``agent_status.pending_callbacks``);
+          * publishes :class:`CallbackRequested` (args + the expected ``output_schema``) so a
+            client can fulfill it on its own machine;
+          * waits — on a ``wait_condition`` so no activity timeout is consumed — for a
+            ``provide_callback_result`` update, an optional ``timeout``, or agent close.
+
+        On an ``ok`` result it returns the client's value (already validated + coerced to the
+        declared output type by the update handler). On a client-reported error, a timeout, or
+        close-while-pending it raises :class:`CallbackToolError`, which the surrounding
+        :func:`tool_defn` wrapper turns into a ``tool_error`` and surfaces to the model as an
+        error result — so a failed callback does not crash the turn.
+        """
+        ctx = self.current_stream_context
+        if ctx is None:
+            raise RuntimeError(
+                f"callback tool {tool_name!r} has no active turn to await a result against"
+            )
+        self._status.register_pending_callback(
+            tool_id,
+            tool_name,
+            tool_input,
+            output_schema,
+            ctx.turn_number,
+            ctx.turn_id,
+            ctx.message_id,
+            output_adapter,
+        )
+        self._pub(
+            ctx.turn_id,
+            ctx.turn_number,
+            CallbackRequested(
+                tool_id=tool_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                output_schema=output_schema,
+            ),
+        )
+        timed_out = False
+        try:
+            await workflow.wait_condition(
+                lambda: self._status.is_callback_resolved(tool_id) or self._closed,
+                timeout=timeout,
+            )
+        except TimeoutError:
+            # ``workflow.wait_condition(timeout=...)`` raises asyncio.TimeoutError (== builtin
+            # TimeoutError on 3.11+) when the deadline elapses with the condition still false.
+            timed_out = True
+
+        # CAUSAL ORDERING (mirrors the approval gate): the ok/error CallbackResolved is published
+        # at the resolution site (the update handler), in the order results arrive. The gate
+        # publishes ONLY the timeout/close case — the one no update resolved.
+        if not self._status.is_callback_resolved(tool_id):
+            outcome = self._status.finalize_callback(
+                tool_id, closed=self._closed, timed_out=timed_out
+            )
+            self._publish_callback_resolved(tool_id)
+        else:
+            outcome = self._status.finalize_callback(tool_id, closed=self._closed)
+
+        if outcome.outcome == "ok":
+            return outcome.result
+        raise CallbackToolError(tool_name, outcome.error)
+
+    def _handle_agent_status(self) -> AgentStatus:
+        return self._status.to_agent_status()
+
+    def _handle_agent_interface(self) -> list[AcceptedFunction]:
+        """Answer the discovery query with the agent's callable surface, tool-style.
+
+        One :class:`AcceptedFunction` per ``@agent.accepts`` handler — name, docstring
+        description, the input/output JSON schemas, and the handler's declared ``mid_turn``
+        and ``model_callable`` — all reachable through ``send_agent_message``.
+
+        EVERY handler is returned; nothing is filtered. That is deliberate, and it is not a
+        weakening: what a parent agent's model can actually reach is decided by which tools
+        its toolset was built with (``SubagentToolPolicy``), not by what this query admits
+        to — so filtering here would only be security-by-obscurity, while costing a
+        debugging UI the ability to discover an agent's full surface. ``model_callable``
+        travels with each handler so a parent can honor the author's intent by default.
+
+        The two harness-owned updates (``tool_approval``, ``provide_callback_result``) are
+        absent for a different reason: they are not ``@agent.accepts`` handlers at all. They
+        are resolved in-process by the harness and are reachable only from an out-of-band
+        human/client control plane, never through this front door."""
+        return [
+            AcceptedFunction(
+                name=h.name,
+                description=h.description,
+                parameters=h.input_type.model_json_schema(),
+                output=h.output_type.model_json_schema(),
+                mid_turn=h.mid_turn,
+                model_callable=h.model_callable,
+            )
+            for h in self._handlers.values()
+        ]
+
+    def _register_declared_states(self, agent: object) -> None:
+        """Publish every ``agent.state(...)`` declared on ``agent``'s class.
+
+        The declaration is the whole contract a workflow author has with state tracking::
+
+            class MyAgent:
+                plan = agent.state(PlanState)
+
+                @agent.accepts
+                async def handle(self, message: TextMessage) -> TextReply:
+                    with self.plan.mutate() as d:
+                        d.goal = message.text
+
+        The author only ever reads ``self.plan.current`` and writes inside
+        ``with self.plan.mutate() as d:``. They never choose a topic, build an event, pick a
+        granularity, or decide when to publish: the runner publishes an
+        :class:`AgentStateSnapshot` here and an :class:`AgentStatePatch` after every
+        ``mutate()`` block that actually changed something, onto the same ``turn_events``
+        stream as the rest of the agent's events. So the patches are durable, replayable and
+        offset-addressed for free, and they arrive *ordered against* ``tool_start`` /
+        ``reply_delta`` — a consumer can see exactly where in a turn the state moved.
+
+        Declaring on the class, not registering at runtime, is what lets static tooling
+        (the generated client types) list every state an agent publishes. A ref the author
+        read in ``__init__`` before the runner existed is attached as it stands: whatever it
+        committed then was published to no one, so it is part of the initial snapshot.
+        Snapshots go out in declaration order, so replay publishes them identically.
+        """
+        for state_id, decl in declared_states(type(agent)).items():
+            ref = state_ref(agent, decl)
+            self._states[state_id] = ref
+            self._publish_state_event(ref._attach(self._publish_state_event))
+
+    def _publish_state_event(self, event: StateEvent) -> None:
+        """Translate a state-layer event into a stream payload and publish it.
+
+        The state layer never imports the protocol (it is a leaf package), so the
+        translation lives here. Outside a turn — registration in ``@agent.init``, or any
+        other mutation made while the agent is idle — the event is stamped
+        ``turn_number=0``, so a consumer can replay these durably without folding them
+        into an agent-turn summary.
+        """
+        payload: AgentStreamItem
+        if isinstance(event, StateSnapshot):
+            payload = AgentStateSnapshot(
+                state_id=event.state_id, version=event.version, value=event.value
+            )
+        else:
+            payload = AgentStatePatch(
+                state_id=event.state_id, version=event.version, ops=event.ops
+            )
+        ctx = self.current_stream_context
+        if ctx is None:
+            self._pub("", 0, payload)
+        else:
+            self._pub(ctx.turn_id, ctx.turn_number, payload)
+
+    @property
+    def current_stream_context(self) -> TurnStreamContext | None:
+        """Carrier identifying the in-flight turn + message for activity-side publishing.
+
+        Read by code dispatching activities that need to publish back
+        to the workflow's stream (e.g. Gemini's streaming request path).
+        Threaded through opaquely — see :class:`TurnStreamContext`.
+
+        The turn half comes from the status; the ``message_id`` half is resolved HERE, from
+        the ambient :data:`_CURRENT_MESSAGE_ID` of the participant task reading the property.
+        That is why an inner loop AI SDK plugin needs no change to attribute its streamed deltas:
+        every plugin already snapshots this carrier from inside the handler it is running for, so
+        it picks up the right message by construction.
+        """
+        ctx = self._status.current_stream_context
+        if ctx is None:
+            return None
+        return ctx.model_copy(update={"message_id": _CURRENT_MESSAGE_ID.get()})
+
+    def _handle_close(self) -> None:
+        self._closed = True
+
+    # -- Turn loop ----------------------------------------------------------
+
+    async def run(self, agent: object) -> None:
+        """Drive the agent's turn loop to completion. The ``run`` that :func:`defn` generates
+        calls it between the agent's ``@agent.setup`` and ``@agent.teardown`` hooks; only an
+        agent declared with a bare ``@workflow.defn`` calls it directly.
+
+        This is the EXECUTION half of dispatch; admission is
+        :meth:`_handle_send_agent_message`, which only records intent and returns. This loop
+        wakes on that intent and runs each admitted message as its own asyncio task, routing
+        it to the matching ``@agent.accepts`` handler on ``agent`` (the validator has already
+        rejected unknown functions and coerced the payload) and bracketing it with
+        ``message_handler_start`` … ``message_handler_end`` (its return value).
+
+        A TURN IS THE INTERVAL THE AGENT IS NON-IDLE, and it is refcounted. Opening one
+        publishes ``turn_started``; ``turn_end`` follows only when the LAST participant
+        finishes. Queued messages each get their own turn and run one at a time; a
+        ``MidTurn.ACCEPT`` message admitted mid-turn JOINS the open turn and runs
+        concurrently with it, sharing its ``turn_id``. At most one turn is open at a time —
+        nothing else opens one — so nested or interleaved turn brackets cannot occur.
+
+        A handler that raises does NOT end the session: its error surfaces as that message's
+        :class:`MessageHandlerError` and the loop carries on — other participants of the same
+        turn are untouched.
+
+        On close, the loop waits for in-flight participants to finish before returning, so a
+        joined handler's work is never silently discarded.
+        """
+        while not self._closed:
+            await workflow.wait_condition(
+                lambda: self._status.can_open_turn or bool(self._joining) or self._closed
+            )
+            if self._closed:
+                break
+            # Joins first: they belong to the turn that is already open, and draining them
+            # before opening a new one keeps a participant from being stranded if the open
+            # turn finishes in this same task.
+            while self._joining:
+                self._spawn_participant(agent, self._joining.pop(0), joined=True)
+            if self._status.can_open_turn:
+                admitted = self._status.open_next_turn()
+                # A pure bracket, belonging to the TURN and not to the message that opened it
+                # — hence the explicit ``message_id=None``. What opened it is the
+                # ``message_accepted`` already published under this same ``turn_id``.
+                self._pub(
+                    admitted.turn_id,
+                    admitted.turn_number,
+                    TurnStarted(),
+                    message_id=None,
+                )
+                self._spawn_participant(agent, admitted, joined=False)
+
+        # CLOSE MUST DRAIN. ``_closed`` is only observed between iterations, so a
+        # participant spawned earlier may still be running. Wait on the refcount rather than
+        # ``workflow.all_handlers_finished``: a participant runs as a spawned task, not
+        # inside its update handler, so the handler-level signal would not see it. The
+        # refcount is also the same counter that closes the turn bracket, so "the turn ended"
+        # and "it is safe to complete" cannot disagree.
+        await workflow.wait_condition(lambda: not self._status.turn_active)
+
+    def _spawn_participant(self, agent: object, admitted: _Admission, *, joined: bool) -> None:
+        """Run one admitted message inside its turn, as its own asyncio task.
+
+        Spawned rather than awaited so several participants can share an open turn, and so
+        the loop stays responsive to the next admission. The task is retained until it
+        finishes purely to keep a strong reference (a bare ``create_task`` may be
+        garbage-collected mid-flight); turn accounting is the refcount's job, not the set's.
+
+        Its own task is also what gives the participant its own ``contextvars`` copy, which is
+        what lets :data:`_CURRENT_MESSAGE_ID` attribute concurrent participants of one shared
+        turn without either of them threading an id anywhere.
+        """
+        task = asyncio.ensure_future(self._run_participant(agent, admitted, joined=joined))
+        self._participant_tasks.add(task)
+        task.add_done_callback(self._participant_tasks.discard)
+
+    async def _run_participant(self, agent: object, admitted: _Admission, *, joined: bool) -> None:
+        """Dispatch one participant and close its half of the turn bracket.
+
+        Brackets the handler with ``message_handler_start`` and exactly one of
+        ``message_handler_end`` (its return value) / ``message_handler_error`` (it raised),
+        then drops its refcount — publishing ``turn_end`` only if it was the last one out.
+
+        Every event is stamped with the turn this participant belongs to, which for a join is
+        the turn it JOINED, and with this message's ``message_id``, parked in
+        :data:`_CURRENT_MESSAGE_ID` for the whole task so everything the handler causes —
+        deltas from a model activity, tool lifecycle, approval gates, subagent brackets — is
+        attributed without any of those call sites knowing about it. The var is set and never
+        reset: it is this task's own context, which ends with the task.
+        """
+        turn_id, turn_number = admitted.turn_id, admitted.turn_number
+        _CURRENT_MESSAGE_ID.set(admitted.message_id)
+        self._pub(turn_id, turn_number, MessageHandlerStart())
+        try:
+            result = await self._dispatch_turn(agent, admitted, joined=joined)
+        except Exception as e:  # noqa: BLE001 — surface ANY failure, keep the agent alive
+            self._pub(turn_id, turn_number, MessageHandlerError(message=str(e)))
+        except BaseException:
+            # Cancellation or workflow teardown — e.g. the instance is evicted (or the worker
+            # shuts down) while this participant is still parked, and the coroutine is resumed
+            # only to be closed. We are NOT on the workflow event loop here, so any publish
+            # would raise (``workflow.time()`` needs the loop). Drop the refcount so a
+            # still-live workflow's drain can complete, but publish nothing: this turn is being
+            # ABANDONED, not finished, and claiming ``turn_end`` would tell a client the agent
+            # went quiescent when in fact its work was discarded.
+            self._status.leave_turn()
+            raise
+        else:
+            self._pub(
+                turn_id,
+                turn_number,
+                MessageHandlerEnd(output=result.model_dump(mode="json")),
+            )
+        # Reached whether the handler returned or raised — both are real completions, unlike
+        # the teardown path above. Announce turn_end ONLY when this was the turn's LAST
+        # participant: it is the quiescence signal a client disconnects on, so emitting it
+        # while a joined handler is still working would be a lie. ``message_id=None`` because
+        # the bracket closes the TURN, not this message — the ambient id would misattribute it
+        # to whichever participant happened to leave last.
+        if self._status.leave_turn():
+            self._pub(turn_id, turn_number, TurnEnded(), message_id=None)
+
+    async def _dispatch_turn(
+        self, agent: object, admitted: _Admission, *, joined: bool
+    ) -> BaseModel:
+        """Dispatch one already-validated envelope to its handler, returning its reply model.
+
+        A handler that declared ``Injected[MessageContext]`` gets it supplied here — by
+        keyword, so it works wherever the author placed the parameter. It is deliberately
+        NOT part of the model-facing schema (see :data:`Injected`), so the handler can branch
+        on whether it opened its turn or joined one without that ever becoming a field a
+        caller could set.
+        """
+        envelope = admitted.message
+        handler = self._handlers[envelope.type]
+        arg = handler.input_type.model_validate(envelope.payload)
+        kwargs: dict[str, Any] = {}
+        if handler.ctx_param is not None:
+            kwargs[handler.ctx_param] = MessageContext(
+                joined_turn=joined,
+                turn_id=admitted.turn_id,
+                turn_number=admitted.turn_number,
+                message_id=admitted.message_id,
+            )
+        result = await getattr(agent, handler.name)(arg, **kwargs)
+        if not isinstance(result, handler.output_type):
+            raise ApplicationError(
+                f"handler {handler.name!r} returned {type(result).__name__}, "
+                f"expected {handler.output_type.__name__}",
+                type="BadHandlerReturn",
+                non_retryable=True,
+            )
+        return result
+
+    # -- Subagents ----------------------------------------------------------
+    #
+    # The runner-side surface the generated subagent toolset calls. The generated
+    # ``start_<key>`` / ``stop_<key>`` / ``send_<function>`` tools are inline ``tool_defn``
+    # closures that resolve the live runner from the ambient ``_CURRENT_RUNNER`` (set by
+    # ``run_tool`` for the duration of every tool call) and delegate here — so all subagent
+    # state lives on the runner, mutated deterministically in-workflow, with no holder object
+    # or ``has_self`` plumbing.
+
+    def _fresh_subagent_handle(self) -> str:
+        """A short, TREE-UNIQUE handle for a new subagent: this agent's own id plus one fresh
+        ``AGENT_ID_LENGTH``-char hex segment (e.g. ``<this agent's id>-a1b2c3``).
+
+        The model references subagents by this handle (cheap to reproduce), never by the full child
+        ``workflow_id``. It is ALSO pushed down as the child's ``AgentConfig.agent_id`` (see
+        :meth:`start_subagent`), so the child stamps this same id on its own events — letting a
+        client merging the streams label and group the child's events by the handle the parent knows
+        it by, with no risk of two agents in the tree sharing an id.
+
+        Tree-uniqueness rests on the reroll below: the fresh segment is regenerated until the full
+        handle is unused in THIS agent's registry, so this agent's children all get distinct
+        segments; prefixing with this agent's own (already tree-unique) id then extends uniqueness
+        across the entire subagent tree. The reroll is LOAD-BEARING for that guarantee — do not drop
+        it. ``workflow.uuid4`` is deterministic in-workflow (offline unit tests patch it)."""
+        while True:
+            candidate = f"{self._agent_id}-{workflow.uuid4().hex[:AGENT_ID_LENGTH]}"
+            if not self._status.has_subagent(candidate):
+                return candidate
+
+    async def start_subagent(
+        self,
+        agent_key: str,
+        workflow_type: str,
+        task_queue: str,
+        config: AgentConfig | None = None,
+        data: BaseModel | None = None,
+    ) -> str:
+        """Start a child agent workflow as a subagent and register it; return its short handle.
+
+        Mirrors ``session_manager.create_session`` — launches the registered ``workflow_type``
+        on ``task_queue`` with a standardized :class:`AgentConfig` — but tracks the child in
+        this runner's subagent registry instead. Returns a short ``handle`` (not the long child
+        ``workflow_id``) for the model to address THIS instance in later ``send_<function>`` /
+        ``stop_<key>`` calls (a parent may run several instances of one ``agent_key``); the
+        workflow-side resolves ``handle`` → ``workflow_id`` internally.
+
+        ``data`` is the child's init data, passed as its second workflow argument; ``None``
+        starts the child with its config alone."""
+        handle = self._fresh_subagent_handle()
+        workflow_id = f"{agent_key}-subagent-{workflow.uuid4()}"
+        # Push the handle down as the child's own agent_id so the child stamps it on every event
+        # it publishes — unifying "the id the parent references this subagent by" with "the id on
+        # the subagent's own stream", which is what lets a client merge the two streams coherently
+        # (and, since the handle is tree-unique, group by agent_id without collisions). This is the
+        # one config field the parent overrides per-child (everything else passes through
+        # unchanged); a caller-supplied agent_id would not match the parent's handle.
+        child_config = (config if config is not None else AgentConfig()).model_copy(
+            update={"agent_id": handle}
+        )
+        await workflow.start_child_workflow(
+            workflow_type,
+            args=[child_config] if data is None else [child_config, data],
+            id=workflow_id,
+            task_queue=task_queue,
+            # EXPLICIT: a subagent is owned by its parent and must never outlive it. If the
+            # parent closes for ANY reason (its own `close` signal, completion, failure,
+            # cancellation, or termination) before `stop_subagent` was called, the Temporal
+            # server terminates this child. We pin TERMINATE rather than rely on the SDK
+            # default so the guarantee can't silently change. (Graceful shutdown of a still-
+            # wanted subagent is the explicit `stop_subagent` path, which sends `close`.)
+            #
+            # TODO: we may prefer to handle parent shutdown more gracefully than a hard
+            # TERMINATE (which kills the child mid-turn with no cleanup — no `close` handling,
+            # no chance to finalize in-flight work). Two candidate approaches:
+            #   1. REQUEST_CANCEL — the server requests cancellation of the child on parent
+            #      close, letting a child that handles cancellation tear down gracefully
+            #      (requires the harness agent loop to treat cancellation as a clean stop).
+            #   2. A workflow finalization/cleanup hook on the parent that, before it exits,
+            #      stops every still-registered subagent through the SAME "front door" a
+            #      human/UI uses — i.e. `stop_subagent` → the `close` signal — so children
+            #      shut down via their normal graceful path rather than being killed by the
+            #      server. (This keeps shutdown semantics uniform with manual stops, but must
+            #      run on every parent-exit path, including failure/cancellation.)
+            parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
+        )
+        self._status.register_subagent(handle, workflow_id, agent_key)
+        # Announce the subagent on this agent's stream (against the in-flight turn). The
+        # ``workflow_id`` lets a consumer dynamically mount the subagent's own stream for a
+        # consolidated view — subagent streams are never mirrored onto this one.
+        self.publish(
+            SubagentStarted(subagent_id=handle, agent_key=agent_key, workflow_id=workflow_id)
+        )
+        return handle
+
+    async def stop_subagent(self, handle: str) -> None:
+        """Signal a subagent to close and drop it from the registry.
+
+        Raises ``UnknownSubagent`` if ``handle`` isn't one this agent started. Resolves the
+        handle to the child ``workflow_id``, sends it the harness ``close`` signal (the same one
+        a human/UI uses), publishes :class:`SubagentStopped` (so a consumer can unmount its
+        stream), then deregisters so a later ``send_<function>`` to ``handle`` is rejected."""
+        inst = self._status.subagent(handle)  # validate ownership (raises UnknownSubagent)
+        await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
+        self.publish(
+            SubagentStopped(
+                subagent_id=inst.handle,
+                agent_key=inst.agent_key,
+                workflow_id=inst.workflow_id,
+            )
+        )
+        self._status.remove_subagent(handle)
+
+    async def run_subagent_turn(
+        self, handle: str, msg_type: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Drive one turn of a subagent (by its short ``handle``) and return the reply ``output``.
+
+        The deterministic in-workflow half of a ``send_<function>`` tool: it resolves ``handle``
+        to the child instance, serializes turns to it through that subagent's FIFO gate (so
+        concurrent ``gather``-ed sends run in the model's call order, one at a time), then
+        dispatches the single ``run_subagent_turn`` activity against the real child
+        ``workflow_id`` with the resume ``from_offset``, and advances the local bookkeeping
+        on completion.
+
+        A ticket is taken **synchronously** (before the first ``await``) so gathered callers are
+        ordered by call order, not await scheduling. Errors propagate as :class:`ApplicationError`
+        (the tool layer renders them as an ``is_error`` result)."""
+        inst = self._status.subagent(handle)  # raises UnknownSubagent
+        ticket = inst.take_ticket()  # synchronous → FIFO admission in call order
+        await workflow.wait_condition(lambda: inst.is_serving(ticket) or self._closed)
+        if not inst.is_serving(ticket):
+            # Woke on agent close while still queued behind an earlier turn.
+            raise ApplicationError(
+                f"agent closed before subagent {handle!r} turn {ticket} could run",
+                type="AgentClosed",
+                non_retryable=True,
+            )
+        try:
+            # The dispatch marker (SubagentMessageSent) is published by the activity itself,
+            # WHEN it actually sends the message to the child — not here at execute_activity
+            # dispatch time (there's a real gap before the activity runs). Mirrors how tool
+            # activities publish tool_start from inside the activity. We pass the parent's turn
+            # context + handle/agent_key so the activity can publish onto THIS agent's stream;
+            # the activity's heartbeat memo dedupes the publish across retries (it only fires on
+            # a fresh send, never on a heartbeat-resume).
+            stream_context = self.current_stream_context
+            if stream_context is None:
+                raise ApplicationError(
+                    "run_subagent_turn called with no active turn to publish against",
+                    type="NoActiveTurn",
+                    non_retryable=True,
+                )
+            try:
+                result = await workflow.execute_activity(
+                    RUN_SUBAGENT_TURN_ACTIVITY,
+                    RunSubagentTurnInput(
+                        child_workflow_id=inst.workflow_id,
+                        type=msg_type,
+                        payload=payload,
+                        from_offset=inst.last_consumed_offset,
+                        handle=inst.handle,
+                        agent_key=inst.agent_key,
+                        parent_stream_context=stream_context,
+                    ),
+                    start_to_close_timeout=DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
+                    heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
+                    result_type=SubagentTurnResult,
+                )
+            except ApplicationError as e:
+                # A turn the child ACCEPTED but that then errored (or produced no reply) opened
+                # a bracket on our stream that must be closed. A pre-acceptance rejection ran
+                # no child turn, so there is nothing to close.
+                if e.type in ("SubagentTurnError", "SubagentNoReply"):
+                    # Close the bracket on the child's ACTUAL accepted turn number, which the
+                    # activity threads through the error details. The opening
+                    # ``subagent_message_sent`` was published with that same number
+                    # (``progress.turn_number``), and the close gate keys on
+                    # ``(workflow_id, subagent_turn)``; using one source on both sides makes
+                    # the key match by construction.
+                    accepted_turn = self._accepted_turn_from_error(e)
+                    # The child ran (and errored on) that turn — it still emitted its own
+                    # turn_end — so we MUST close the [message_sent … reply_received] bracket on
+                    # OUR stream, or a client merge would wedge waiting on a reply that never
+                    # comes. (A pre-acceptance rejection ran no child turn → no bracket → no
+                    # publish.) outcome="error" since this turn produced no usable reply.
+                    self._publish_subagent_reply_received(
+                        inst, msg_type, accepted_turn, outcome="error"
+                    )
+                raise
+            inst.last_consumed_offset = result.consumed_offset
+            # Close the bracket on OUR stream now that the agent (this workflow) actually holds
+            # the reply — BEFORE ``release_gate()`` in the finally, so this turn's reply_received
+            # is published ahead of the next gathered turn's message_sent (the merge relies on
+            # per-subagent brackets never overlapping; see run_subagent_turn's FIFO gate).
+            self._publish_subagent_reply_received(inst, msg_type, result.turn_number, outcome="ok")
+            return result.output
+        finally:
+            inst.release_gate()
+
+    @staticmethod
+    def _accepted_turn_from_error(e: ApplicationError) -> int:
+        """The child's ACTUAL accepted turn number, threaded through the activity's error details.
+
+        On an accepted-but-errored child turn the ``run_subagent_turn`` activity raises an
+        ``ApplicationError`` carrying ``{"subagent_turn": <the child's real accepted turn>}`` — the
+        SAME number the activity stamped on the opening ``subagent_message_sent``. We close the
+        bracket on that exact key so the client merge's close gate (keyed on
+        ``(workflow_id, subagent_turn)``) always matches. The activity is the only source of
+        that number on the parent side, so its absence is a contract violation, raised loudly
+        rather than guessed around."""
+        for detail in e.details or ():
+            if isinstance(detail, dict) and "subagent_turn" in detail:
+                return int(detail["subagent_turn"])
+        raise ApplicationError(
+            f"{e.type} error from run_subagent_turn carried no 'subagent_turn' detail",
+            type="SubagentProtocolError",
+            non_retryable=True,
+        ) from e
+
+    def _publish_subagent_reply_received(
+        self,
+        inst: _SubagentInstance,
+        handler: str,
+        subagent_turn: int,
+        *,
+        outcome: Literal["ok", "error"],
+    ) -> None:
+        """Publish the :class:`SubagentReplyReceived` close marker for one subagent turn.
+
+        Published IN-WORKFLOW (not from the activity) — the agent *is* the workflow, so
+        "received" must mean the AGENT (this workflow) has the reply in hand, not merely that the
+        ``run_subagent_turn`` activity (potentially on another machine) returned. In-workflow is
+        also deterministic and needs no heartbeat dedup, unlike the activity-published
+        ``subagent_message_sent`` (which must survive activity retries). Mirrors
+        ``SubagentMessageSent``'s correlation fields so a client stream-merge can match the
+        bracket on ``(workflow_id, subagent_turn)``.
+        """
+        self.publish(
+            SubagentReplyReceived(
+                subagent_id=inst.handle,
+                agent_key=inst.agent_key,
+                workflow_id=inst.workflow_id,
+                handler=handler,
+                subagent_turn=subagent_turn,
+                outcome=outcome,
+            )
+        )
+
+    def publish(self, event: AgentStreamItem) -> None:
+        """Publish an event against the in-flight turn (for custom intermediate events).
+
+        Most agents never need this — streaming (reply deltas, tool lifecycle) is handled
+        by the runner↔SDK integration and ``run_tool``. Use it from inside a handler to
+        emit a bespoke progress event. Raises if no turn is active.
+        """
+        ctx = self.current_stream_context
+        if ctx is None:
+            raise RuntimeError("publish() called with no active turn")
+        self._pub(ctx.turn_id, ctx.turn_number, event)
+
+    # -- Activity-side publishing helper -----------------------------------
+
+    @staticmethod
+    @asynccontextmanager
+    async def publisher_from_activity(
+        context: TurnStreamContext,
+        *,
+        batch_interval: timedelta | None = None,
+    ) -> AsyncIterator[TurnEventPublisher]:
+        """Open a :class:`TurnEventPublisher` from inside a Temporal activity.
+
+        Use from within a ``@activity.defn`` that needs to publish
+        turn events (e.g. ``reply_delta`` chunks from a streaming model
+        call) to its parent workflow's :class:`WorkflowStream`.
+
+        Encapsulates the :class:`WorkflowStreamClient` lifecycle (entered
+        for batched flushing, exited so the tail drains before the
+        activity returns) and the topic binding. Activities just call
+        ``publisher.publish(...)``.
+
+        Args:
+            context: Carrier identifying the workflow + turn to publish
+                against. Built on the workflow side via
+                :attr:`AgentWorkflowRunner.current_stream_context` and
+                forwarded opaquely through activity inputs.
+            batch_interval: Background flush cadence on the underlying
+                stream client — each flush is one Signal, so a longer interval
+                trades UI snappiness for fewer workflow-history events. ``None``
+                takes :data:`DEFAULT_PUBLISH_BATCH_INTERVAL` (50ms), which keeps
+                the UI feel snappy. An SDK integration should pass its own
+                configured cadence (e.g. the OpenAI plugin's
+                ``ModelActivityParameters.streaming_batch_interval``).
+
+        Yields:
+            A :class:`TurnEventPublisher` bound to the active workflow
+            (resolved from the activity context) and the given turn.
+        """
+        client = WorkflowStreamClient.from_within_activity(
+            batch_interval=(
+                DEFAULT_PUBLISH_BATCH_INTERVAL if batch_interval is None else batch_interval
+            ),
+        )
+        # ``from_within_activity`` targets the workflow that SCHEDULED this activity (always the
+        # publishing agent), so events land on the right stream. The agent's SHORT id to stamp them
+        # with is not derivable from ``activity.info()`` (which only knows the workflow_id), so it
+        # rides in on the threaded ``context`` (TurnStreamContext.agent_id).
+        async with client:
+            yield TurnEventPublisher(
+                events=client.topic(TURN_EVENTS_TOPIC, type=AgentEvent),
+                context=context,
+            )
+
+    # -- Tool execution -----------------------------------------------------
+
+    async def run_tool(
+        self,
+        call_id: str,
+        tool_callable: Callable[..., Awaitable[Any]],
+        /,
+        *args: Any,
+        injections: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Invoke one tool call, owning the per-call tool id for its lifecycle events.
+
+        ``call_id`` is the stable id correlating every event of this invocation
+        (``tool_requested`` → ``tool_start`` → ``tool_end``/``tool_error``). The same
+        tool may be requested several times in one turn, each with its own id — which
+        is why the id arrives here, per-invocation, rather than being baked into the
+        tool when it is declared to the model. ``run_tool`` parks it in the ambient
+        ``_CURRENT_TOOL_ID`` for the duration of the call, scoped to this asyncio
+        Task's context (so concurrent calls, even of the same tool, never collide).
+
+        ``injections`` supplies values for the tool's *injected* parameters (declared
+        via :data:`Injected`) — keyed by parameter name. These are filled by the
+        workflow, not the model, and are hidden from the model's tool schema; ``run_tool``
+        parks them in the ambient ``_CURRENT_TOOL_INJECTIONS`` for the dispatch machinery
+        to read (see :func:`_current_tool_injections`).
+
+        ``tool_callable`` is whatever executes the tool and is responsible for
+        publishing its own ``tool_start``/``tool_end`` events:
+
+        * an **activity tool** — an :func:`activity_tool_defn` object, whose dispatcher
+          calls :meth:`AgentToolContext.for_current_tool_id` to build the context it
+          ferries into the activity, where the decorator's activity body publishes;
+        * a **workflow tool** — a :func:`tool_defn` object, which runs inline and reads
+          the ambient tool id directly to publish in-process.
+
+        Either applies the agent's tool-approval policy first (gating the call when
+        required); that gate lives in the in-workflow prologue, not here. ``run_tool``
+        itself neither
+        dispatches activities nor publishes — that lives in the tool object so
+        ``tool_start`` means "now executing."
+        """
+        runner_token = _CURRENT_RUNNER.set(self)
+        tool_id_token = _CURRENT_TOOL_ID.set(call_id)
+        injections_token = _CURRENT_TOOL_INJECTIONS.set(injections)
+        closing = False
+        try:
+            return await tool_callable(*args, **kwargs)
+        except GeneratorExit:
+            # The coroutine is being closed after the workflow was evicted mid-call, from
+            # another context: the tokens cannot be reset there (it raises ValueError, which
+            # would turn the teardown into an ordinary handler error), and the context they
+            # belong to is being discarded anyway.
+            closing = True
+            raise
+        finally:
+            if not closing:
+                _CURRENT_TOOL_INJECTIONS.reset(injections_token)
+                _CURRENT_TOOL_ID.reset(tool_id_token)
+                _CURRENT_RUNNER.reset(runner_token)
+
+    # -- Internal -----------------------------------------------------------
+
+    def _pub(
+        self,
+        turn_id: str,
+        turn_number: int,
+        event: AgentStreamItem,
+        *,
+        message_id: str | None | _Ambient = _AMBIENT,
+    ) -> None:
+        """Wrap ``event`` in an :class:`AgentEvent` envelope and publish it.
+
+        ``message_id`` defaults to the AMBIENT one — the message whose participant task is
+        running right now (:data:`_CURRENT_MESSAGE_ID`) — which is what makes envelope-side
+        attribution free: a call site inside a dispatch says nothing and gets it right. Pass
+        an explicit ``None`` for the events that deliberately belong to no message
+        (``turn_started`` / ``turn_end``, the entry-carried approval + callback resolutions),
+        and an explicit id only where there is no ambient one to read: the admission prologue,
+        which publishes ``message_accepted`` for a message that has not started running yet.
+        """
+        self._events.publish(
+            AgentEvent(
+                event=event,
+                # This agent's own short id — so every event on the stream self-identifies its
+                # source agent for the client stream-merge (and a single-agent consumer can filter
+                # by it). For a subagent this is the handle its parent references it by.
+                agent_id=self._agent_id,
+                turn_id=turn_id,
+                turn_number=turn_number,
+                message_id=(
+                    _CURRENT_MESSAGE_ID.get() if isinstance(message_id, _Ambient) else message_id
+                ),
+                timestamp=workflow.time(),
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Shared tool helpers — signature/input introspection used by both tool decorators
+# ---------------------------------------------------------------------------
+
+
+def _signature_with_tool_ctx(user_sig: inspect.Signature) -> inspect.Signature:
+    """Return ``user_sig`` with a trailing ``tool_ctx: AgentToolContext = None`` param.
+
+    This is the wrapper's runtime ``__signature__``, read by ``@activity.defn`` to
+    build the activity's ``arg_types`` so Temporal serializes the context as the last
+    argument. The param is POSITIONAL_OR_KEYWORD (Temporal forbids keyword-only
+    activity args) and defaults to ``None`` so it can legally follow any of the user's
+    own defaulted params. It is NOT part of the decorator's *static* type — the
+    developer's call signature is preserved exactly (see ``_P``/``_R``).
+    """
+    params = list(user_sig.parameters.values())
+    params.append(
+        inspect.Parameter(
+            "tool_ctx",
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=None,
+            annotation=AgentToolContext,
+        )
+    )
+    return user_sig.replace(parameters=params)
+
+
+def _tool_input(
+    user_sig: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Best-effort dict of the user-facing args for a tool_start event's ``tool_input``."""
+    try:
+        bound = user_sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        return dict(bound.arguments)
+    except TypeError:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# @agent.activity_tool_defn / @agent.tool_defn — the tool decorators
+# ---------------------------------------------------------------------------
+#
+# Two decorators define agent tools: ``activity_tool_defn`` (durable, activity-backed)
+# and ``tool_defn`` (inline in the workflow). Each owns a single execution path and bakes
+# the optional human-approval gate into the in-workflow prologue (NEVER the activity), so
+# the wait can sit indefinitely without consuming the tool's activity timeout. ``run_tool``
+# stays a thin per-call funnel that parks the ambient tool id / runner / injections these
+# decorators read.
+
+
+@dataclass
+class _ToolSig:
+    """The schema-facing + dispatch-facing views of a tool's signature, computed once
+    at decoration time.
+
+    ``model_sig`` / ``model_annotations`` are what the model's schema is built from —
+    the user signature with ``self`` and every ``Injected[...]`` parameter removed.
+    ``user_params`` / ``inject_names`` / ``has_self`` are what dispatch needs to rebuild
+    the full call (model-supplied values + workflow-injected values) in the activity's
+    own parameter order.
+    """
+
+    user_sig: inspect.Signature
+    model_sig: inspect.Signature
+    model_annotations: dict[str, Any]
+    user_params: list[inspect.Parameter]
+    inject_names: tuple[str, ...]
+    has_self: bool
+    return_type: Any  # the tool's declared return type, or None if unannotated
+
+
+def _tool_signatures(user_fn: Callable[..., Any]) -> _ToolSig:
+    user_sig = inspect.signature(user_fn)
+    user_params = list(user_sig.parameters.values())
+    inject_names = _injected_param_names(user_fn)
+    has_self = bool(user_params) and user_params[0].name == "self"
+    hidden = set(inject_names) | ({"self"} if has_self else set())
+    model_sig = user_sig.replace(parameters=[p for p in user_params if p.name not in hidden])
+    model_annotations = {
+        k: v for k, v in getattr(user_fn, "__annotations__", {}).items() if k not in hidden
+    }
+    # Resolve the declared return type so an activity tool's dispatcher can ask
+    # ``execute_activity`` to reconstruct the typed result. Dispatching by activity NAME
+    # otherwise yields a raw dict for a model/dataclass return; this keeps the dispatcher
+    # honoring its own ``-> _R`` signature (resolves string annotations too).
+    try:
+        return_type = get_type_hints(user_fn).get("return")
+    except Exception:
+        ret = user_sig.return_annotation
+        return_type = None if ret is inspect.Signature.empty else ret
+    return _ToolSig(
+        user_sig=user_sig,
+        model_sig=model_sig,
+        model_annotations=model_annotations,
+        user_params=user_params,
+        inject_names=inject_names,
+        has_self=has_self,
+        return_type=return_type,
+    )
+
+
+def _apply_model_facing_views(
+    wrapper: Any, user_fn: Callable[..., Any], sig: _ToolSig, tool_name: str
+) -> None:
+    """Stamp the wrapper with the MODEL-facing name/doc/signature/annotations.
+
+    Deliberately does NOT set ``__wrapped__``: the schema builder (the plugin's
+    ``function_param``) reads these views directly, and a ``__wrapped__`` pointing at the
+    user fn would re-expose the hidden (``self`` / ``Injected[...]``) parameters to the
+    model. The static type stays the developer's own via the decorator's return cast."""
+    wrapper.__name__ = tool_name
+    wrapper.__qualname__ = tool_name
+    wrapper.__doc__ = user_fn.__doc__
+    wrapper.__module__ = user_fn.__module__
+    wrapper.__signature__ = sig.model_sig
+    wrapper.__annotations__ = sig.model_annotations
+
+
+def activity_tool_defn(
+    *,
+    inherently_safe: bool = False,
+    auto_approval_criteria: str | None = None,
+    activity_config: ActivityConfig | None = None,
+    name: str | None = None,
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    """Define a durable, activity-backed agent tool::
+
+        @agent.activity_tool_defn(
+            activity_config=ActivityConfig(start_to_close_timeout=timedelta(minutes=2)),
+        )
+        async def delete_workflow(store_display_name: Injected[str], workflow_id: str) -> str:
+            ...
+
+    The returned object is the **in-workflow dispatcher** — call it (the model's
+    function call resolves to it via ``run_tool``) and it binds the model args, applies the
+    agent's tool-approval policy (gating the call when required; see
+    :func:`_apply_approval_policy`), fills ``Injected[...]`` params from the ambient
+    injections, and executes the tool as a Temporal activity. Its durable body — the
+    auto-``@activity.defn``-wrapped function that publishes ``tool_start``/``tool_end``
+    from inside the running activity — is obtained with :func:`tool_activity` for worker
+    registration::
+
+        Worker(..., activities=[tool_activity(delete_workflow), ...])
+
+    ``name`` overrides the activity name (default: the function's ``__name__``).
+
+    ``inherently_safe=True`` asserts this tool is *never*, under any input, unsafe — a
+    static hint, NOT a decision to skip approval. Whether it is actually gated is up to
+    the agent's :class:`ToolApprovalPolicy` (the safe-by-default baseline gates everything;
+    only a policy that opts into ``auto_approve_inherently_safe`` lets a safe tool through).
+    Mark a tool safe ONLY if it is *always* safe; if it is even sometimes unsafe, leave it
+    ``False`` (the default).
+
+    ``auto_approval_criteria`` names the :class:`AutoApprovalCriteriaSet` this tool's calls
+    should be judged against when AUTO MODE decides them — the tool's DEFAULT choice, which
+    the operator's configuration or a runtime assignment outranks, and which means nothing
+    at all unless auto mode is switched on::
+
+        @agent.activity_tool_defn(auto_approval_criteria="financial")
+        async def issue_refund(order_id: str, amount_cents: int) -> Receipt: ...
+
+    A NAME, not the rules: a tool author is well placed to say *what kind of thing this
+    tool is* and badly placed to say how sure a machine must be before acting unattended,
+    or what the deploying operator's risk appetite is. The rules behind the name live in
+    :class:`AutoApprovalCriteria` as configuration, so the operator — usually the end user
+    of the product, not the agent's author — can redefine what ``"financial"`` means without
+    touching this code. A name nobody registered resolves to nothing, which escalates the
+    call to a human; that is the safe direction, and the dangling name is recorded on the
+    evaluation so the typo is visible.
+    """
+
+    def decorator(user_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+        sig = _tool_signatures(user_fn)
+        tool_name = name or user_fn.__name__
+        # The prose the model was shown when it chose to make this call. Carried to the
+        # approval gate so an auto mode evaluator — an AI approver above all — can judge
+        # what the tool actually DOES, not just what it is named.
+        tool_description = inspect.getdoc(user_fn)
+
+        # ---- activity body: runs in the worker, publishes lifecycle from within ----
+        async def activity_body(*args: Any, **kwargs: Any) -> Any:
+            *user_args, tool_ctx = args
+            if not isinstance(tool_ctx, AgentToolContext):
+                raise RuntimeError(
+                    f"agent tool {tool_name!r} ran as an activity without an "
+                    f"AgentToolContext trailing argument"
+                )
+            full_input = _tool_input(sig.user_sig, tuple(user_args), kwargs)
+            tool_input = {
+                k: v for k, v in full_input.items() if k not in sig.inject_names and k != "self"
+            }
+            async with AgentWorkflowRunner.publisher_from_activity(tool_ctx.stream_context) as pub:
+                pub.publish(
+                    ToolStartEvent(
+                        tool_id=tool_ctx.tool_id,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                    )
+                )
+                try:
+                    result = await user_fn(*user_args, **kwargs)
+                except Exception as e:
+                    pub.publish(
+                        ToolErrorEvent(
+                            tool_id=tool_ctx.tool_id, tool_name=tool_name, message=str(e)
+                        )
+                    )
+                    raise
+                pub.publish(
+                    ToolEndEvent(
+                        tool_id=tool_ctx.tool_id,
+                        tool_name=tool_name,
+                        tool_output=str(result),
+                    )
+                )
+                return result
+
+        activity_body.__name__ = tool_name
+        activity_body.__qualname__ = tool_name
+        activity_body.__doc__ = user_fn.__doc__
+        activity_body.__module__ = user_fn.__module__
+        activity_body.__signature__ = _signature_with_tool_ctx(sig.user_sig)  # type: ignore[attr-defined]
+        activity_body.__annotations__ = {
+            **getattr(user_fn, "__annotations__", {}),
+            "tool_ctx": AgentToolContext,
+        }
+        the_activity = activity.defn(name=tool_name)(activity_body)
+
+        config: ActivityConfig = {
+            **(
+                ActivityConfig(start_to_close_timeout=timedelta(seconds=30))
+                if activity_config is None
+                else activity_config
+            )
+        }
+        if "summary" not in config:
+            config["summary"] = "tool_call"
+
+        # ---- dispatcher: runs in-workflow (gate + execute_activity) ----
+        async def dispatch(*args: Any, **kwargs: Any) -> Any:
+            bound = sig.model_sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            model_input = dict(bound.arguments)
+            await _apply_approval_policy(
+                tool_name,
+                model_input,
+                inherently_safe=inherently_safe,
+                tool_description=tool_description,
+                auto_approval_criteria=auto_approval_criteria,
+            )
+
+            injections = _current_tool_injections() if sig.inject_names else {}
+            activity_args: list[Any] = []
+            for p in sig.user_params:
+                if sig.has_self and p.name == "self":
+                    continue
+                if p.name in sig.inject_names:
+                    if p.name not in injections:
+                        raise ApplicationError(
+                            f"tool {tool_name!r} requires injected argument "
+                            f"{p.name!r}, but run_tool was called without it",
+                            type="MissingInjection",
+                            non_retryable=True,
+                        )
+                    activity_args.append(injections[p.name])
+                else:
+                    activity_args.append(bound.arguments[p.name])
+            activity_args.append(AgentToolContext.for_current_tool_id())
+            # Dispatch by activity NAME, so pass result_type explicitly — otherwise a
+            # model/dataclass return comes back as a raw dict (Temporal can't infer the
+            # type from a name the way it would from a function reference).
+            return await workflow.execute_activity(
+                tool_name,
+                args=activity_args,
+                result_type=sig.return_type,
+                **config,
+            )
+
+        _apply_model_facing_views(dispatch, user_fn, sig, tool_name)
+        dispatch.activity = the_activity  # type: ignore[attr-defined]
+        dispatch.__agent_activity_tool__ = True  # type: ignore[attr-defined]
+        return cast("Callable[_P, Awaitable[_R]]", dispatch)
+
+    return decorator
+
+
+def tool_activity(tool: Callable[..., Any]) -> Callable[..., Any]:
+    """Return the registrable Temporal activity for an :func:`activity_tool_defn` tool.
+
+    The decorator returns the in-workflow *dispatcher*, typed as the developer's own
+    callable so the model-facing call signature is preserved; its durable activity body
+    lives on a ``.activity`` attribute that is invisible to type checkers. Use this to
+    register the activity on a worker without a per-call ``# type: ignore``::
+
+        Worker(..., activities=[tool_activity(get_page_outline), tool_activity(read_section)])
+
+    Raises :class:`TypeError` if ``tool`` was not produced by :func:`activity_tool_defn`
+    (e.g. a :func:`tool_defn` inline tool, which has no activity, or a plain function).
+    """
+    activity_fn = getattr(tool, "activity", None)
+    if not getattr(tool, "__agent_activity_tool__", False) or activity_fn is None:
+        name = getattr(tool, "__name__", None) or repr(tool)
+        raise TypeError(
+            f"{name} is not an @agent.activity_tool_defn tool, so it has no activity to "
+            f"register; tool_activity() requires a tool defined with "
+            f"@agent.activity_tool_defn (got {type(tool).__name__})."
+        )
+    return cast("Callable[..., Any]", activity_fn)
+
+
+def tool_defn(
+    *, inherently_safe: bool = False, auto_approval_criteria: str | None = None
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    """Define an agent tool that runs INLINE in the workflow (no activity)::
+
+        @agent.tool_defn()
+        async def summarize(text: str) -> str: ...
+
+        @agent.tool_defn(inherently_safe=True)
+        async def lookup(change: Injected[Change], note: str) -> str: ...
+
+    The returned object is invoked via ``run_tool`` within an active turn; it applies the
+    agent's tool-approval policy (gating the call when required; see
+    :func:`_apply_approval_policy`), publishes ``tool_start``/``tool_end`` (or
+    ``tool_error``) in-process, and fills ``Injected[...]`` parameters from the ambient
+    injections. ``inherently_safe`` is the same static safety hint as on
+    :func:`activity_tool_defn` (the policy, not the tool, decides enforcement), and
+    ``auto_approval_criteria`` is the same default criteria-set NAME for auto mode. Use for
+    deterministic, side-effect-free-ish work that belongs in the workflow itself; reach for
+    :func:`activity_tool_defn` when the work must cross into an activity (I/O,
+    nondeterminism, long-running).
+    """
+
+    def decorator(user_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+        sig = _tool_signatures(user_fn)
+        tool_name = user_fn.__name__
+        # The prose the model was shown when it chose to make this call. Carried to the
+        # approval gate so an auto mode evaluator — an AI approver above all — can judge
+        # what the tool actually DOES, not just what it is named.
+        tool_description = inspect.getdoc(user_fn)
+
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not workflow.in_workflow():
+                raise RuntimeError(f"workflow tool {tool_name!r} was invoked outside a workflow")
+            runner = _CURRENT_RUNNER.get()
+            ctx = runner.current_stream_context if runner is not None else None
+            tool_id = _CURRENT_TOOL_ID.get()
+            if runner is None or ctx is None or tool_id is None:
+                raise RuntimeError(
+                    f"workflow tool {tool_name!r} must be invoked via run_tool within "
+                    f"an active turn"
+                )
+            available = _current_tool_injections()
+            try:
+                inject_kwargs = {n: available[n] for n in sig.inject_names}
+            except KeyError as missing:
+                raise RuntimeError(
+                    f"workflow tool {tool_name!r} requires injected argument {missing} "
+                    f"but run_tool was called without it in injections="
+                ) from None
+
+            model_input = _tool_input(sig.model_sig, args, kwargs)
+            await _apply_approval_policy(
+                tool_name,
+                model_input,
+                inherently_safe=inherently_safe,
+                tool_description=tool_description,
+                auto_approval_criteria=auto_approval_criteria,
+            )
+
+            runner._pub(
+                ctx.turn_id,
+                ctx.turn_number,
+                ToolStartEvent(tool_id=tool_id, tool_name=tool_name, tool_input=model_input),
+            )
+            try:
+                result = await user_fn(*args, **inject_kwargs, **kwargs)
+            except Exception as e:
+                runner._pub(
+                    ctx.turn_id,
+                    ctx.turn_number,
+                    ToolErrorEvent(tool_id=tool_id, tool_name=tool_name, message=str(e)),
+                )
+                raise
+            runner._pub(
+                ctx.turn_id,
+                ctx.turn_number,
+                ToolEndEvent(tool_id=tool_id, tool_name=tool_name, tool_output=str(result)),
+            )
+            return result
+
+        _apply_model_facing_views(wrapper, user_fn, sig, tool_name)
+        wrapper.__agent_tool__ = True  # type: ignore[attr-defined]
+        return cast("Callable[_P, Awaitable[_R]]", wrapper)
+
+    return decorator
+
+
+def _assert_callback_stub(stub_fn: Callable[..., Any]) -> None:
+    """Enforce that a ``@callback_tool_defn`` target is an ``async def`` whose body is exactly
+    ``...``.
+
+    A callback tool declares only a *contract* — the harness supplies the body and an attached
+    client fulfills the call — so a real body would be dead code that never runs and would
+    mislead the author into thinking it executes. This parses the decorated function's source
+    and rejects anything but a lone ``...`` (an optional leading docstring is allowed). If the
+    source can't be read (e.g. a dynamically built function), the check is skipped rather than
+    failing — best-effort enforcement of the intended shape.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(stub_fn)))
+    except (OSError, TypeError, SyntaxError):
+        return  # source unavailable — can't verify the stub shape; skip.
+    node = next(
+        (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
+        None,
+    )
+    if node is None:
+        return
+    name = stub_fn.__name__
+    if not isinstance(node, ast.AsyncFunctionDef):
+        raise TypeError(
+            f"@agent.callback_tool_defn {name!r} must be declared `async def` — a callback "
+            f"tool is awaited like every other tool."
+        )
+    body = list(node.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]  # a leading docstring is allowed (it's the tool description)
+    is_ellipsis = (
+        len(body) == 1
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and body[0].value.value is Ellipsis
+    )
+    if not is_ellipsis:
+        raise TypeError(
+            f"@agent.callback_tool_defn {name!r} must have a body of exactly `...` — the "
+            f"harness supplies the implementation and an attached client fulfills the call. "
+            f"Declare only the signature (parameters + return type) and a docstring."
+        )
+
+
+def callback_tool_defn(
+    *,
+    inherently_safe: bool = False,
+    auto_approval_criteria: str | None = None,
+    name: str | None = None,
+    timeout: timedelta | None = None,
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    r"""Define a CALLBACK tool — one whose work runs on an EXTERNAL CLIENT, not the worker.
+
+    Use it when a tool needs state or an environment the agent's worker does not have — e.g. a
+    cloud-hosted coding agent reading a file on the *user's laptop*, or an agent asking the
+    user's phone to capture and upload a photo. The author declares only the tool's contract; the
+    body must be exactly ``...`` (enforced at import) — the harness provides a single generic
+    implementation and an attached client fulfills each call on its own machine::
+
+        class FileContents(BaseModel):
+            path: str
+            text: str
+
+        @agent.callback_tool_defn()
+        async def read_file(path: str) -> FileContents:
+            \"\"\"Read a file from the user's local machine.\"\"\"
+            ...   # never runs; the attached client executes it and returns the result
+
+    The returned object is a normal inline tool: it is invoked via ``run_tool`` within an active
+    turn and goes through the EXACT SAME path as every other tool — the agent's
+    :class:`ToolApprovalPolicy` gates it identically (a callback tool is not auto-anything; the
+    policy decides), and it publishes ``tool_start`` / ``tool_end`` / ``tool_error``. The only
+    difference is what happens between start and end: instead of running a body, it publishes a
+    :class:`CallbackRequested` event (the args + the JSON schema of the declared return type) and
+    parks on an in-workflow wait condition until a client submits the result via the
+    ``provide_callback_result`` update (see :class:`CallbackResult`). The client's payload is
+    validated against the return type before it becomes the tool's value; a client-reported error
+    or a timeout surfaces to the model as a tool error rather than crashing the turn.
+
+    ``name`` overrides the tool name (default: the function's ``__name__``). ``timeout`` bounds
+    the wait for a result (``None`` = wait indefinitely, durably — no activity timeout is
+    consumed). ``inherently_safe`` is the same static safety hint as on the other tool decorators
+    (the policy, not the tool, decides enforcement), and ``auto_approval_criteria`` is the
+    same default criteria-set name for auto mode.
+
+    Because it is an ordinary harness tool, a callback tool composes with Code Mode and subagent
+    toolsets for free.
+    """
+
+    def decorator(stub_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+        _assert_callback_stub(stub_fn)
+        tool_name = name or stub_fn.__name__
+        sig = _tool_signatures(stub_fn)
+        if sig.return_type is None:
+            raise TypeError(
+                f"@agent.callback_tool_defn {tool_name!r} must declare a concrete return type "
+                f"(the client's result is validated against it); got no return annotation."
+            )
+        output_adapter: TypeAdapter[Any] = TypeAdapter(sig.return_type)
+        output_schema = output_adapter.json_schema()
+
+        async def _impl(*args: Any, **kwargs: Any) -> Any:
+            # Reconstruct the model-facing args to hand to the fulfilling client: bind against the
+            # full user signature (so injected params don't break the bind), then drop the hidden
+            # ones — the same tool_input the surrounding tool_start carries.
+            full_input = _tool_input(sig.user_sig, args, kwargs)
+            tool_input = {
+                k: v for k, v in full_input.items() if k not in sig.inject_names and k != "self"
+            }
+            return await _current_runner().await_callback_result(
+                tool_id=_current_tool_id(),
+                tool_name=tool_name,
+                tool_input=tool_input,
+                output_adapter=output_adapter,
+                output_schema=output_schema,
+                timeout=timeout,
+            )
+
+        # Carry the author's contract onto the generated impl so tool_defn's introspection
+        # (signature → model schema, docstring → description, return type) reads the stub, not
+        # this generic *args/**kwargs shim.
+        _impl.__name__ = tool_name
+        _impl.__qualname__ = tool_name
+        _impl.__doc__ = stub_fn.__doc__
+        _impl.__module__ = stub_fn.__module__
+        _impl.__signature__ = sig.user_sig  # type: ignore[attr-defined]
+        _impl.__annotations__ = dict(getattr(stub_fn, "__annotations__", {}))
+
+        # Route through the standard inline-tool path so the callback tool gets the SAME
+        # approval gate and tool_start/tool_end/tool_error publishing as any other tool. The
+        # policy engine cannot tell — and does not need to tell — a callback tool apart.
+        return tool_defn(
+            inherently_safe=inherently_safe, auto_approval_criteria=auto_approval_criteria
+        )(cast("Callable[_P, Awaitable[_R]]", _impl))
+
+    return decorator

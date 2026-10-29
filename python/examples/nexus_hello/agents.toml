@@ -1,0 +1,31 @@
+# Registry of agents the Nexus-hello example UI can launch.
+#
+# The packaged FastAPI server (`temporal-agent-harness serve`) reads this file and passes the parsed registry
+# into the packaged SessionManagerWorkflow as its workflow init arg. The manager then serves
+# it back over the `available_agents` query, so the app server can expose it at /api/agents
+# without hardcoding the agent list.
+#
+# Bazel does not build this example, so this file is written by hand. `schema` is the agent's start
+# interface; rewrite it after changing the agent with:
+#   uv run temporal-agent-harness schema examples.nexus_hello.workflow:NexusHelloAgentWorkflow \
+#       -o examples/nexus_hello/NexusHelloAgent.schema.json
+
+[[agents]]
+key = "nexus-hello"
+workflow_type = "NexusHelloAgent"
+schema = "NexusHelloAgent.schema.json"
+task_queue = "nexus-hello"
+label = "Nexus Hello"
+description = """
+A hello-world OpenAI Agents SDK agent using nexus_tools_gateway() (agent_id inferred
+from this workflow_type, "NexusHelloAgent") and nexus_native_mcp_server():
+
+- demo_get_fun_fact (a 3rd-party MCP server, proxied through the Durable Tools Gateway
+  -- registered ahead of time under agent_id "NexusHelloAgent")
+- demo-nexus_get_lucky_number (a native Nexus tool service, reached directly -- no
+  gateway, no registration)
+- demo-nexus_get_delayed_lucky_number (a workflow-backed Nexus operation, reached
+  through the same direct service route)
+
+Needs `just setup-nexus`, the gateway, both tool services/servers, and `just
+register-third-party` run first — see examples/nexus_hello/README.md."""

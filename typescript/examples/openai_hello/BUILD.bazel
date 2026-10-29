@@ -1,0 +1,122 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:agents.bzl", "harness_agent_registry", "harness_ts_agent")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+npm_link_all_packages(name = "node_modules")
+
+# package.json's "type": "module" makes tsc emit ES modules (module: NodeNext) and Node load them.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+)
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
+    ],
+)
+
+# The SDK packages' optional peers this example uses, as MODULE.bazel hoists them: the SDKs load
+# them from Node (the schema tool imports agents.js, the worker its OpenAI plugin).
+js_library(
+    name = "sdk_peers",
+    deps = [
+        "//typescript:node_modules/@openai/agents-core",
+        "//typescript:node_modules/@openai/agents-openai",
+        "//typescript:node_modules/@temporalio/openai-agents",
+        "//typescript:node_modules/openai",
+    ],
+)
+
+# The worker bundles the compiled agents.js, so it and the node_modules it imports are runfiles of
+# :worker.
+ts_project(
+    name = "agents",
+    srcs = ["agents.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":node_modules/@openai/agents-core",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/workflow",
+        ":node_modules/zod",
+        ":sdk_peers",
+    ],
+)
+
+ts_project(
+    name = "worker_main",
+    srcs = ["worker.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":agents",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/envconfig",
+        ":node_modules/@temporalio/worker",
+        ":sdk_peers",
+    ],
+)
+
+# The OpenAIHelloAgentTs worker; reads OPENAI_API_KEY and the Temporal connection from the env.
+js_binary(
+    name = "worker",
+    data = [":worker_main"],
+    entry_point = "worker.js",
+)
+
+ts_project(
+    name = "agents.test",
+    testonly = True,
+    srcs = ["agents.test.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":agents",
+        ":node_modules/@openai/agents-core",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/client",
+        ":node_modules/@temporalio/testing",
+        ":node_modules/@temporalio/worker",
+    ],
+)
+
+harness_js_test(
+    name = "weather_question_streams_tool_call_and_reply_test",
+    data = [":agents.test"],
+    entry_point = "agents.test.js",
+    # agents-core would export traces to OpenAI from the worker.
+    env = {"OPENAI_AGENTS_DISABLE_TRACING": "1"},
+)
+
+harness_ts_agent(
+    name = "OpenAIHelloAgentTs",
+    description = """
+A hello-world OpenAI Agents SDK agent, in TypeScript. Chat in plain text; it replies in prose and
+can call one tool (get_weather) for a city's weather. Exists to show the harness streaming path
+for the OpenAI integration end to end — model call → streaming activity → live turn stream
+(reply_delta / tool_requested / tool_start / tool_end / model_interaction_*).""",
+    export = "OpenAIHelloAgentTs",
+    key = "openai-hello-ts",
+    label = "OpenAI Hello (TypeScript)",
+    module = "agents.js",
+    task_queue = "openai-hello-ts",
+    deps = [":agents"],
+)
+
+# agents.toml and its agent's schema document. `bazel test` fails when one is out of date;
+# `bazel run //typescript/examples/openai_hello:registry_update` rewrites them.
+harness_agent_registry(
+    name = "registry",
+    srcs = [
+        "OpenAIHelloAgentTs.schema.json",
+        "agents.toml",
+    ],
+    agents = [":OpenAIHelloAgentTs"],
+)

@@ -1,0 +1,282 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "AgentStateFlow",
+    srcs = ["AgentStateFlow.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":AgentStateNode",
+        ":AgentWorkflowNode",
+        ":AutoFitView",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@xyflow/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/state:nodeTween",
+    ],
+)
+
+js_library(
+    name = "AgentStateNode",
+    srcs = ["AgentStateNode.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@xyflow/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:JsonReply",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+    ],
+)
+
+js_library(
+    name = "AgentWorkflowNode",
+    srcs = ["AgentWorkflowNode.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":AgentStateNode",
+        "//typescript/apps/ui:node_modules/@xyflow/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+    ],
+)
+
+js_library(
+    name = "AutoFitView",
+    srcs = ["AutoFitView.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@xyflow/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+js_library(
+    name = "HotkeyHelp",
+    srcs = ["HotkeyHelp.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/state:replayHotkeys"],
+)
+
+js_library(
+    name = "LatencyWaterfall",
+    srcs = ["LatencyWaterfall.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:Reading",
+        "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:historyGap",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:textWidth",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
+)
+
+js_library(
+    name = "ModelBreakdown",
+    srcs = ["ModelBreakdown.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/cost:pricing"],
+)
+
+js_library(
+    name = "StepController",
+    srcs = ["StepController.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:dismissable.svelte",
+        "//typescript/apps/ui/src/lib/state:eventVelocity",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:scrubLane",
+    ],
+)
+
+js_library(
+    name = "UsageLineChart",
+    srcs = ["UsageLineChart.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":usageChart",
+        "//typescript/apps/ui:node_modules/@tanstack/charts",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+    ],
+)
+
+js_library(
+    name = "UsageReading",
+    srcs = ["UsageReading.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":ModelBreakdown",
+        ":UsageLineChart",
+        ":usageChart",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:Reading",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+    ],
+)
+
+js_library(
+    name = "WorkflowTimeline",
+    srcs = ["WorkflowTimeline.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":usageChart",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
+        "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+        "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
+)
+
+js_library(
+    name = "timelineMark",
+    srcs = ["timelineMark.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "usageChart",
+    srcs = ["usageChart.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/charts",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:timeTicks",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+    ],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "AgentStateNode_test",
+    src = "AgentStateNode.test.mjs",
+    deps = [
+        ":AgentStateNode",
+        ":AgentWorkflowNode",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "LatencyWaterfall_test",
+    src = "LatencyWaterfall.test.mjs",
+    deps = [
+        ":LatencyWaterfall",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+    ],
+)
+
+vitest_test(
+    name = "ModelBreakdown_test",
+    src = "ModelBreakdown.test.mjs",
+    deps = [
+        ":ModelBreakdown",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+    ],
+)
+
+vitest_test(
+    name = "StepController_test",
+    src = "StepController.test.mjs",
+    deps = [
+        ":StepController",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:scrubLane",
+    ],
+)
+
+vitest_test(
+    name = "UsageLineChart_test",
+    src = "UsageLineChart.test.mjs",
+    deps = [
+        ":UsageLineChart",
+        ":usageChart",
+        "//typescript/apps/ui:node_modules/@tanstack/charts",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "UsageReading_test",
+    src = "UsageReading.test.mjs",
+    deps = [
+        ":UsageLineChart",
+        ":UsageReading",
+        ":usageChart",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
+    ],
+)
+
+vitest_test(
+    name = "WorkflowTimeline_test",
+    src = "WorkflowTimeline.test.mjs",
+    deps = [
+        ":LatencyWaterfall",
+        ":WorkflowTimeline",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "timelineMark_test",
+    src = "timelineMark.test.ts",
+    deps = [":timelineMark"],
+)

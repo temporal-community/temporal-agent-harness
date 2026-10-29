@@ -1,0 +1,70 @@
+{
+  "description": "A queued and a joined message arriving during the same turn.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-hold",
+            "name": "ask_client",
+            "args": {
+              "question": "Continue?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "First."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-hold"
+    },
+    {
+      "action": "send",
+      "handler": "run_enqueue",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Queued."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "send",
+      "handler": "run_accept",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Joined."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "message_handler_end",
+      "send": 3
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-hold",
+      "result": "Yes."
+    }
+  ]
+}

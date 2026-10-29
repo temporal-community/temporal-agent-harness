@@ -1,0 +1,49 @@
+# Recipes for the OPTIONAL chat-platform front end.
+#
+# Nothing here is part of running the harness: the Python app (`just server` at the repo root)
+# is the primary surface and is unaffected by this directory. Run these only to reach your
+# agents from Slack or Discord. Needs only Bazel (bazelisk), which brings the pinned Node and
+# pnpm; no Python.
+#
+#     cd typescript/apps/chat-server
+#     just run
+#
+# Credentials live in THIS directory's .env.local — `cp .env.example .env.local` and fill it in.
+# Self-contained on purpose: the harness's own .env.local is untouched and unread here.
+
+set dotenv-path := ".env.local"
+set dotenv-load := true
+# A missing .env.local is fine: the recipes report which variable is absent, which is friendlier
+# than refusing to run at all (and `just check` needs no credentials whatsoever).
+set dotenv-required := false
+
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
+
+# List available recipes.
+default:
+    @just --list
+
+# Install the Node dependencies (the whole typescript/ workspace, which shares one lockfile).
+install:
+    {{pnpm}} --dir "{{justfile_directory()}}" install --frozen-lockfile
+
+# Type-check and run the test suite.
+check:
+    bazel test //typescript/apps/chat-server/...
+
+# Discord runs over the Gateway (an outbound WebSocket), so it needs no public URL — set
+# DISCORD_GATEWAY=0 to use the webhook route instead. Slack always needs a public URL.
+# Run the server. Enables whichever adapters have credentials in .env.local.
+run: _deps
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # HARNESS_URL defaults to the repo root's `just server` port, so .env.local only needs to
+    # set it when the Python app lives somewhere else.
+    export HARNESS_URL="${HARNESS_URL:-http://127.0.0.1:8000}"
+    {{pnpm}} --dir "{{justfile_directory()}}" run --silent dev
+
+# Install on first use, so `just run` works from a fresh clone with no separate step.
+_deps:
+    @[ -d node_modules ] || {{pnpm}} --dir "{{justfile_directory()}}" install --frozen-lockfile

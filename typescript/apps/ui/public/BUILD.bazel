@@ -1,0 +1,14 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "favicon",
+    srcs = ["favicon.svg"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "temporal-logo",
+    srcs = ["temporal-logo.svg"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)

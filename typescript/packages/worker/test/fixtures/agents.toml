@@ -1,0 +1,8 @@
+# A registry for the web API tests; `agent` is relative to this file.
+[[agents]]
+key = "typed-from-toml"
+workflow_type = "TypedProbeAgent"
+agent = "./workflows.ts#TypedProbeAgent"
+task_queue = "unused"
+label = "Typed (toml)"
+description = "TypedProbeAgent, loaded from a registry file."

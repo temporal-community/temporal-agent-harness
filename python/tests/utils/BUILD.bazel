@@ -1,0 +1,15 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_large_payload",
+    srcs = ["test_large_payload.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/utils:large_payload",
+        "//python/tests:conftest",
+        "@pypi//boto3",
+        "@pypi//moto",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)

@@ -9,7 +9,10 @@ five decorators and one type annotation — plus related helpers. For *how* Pyth
 
 | Annotation | Kind | For |
 |---|---|---|
-| `@agent.defn` | class decorator | Used *instead of* `@workflow.defn` (it applies it: `name=` sets the workflow type; other `@workflow.defn` settings go in `workflow_options=agent.WorkflowDefnOptions(...)`). Contract-checks the class is a valid harness agent (`run`/`__init__` takes exactly one `AgentConfig`), stamps its discovered `@agent.accepts` handlers at import, then registers it as a workflow. Fails fast on a malformed agent. |
+| `@agent.defn` | class decorator | Used *instead of* `@workflow.defn` (it applies it: `name=` sets the workflow type; other `@workflow.defn` settings go in `workflow_options=agent.WorkflowDefnOptions(...)`). Contract-checks the class is a valid harness agent (its `@agent.init` `__init__` takes an `AgentConfig` plus optionally one `data` model, and it defines no `run`), stamps its discovered `@agent.accepts` handlers at import, generates the workflow's `run`, then registers it as a workflow. Fails fast on a malformed agent. |
+| `@agent.init` | method decorator | Marks the agent's `__init__(self, config)`, where it builds its `AgentWorkflowRunner`. A second parameter takes the agent's own init data: `data: Model` (required) or `data: Model \| None = None` (optional). Both inputs are validated before `__init__` runs; invalid input, or missing required data, fails the workflow. Temporal's `@workflow.init`, re-exported. |
+| `@agent.setup` | method decorator | Optional. `async def (self) -> None`, awaited once after `__init__` and before the first message is handled. Messages that arrive meanwhile wait. |
+| `@agent.teardown` | method decorator | Optional. `async def (self) -> None`, awaited once after `close` drains in-flight messages, or when the workflow is cancelled. Skipped if setup never completed, and when the workflow fails. |
 | `@agent.accepts` | method decorator | Marks a typed, self-describing **operation** — `async def name(self, msg: InputModel) -> OutputModel`. Method name = operation name; input/output pydantic models = the schemas; docstring = the description; the return value becomes the turn's reply. The set of these is the agent's discoverable interface (`agent_interface`). Pure marker (sets an attribute; discovery happens in `@agent.defn`). |
 | `@agent.tool_defn` | decorator factory | An **inline** tool — runs in the workflow. |
 | `@agent.activity_tool_defn` | decorator factory | A **durable activity-backed** tool — runs as a retried Temporal activity. Returns the in-workflow dispatcher; the generated `@activity.defn` body is registered via `agent.tool_activity(t)`. |
@@ -34,15 +37,21 @@ Same `agent.*` namespace, but helpers/factories/types (not decorators):
 - `agent.tool_activity(tool)` — returns the registrable `@activity.defn` body for an
   `activity_tool_defn` tool (for the worker's `activities=[...]`).
 - `agent.subagent_toolset(...)` — factory: generates `start_/send_/stop_` tools from another agent's
-  interface (agents-as-subagents).
+  interface (agents-as-subagents). A child's init data never comes from the parent model:
+  `start_<key>` takes no arguments. For a child whose `@agent.init` takes `data`, `init_data=` is
+  a developer callable that supplies each new instance's data; without it the child starts with
+  none. A child whose `data` is required must be given `init_data=`, and the `subagent_toolset`
+  overloads make a type checker enforce that.
 - `agent.code_mode_tool(...)` — factory: the Code Mode tool (model-authored scripts over your tools).
 - `ToolApprovalPolicy`, `AgentToolContext`, `AutoApprovalContext`, `AutoModeEvaluator`
   (type alias), and exceptions `ToolApprovalDenied` / `CallbackToolError` — supporting types.
 
 ## Notes
 
-- Agents also use Temporal's own method decorators — `@workflow.init`, `@workflow.run`.
-  `@agent.defn` **replaces** `@workflow.defn` (and stacking both raises, since Temporal refuses to
+- `@agent.init` marks the agent's `__init__` (it is Temporal's `@workflow.init`, re-exported).
+  An agent does not write `@workflow.run`: `@agent.defn` generates it, awaiting the optional
+  `@agent.setup` method, the turn loop, then the optional `@agent.teardown` method, and raises if
+  the class defines `run` itself. `@agent.defn` **replaces** `@workflow.defn` (and stacking both raises, since Temporal refuses to
   define a class twice), just as `@agent.activity_tool_defn` **replaces** the need for
   `@activity.defn` (and forbids stacking it) — each generates the Temporal definition for you. See `python-idioms-for-java-spring-devs.md`.
 - **Slash commands** and the **operator interface** are *not* in this annotation set — they're

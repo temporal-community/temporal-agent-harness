@@ -1,0 +1,158 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "EndSessionDialog",
+    srcs = ["EndSessionDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/components/primitives:Chip"],
+)
+
+js_library(
+    name = "JsonReply",
+    srcs = ["JsonReply.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:LongContent",
+        "//typescript/apps/ui/src/lib/state:handlerReply",
+    ],
+)
+
+js_library(
+    name = "MarkdownMessage",
+    srcs = ["MarkdownMessage.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":JsonReply",
+        "//typescript/apps/ui:node_modules/@tanstack/markdown",
+        "//typescript/apps/ui:node_modules/remend",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:SafeImage",
+        "//typescript/apps/ui/src/lib/state:imagePolicy",
+    ],
+)
+
+js_library(
+    name = "SchemaForm",
+    srcs = ["SchemaForm.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":MarkdownMessage",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Select",
+    ],
+)
+
+js_library(
+    name = "SessionControls",
+    srcs = ["SessionControls.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":EndSessionDialog",
+        ":MarkdownMessage",
+        ":StartSessionDialog",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconAgent",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:Select",
+        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
+        "//typescript/apps/ui/src/lib/motion:inputClearDissolve",
+        "//typescript/apps/ui/src/lib/state:agentRunStorage",
+        "//typescript/apps/ui/src/lib/state:quickSwitch",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+    ],
+)
+
+js_library(
+    name = "StartSessionDialog",
+    srcs = ["StartSessionDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":MarkdownMessage",
+        ":SchemaForm",
+        ":schemaForm",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-virtual",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
+        "//typescript/apps/ui/src/lib/motion:inputClearDissolve",
+        "//typescript/apps/ui/src/lib/state:initData",
+        "//typescript/apps/ui/src/lib/state:quickSwitch",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+    ],
+)
+
+js_library(
+    name = "schemaForm",
+    srcs = ["schemaForm.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/svelte"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "JsonReply_test",
+    src = "JsonReply.test.mjs",
+    deps = [
+        ":JsonReply",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib:highlight",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "MarkdownMessage_test",
+    src = "MarkdownMessage.test.mjs",
+    tags = ["exclusive"],
+    deps = [
+        ":MarkdownMessage",
+        ":SchemaForm",
+        ":StartSessionDialog",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui:node_modules/vite",
+        "//typescript/apps/ui/src/lib/components/agent:CallInput",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "StartSessionDialog_test",
+    src = "StartSessionDialog.test.mjs",
+    deps = [
+        ":StartSessionDialog",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "schemaForm_test",
+    src = "schemaForm.test.mjs",
+    deps = [
+        ":SchemaForm",
+        ":schemaForm",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)

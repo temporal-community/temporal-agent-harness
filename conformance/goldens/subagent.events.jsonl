@@ -1,0 +1,37 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"name": "child", "step": "subagent_start"}, {"handler": "run_reject", "name": "child", "script": {"steps": [{"model": "scripted", "reply": ["Hi from the child."], "step": "model", "usage": null}]}, "step": "subagent_send"}, {"handler": "run_reject", "name": "child", "script": {"steps": [{"model": "scripted", "reply": ["Again."], "step": "model", "usage": null}]}, "step": "subagent_send"}, {"args": {"question": "Continue?"}, "id": "call-hold", "name": "ask_client", "step": "tool"}, {"name": "child", "step": "subagent_stop"}, {"model": "scripted", "reply": ["Done."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"agent_key": "scripted", "subagent_id": "agent-2", "type": "subagent_started", "workflow_id": "workflow-1"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"agent_key": "scripted", "from_offset": 0, "handler": "run_reject", "subagent_id": "agent-2", "subagent_turn": 1, "type": "subagent_message_sent", "workflow_id": "workflow-1"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"agent_key": "scripted", "handler": "run_reject", "outcome": "ok", "subagent_id": "agent-2", "subagent_turn": 1, "type": "subagent_reply_received", "workflow_id": "workflow-1"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"agent_key": "scripted", "from_offset": 9, "handler": "run_reject", "subagent_id": "agent-2", "subagent_turn": 2, "type": "subagent_message_sent", "workflow_id": "workflow-1"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"agent_key": "scripted", "handler": "run_reject", "outcome": "ok", "subagent_id": "agent-2", "subagent_turn": 2, "type": "subagent_reply_received", "workflow_id": "workflow-1"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-hold", "tool_input": {"question": "Continue?"}, "tool_name": "ask_client", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-hold", "tool_input": {"question": "Continue?"}, "tool_name": "ask_client", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output_schema": {"type": "string"}, "tool_id": "call-hold", "tool_input": {"question": "Continue?"}, "tool_name": "ask_client", "type": "callback_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"error": null, "outcome": "ok", "tool_id": "call-hold", "tool_name": "ask_client", "type": "callback_resolved"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-hold", "tool_name": "ask_client", "tool_output": "Yes.", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"agent_key": "scripted", "subagent_id": "agent-2", "type": "subagent_stopped", "workflow_id": "workflow-1"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Done.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": "Done."}, "type": "message_handler_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-2", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"model": "scripted", "reply": ["Hi from the child."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"type": "message_handler_start"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"text": "Hi from the child.", "type": "reply_delta"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"output": {"text": "Hi from the child."}, "type": "message_handler_end"}, "message_id": "message-2", "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-2", "turn_number": 1}
+{"agent_id": "agent-2", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"model": "scripted", "reply": ["Again."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-3", "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"type": "message_handler_start"}, "message_id": "message-3", "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-3", "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"text": "Again.", "type": "reply_delta"}, "message_id": "message-3", "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-3", "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"output": {"text": "Again."}, "type": "message_handler_end"}, "message_id": "message-3", "turn_id": "turn-3", "turn_number": 2}
+{"agent_id": "agent-2", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-3", "turn_number": 2}

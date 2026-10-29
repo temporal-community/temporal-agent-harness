@@ -1,0 +1,206 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# One target per test file and support module, depending on the files it imports.
+ts_project(
+    name = "activity-fs.test",
+    testonly = True,
+    srcs = ["activity-fs.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":disk-workflows",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src:plugin",
+        "//typescript/packages/worker/src/harness/code-mode:activity-fs",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+        "//typescript/packages/worker/src/harness/code-mode:okf",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+# The probe agent activity-fs.test bundles, with the node_modules it imports as runfiles.
+ts_project(
+    name = "disk-workflows",
+    testonly = True,
+    srcs = ["disk-workflows.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/workflow",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "driver.test",
+    testonly = True,
+    srcs = ["driver.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+ts_project(
+    name = "monty-stepper.test",
+    testonly = True,
+    srcs = ["monty-stepper.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":tools",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+ts_project(
+    name = "monty-pool.test",
+    testonly = True,
+    srcs = ["monty-pool.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@pydantic/monty",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+    ],
+)
+
+ts_project(
+    name = "okf.test",
+    testonly = True,
+    srcs = ["okf.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/activity",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/yaml",
+        "//typescript/packages/worker:node_modules/zod",
+        "//typescript/packages/worker/src:plugin",
+        "//typescript/packages/worker/src/harness/code-mode:activity-fs",
+        "//typescript/packages/worker/src/harness/code-mode:okf",
+        "//typescript/packages/worker/test:match",
+    ],
+)
+
+ts_project(
+    name = "stubs.test",
+    testonly = True,
+    srcs = ["stubs.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":tools",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+ts_project(
+    name = "tool.test",
+    testonly = True,
+    srcs = ["tool.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":tools",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+        "//typescript/packages/worker/test/fixtures:workflows",
+    ],
+)
+
+ts_project(
+    name = "tools",
+    testonly = True,
+    srcs = ["tools.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "vfs.test",
+    testonly = True,
+    srcs = ["vfs.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/@temporalio/testing",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src/harness/code-mode:monty-stepper",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+    ],
+)
+
+harness_js_test(
+    name = "activity-fs_test",
+    data = [":activity-fs.test"],
+    entry_point = "activity-fs.test.js",
+)
+
+harness_js_test(
+    name = "driver_test",
+    data = [":driver.test"],
+    entry_point = "driver.test.js",
+)
+
+js_test(
+    name = "monty-stepper_test",
+    data = [":monty-stepper.test"],
+    entry_point = "monty-stepper.test.js",
+)
+
+js_test(
+    name = "monty-pool_test",
+    data = [":monty-pool.test"],
+    entry_point = "monty-pool.test.js",
+)
+
+js_test(
+    name = "okf_test",
+    data = [":okf.test"],
+    entry_point = "okf.test.js",
+)
+
+js_test(
+    name = "stubs_test",
+    data = [":stubs.test"],
+    entry_point = "stubs.test.js",
+)
+
+js_test(
+    name = "tool_test",
+    data = [":tool.test"],
+    entry_point = "tool.test.js",
+)
+
+harness_js_test(
+    name = "vfs_test",
+    data = [":vfs.test"],
+    entry_point = "vfs.test.js",
+)

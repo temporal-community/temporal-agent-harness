@@ -1,0 +1,19 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+# Imports the OpenAI Agents plugin through pytest.importorskip (the `# keep` dep).
+harness_pytest_test(
+    name = "test_plugin",
+    srcs = ["test_plugin.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",  # keep
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:subagent_activities",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/utils:large_payload",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)

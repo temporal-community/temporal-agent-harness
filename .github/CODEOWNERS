@@ -1,7 +1,7 @@
 # Global code owners for this repository.
 * @Alex-Tideman @JasonSteving99 @long-nt-tran @JoshuaFrenchwood
 
-/temporal_agent_harness/ @JasonSteving99
-/ui/ @Alex-Tideman @shphrd
+/python/temporal_agent_harness/ @JasonSteving99
+/typescript/apps/ui/ @Alex-Tideman @shphrd
 /nexus/ @long-nt-tran @JoshuaFrenchwood
 /.github/workflows/ @JasonSteving99 @Alex-Tideman 

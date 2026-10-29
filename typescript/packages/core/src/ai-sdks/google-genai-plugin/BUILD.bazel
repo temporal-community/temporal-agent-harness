@@ -1,0 +1,94 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it. Every @google/genai import here is type-only: the workflow sandbox never loads the SDK.
+
+ts_project(
+    name = "index",
+    srcs = ["index.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":interactions-conversation",
+        ":interactions-models",
+        ":interactions-workflow",
+        ":temporal-async-client",
+        ":temporal-interactions",
+        ":workflow",
+    ],
+)
+
+ts_project(
+    name = "interactions-conversation",
+    srcs = ["interactions-conversation.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@google/genai",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+    ],
+)
+
+ts_project(
+    name = "interactions-models",
+    srcs = ["interactions-models.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = ["//typescript/packages/core:node_modules/@google/genai"],
+)
+
+ts_project(
+    name = "interactions-workflow",
+    srcs = ["interactions-workflow.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@google/genai",
+        "//typescript/packages/core/src/harness/agent-workflow:types",
+    ],
+)
+
+ts_project(
+    name = "temporal-async-client",
+    srcs = ["temporal-async-client.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":temporal-interactions",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core/src/harness:agent-workflow",
+    ],
+)
+
+ts_project(
+    name = "temporal-interactions",
+    srcs = ["temporal-interactions.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":interactions-models",
+        "//typescript/packages/core:node_modules/@google/genai",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core/src/harness:agent-workflow",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+    ],
+)
+
+ts_project(
+    name = "workflow",
+    srcs = ["workflow.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":temporal-async-client",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core/src/harness:agent-workflow",
+    ],
+)

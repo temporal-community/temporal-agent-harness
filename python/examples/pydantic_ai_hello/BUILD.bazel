@@ -1,0 +1,62 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "@pypi//pydantic_ai_slim",
+        "@pypi//temporalio",
+    ],
+)
+
+# DEFAULT_MODEL names an OpenAI model, which Pydantic AI imports `openai` for (the `# keep` dep).
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//openai",  # keep
+        "@pypi//pydantic_ai_slim",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "PydanticAIHelloAgent",
+    agent = "examples.pydantic_ai_hello.workflow:PydanticAIHelloAgentWorkflow",
+    description = """
+A hello-world Pydantic AI agent. Chat in plain text; it replies in prose and can call one
+tool (get_weather) for a city's weather. Exists to show the harness streaming path for the
+Pydantic AI integration end to end — model call → event_stream_handler in the model activity →
+live turn stream (reply_delta / tool_requested / tool_start / tool_end / model_interaction_*).""",
+    # The workflow module builds its OpenAI model provider at import time; writing the schema
+    # never calls it.
+    env = {"OPENAI_API_KEY": "unused"},
+    key = "pydantic-ai-hello",
+    label = "Pydantic AI Hello",
+    task_queue = "pydantic-ai-hello",
+    deps = [":workflow"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/pydantic_ai_hello:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "PydanticAIHelloAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":PydanticAIHelloAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)
