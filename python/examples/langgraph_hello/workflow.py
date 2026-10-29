@@ -34,7 +34,6 @@ with workflow.unsafe.imports_passed_through():
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import END, START, MessagesState, StateGraph
     from langgraph.prebuilt import ToolNode, tools_condition
-    from langgraph.types import Command
 
     from temporal_agent_harness.ai_sdks.langgraph import HarnessContext, graph
     from temporal_agent_harness.harness import agent
@@ -163,13 +162,7 @@ class LangGraphHelloAgentWorkflow:
             .compile(checkpointer=self._checkpointer)
             .with_config(recursion_limit=25)
         )
-        # A pending interrupt() (ask_user's question) takes this message as its answer.
-        pending = (await g.aget_state(g.config or {})).interrupts
-        result = await g.ainvoke(
-            Command(resume={i.id: message.text for i in pending})
-            if pending
-            else {"messages": [HumanMessage(message.text)]}
-        )
-        if interrupts := result.get("__interrupt__"):
-            return TextReply(text="\n".join(str(i.value) for i in interrupts))
+        # ask_user is a callback tool: the harness holds the turn open until the console
+        # answers it, so one message is one graph run.
+        result = await g.ainvoke({"messages": [HumanMessage(message.text)]})
         return TextReply(text=result["messages"][-1].text)

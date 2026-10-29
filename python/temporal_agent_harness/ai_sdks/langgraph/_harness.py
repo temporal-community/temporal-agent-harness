@@ -52,8 +52,8 @@ Build the graph with the harness context and the plugin's activity metadata:
 >>> g.add_edge("tools", "agent")
 
 In the agent, keep one checkpointer and run one turn per message (``graph()`` binds the turn, so
-call it in the handler; a pending ``interrupt()`` is resumed with ``Command(resume=...)``, as in
-``examples/langgraph_hello``):
+call it in the handler; a tool that calls ``interrupt()`` is resumed with ``Command(resume=...)``
+on the next message, as the agent in ``tests/ai_sdks/langgraph`` does):
 
 >>> g = graph("weather", self._runner).compile(checkpointer=self._checkpointer)
 >>> result = await g.ainvoke({"messages": [HumanMessage(message.text)]})

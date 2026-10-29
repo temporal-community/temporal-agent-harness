@@ -23,7 +23,7 @@ own module beside it, `ai_sdks/langgraph/_harness.py`, supplies the seams the pl
   `graph(GRAPH, self._runner, injections={"notes": self.notes})`, which binds one to the compiled
   graph: it snapshots the turn's stream context for the activity node and keeps the runner and
   the injections in the workflow for the tool node. The handler then calls `ainvoke` as any
-  LangGraph code would, resuming a pending `interrupt()` with `Command(resume=...)`.
+  LangGraph code would.
 - **One tool of each harness kind**, all in one prebuilt `ToolNode` that runs **in-workflow**;
   the plugin sets `harness_tool_call` as its `awrap_tool_call`, so every call goes through
   `AgentWorkflowRunner.run_tool` — where the approval gate and `tool_start`/`tool_end` events live:
