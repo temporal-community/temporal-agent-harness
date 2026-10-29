@@ -157,6 +157,8 @@ class LangGraphHelloAgentWorkflow:
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the assistant: ask about the weather in a city, ask it to remember something,
         or ask something ambiguous and it will ask you back."""
+        # graph() binds the turn: the workflow id is the checkpoint thread, so each turn
+        # continues the conversation, and the context carries the runner and injections.
         g = (
             graph(GRAPH, self._runner, injections={"notes": self.notes})
             .compile(checkpointer=self._checkpointer)
