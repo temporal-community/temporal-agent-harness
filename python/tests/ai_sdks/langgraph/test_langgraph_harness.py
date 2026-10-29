@@ -1,5 +1,5 @@
 # ABOUTME: Tests the LangGraph glue end to end on a local dev server with a fake chat model
-# ABOUTME: (streaming, tool gating, interrupts, heartbeats, replay), plus handler unit tests.
+# ABOUTME: (streaming, tool gating, callbacks, heartbeats, replay), plus handler unit tests.
 
 # pyright: reportMissingTypeStubs=false
 
@@ -32,7 +32,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, create_react_agent, tools_condition
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.pregel import Pregel
-from langgraph.types import Command, Send, interrupt
+from langgraph.types import Send
 from pydantic import BaseModel
 
 from temporalio import workflow
@@ -91,7 +91,7 @@ def _reply(messages: Sequence[BaseMessage]) -> list[AIMessageChunk]:
 
     The last human message's words pick the shape:
       "whoami"  -> one whoami call that tries to set the Injected user
-      "both"    -> get_weather and ask_user in one reply (ask_user interrupts)
+      "both"    -> get_weather and ask_user in one reply (ask_user is a callback)
       "weather" -> three get_weather calls, one without an id
       "ask"     -> one ask_user call
       "explode" -> raise after the tool results, non-retryable
@@ -191,10 +191,10 @@ async def whoami(user: Injected[str], greeting: str) -> str:
     return f"{greeting} {user}"
 
 
-@agent.tool_defn()
+@agent.callback_tool_defn(inherently_safe=True)
 async def ask_user(question: str) -> str:
-    """Ask the user a question."""
-    return str(interrupt(question))
+    """Ask the user a question; the client answers it within the turn."""
+    ...
 
 
 async def call_model(state: MessagesState) -> dict[str, Any]:
@@ -313,15 +313,8 @@ def functional_plugin() -> Any:
 
 
 async def turn(g: Pregel[Any, Any, Any, Any], text: str) -> str:
-    """One harness turn, as the hello example's handler: resume a pending interrupt or append."""
-    pending = (await g.aget_state(g.config or {})).interrupts
-    result = await g.ainvoke(
-        Command(resume={i.id: text for i in pending})
-        if pending
-        else {"messages": [HumanMessage(text)]}
-    )
-    if interrupts := result.get("__interrupt__"):
-        return "\n".join(str(i.value) for i in interrupts)
+    """One harness turn, as the hello example's handler: one message is one graph run."""
+    result = await g.ainvoke({"messages": [HumanMessage(text)]})
     return result["messages"][-1].text
 
 
@@ -379,18 +372,19 @@ class Session:
         self.pending: list[Any] = []
 
     async def turn(self, text: str) -> list[Any]:
-        """Send one message, approving every gated tool call, and return its events."""
+        """Send one message, approving gated calls and answering callbacks, and return its events."""
         events: list[Any] = []
         stream = await self.agent.send_message(
             "ask", {"text": text}, on_item=lambda item, _: item, timeout=30
         )
         async for item in stream:
             events.append(item)
-            if (
-                isinstance(item, AgentEvent)
-                and item.event.type == T.TOOL_APPROVAL_REQUESTED
-            ):
+            if not isinstance(item, AgentEvent):
+                continue
+            if item.event.type == T.TOOL_APPROVAL_REQUESTED:
                 await self.agent.approve_tool(item.event.tool_id, approved=True)
+            elif item.event.type == T.CALLBACK_REQUESTED:
+                await self.agent.provide_callback_result(item.event.tool_id, result="Paris")
         return events
 
     async def replay(self) -> None:
@@ -488,16 +482,13 @@ async def test_turn_streams_model_output_and_gates_tools(client: Client):
     await session.replay()
 
 
-async def test_prebuilt_react_agent_streams_gates_and_resumes(client: Client):
-    # create_react_agent sends each call to its ToolNode on its own, so the interrupt resumes.
-    session, [asked, resumed] = await run_session(
-        client, AgentConfig(), "both", "Paris", shape="prebuilt"
-    )
+async def test_prebuilt_react_agent_streams_and_gates(client: Client):
+    session, [events] = await run_session(client, AgentConfig(), "both", shape="prebuilt")
 
-    assert [e.tool_name for e in payloads(asked, T.TOOL_START)].count("get_weather") == 1
-    assert [e.text for e in payloads(resumed, T.REPLY_DELTA)][0] == "Answer: "
-    assert payloads(resumed, T.MODEL_INTERACTION_ENDED)[-1].usage.total_tokens == 5
-    assert [reply(asked), reply(resumed)] == ["Which city?", "Answer: It's sunny in Paris. | Paris"]
+    assert [e.tool_name for e in payloads(events, T.TOOL_START)].count("get_weather") == 1
+    assert [e.text for e in payloads(events, T.REPLY_DELTA)][0] == "Answer: "
+    assert payloads(events, T.MODEL_INTERACTION_ENDED)[-1].usage.total_tokens == 5
+    assert reply(events) == "Answer: It's sunny in Paris. | Paris"
     await session.replay()
 
 
@@ -530,62 +521,38 @@ async def test_slow_model_call_outlives_heartbeat_timeout(client: Client):
 
 
 async def test_functional_api_entrypoint_streams_and_gates_tools(client: Client):
-    session, [weather, asked, resumed] = await run_session(
-        client, AgentConfig(), "What's the weather?", "ask me", "Paris", shape="functional"
+    session, [weather, asked] = await run_session(
+        client, AgentConfig(), "What's the weather?", "ask me", shape="functional"
     )
 
     assert len(payloads(weather, T.TOOL_END)) == 3
     assert [e.text for e in payloads(weather, T.REPLY_DELTA)][0] == "Answer: "
     assert payloads(weather, T.MODEL_INTERACTION_ENDED)[-1].usage.total_tokens == 5
     assert reply(weather).startswith("Answer: It's sunny in Paris.")
-    assert [reply(asked), reply(resumed)] == ["Which city?", "Answer: Paris"]
+    assert reply(asked) == "Answer: Paris"
     await session.replay()
 
 
-async def test_next_message_resumes_pending_interrupt(client: Client):
-    session, turns = await run_session(client, AgentConfig(), "ask me", "Paris")
+async def test_callback_tool_is_answered_within_the_turn(client: Client):
+    session, [events] = await run_session(client, AgentConfig(), "ask me")
 
-    assert [reply(events) for events in turns] == ["Which city?", "Answer: Paris"]
-    # The interrupt ended "call-ask" with a tool_error; the resumed call is a new one.
-    asked, resumed = turns
-    assert [e.tool_id for e in payloads(asked, T.TOOL_ERROR)] == ["call-ask"]
-    [fresh] = [e.tool_id for e in payloads(resumed, T.TOOL_REQUESTED)]
-    assert fresh != "call-ask"
-    assert [e.tool_id for e in payloads(resumed, T.TOOL_START, T.TOOL_END)] == [fresh, fresh]
+    # The harness holds the turn open on callback_requested until the client answers.
+    assert [e.tool_id for e in payloads(events, T.CALLBACK_REQUESTED)] == ["call-ask"]
+    assert [e.tool_id for e in payloads(events, T.TOOL_START, T.TOOL_END)] == ["call-ask"] * 2
+    assert reply(events) == "Answer: Paris"
     await session.replay()
 
 
-REFUSED = (
-    "Answer: It's sunny in Paris. | Tool 'ask_user' asked the user for input, "
-    "which only works when it is the only tool call in a step."
-)
+@pytest.mark.parametrize("shape", ["state", "batch", "send"])
+async def test_callback_tool_runs_beside_other_calls(client: Client, shape: str):
+    session, [events] = await run_session(client, AgentConfig(), "both", shape=shape)
 
-
-@pytest.mark.parametrize(
-    ("shape", "texts", "replies"),
-    [
-        ("state", ["both"], [REFUSED]),
-        ("batch", ["both"], [REFUSED]),
-        (
-            "send",
-            ["both", "Paris"],
-            ["Which city?", "Answer: It's sunny in Paris. | Paris"],
-        ),
-    ],
-)
-async def test_interrupt_never_reruns_a_sibling_call(
-    client: Client, shape: str, texts: list[str], replies: list[str]
-):
-    session, turns = await run_session(client, AgentConfig(), *texts, shape=shape)
-
-    events = [e for turn in turns for e in turn]
-    started = payloads(events, T.TOOL_START)
-    assert [e.tool_name for e in started].count("get_weather") == 1
+    assert [e.tool_name for e in payloads(events, T.TOOL_START)].count("get_weather") == 1
     requested = {e.tool_id for e in payloads(events, T.TOOL_APPROVAL_REQUESTED)}
     resolved = {e.tool_id for e in payloads(events, T.TOOL_APPROVAL_RESOLVED)}
     assert requested == resolved
     assert session.pending == []
-    assert [reply(turn) for turn in turns] == replies
+    assert reply(events) == "Answer: It's sunny in Paris. | Paris"
     await session.replay()
 
 

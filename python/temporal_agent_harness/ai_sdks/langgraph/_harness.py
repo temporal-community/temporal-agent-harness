@@ -52,8 +52,7 @@ Build the graph with the harness context and the plugin's activity metadata:
 >>> g.add_edge("tools", "agent")
 
 In the agent, keep one checkpointer and run one turn per message (``graph()`` binds the turn, so
-call it in the handler; a tool that calls ``interrupt()`` is resumed with ``Command(resume=...)``
-on the next message, as the agent in ``tests/ai_sdks/langgraph`` does):
+call it in the handler):
 
 >>> g = graph("weather", self._runner).compile(checkpointer=self._checkpointer)
 >>> result = await g.ainvoke({"messages": [HumanMessage(message.text)]})
@@ -89,12 +88,9 @@ is in ``python/examples/langgraph_hello/README.md``):
 - Give every activity node a ``retry_policy``: Temporal retries an activity forever by default,
   and each attempt re-streams. A streamed node fails a model error carrying a 4xx
   ``status_code`` other than 408, 409 and 429 as non-retryable, so a bad key fails the turn once.
-- A tool may call ``interrupt()`` only as the sole call in its ``ToolNode`` invocation (one
-  ``Send`` per call makes every call its own invocation), because resume re-runs the whole
-  invocation. The resumed tool runs again from the start, approval gate included, and the
-  interrupt itself is reported as a ``tool_error`` event, which ends that ``tool_id``. The
-  resuming turn requests and runs the call again under a fresh ``tool_id``; the model still
-  sees one ``ToolMessage`` for its call.
+- Ask the user through a harness callback tool (``@agent.callback_tool_defn``), not LangGraph's
+  ``interrupt()``: the harness holds the turn open until the client answers, so one message is
+  one graph run. An ``interrupt()`` pauses the graph instead, and nothing resumes it.
 - Set a ``recursion_limit`` on the compiled graph; ``run_turn`` takes no config, and a model can
   re-call a denied tool indefinitely. Reaching the limit fails the turn.
 
@@ -108,7 +104,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import suppress
 from datetime import timedelta
@@ -138,10 +133,10 @@ try:
     from langchain_core.outputs import ChatGenerationChunk, GenerationChunk, LLMResult
     from langchain_core.runnables import RunnableConfig
     from langchain_core.runnables.config import run_in_executor, var_child_runnable_config
-    from langgraph._internal._constants import CONFIG_KEY_RUNTIME, CONFIG_KEY_SCRATCHPAD
+    from langgraph._internal._constants import CONFIG_KEY_RUNTIME
     from langgraph._internal._runnable import RunnableCallable
     from langgraph.constants import TAG_NOSTREAM
-    from langgraph.errors import GraphBubbleUp, GraphInterrupt
+    from langgraph.errors import GraphBubbleUp
     from langgraph.graph import StateGraph
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.prebuilt import ToolNode
@@ -217,7 +212,6 @@ class HarnessContext(BaseModel):
         default_factory=dict, exclude=True, repr=False
     )
     stream_context: TurnStreamContext | None = None
-    _task_calls: Counter[str | None] = PrivateAttr(default_factory=Counter)
     _call_ids: set[str] = PrivateAttr(default_factory=set)
 
     @model_validator(mode="after")
@@ -344,8 +338,7 @@ async def harness_tool_call(
     Arguments are validated against the tool's schema before the tool runs.
     Invalid arguments and a failed or denied
     call become an error ``ToolMessage``; cancellation and nondeterminism
-    errors propagate. ``interrupt()`` propagates only from
-    the step's sole tool call; beside other calls it becomes an error.
+    errors propagate.
     """
     if request.tool is None:
         return await execute(request)
@@ -365,18 +358,12 @@ async def harness_tool_call(
         )
     call = request.tool_call
     name = call.get("name", "")
-    task: str | None = None  # one LangGraph task = one ToolNode invocation
     try:
-        task = request.runtime.config.get("metadata", {}).get("langgraph_checkpoint_ns")
-        context._task_calls[task] += 1
         # Clients see the provider's id; a missing or repeated one gets a fresh id. A missing
         # one is written back into the AIMessage's dict, which reaches the state only when the
-        # node received the state itself, not a Send copy of the call. A call re-run to resume
-        # its interrupt() already ended in a tool_error, so it is a new call to clients too.
-        scratchpad = request.runtime.config.get("configurable", {}).get(CONFIG_KEY_SCRATCHPAD)
-        resumed = bool(getattr(scratchpad, "resume", None))
+        # node received the state itself, not a Send copy of the call.
         call_id = call["id"] or ""
-        minted = not call_id or call_id in context._call_ids or resumed
+        minted = not call_id or call_id in context._call_ids
         if minted:
             call_id = str(workflow.uuid4())
         context._call_ids.add(call_id)
@@ -390,19 +377,6 @@ async def harness_tool_call(
         args = _schema_args(request.tool.tool_call_schema, call["args"], tool)
         result = await context.runner.run_tool(
             call_id, tool, injections=context.injections, **args
-        )
-    except GraphInterrupt:
-        # Resume re-runs the whole node, so only a lone call may interrupt. ToolNode
-        # gathers a step's calls, so one yield lets every sibling register first.
-        await asyncio.sleep(0)
-        if task is not None and context._task_calls[task] == 1:
-            raise
-        return ToolMessage(
-            f"Tool {name!r} asked the user for input, which only works when it "
-            "is the only tool call in a step.",
-            name=name,
-            tool_call_id=call.get("id") or "",
-            status="error",
         )
     except GraphBubbleUp:
         raise
