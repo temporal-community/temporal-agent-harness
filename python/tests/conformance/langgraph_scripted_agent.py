@@ -189,7 +189,7 @@ class LangGraphScriptedAgent:
             ),
         )
         self.subagents: dict[str, str] = {}
-        self._checkpointer = InMemorySaver()
+        self._graph = graph(GRAPH, self._runner, agent=self).compile(checkpointer=InMemorySaver())
         self._thread = {"configurable": {"thread_id": workflow.info().workflow_id}}
 
     @agent.accepts(mid_turn=MidTurn.REJECT)
@@ -208,13 +208,10 @@ class LangGraphScriptedAgent:
         return await self._play(script)
 
     async def _play(self, script: Script) -> ScriptReply:
-        g = (
-            graph(GRAPH, self._runner, agent=self)
-            .compile(checkpointer=self._checkpointer)
-            .with_config(self._thread)
+        await self._graph.ainvoke(
+            {"messages": [HumanMessage(script.model_dump_json())]}, self._thread
         )
-        await g.ainvoke({"messages": [HumanMessage(script.model_dump_json())]})
-        state = await g.aget_state(g.config or {})
+        state = await self._graph.aget_state(self._thread)
         return ScriptReply(text="".join(state.values["reply"]))
 
 

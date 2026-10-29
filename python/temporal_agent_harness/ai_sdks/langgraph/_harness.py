@@ -7,10 +7,10 @@ The harness owns the session, the turn event stream, tool approvals and clients.
 the inner loop, made durable by ``temporalio-langgraph``. This module connects them:
 
 - ``graph(name, runner, injections=...)`` (and ``entrypoint`` for the Functional API) is the
-  plugin's lookup bound to the turn: the compiled graph runs with a :class:`HarnessContext`, the
-  graph's ``context_schema``, which carries the harness runner and tool injections inside the
-  workflow and the turn's stream context into activity nodes. Everything else, the checkpointer
-  and its ``thread_id`` included, is the caller's, as in any LangGraph code.
+  plugin's lookup bound to the harness: the compiled graph runs with a :class:`HarnessContext`,
+  the graph's ``context_schema``, which carries the harness runner and tool injections inside the
+  workflow and the turn in flight's stream context into activity nodes. Everything else, the
+  checkpointer and its ``thread_id`` included, is the caller's, as in any LangGraph code.
 - An activity node with ``"stream_to_harness": True`` in its metadata (or a task's
   ``activity_options``) has its chat-model calls publish ``model_interaction_started``,
   ``reply_delta``, ``thought_summary`` and ``model_interaction_ended`` (with token usage) onto
@@ -52,15 +52,13 @@ Build the graph with the harness context and the plugin's activity metadata:
 >>> g.add_conditional_edges("agent", route, ["tools", END])
 >>> g.add_edge("tools", "agent")
 
-In the agent, keep one checkpointer and run one turn per message (``graph()`` binds the turn, so
-call it in the handler):
+In the agent, compile once in ``@agent.init`` and run one turn per message on the conversation's
+thread:
 
->>> g = (
-...     graph("weather", self._runner)
-...     .compile(checkpointer=self._checkpointer)
-...     .with_config(configurable={"thread_id": self._thread_id})  # the conversation
-... )
->>> result = await g.ainvoke({"messages": [HumanMessage(message.text)]})
+>>> self._graph = graph("weather", self._runner).compile(checkpointer=InMemorySaver())
+...
+>>> config = {"recursion_limit": 25, "configurable": {"thread_id": workflow.info().workflow_id}}
+>>> result = await self._graph.ainvoke({"messages": [HumanMessage(message.text)]}, config)
 >>> reply = result["messages"][-1].text
 
 On the client, register ``LangGraphPlugin`` before ``AgentHarnessPlugin`` so the harness's data
@@ -117,7 +115,8 @@ from inspect import iscoroutinefunction, signature
 from typing import Any, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializerFunctionWrapHandler
+from pydantic import SerializationInfo, model_serializer
 from pydantic_core import to_jsonable_python
 
 _INSTALL_MESSAGE = (
@@ -200,14 +199,15 @@ class _Publisher(Protocol):
 
 
 class HarnessContext(BaseModel):
-    """LangGraph runtime context for one harness turn.
+    """LangGraph runtime context for a harness agent's graph.
 
-    Declare it as the graph's ``context_schema``; ``graph()`` makes one per
-    turn. Only ``stream_context``, snapshotted from ``runner`` on the workflow
-    side, crosses into activity nodes; ``runner`` and ``injections`` stay in
-    the workflow for :func:`harness_tool_call`. A subclass may add fields,
-    passed as keywords to ``graph()``, but must then be the graph's declared
-    ``context_schema``: activity nodes reject an unregistered context type.
+    Declare it as the graph's ``context_schema``; ``graph()`` makes one. Only
+    ``stream_context`` crosses into activity nodes, taken from ``runner`` for
+    the turn in flight each time the context is serialized; ``runner`` and
+    ``injections`` stay in the workflow for :func:`harness_tool_call`. A
+    subclass may add fields, passed as keywords to ``graph()``, but must then
+    be the graph's declared ``context_schema``: activity nodes reject an
+    unregistered context type.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -219,11 +219,15 @@ class HarnessContext(BaseModel):
     stream_context: TurnStreamContext | None = None
     _call_ids: set[str] = PrivateAttr(default_factory=set)
 
-    @model_validator(mode="after")
-    def _snapshot_stream_context(self) -> HarnessContext:
-        if self.runner is not None and self.stream_context is None:
-            self.stream_context = self.runner.current_stream_context
-        return self
+    @model_serializer(mode="wrap")
+    def _with_turn(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> Any:
+        data = handler(self)
+        if self.runner is not None and isinstance(data, dict):
+            stream_context = self.runner.current_stream_context
+            data["stream_context"] = (
+                None if stream_context is None else stream_context.model_dump(mode=info.mode)
+            )
+        return data
 
 
 def _turn_config(
@@ -360,9 +364,9 @@ async def harness_tool_call(
     call = request.tool_call
     name = call.get("name", "")
     try:
-        # Clients see the provider's id; a missing or repeated one gets a fresh id. A missing
-        # one is written back into the AIMessage's dict, which reaches the state only when the
-        # node received the state itself, not a Send copy of the call.
+        # Clients see the provider's id; a missing one, or one this agent has seen, gets a
+        # fresh id. A missing one is written back into the AIMessage's dict, which reaches the
+        # state only when the node received the state itself, not a Send copy of the call.
         call_id = call["id"] or ""
         minted = not call_id or call_id in context._call_ids
         if minted:

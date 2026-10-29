@@ -314,7 +314,8 @@ def functional_plugin() -> Any:
 
 async def turn(g: Pregel[Any, Any, Any, Any], text: str) -> str:
     """One harness turn, as the hello example's handler: one message is one graph run."""
-    result = await g.ainvoke({"messages": [HumanMessage(text)]})
+    config = {"configurable": {"thread_id": workflow.info().workflow_id}}
+    result = await g.ainvoke({"messages": [HumanMessage(text)]}, config)
     return result["messages"][-1].text
 
 
@@ -327,18 +328,14 @@ class GraphAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-        self._checkpointer = InMemorySaver()
-        self._thread = {"configurable": {"thread_id": str(workflow.uuid4())}}
+        self._graph = graph("agent", self._runner, injections={"user": "alice"}).compile(
+            checkpointer=InMemorySaver()
+        )
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask the agent something."""
-        g = (
-            graph("agent", self._runner, injections={"user": "alice"})
-            .compile(checkpointer=self._checkpointer)
-            .with_config(self._thread)
-        )
-        return TextReply(text=await turn(g, message.text))
+        return TextReply(text=await turn(self._graph, message.text))
 
 
 @agent.defn(name="LangGraphFunctionalTestAgent")
@@ -351,18 +348,14 @@ class FunctionalAgent:
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
         # An entrypoint is built once at import, so give this workflow its own checkpointer.
-        self._checkpointer = InMemorySaver()
-        self._thread = {"configurable": {"thread_id": str(workflow.uuid4())}}
+        self._graph = registered_entrypoint(
+            "functional", self._runner, injections={"user": "alice"}
+        ).copy({"checkpointer": InMemorySaver()})
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask the agent something."""
-        g = (
-            registered_entrypoint("functional", self._runner, injections={"user": "alice"})
-            .copy({"checkpointer": self._checkpointer})
-            .with_config(self._thread)
-        )
-        return TextReply(text=await turn(g, message.text))
+        return TextReply(text=await turn(self._graph, message.text))
 
 
 AGENTS = {"functional": "LangGraphFunctionalTestAgent"}

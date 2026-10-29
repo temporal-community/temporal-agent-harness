@@ -152,21 +152,21 @@ class LangGraphHelloAgentWorkflow:
             # get_weather and ask_user are inherently safe; remember goes to the user first.
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-        self._checkpointer = InMemorySaver()
-        self._thread_id = str(workflow.uuid4())  # one conversation per workflow
+        # graph() binds the harness context (runner, injections) to the compiled graph.
+        self._graph = graph(GRAPH, self._runner, injections={"notes": self.notes}).compile(
+            checkpointer=InMemorySaver()
+        )
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the assistant: ask about the weather in a city, ask it to remember something,
         or ask something ambiguous and it will ask you back."""
-        # graph() binds the turn's context (runner, injections) to the run; the checkpoint
-        # thread is the conversation, so each turn continues it.
-        g = (
-            graph(GRAPH, self._runner, injections={"notes": self.notes})
-            .compile(checkpointer=self._checkpointer)
-            .with_config(recursion_limit=25, configurable={"thread_id": self._thread_id})
-        )
-        # ask_user is a callback tool: the harness holds the turn open until the console
-        # answers it, so one message is one graph run.
-        result = await g.ainvoke({"messages": [HumanMessage(message.text)]})
+        # One thread per workflow: each turn continues the conversation. ask_user is a callback
+        # tool: the harness holds the turn open until the console answers, so one message is
+        # one graph run.
+        config = {
+            "recursion_limit": 25,
+            "configurable": {"thread_id": workflow.info().workflow_id},
+        }
+        result = await self._graph.ainvoke({"messages": [HumanMessage(message.text)]}, config)
         return TextReply(text=result["messages"][-1].text)

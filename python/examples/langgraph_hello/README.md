@@ -19,11 +19,11 @@ own module beside it, `ai_sdks/langgraph/_harness.py`, supplies the seams the pl
   `model_interaction_ended` (with token usage) — heartbeating while the node runs.
 - **Reasoning summaries.** The model is `gpt-5.1` with `reasoning={"effort": "medium", "summary":
   "auto"}`; its summaries stream as `thought_summary` events the console shows while it thinks.
-- **`HarnessContext` as the graph's `context_schema`.** Each turn calls
+- **`HarnessContext` as the graph's `context_schema`.** `init` calls
   `graph(GRAPH, self._runner, injections={"notes": self.notes})`, which binds one to the compiled
-  graph: it snapshots the turn's stream context for the activity node and keeps the runner and
-  the injections in the workflow for the tool node. The handler then calls `ainvoke` as any
-  LangGraph code would.
+  graph: it carries each turn's stream context to the activity node and keeps the runner and
+  the injections in the workflow for the tool node. The handler then calls `ainvoke` with the
+  conversation's thread, as any LangGraph code would.
 - **One tool of each harness kind**, all in one prebuilt `ToolNode` that runs **in-workflow**;
   the plugin sets `harness_tool_call` as its `awrap_tool_call`, so every call goes through
   `AgentWorkflowRunner.run_tool` — where the approval gate and `tool_start`/`tool_end` events live:

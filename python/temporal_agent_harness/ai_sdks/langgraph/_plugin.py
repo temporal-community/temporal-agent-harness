@@ -419,11 +419,12 @@ def graph(
     Args:
         name: Graph name as registered with LangGraphPlugin.
         runner: Vendored: the harness ``AgentWorkflowRunner``. Given, the graph
-            is bound to the current harness turn: call this in the handler,
-            and ``compile`` the result as the builder. The compiled graph runs
-            with a ``HarnessContext`` (the graph's ``context_schema``;
-            ``injections`` and ``fields`` fill it), so ``ainvoke`` takes no
-            context. The checkpointer and its ``thread_id`` stay the caller's.
+            is bound to the harness: ``compile`` the result as the builder,
+            once, in ``@agent.init``. The compiled graph runs with a
+            ``HarnessContext`` (the graph's ``context_schema``; ``injections``
+            and ``fields`` fill it) that carries each turn's stream context
+            into activity nodes, so ``ainvoke`` takes no context. The
+            checkpointer and its ``thread_id`` stay the caller's.
         cache: Optional task result cache from a previous cache() call.
             Restores cached results so previously-completed nodes are
             not re-executed after continue-as-new.
