@@ -1,8 +1,9 @@
 """A hello-world LangGraph agent on the harness: a weather chat with one of each harness tool kind.
 
 The turn is one run of a two-node ``StateGraph``: the ``agent`` node calls a reasoning chat model
-in an activity, where its ``stream_to_harness`` option publishes the stream as ``model_interaction_started``,
-``thought_summary``, ``reply_delta`` and ``model_interaction_ended`` (with token usage); the
+in an activity, where its ``stream_to_harness`` option publishes the stream as
+``model_interaction_started``, ``thought_summary``, ``reply_delta`` and ``model_interaction_ended``
+(with token usage); the
 ``tools`` node is a prebuilt ``ToolNode`` whose calls go through ``harness_tool_call``, so the
 harness owns approval and the ``tool_start`` / ``tool_end`` / ``tool_error`` events. Its tools:
 
@@ -152,15 +153,16 @@ class LangGraphHelloAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
         self._checkpointer = InMemorySaver()
+        self._thread_id = str(workflow.uuid4())  # one conversation per workflow
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the assistant: ask about the weather in a city, ask it to remember something,
         or ask something ambiguous and it will ask you back."""
-        # graph() binds the turn: the workflow id is the checkpoint thread, so each turn
-        # continues the conversation, and the context carries the runner and injections.
+        # graph() binds the turn: the conversation's checkpoint thread, so each turn continues
+        # it, and the context that carries the runner and injections.
         g = (
-            graph(GRAPH, self._runner, injections={"notes": self.notes})
+            graph(GRAPH, self._runner, injections={"notes": self.notes}, thread_id=self._thread_id)
             .compile(checkpointer=self._checkpointer)
             .with_config(recursion_limit=25)
         )

@@ -225,6 +225,7 @@ def _turn_config(
     schema: object,
     runner: AgentWorkflowRunner,
     injections: Mapping[str, object] | None,
+    thread_id: str | None,
     fields: Mapping[str, object],
 ) -> RunnableConfig:
     if not (isinstance(schema, type) and issubclass(schema, HarnessContext)):
@@ -236,7 +237,7 @@ def _turn_config(
     set_task_cache(None)
     return {
         "configurable": {
-            "thread_id": workflow.info().workflow_id,
+            "thread_id": thread_id or workflow.info().workflow_id,
             CONFIG_KEY_RUNTIME: Runtime(context=context),  # inherited by ainvoke(context=None)
         }
     }

@@ -412,6 +412,7 @@ def graph(
     cache: dict[str, Any] | None = None,
     *,
     injections: Mapping[str, object] | None = None,
+    thread_id: str | None = None,
     **fields: object,
 ) -> StateGraph[Any, Any, Any, Any] | _TurnGraph:
     """Retrieve a registered graph by name.
@@ -421,9 +422,10 @@ def graph(
         runner: Vendored: the harness ``AgentWorkflowRunner``. Given, the graph
             is bound to the current harness turn: call this in the handler,
             and ``compile`` the result as the builder. The compiled graph runs
-            on the workflow's checkpoint thread with a ``HarnessContext`` (the
-            graph's ``context_schema``; ``injections`` and ``fields`` fill it),
-            so ``ainvoke`` takes just the input.
+            on the checkpoint thread ``thread_id`` (the workflow id unless
+            given) with a ``HarnessContext`` (the graph's ``context_schema``;
+            ``injections`` and ``fields`` fill it), so ``ainvoke`` takes just
+            the input.
         cache: Optional task result cache from a previous cache() call.
             Restores cached results so previously-completed nodes are
             not re-executed after continue-as-new.
@@ -439,7 +441,7 @@ def graph(
     builder = graphs[name]
     if runner is None:
         return builder
-    return _TurnGraph(builder, _turn_config(builder.context_schema, runner, injections, fields))
+    return _TurnGraph(builder, _turn_config(builder.context_schema, runner, injections, thread_id, fields))
 
 
 class _TurnGraph:
@@ -459,6 +461,7 @@ def entrypoint(
     cache: dict[str, Any] | None = None,
     *,
     injections: Mapping[str, object] | None = None,
+    thread_id: str | None = None,
     **fields: object,
 ) -> Pregel[Any, Any, Any, Any]:
     """Retrieve a registered entrypoint by name.
@@ -486,7 +489,7 @@ def entrypoint(
     pregel = entrypoints[name]
     if runner is None:
         return pregel
-    return pregel.with_config(_turn_config(pregel.context_schema, runner, injections, fields))
+    return pregel.with_config(_turn_config(pregel.context_schema, runner, injections, thread_id, fields))
 
 
 def cache() -> dict[str, Any] | None:
