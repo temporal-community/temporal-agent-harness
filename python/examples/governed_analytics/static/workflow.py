@@ -115,11 +115,11 @@ class BranchReport:
             run_sql,
             f"""
             SELECT b.branch_id, b.branch_name, b.region
-                , avg(l.defaulted::INTEGER) AS loan_default_rate
+                -- , avg(l.defaulted::INTEGER) AS loan_default_rate
             FROM branches b
-            JOIN risk.loan_applications l USING (branch_id)
+            -- JOIN risk.loan_applications l USING (branch_id)
             WHERE b.branch_id IN ({ids})
-            GROUP BY ALL
+            -- GROUP BY ALL
             ORDER BY b.branch_id
             """,
             summary="the outlier branches",
