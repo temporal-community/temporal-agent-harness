@@ -205,12 +205,11 @@ jobs:
           key: bazel-disk-other-${{ github.sha }}
           restore-keys: bazel-disk-other-
 
-      # The tarballs publish-npm.yml would publish, every public package's :pkg_tgz, plus the SDK's
-      # (core and worker), private until their first release but built and checked the same way.
+      # The tarballs publish-npm.yml would publish: every public package's :pkg_tgz.
       - name: Build the tarballs
         run: |
           flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
-          directories="$(node scripts/release.mjs npm-packages) typescript/packages/core typescript/packages/worker"
+          directories="$(node scripts/release.mjs npm-packages)"
           targets=()
           for directory in $directories; do targets+=("//$directory:pkg_tgz"); done
           bazel build "${targets[@]}" "${flags[@]}" --remote_download_toplevel
