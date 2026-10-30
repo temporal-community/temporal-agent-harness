@@ -1,3 +1,5 @@
+@import "./lib/theme/io-tokens.css";
+
 :root {
   color-scheme: dark;
   /* Instrument, not terminal: sans carries content, mono is reserved for chrome
