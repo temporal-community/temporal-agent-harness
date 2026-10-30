@@ -210,12 +210,20 @@ class HarnessBackend:
             # back the live todo panel here.
             handle = handles.pop(data["tool_id"], None)
             if handle is not None:
+                # tool_output is the result as JSON; opencode's tool part takes text.
+                output = data.get("tool_output")
+                if output is None:
+                    text = ""
+                elif isinstance(output, str):
+                    text = output
+                else:
+                    text = json.dumps(output, indent=2)
                 if data.get("tool_name") == "todowrite":
                     todos = handle._input().get("todos", [])
                     turn.set_todos(todos)
-                    await handle.complete(data.get("tool_output", ""), metadata={"todos": todos})
+                    await handle.complete(text, metadata={"todos": todos})
                 else:
-                    await handle.complete(data.get("tool_output", ""))
+                    await handle.complete(text)
 
         elif event_type == "tool_error":
             handle = handles.pop(data["tool_id"], None)

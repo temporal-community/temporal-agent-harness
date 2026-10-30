@@ -16,9 +16,11 @@ import uuid
 from datetime import timedelta
 
 import pytest_asyncio
+from pydantic import BaseModel
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -56,6 +58,40 @@ async def echo_workflow_tool(text: str) -> str:
     return f"wf:{text}"
 
 
+class Receipt(BaseModel):
+    order_id: str
+    amount_cents: int
+    tags: list[str]
+    note: str | None = None
+
+
+@agent.activity_tool_defn()
+async def issue_receipt(order_id: str) -> Receipt:
+    """An activity tool with a structured result."""
+    return Receipt(order_id=order_id, amount_cents=1250, tags=["refund", "card"])
+
+
+@agent.tool_defn()
+async def record_nothing(text: str) -> None:
+    """A workflow tool with no result."""
+
+
+class _Opaque:
+    pass
+
+
+@agent.tool_defn()
+async def return_opaque(text: str) -> object:
+    """A workflow tool whose result has no JSON form."""
+    return _Opaque()
+
+
+@agent.tool_defn()
+async def return_nan(text: str) -> dict[str, float]:
+    """A workflow tool whose result holds a float JSON can't carry."""
+    return {"ratio": float("nan")}
+
+
 # ---------------------------------------------------------------------------
 # Probe workflow: each text turn runs the activity tool twice + the workflow tool
 # ---------------------------------------------------------------------------
@@ -87,6 +123,19 @@ class ToolProbeAgent:
 
         return TextReply(text=f"done:{text}")
 
+    @agent.accepts
+    async def probe_outputs(self, message: TextMessage) -> TextReply:
+        """Run tools whose results are a model, nothing, and two values with no JSON form."""
+        await self._runner.run_tool("receipt", issue_receipt, message.text)
+        await self._runner.run_tool("nothing", record_nothing, message.text)
+        failures: list[str] = []
+        for tool_id, tool in (("opaque", return_opaque), ("nan", return_nan)):
+            try:
+                await self._runner.run_tool(tool_id, tool, message.text)
+            except ApplicationError as e:
+                failures.append(f"{tool_id}:{e.type}")
+        return TextReply(text=" ".join(failures))
+
 
 # ---------------------------------------------------------------------------
 # Fixture + helpers
@@ -103,7 +152,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[ToolProbeAgent],
-        activities=[agent.tool_activity(echo_activity_tool)],
+        activities=[agent.tool_activity(echo_activity_tool), agent.tool_activity(issue_receipt)],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ):
         try:
@@ -182,6 +231,48 @@ async def test_activity_and_workflow_tools_publish_lifecycle(client_and_queue):
             tool_id,
             order,
         )
+
+
+async def test_tool_end_carries_the_result_as_json(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await client.start_workflow(
+        ToolProbeAgent.run,
+        AgentConfig(),
+        id=f"ToolProbeAgent-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentMessage(type="probe_outputs", payload={"text": "A-17"}),
+        result_type=AgentMessageReply,
+    )
+
+    events = await _collect_until_turn_end(client, handle.id)
+    ends = {e.event.tool_id: e.event for e in events if e.event.type == AgentEventType.TOOL_END}
+    errors = {
+        e.event.tool_id: e.event for e in events if e.event.type == AgentEventType.TOOL_ERROR
+    }
+
+    # A model is published as the JSON object it travels as, every field included.
+    assert ends["receipt"].tool_output == {
+        "order_id": "A-17",
+        "amount_cents": 1250,
+        "tags": ["refund", "card"],
+        "note": None,
+    }
+    # No result is null, not "None".
+    assert ends["nothing"].tool_output is None
+    # A result with no JSON form fails the call instead of publishing a repr, and so does a
+    # float JSON would turn into null.
+    assert "opaque" not in ends and "nan" not in ends
+    assert "_Opaque" in errors["opaque"].message
+    assert errors["nan"].message.endswith(
+        "tool 'return_nan' returned a value with no JSON form at $.ratio: nan"
+    )
+    [handler_end] = [
+        e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END
+    ]
+    assert handler_end.output == {"text": "opaque:ToolOutputNotJson nan:ToolOutputNotJson"}
 
 
 # ---------------------------------------------------------------------------

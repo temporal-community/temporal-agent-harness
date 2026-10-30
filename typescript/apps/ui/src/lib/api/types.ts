@@ -392,6 +392,8 @@ interface Narrowed {
   text_annotation: { delta: TextAnnotationDelta };
   state_patch: { ops: JsonPatchOp[] };
   subagent_stream_unavailable: { reason_code?: SubagentUnavailableCode };
+  /** JSON parsed from the wire never holds `undefined`, which the generated type allows. */
+  tool_end: { tool_output: JsonValue };
 }
 
 /**

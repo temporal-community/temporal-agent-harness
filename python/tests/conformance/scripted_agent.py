@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
+from pydantic import BaseModel
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
@@ -50,10 +51,31 @@ async def add(a: int, b: int) -> int:
     return a + b
 
 
+class Entry(BaseModel):
+    key: str
+    tags: list[str]
+    count: int
+    found: bool
+    note: str | None = None
+
+
+@agent.activity_tool_defn(
+    activity_config=ActivityConfig(start_to_close_timeout=timedelta(seconds=30)),
+)
+async def lookup(key: str) -> Entry:
+    """Look up an entry: a structured result."""
+    return Entry(key=key, tags=["a", "b"], count=2, found=True)
+
+
 @agent.tool_defn()
 async def echo(text: str) -> str:
     """Return the text unchanged."""
     return text
+
+
+@agent.tool_defn()
+async def noop(text: str) -> None:
+    """Do nothing: no result."""
 
 
 @agent.tool_defn()
@@ -76,7 +98,9 @@ async def ask_client(question: str) -> str:
 
 TOOLS: dict[str, Callable[..., Awaitable[Any]]] = {
     "add": add,
+    "lookup": lookup,
     "echo": echo,
+    "noop": noop,
     "fail": fail,
     "gated": gated,
     "ask_client": ask_client,
@@ -97,7 +121,7 @@ class ScriptedAgent:
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_tools(
-                ["add", "echo", "fail", "ask_client"]
+                ["add", "lookup", "echo", "noop", "fail", "ask_client"]
             ),
         )
         self._subagents: dict[str, str] = {}

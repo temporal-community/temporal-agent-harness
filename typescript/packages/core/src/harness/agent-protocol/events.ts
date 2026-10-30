@@ -9,6 +9,7 @@ export type AgentEvent = Protocol.AgentEvent;
 export type AgentStreamItem = Protocol.AgentStreamItem;
 export type AgentEventType = Protocol.AgentEventType;
 export type TokenUsage = Protocol.TokenUsage;
+export type JsonValue = Protocol.JsonValue;
 export type StreamEventOf<T extends AgentEventType> = Extract<AgentStreamItem, { type: T }>;
 
 // The pubsub topic the agent publishes its turn events on.

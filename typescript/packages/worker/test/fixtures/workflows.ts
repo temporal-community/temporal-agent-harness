@@ -881,6 +881,46 @@ export const ToolRetryAgent = defineAgent({
   }),
 });
 
+// -- tool_end's output as JSON ---------------------------------------------------------------------
+
+export const issueReceipt = activityTool({
+  name: "issue_receipt",
+  description: "An activity tool with a structured result.",
+  inputSchema: TextInput,
+  inherentlySafe: true,
+});
+export const mapResultTool = activityTool({
+  name: "map_result",
+  description: "An activity tool whose result has no JSON form.",
+  inputSchema: TextInput,
+  inherentlySafe: true,
+  activityOptions: { startToCloseTimeout: "30 seconds", retry: { maximumAttempts: 1 } },
+});
+const recordNothing = tool({
+  name: "record_nothing",
+  description: "An inline tool with no result.",
+  inputSchema: TextInput,
+  inherentlySafe: true,
+  execute: async () => undefined,
+});
+
+export const ToolOutputAgent = defineAgent({
+  name: "ToolOutputAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
+  handlers: { act },
+  create: ({ runner }) => ({
+    async act({ text }) {
+      await runner.runTool("receipt", issueReceipt, { text });
+      await runner.runTool("nothing", recordNothing, { text });
+      const failed = await runner
+        .runTool("map", mapResultTool, { text })
+        .then(() => "map tool did not fail")
+        .catch((e: unknown) => `caught:${e instanceof Error ? e.name : String(e)}`);
+      return { text: failed };
+    },
+  }),
+});
+
 // -- cancellation inside a handler ---------------------------------------------------------------
 
 const parkedInline = tool({
