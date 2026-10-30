@@ -87,7 +87,7 @@
      --reasoning do, and it answers a different question from --success/--warning/
      --error, which say how it went. The two maps overlay — a tool that warns is
      both — so they cannot be one token. */
-  --tool: #ff9d00;
+  --tool: var(--color-pink-9);
   --success: #6ee7b7;
   --warning: #fcd34d;
   /* Retrying. Deliberately between --warning and --error, because that is what
