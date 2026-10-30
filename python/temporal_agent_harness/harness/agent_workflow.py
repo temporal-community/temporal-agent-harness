@@ -3070,7 +3070,8 @@ class AgentWorkflowRunner:
         try:
             result = await self._dispatch_turn(agent, admitted, joined=joined)
         except Exception as e:  # noqa: BLE001 — surface ANY failure, keep the agent alive
-            self._pub(turn_id, turn_number, MessageHandlerError(message=str(e)))
+            # An exception with no text (NotImplementedError(), TimeoutError()) still names itself.
+            self._pub(turn_id, turn_number, MessageHandlerError(message=str(e) or type(e).__name__))
         except BaseException:
             # Cancellation or workflow teardown — e.g. the instance is evicted (or the worker
             # shuts down) while this participant is still parked, and the coroutine is resumed

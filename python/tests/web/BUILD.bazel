@@ -129,6 +129,7 @@ harness_pytest_test(
         "//python/examples/callback_tools/coding_agent:agents_files",
         "//python/examples/callback_tools/wiki_agent:agents_files",
         "//python/examples/code_mode_memory:agents_files",
+        "//python/examples/langgraph_hello:agents_files",
         "//python/examples/monty:agents_files",
         "//python/examples/openai_hello:agents_files",
         "//python/examples/pydantic_ai_hello:agents_files",

@@ -110,3 +110,61 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+py_library(
+    name = "langgraph_scripted_agent",
+    srcs = ["langgraph_scripted_agent.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":script",
+        ":scripted_agent",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//langchain_core",
+        "@pypi//langgraph",
+        "@pypi//langgraph_checkpoint",
+        "@pypi//langgraph_prebuilt",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_module_binary(
+    name = "langgraph_worker",
+    srcs = ["langgraph_worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":langgraph_scripted_agent",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+# test_goldens.py is data, not srcs: the module imports its fixtures and tests.
+harness_pytest_test(
+    name = "test_langgraph_goldens",
+    srcs = ["test_langgraph_goldens.py"],
+    data = [
+        "test_goldens.py",
+        ":langgraph_worker",
+        "//conformance/goldens",
+        "//conformance/scenarios",
+        "//contract:protocol_files",
+    ],
+    env = {"CONFORMANCE_WORKER": "$(rootpath :langgraph_worker)"},
+    imports = ["../.."],
+    deps = [
+        ":driver",  # keep
+        ":goldens",
+        "//python/tests:__init__",
+        "//python/tests:conftest",
+        "@pypi//jsonschema",  # keep
+        "@pypi//pytest",
+    ],
+)

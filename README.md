@@ -104,6 +104,7 @@ dependencies = [
     #   genai           the Google Gemini integration
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
+    #   langgraph       the LangGraph integration
     #   typesafe        typed decisions and the Jev auto mode evaluator, via the canonical
     #                   temporalio-typesafe plugin
     #   s3              S3-backed offload for large payloads
@@ -198,6 +199,7 @@ opt-in:
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
+| `langgraph` | use the **LangGraph** integration (`ai_sdks.langgraph`): the vendored `temporalio-langgraph` plugin runs graph nodes as activities, with the harness's integration beside it. Register its `LangGraphPlugin` on the client, before `AgentHarnessPlugin`. |
 | `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe_harness`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentHarnessPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
@@ -276,7 +278,7 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | [Pydantic AI](python/temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
-| [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
+| [LangGraph](python/temporal_agent_harness/ai_sdks/langgraph/_harness.py) | ✅ Available now | Vendors the [`temporalio-langgraph`](https://github.com/temporalio/ai-integrations/tree/main/python/langgraph) plugin as `ai_sdks.langgraph` until its ToolNode fix is released |
 
 ### 📡 Durable and inline tools
 Tools come in two on-worker flavors — durable, activity-backed tools (`@agent.activity_tool_defn`)
@@ -1005,7 +1007,7 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
+pydantic_ai_hello, langgraph_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
 The default committed `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
@@ -1047,7 +1049,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 
 | Agent | Needs |
 |---|---|
-| OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| OpenAI Hello · Pydantic AI Hello · LangGraph Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](python/examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI, or `just tictactoe-play` for its board |
