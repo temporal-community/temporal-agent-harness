@@ -1,10 +1,13 @@
 {
   "name": "@temporalio/agent-harness-worker",
   "version": "0.1.0",
-  "private": true,
   "license": "MIT",
   "type": "module",
   "description": "Worker side of the Temporal agent harness: the harness plugin and activities, the agent client and the Code Mode sandbox.",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "sideEffects": false,
   "exports": {
     ".": {
