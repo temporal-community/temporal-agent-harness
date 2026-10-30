@@ -268,7 +268,7 @@ const frames: AgentSseFrame[] = [
     tool_id: "tool-api-outline-1",
     tool_name: "get_api_outline",
     tool_output:
-      '{"routes":["GET /api/agents","GET /api/sessions","POST /api/sessions","POST /api/chat","GET /api/status/{session_id}","POST /api/tool-approval","GET /api/stream/{session_id}"]}'
+      {"routes":["GET /api/agents","GET /api/sessions","POST /api/sessions","POST /api/chat","GET /api/status/{session_id}","POST /api/tool-approval","GET /api/stream/{session_id}"]}
   }),
   /* One `mutate()` block, three ops, one version — which is the whole shape of the
      feature: an append, a nested field of the thing just appended, and a dict key,
@@ -445,7 +445,7 @@ const frames: AgentSseFrame[] = [
     tool_id: "tool-doc-search-3",
     tool_name: "search_docs",
     tool_output:
-      '{"hits":[{"title":"Signals","score":0.92},{"title":"Updates","score":0.89},{"title":"Queries","score":0.81}]}'
+      {"hits":[{"title":"Signals","score":0.92},{"title":"Updates","score":0.89},{"title":"Queries","score":0.81}]}
   }),
   frame("tool_end", {
     type: "tool_end",
@@ -453,7 +453,7 @@ const frames: AgentSseFrame[] = [
     tool_id: "tool-forum-search-3",
     tool_name: "search_forum",
     tool_output:
-      '{"hits":[{"title":"Use Updates for command acknowledgment","score":0.86},{"title":"Signals for fire-and-forget messages","score":0.78}]}'
+      {"hits":[{"title":"Use Updates for command acknowledgment","score":0.86},{"title":"Signals for fire-and-forget messages","score":0.78}]}
   }),
   /* A set has no JSON representation and RFC 6902 has no set op, so a change to one
      is a `replace` carrying the whole array — in sorted order, which is what makes it
@@ -781,7 +781,7 @@ const frames: AgentSseFrame[] = [
     tool_id: "tool-budget-7",
     tool_name: "estimate_usage_budget",
     tool_output:
-      '{"expected_total_tokens":62000,"expected_cached_tokens":18000,"expected_model_calls":22}'
+      {"expected_total_tokens":62000,"expected_cached_tokens":18000,"expected_model_calls":22}
   }),
   frame("subagent_started", {
     type: "subagent_started",
@@ -831,7 +831,7 @@ const frames: AgentSseFrame[] = [
     turn_id: "search-turn-001",
     tool_id: "tool-search-budget-1",
     tool_name: "scan_saved_sessions",
-    tool_output: '{"matching_sessions":4,"largest_token_total":68120}'
+    tool_output: {"matching_sessions":4,"largest_token_total":68120}
   }),
   frame("message_handler_end", {
     type: "message_handler_end",
@@ -1048,7 +1048,7 @@ const frames: AgentSseFrame[] = [
     tool_id: "tool-mock-file-9b",
     tool_name: "list_mock_files",
     tool_output:
-      '["docs/api.md","docs/components.md","docs/replay-controller.md"]'
+      ["docs/api.md","docs/components.md","docs/replay-controller.md"]
   }),
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
@@ -1264,7 +1264,7 @@ const frames: AgentSseFrame[] = [
     tool_id: "tool-export-12",
     tool_name: "write_session_note",
     tool_output:
-      '{"artifact_id":"artifact-agent-ui-notes","mime_type":"text/markdown","bytes":4821}'
+      {"artifact_id":"artifact-agent-ui-notes","mime_type":"text/markdown","bytes":4821}
   }),
   frame("model_interaction_ended", {
     type: "model_interaction_ended",

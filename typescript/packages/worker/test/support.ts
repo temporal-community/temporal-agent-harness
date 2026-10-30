@@ -35,6 +35,8 @@ import {
   bigResult,
   bookItem,
   failingTool,
+  issueReceipt,
+  mapResultTool,
   gatedActivityTool,
   refundCustomer,
   refundWithCredential,
@@ -86,6 +88,14 @@ function fixturePlugin() {
         items: Array.from({ length: n }, (_, i) => ({ id: `${origin}-${i}`, price: 100 + 10 * i })),
       })),
       toolActivity(bookItem, async ({ id }) => `BOOKED-${id}`),
+      toolActivity(issueReceipt, async ({ text }) => ({
+        order_id: text,
+        amount_cents: 1250,
+        tags: ["refund", "card"],
+        issued: new Date(Date.UTC(2026, 9, 29)),
+        note: undefined,
+      })),
+      toolActivity(mapResultTool, async ({ text }) => new Map([[text, 1]])),
       toolActivity(bigResult, async ({ n }) => "y".repeat(n)),
       toolActivity(failingTool, async () => {
         throw new Error("tool broke");

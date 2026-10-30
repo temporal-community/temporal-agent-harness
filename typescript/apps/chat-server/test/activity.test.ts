@@ -5,6 +5,7 @@ import {
   MAX_SEGMENT_CARDS,
   MAX_SEGMENT_CHARS,
   formatToolInput,
+  formatToolOutput,
   keepTyping,
   openStream,
   renderedSize,
@@ -36,6 +37,14 @@ test('arguments ride along as details, so they can be inspected without clutter'
   assert.match(toTaskUpdate(start).details ?? '', /Lisbon/);
   // A no-argument tool should not show an empty block.
   assert.equal(toTaskUpdate({ ...start, toolInput: {} }).details, undefined);
+});
+
+test("a tool's JSON result reaches the card as text: a string as it is, a structure indented", () => {
+  assert.equal(formatToolOutput('21C'), '21C');
+  assert.equal(formatToolOutput({ temp: 21, unit: 'C' }), '{\n  "temp": 21,\n  "unit": "C"\n}');
+  assert.equal(formatToolOutput(0), '0');
+  // A tool with no result shows no output.
+  assert.equal(formatToolOutput(null), undefined);
 });
 
 test('an error carries its reason rather than the arguments', () => {

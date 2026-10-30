@@ -89,6 +89,7 @@ js_library(
     name = "editorWorkspace",
     srcs = ["editorWorkspace.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":toolOutput"],
 )
 
 js_library(
@@ -120,6 +121,7 @@ js_library(
         ":logValue",
         ":replayLog",
         ":thoughtSummary",
+        ":toolOutput",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/cost:pricing",
@@ -261,6 +263,7 @@ js_library(
         ":inboundMessageText",
         ":replyRuns",
         ":thoughtSummary",
+        ":toolOutput",
         "//typescript/apps/ui/src/lib/api:types",
         "//typescript/apps/ui/src/lib/cost:pricing",
     ],
@@ -342,6 +345,12 @@ js_library(
 )
 
 js_library(
+    name = "toolOutput",
+    srcs = ["toolOutput.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "transcript",
     srcs = ["transcript.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -349,6 +358,7 @@ js_library(
         ":handlerReply",
         ":inboundMessageText",
         ":thoughtSummary",
+        ":toolOutput",
     ],
 )
 
@@ -817,6 +827,16 @@ vitest_test(
     name = "replyRuns_test",
     src = "replyRuns.test.mjs",
     deps = [":replyRuns"],
+)
+
+vitest_test(
+    name = "toolOutput_test",
+    src = "toolOutput.test.mjs",
+    deps = [
+        ":replayLog",
+        ":toolImages",
+        ":toolOutput",
+    ],
 )
 
 vitest_test(

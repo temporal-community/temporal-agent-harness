@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { AgentHarnessPlugin, toolActivity } from "../../src/index.ts";
-import { add } from "./scripted-agent.ts";
+import { add, lookup } from "./scripted-agent.ts";
 
 const { values } = parseArgs({
   options: {
@@ -32,7 +32,20 @@ const worker = await Worker.create({
   namespace: values.namespace ?? process.env.TEMPORAL_NAMESPACE ?? "default",
   taskQueue,
   workflowsPath: fileURLToPath(new URL("./scripted-agent.js", import.meta.url)),
-  plugins: [new AgentHarnessPlugin({ tools: [toolActivity(add, async ({ a, b }) => a + b)] })],
+  plugins: [
+    new AgentHarnessPlugin({
+      tools: [
+        toolActivity(add, async ({ a, b }) => a + b),
+        toolActivity(lookup, async ({ key }) => ({
+          key,
+          tags: ["a", "b"],
+          count: 2,
+          found: true,
+          note: null,
+        })),
+      ],
+    }),
+  ],
 });
 console.log(`conformance worker ready: taskQueue=${taskQueue}`);
 await worker.run();

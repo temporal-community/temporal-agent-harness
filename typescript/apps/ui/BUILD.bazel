@@ -201,6 +201,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:thoughtSummary",
         "//typescript/apps/ui/src/lib/state:timeTicks",
         "//typescript/apps/ui/src/lib/state:toolImages",
+        "//typescript/apps/ui/src/lib/state:toolOutput",
         "//typescript/apps/ui/src/lib/state:transcript",
         "//typescript/apps/ui/src/lib/state:workflowTimelineScale",
     ],

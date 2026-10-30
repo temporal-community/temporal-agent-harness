@@ -49,12 +49,10 @@
         children.find((c) => !c.used && c.view?.states.profile?.name === spec.name) ??
         children.filter((c) => !c.used)[0];
       if (child) child.used = true;
-      let output: string | null = null;
-      try {
-        output = call.output ? (JSON.parse(call.output) as { output: string }).output : null;
-      } catch {
-        output = call.output;
-      }
+      // run_agent's result is the step's { name, output }.
+      const result = call.output as { output?: unknown } | string | null;
+      const output =
+        typeof result === "string" ? result : typeof result?.output === "string" ? result.output : null;
       const t = times.get(call.toolId);
       return {
         id: call.toolId,

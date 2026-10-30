@@ -5,7 +5,6 @@ converter, the handler-parameter schemas the UI renders forms from, and the Code
 flow script is type-checked against.
 """
 
-import json
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -82,7 +81,3 @@ class AgentStep(BaseModel):
 class AgentStepResult(BaseModel):
     name: str = Field(description="The step's name.")
     output: str = Field(description="The step agent's final reply.")
-
-    def __str__(self) -> str:
-        # The harness publishes ``str(result)`` as the tool's ``tool_output``.
-        return json.dumps(self.model_dump(), indent=2)

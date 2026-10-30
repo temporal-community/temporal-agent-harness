@@ -2,11 +2,12 @@ import { Context, ApplicationFailure, CancelledFailure } from "@temporalio/activ
 import { WorkflowStreamClient } from "@temporalio/workflow-streams/client";
 import type { Duration } from "@temporalio/common";
 import type { AgentToolContext, HarnessTool } from "@temporalio/agent-harness";
-import { toolOutputText } from "@temporalio/agent-harness";
+import { toolOutputJson } from "@temporalio/agent-harness";
 import {
   TURN_EVENTS_TOPIC,
   type AgentEvent,
   type AgentStreamItem,
+  type JsonValue,
   type TurnStreamContext,
   validate,
 } from "@temporalio/agent-harness/harness/agent-protocol";
@@ -118,6 +119,7 @@ export function toolActivity<
       };
       const activity = Context.current();
       let result: ActivityToolTypes<T>["output"];
+      let toolOutput: JsonValue;
       try {
         result = await heartbeating(() =>
           Promise.race([
@@ -129,6 +131,7 @@ export function toolActivity<
             activity.cancelled,
           ]),
         );
+        toolOutput = toolOutputJson(tool.name, result);
       } catch (e) {
         if (!(e instanceof CancelledFailure) && !activity.cancellationSignal.aborted)
           pub.publish({
@@ -143,7 +146,7 @@ export function toolActivity<
         type: "tool_end",
         tool_id: ctx.tool_id,
         tool_name: tool.name,
-        tool_output: toolOutputText(result),
+        tool_output: toolOutput,
       });
       return result;
     },

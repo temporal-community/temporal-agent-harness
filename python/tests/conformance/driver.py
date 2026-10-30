@@ -39,7 +39,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporal_agent_harness.harness.subagent_activities import SubagentActivities
 from tests.conformance.script import Handler, Script
-from tests.conformance.scripted_agent import ScriptedAgent, add
+from tests.conformance.scripted_agent import ScriptedAgent, add, lookup
 
 TIMEOUT = timedelta(seconds=30)
 
@@ -133,7 +133,11 @@ async def scripted_worker() -> AsyncIterator[tuple[Client, str]]:
             env.client,
             task_queue=task_queue,
             workflows=[ScriptedAgent],
-            activities=[agent.tool_activity(add), SubagentActivities(env.client).run_subagent_turn],
+            activities=[
+                agent.tool_activity(add),
+                agent.tool_activity(lookup),
+                SubagentActivities(env.client).run_subagent_turn,
+            ],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             yield env.client, task_queue
