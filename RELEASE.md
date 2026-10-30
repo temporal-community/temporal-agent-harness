@@ -10,7 +10,7 @@ rest: what to decide, what to write down, and what to do when something fails.
 | Unit | Packages | Version source | Tag |
 | --- | --- | --- | --- |
 | `python` | `temporal-agent-harness` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
-| `npm` | Every `@temporalio/agent-harness*` package under [typescript/packages](typescript/packages), at **one shared version**: today `-client`, `-react` and `-svelte` publish; `@temporalio/agent-harness` (core) and `-worker` are `private` until [their first release](#first-typescript-sdk-release) | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
+| `npm` | Every `@temporalio/agent-harness*` package under [typescript/packages](typescript/packages), at **one shared version**: `-client`, `-react` and `-svelte` publish today; `@temporalio/agent-harness` (core) and `-worker` publish from [their first release](#first-typescript-sdk-release) | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
 
 `@temporal-agent-harness/codegen` is private build tooling with no release. Examples ship in the
 repository, not in any package: release notes name the tag to check out.
@@ -149,10 +149,10 @@ matching tag yourself (`0.9.0` or `npm-v0.9.0`) is the manual fallback and also 
 (their versions and ranges move with every npm release) and have tarball targets and tests. To
 publish them, in a reviewed PR:
 
-- [ ] Drop `private: true` from both manifests and add the `publishConfig` the other packages
-  have. The tooling then includes them: the publish order becomes client, core, worker, react,
-  svelte, and [check-installed-npm.sh](scripts/check-installed-npm.sh) should grow a consumer of
-  both (a workflow bundle and the worker's `agent-harness-schema` executable).
+- [x] Drop `private: true` from both manifests and add the `publishConfig` the other packages
+  have. The tooling then includes them in the publish order and in
+  [check-installed-npm.sh](scripts/check-installed-npm.sh), which installs both next to the Temporal
+  SDK version the worker's `@temporalio/openai-agents` peer pins and loads their entry points.
 - [ ] Configure npm trusted publishing for each new package: repository
   `temporal-community/temporal-agent-harness`, workflow `publish-npm.yml`, environment `npm`.
   Check whether the registry needs a bootstrap for a new package before its first OIDC publish.
