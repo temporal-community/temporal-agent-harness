@@ -6,8 +6,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 
-const css = readFileSync(new URL("../src/app.css", import.meta.url), "utf8");
-const token = (name) => css.match(new RegExp(`^\\s*--${name}:\\s*([^;]+);`, "m"))?.[1].trim();
+/* app.css, then the IO tokens it imports, so a token that aliases an IO colour with var()
+   resolves to its hex. Other aliases stay as written, for the tests that pin them. */
+const css = ["../src/app.css", "../src/lib/theme/io-tokens.css"]
+  .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+  .join("\n");
+const token = (name) => {
+  const value = css.match(new RegExp(`^\\s*--${name}:\\s*([^;]+);`, "m"))?.[1].trim();
+  const alias = value?.match(/^var\(--(color-[\w-]+)\)$/);
+  return alias ? token(alias[1]) : value;
+};
 
 const luminance = (hex) => {
   const [r, g, b] = [1, 3, 5].map((i) => {

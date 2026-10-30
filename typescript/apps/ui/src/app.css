@@ -79,7 +79,8 @@
   --accent: #6173f3;
   --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */
-  --live: #ffc53d;
+  --color-attention: var(--color-amber-9);
+  --live: var(--color-attention);
   --model: #a9aef5;
   --reasoning: #53dfca;
   /* Identity, not outcome: --tool says a tool is what this is, the way --model and
