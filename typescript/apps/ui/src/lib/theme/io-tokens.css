@@ -1,9 +1,8 @@
 /* GENERATED — do not edit by hand.
 
-   Source: temporalio/ui src/lib/theme/io/themes @ 13427749, copied verbatim
-   into ./tokens/. To regenerate after re-copying those five files, flatten the
-   token objects to `--<path joined by dashes>` using the helpers ./tokens/index.ts
-   already exports:
+   Source: temporalio/ui src/lib/theme/io/themes @ 13427749. To regenerate
+   against a newer upstream, flatten its token objects to `--<path joined by
+   dashes>` using the helpers that directory's index.ts exports:
 
      toCssVariables(colorScales, 'color')            -> bare :root
      toCssVariables({ alpha: colorAlphaScales }, 'color') -> bare :root
