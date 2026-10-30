@@ -80,7 +80,7 @@ if (toggle) {
     timelineworst: "Worst timeline",
     logsworst: "Worst logs"
   };
-  for (const name of ["demo", "worst", "empty", "one", "huge", "markdown", "longcontent", "images", "attachments", "queue", "script", "sessions200", "sessions10k", "sessionsworst", "transcript5k", "frames100k", "run100k", "dense50k", "okf2k", "okf10k", "agents", "agents300", "soak", "timelineworst", "logsworst"]) {
+  for (const name of ["demo", "worst", "empty", "one", "huge", "markdown", "approvals", "longcontent", "images", "attachments", "queue", "script", "sessions200", "sessions10k", "sessionsworst", "transcript5k", "frames100k", "run100k", "dense50k", "okf2k", "okf10k", "agents", "agents300", "soak", "timelineworst", "logsworst"]) {
     const link = document.createElement("a");
     link.textContent = labels[name] ?? name[0].toUpperCase() + name.slice(1);
     link.href = `?mock=${name}`;
