@@ -951,8 +951,10 @@
      takes the rail, one at a time, and the rail snaps between them. At their own minimum
      widths the graph filled the screen and the chat sat off-canvas behind a scrollbar with
      nothing to say so; now every pane is a swipe, a minimap pip or Alt+Arrow away, and none
-     is clipped. Folded spines keep their width. The breakpoint is repeated as NARROW in
-     the script. */
+     is clipped. Folded spines keep their width, and snap by their trailing edge: with no
+     snap point of their own, mandatory snapping pulled every swipe that reached them back
+     to the open column before, so a spine after the last open column could never be
+     tapped. The breakpoint is repeated as NARROW in the script. */
   @media (max-width: 860px) {
     .rail {
       scroll-snap-type: x mandatory;
@@ -962,6 +964,10 @@
       flex: 0 0 100%;
       min-width: 0;
       scroll-snap-align: start;
+    }
+
+    .rail-slot.collapsed {
+      scroll-snap-align: end;
     }
   }
 </style>

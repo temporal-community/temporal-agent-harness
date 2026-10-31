@@ -738,6 +738,7 @@ vitest_test(
     deps = [
         ":paneStack.svelte",
         "//typescript/apps/ui/src/lib/panes:PaneRail",
+        "//typescript/apps/ui/src/lib/panes:registry",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

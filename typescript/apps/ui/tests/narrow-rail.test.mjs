@@ -30,7 +30,13 @@ describe("the pane rail on a narrow screen", () => {
   });
 
   it("leaves folded spines at their own width", () => {
-    assert.doesNotMatch(rule, /\.rail-slot\.collapsed/);
+    assert.doesNotMatch(rule, /\.rail-slot\.collapsed\s*\{[^}]*(flex|width)/);
+  });
+
+  /* Mandatory snapping with no snap point on a spine pulled every swipe that reached the
+     default desk's folded logs and latency back to the column before them. */
+  it("gives folded spines a snap point, so a swipe can rest on them", () => {
+    assert.match(rule, /\.rail-slot\.collapsed\s*\{[^}]*scroll-snap-align:\s*end;/);
   });
 
   it("shares one breakpoint between the stylesheet and the script that follows it", () => {

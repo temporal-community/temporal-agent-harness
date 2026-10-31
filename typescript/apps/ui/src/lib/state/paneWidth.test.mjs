@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, it } from "vitest";
 
+import { PANE_META, SPINE_SIZE } from "../panes/registry.ts";
 import { installBrowserSurface } from "../../../tests/support/controllerHarness.mjs";
 import { createPaneStack, slotKey } from "./paneStack.svelte.ts";
 
@@ -52,16 +53,52 @@ describe("a column's width", () => {
     assert.deepEqual(widths(reloaded), after, "a reload on a wider window restores every width");
   });
 
-  it("fills the window once on a first visit, through the flexible column", () => {
+  it("fits the window once on a first visit, through the flexible column", () => {
     installBrowserSurface();
+    const stack = createPaneStack();
+    stack.noteRailWidth(2400);
+    stack.enterSession(SESSION);
+    const { graph, chat, usage } = widths(stack);
+    assert.equal(graph + chat + usage + 2 * SPINE_SIZE, 2400, "the folded logs and latency count as spines");
+
+    stack.closePane("chat");
+    stack.noteRailWidth(3400);
+    assert.equal(widths(stack).graph, graph, "and never again");
+  });
+
+  /* The old default's first-visit fill left the state flow 1036px wide in storage, and
+     brought back on a reload that pushed every new column off the right edge. */
+  it("fits a returning visit too, ignoring desks saved before the default changed", () => {
+    installBrowserSurface();
+    const old = [
+      [{ id: "graph", collapsed: false, pinned: false, size: 1036 }],
+      [{ id: "chat", collapsed: false, pinned: false, size: 404 }]
+    ];
+    localStorage.setItem(
+      "temporal-agent-ui.desks.v1",
+      JSON.stringify({ [SESSION]: { desk: old, savedAt: Date.now() } })
+    );
     const stack = createPaneStack();
     stack.noteRailWidth(1440);
     stack.enterSession(SESSION);
-    const { graph, chat } = widths(stack);
-    assert.equal(graph + chat, 1440);
+    const fitted = widths(stack);
+    assert.equal(fitted.graph + fitted.chat + fitted.usage + 2 * SPINE_SIZE, 1440);
+  });
 
-    stack.closePane("chat");
-    stack.noteRailWidth(2400);
-    assert.equal(widths(stack).graph, graph, "and never again");
+  it("narrows the flexible column to fit a laptop, but never below its minimum", () => {
+    installBrowserSurface();
+    const laptop = createPaneStack();
+    laptop.noteRailWidth(1440);
+    laptop.enterSession(SESSION);
+    const fitted = widths(laptop);
+    assert.equal(fitted.graph + fitted.chat + fitted.usage + 2 * SPINE_SIZE, 1440, "the whole default desk on screen");
+    assert.equal(fitted.chat, PANE_META.chat.defaultSize, "only the state flow gives up width");
+
+    delete globalThis.window;
+    installBrowserSurface();
+    const narrow = createPaneStack();
+    narrow.noteRailWidth(900);
+    narrow.enterSession("wf-narrow");
+    assert.equal(widths(narrow).graph, PANE_META.graph.minSize, "a narrower window scrolls the rest");
   });
 });

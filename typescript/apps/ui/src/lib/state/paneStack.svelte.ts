@@ -145,17 +145,31 @@ function rememberedSize(size: unknown): number | null {
 }
 
 /**
- * Narration beside the thing it narrates.
+ * Everything a newcomer needs open at once, in a fixed place.
  *
- * The desk used to open on the chat, which made the chat the way in: a newcomer
- * arrived at a prompt and had to know what to type before the console showed them
- * anything. The example is already running by the time this renders, so the first
- * two columns are the account of that run and the run itself. The chat is one
- * gesture away, and comes forward on its own when a tool needs approving —
- * approvals are answered nowhere else.
+ * A reader who has never added a pane should not have to learn how before they
+ * can see the run, and a demo needs the same screen every time. So the desk opens
+ * on the state flow, the chat beside it at full height, and the tokens stacked
+ * over the agent state, with the logs and the latency waterfall folded to spines
+ * after them: on the desk, one click from open, without costing the width. The
+ * state flow gives up width to fit the rest; see `#fillOnce`. The stacked pair
+ * splits evenly: a fixed height for either one squeezes the other to nothing once
+ * the drawer is opened tall.
  */
 function defaultGroups(): Pane[][] {
-  return [[makePane({ kind: "graph" })], [makePane({ kind: "chat" })]];
+  const usage = makePane({ kind: "usage" });
+  const state = makePane({ kind: "state" });
+  usage.split = state.split = true;
+  const logs = makePane({ kind: "logs" });
+  const latency = makePane({ kind: "latency" });
+  logs.collapsed = latency.collapsed = true;
+  return [
+    [makePane({ kind: "graph" })],
+    [makePane({ kind: "chat" })],
+    [usage, state],
+    [logs],
+    [latency]
+  ];
 }
 
 /**
@@ -442,9 +456,10 @@ export class PaneStack {
 
   /**
    * A first visit has no saved widths, so the flexible column takes what the
-   * defaults leave of the rail, once, and keeps it as its own width. After that
-   * nothing fills the rail: a window resize changes no column, and room left
-   * over sits empty at the end of the rail.
+   * defaults leave of the rail, or gives back what they overflow it by down to
+   * its minimum, once, and keeps that as its own width. After that nothing fits
+   * the rail: a window resize changes no column, room left over sits empty at
+   * the end of the rail, and a rail too narrow scrolls.
    *
    * Waits for both a measured rail and the session's stored widths, so a
    * reload never fills over a width the reader saved.
@@ -463,7 +478,7 @@ export class PaneStack {
       (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.sizeOfGroup(item)),
       0
     );
-    if (used < this.#railWidth) {
+    if (used !== this.#railWidth) {
       this.setGroupSize(group[0].id, this.sizeOfGroup(group) + this.#railWidth - used);
     }
   }
@@ -1181,7 +1196,7 @@ export function dockFocusedPane(from: PaneStack, to: PaneStack): void {
 /**
  * Open the timeline when a visit names no desk.
  *
- * The rail already opens on the state flow and the chat. This is the other
+ * The rail already opens on its own default desk. This is the other
  * half: the pane the drawer exists for. A link that already spells `p` or
  * `p2` — including an explicit empty value — is a desk someone arranged, and
  * hydrate has already restored it, so it is left alone.
