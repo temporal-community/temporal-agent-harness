@@ -43,7 +43,7 @@ Two ways in, depending on what you want:
 
 | I want to… | Do this |
 | --- | --- |
-| **See it work** — chat with real agents in a browser | [Run the example agents](#try-it--run-the-example-agents) from a checkout |
+| **See it work** — chat with real agents in a browser | [Run the example agents](#try-the-example-agents) from a checkout |
 | **Build my own agent** | [Install from PyPI](#build-with-it--install-from-pypi) |
 
 The examples are the fastest path to something running, and they are **not shipped in the
@@ -996,7 +996,7 @@ UIs run the Node and pnpm Bazel pins — see
 ## Run the examples
 
 These run from a checkout or an unpacked
-[release archive](#try-it--run-the-example-agents) — the steps are identical.
+[release archive](#try-the-example-agents) — the steps are identical.
 
 One `.env.local` at the **project root** serves every example. Create it once:
 
