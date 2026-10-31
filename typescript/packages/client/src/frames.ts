@@ -31,6 +31,8 @@ type Payload<TType extends AgentEventType> = Extract<Protocol.AgentStreamItem, {
 interface Narrowed {
   text_annotation: { delta: TextAnnotationDelta };
   state_patch: { ops: JsonPatchOp[] };
+  /** JSON parsed from the wire never holds `undefined`, which the generated type allows. */
+  tool_end: { tool_output: JsonValue };
 }
 
 /** The flattened SSE `data` of one event type. */

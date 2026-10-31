@@ -7,7 +7,7 @@ import { z } from "zod";
 export const HANDLERS = ["run_reject", "run_enqueue", "run_accept"] as const;
 export type Handler = (typeof HANDLERS)[number];
 
-export const TOOL_NAMES = ["add", "echo", "fail", "gated", "ask_client"] as const;
+export const TOOL_NAMES = ["add", "lookup", "echo", "noop", "fail", "gated", "ask_client"] as const;
 
 const count = z.number().int().nullable().default(null);
 const TokenUsage = z.object({

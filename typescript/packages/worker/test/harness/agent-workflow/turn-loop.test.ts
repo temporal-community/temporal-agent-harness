@@ -135,6 +135,30 @@ describe("the turn loop", () => {
     assert.deepStrictEqual(started, [3]);
   });
 
+  it("tool_end carries the result as JSON, and a result with no JSON form fails the call", async () => {
+    const h = await env.start("ToolOutputAgent");
+    await send(h, "act", { text: "A-17" });
+    const events = await collect(env.client, h.workflowId);
+    const ends = new Map(
+      events.flatMap((e) => (e.event.type === "tool_end" ? [[e.event.tool_id, e.event]] : [])),
+    );
+    // A Date is its ISO string, and an undefined property is absent.
+    assert.deepStrictEqual(ends.get("receipt")?.tool_output, {
+      order_id: "A-17",
+      amount_cents: 1250,
+      tags: ["refund", "card"],
+      issued: "2026-10-29T00:00:00.000Z",
+    });
+    assert.equal(ends.get("nothing")?.tool_output, null);
+    assert.equal(ends.has("map"), false);
+    assert.deepStrictEqual(typesFor(events, "map"), ["tool_start", "tool_error"]);
+    assert.equal(
+      one(events, "tool_error").message,
+      "tool 'map_result' returned a value with no JSON form at $: a Map",
+    );
+    assert.equal(replyText(events), "caught:ActivityFailure");
+  });
+
   it("an activity tool heartbeats, so it may run past its heartbeat timeout", async () => {
     const h = await env.start("ToolRetryAgent");
     await send(h, "act", { text: "slow" });

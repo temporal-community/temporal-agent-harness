@@ -19,6 +19,7 @@ import asyncio
 import contextvars
 import functools
 import inspect
+import math
 import textwrap
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -38,7 +39,8 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 from temporalio import activity, workflow
 from temporalio.common import VersioningBehavior
 from temporalio.contrib.workflow_streams import (
@@ -3740,6 +3742,7 @@ def activity_tool_defn(
                 )
                 try:
                     result = await user_fn(*user_args, **kwargs)
+                    tool_output = _tool_output_json(tool_name, result)
                 except Exception as e:
                     pub.publish(
                         ToolErrorEvent(
@@ -3751,7 +3754,7 @@ def activity_tool_defn(
                     ToolEndEvent(
                         tool_id=tool_ctx.tool_id,
                         tool_name=tool_name,
-                        tool_output=str(result),
+                        tool_output=tool_output,
                     )
                 )
                 return result
@@ -3761,10 +3764,14 @@ def activity_tool_defn(
         activity_body.__doc__ = user_fn.__doc__
         activity_body.__module__ = user_fn.__module__
         activity_body.__signature__ = _signature_with_tool_ctx(sig.user_sig)  # type: ignore[attr-defined]
-        activity_body.__annotations__ = {
-            **getattr(user_fn, "__annotations__", {}),
-            "tool_ctx": AgentToolContext,
-        }
+        # Resolved here, in the tool's own module: Temporal resolves string annotations
+        # (`from __future__ import annotations`) against activity_body's globals, which are
+        # this module's, so a tool returning its own model would fail to define.
+        try:
+            user_hints = get_type_hints(user_fn, include_extras=True)
+        except Exception:
+            user_hints = dict(getattr(user_fn, "__annotations__", {}))
+        activity_body.__annotations__ = {**user_hints, "tool_ctx": AgentToolContext}
         the_activity = activity.defn(name=tool_name)(activity_body)
 
         config: ActivityConfig = {
@@ -3823,6 +3830,40 @@ def activity_tool_defn(
         return cast("Callable[_P, Awaitable[_R]]", dispatch)
 
     return decorator
+
+
+def _tool_output_json(tool_name: str, result: Any) -> JsonValue:
+    """``tool_end``'s ``tool_output``: the result as JSON, encoded as the pydantic data converter
+    encodes it, so an activity tool's output is the value its result carries in history.
+
+    A result with no JSON form fails the call, as does a float that is not finite (which JSON
+    would carry as ``null``): the protocol carries tool results as JSON, and a value that reaches
+    readers changed would mean something other than what the tool returned.
+    """
+
+    def not_json(what: str) -> ApplicationError:
+        return ApplicationError(
+            f"tool {tool_name!r} returned a value with no JSON form{what}",
+            type="ToolOutputNotJson",
+            non_retryable=True,
+        )
+
+    def check_finite(value: JsonValue, path: str) -> None:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise not_json(f" at {path}: {value}")
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                check_finite(item, f"{path}[{i}]")
+        elif isinstance(value, dict):
+            for k, item in value.items():
+                check_finite(item, f"{path}.{k}")
+
+    try:
+        output = cast("JsonValue", to_jsonable_python(result))
+    except PydanticSerializationError as e:
+        raise not_json(f": {e}") from None
+    check_finite(output, "$")
+    return output
 
 
 def tool_activity(tool: Callable[..., Any]) -> Callable[..., Any]:
@@ -3916,6 +3957,7 @@ def tool_defn(
             )
             try:
                 result = await user_fn(*args, **inject_kwargs, **kwargs)
+                tool_output = _tool_output_json(tool_name, result)
             except Exception as e:
                 runner._pub(
                     ctx.turn_id,
@@ -3926,7 +3968,7 @@ def tool_defn(
             runner._pub(
                 ctx.turn_id,
                 ctx.turn_number,
-                ToolEndEvent(tool_id=tool_id, tool_name=tool_name, tool_output=str(result)),
+                ToolEndEvent(tool_id=tool_id, tool_name=tool_name, tool_output=tool_output),
             )
             return result
 

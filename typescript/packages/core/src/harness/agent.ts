@@ -24,6 +24,7 @@ import {
   type AgentConfig,
   type InferInput,
   type InferOutput,
+  type JsonValue,
   type Schema,
   type AutoApprovalCriteria,
   type AutoModeEvaluator,
@@ -36,7 +37,6 @@ import {
   type HandlerImpl,
 } from "./agent-workflow.ts";
 import { errorMessage, isOwnCancellation } from "./agent-workflow/errors.ts";
-import { pyRepr } from "./py-repr.ts";
 import type { StateDecl, StateRef } from "./state/index.ts";
 import type { AnyHarnessTool, HarnessTool, ObjectSchema } from "./agent-workflow/types.ts";
 
@@ -98,12 +98,55 @@ export interface AgentToolContext {
 }
 
 /**
- * `tool_end`'s `tool_output`: the result as Python's `str()` renders it, as the Python harness
- * publishes it (a string as it is, `True`, `None`, `{'a': 1}`), until the protocol carries
- * structured results.
+ * `tool_end`'s `tool_output`: the result as JSON. A tool that returns nothing gives `null`, an
+ * object's `toJSON` is honored (a `Date` is its ISO string), and an object property that is
+ * `undefined` is absent, as the payload converter encodes them.
+ *
+ * Where `JSON.stringify` would lose data silently, the call fails instead: a `Map`, `Set` or other
+ * built-in object with no JSON form, a function, symbol or bigint, a number that is not finite, an
+ * `undefined` array item, or a cycle. The protocol carries tool results as JSON, and a value that
+ * reaches readers changed would mean something other than what the tool returned.
  */
-export function toolOutputText(result: unknown): string {
-  return typeof result === "string" ? result : pyRepr(result);
+export function toolOutputJson(toolName: string, result: unknown): JsonValue {
+  if (result === undefined) return null;
+  const notJson = (path: string, what: string) =>
+    ApplicationFailure.create({
+      type: "ToolOutputNotJson",
+      nonRetryable: true,
+      message: `tool '${toolName}' returned a value with no JSON form at ${path}: ${what}`,
+    });
+  const ancestors = new Set<object>();
+  const encode = (value: unknown, path: string, key: string): JsonValue => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw notJson(path, String(value));
+      return value;
+    }
+    if (typeof value !== "object") throw notJson(path, `a ${typeof value}`);
+    const toJSON = (value as { toJSON?: unknown }).toJSON;
+    if (typeof toJSON === "function") return encode(toJSON.call(value, key), path, key);
+    if (ancestors.has(value)) throw notJson(path, "a cycle");
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value))
+        return value.map((item, i) => {
+          if (item === undefined) throw notJson(`${path}[${i}]`, "undefined");
+          return encode(item, `${path}[${i}]`, String(i));
+        });
+      // Plain objects and class instances tag as `Object`; Map, Set, RegExp, Error, typed
+      // arrays and the like have no own fields for JSON to carry.
+      const tag = Object.prototype.toString.call(value).slice(8, -1);
+      if (tag !== "Object") throw notJson(path, `a ${tag}`);
+      const out: { [k: string]: JsonValue } = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (v !== undefined) out[k] = encode(v, `${path}.${k}`, k);
+      }
+      return out;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  return encode(result, "$", "");
 }
 
 function injectedValues(
@@ -177,8 +220,10 @@ function baseTool<I extends ObjectSchema, O extends Schema | undefined, J>(
         tool_input: toolInput,
       });
       let result: unknown;
+      let toolOutput: JsonValue;
       try {
         result = await body(input, values, toolId, runner);
+        toolOutput = toolOutputJson(options.name, result);
       } catch (e) {
         if (!isOwnCancellation(e))
           runner.pub(ctx.turn_id, ctx.turn_number, {
@@ -193,7 +238,7 @@ function baseTool<I extends ObjectSchema, O extends Schema | undefined, J>(
         type: "tool_end",
         tool_id: toolId,
         tool_name: options.name,
-        tool_output: toolOutputText(result),
+        tool_output: toolOutput,
       });
       return result as Output<O>;
     },

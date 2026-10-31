@@ -107,7 +107,7 @@ describe("the interactions activity's stream translation", () => {
         tool_input: { city: "Paris" },
       },
       { type: "tool_start", tool_id: "fs_1", tool_name: "file_search", tool_input: {} },
-      { type: "tool_end", tool_id: "fs_1", tool_name: "file_search", tool_output: "" },
+      { type: "tool_end", tool_id: "fs_1", tool_name: "file_search", tool_output: null },
       { type: "tool_requested", tool_id: "call_2", tool_name: "lookup", tool_input: { id: 7 } },
       // Malformed streamed arguments are shown as {} rather than failing the activity.
       { type: "tool_requested", tool_id: "call_3", tool_name: "lookup", tool_input: {} },

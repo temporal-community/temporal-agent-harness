@@ -41,9 +41,11 @@ The integration publishes only what a model integration would, and only what the
 | `subagent_start`, `subagent_send`, `subagent_stop` | nothing; the runner's subagent calls |
 | `raise` | nothing; the handler raises `message` and later steps never run |
 
-Its tools are `add` (an activity tool), `echo` (a workflow tool), `fail` (raises), `gated` (needs
+Its tools are `add` (an activity tool), `lookup` (an activity tool with a structured result),
+`echo` (a workflow tool), `noop` (a workflow tool with no result), `fail` (raises), `gated` (needs
 approval) and `ask_client` (a callback tool). A failed tool call or subagent turn does not end the
-handler, as in a model loop.
+handler, as in a model loop. `tool_end` carries each result as JSON, so `lookup`'s is an object
+and `noop`'s is `null`, from either SDK.
 
 Before any golden comparison, the test derives from each message's script the events the
 integration must publish and compares them with the recorded stream. A mismatch there means the
