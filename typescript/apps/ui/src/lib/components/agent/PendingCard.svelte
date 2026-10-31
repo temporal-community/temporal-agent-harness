@@ -84,7 +84,7 @@
   .head strong {
     flex: 1 1 0;
     min-width: 0;
-    color: var(--text-1);
+    color: var(--color-content-primary);
     font-family: var(--font-mono);
     font-size: var(--font-md);
     font-weight: 600;
@@ -103,7 +103,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-3);
+    color: var(--color-content-secondary);
     font-family: var(--font-mono);
     font-size: var(--font-2xs);
   }
@@ -152,7 +152,7 @@
     justify-content: flex-end;
     margin-inline: -12px;
     padding: 8px 12px 12px;
-    background: var(--surface-0);
+    background: var(--color-surface-primary);
   }
 
   /* Labelled, Approve, Always allow and Reject need about 290px inside the card. Narrower,

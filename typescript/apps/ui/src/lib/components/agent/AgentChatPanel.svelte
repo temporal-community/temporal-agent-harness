@@ -2292,13 +2292,13 @@
                 {/if}
               {/snippet}
               {#snippet foot()}
-                <Chip tone="success" fill="quiet" leadToned dense label="Approve" aria-label="Approve" data-tip="Approve" disabled={busy} onclick={(event) => void resolveApproval(event, request, true)}>
+                <Chip class="approval-button" tone="success" fill="quiet" leadToned dense label="Approve" aria-label="Approve" data-tip="Approve" disabled={busy} onclick={(event) => void resolveApproval(event, request, true)}>
                   {#snippet lead()}<Check size={12} />{/snippet}
                 </Chip>
-                <Chip tone="warning" fill="quiet" leadToned dense label="Always allow" aria-label="Always allow" data-tip="Always allow" disabled={busy} onclick={(event) => void resolveApproval(event, request, true, true)}>
+                <Chip class="approval-button" tone="warning" fill="quiet" leadToned dense label="Always allow" aria-label="Always allow" data-tip="Always allow" disabled={busy} onclick={(event) => void resolveApproval(event, request, true, true)}>
                   {#snippet lead()}<ShieldCheck size={12} />{/snippet}
                 </Chip>
-                <Chip tone="error" fill="quiet" toned dense label="Reject" aria-label="Reject" data-tip="Reject" disabled={busy} onclick={(event) => void resolveApproval(event, request, false)}>
+                <Chip class="approval-button approval-reject" tone="error" fill="quiet" toned dense label="Reject" aria-label="Reject" data-tip="Reject" disabled={busy} onclick={(event) => void resolveApproval(event, request, false)}>
                   {#snippet lead()}<CircleX size={12} />{/snippet}
                 </Chip>
               {/snippet}
@@ -3175,6 +3175,46 @@
 
   .activity-script-detail code {
     font: inherit;
+  }
+
+  /* The approval decisions on IO's tertiary button: a constant hairline and a tint that
+     answers hover and press, in sentence case at body size. The icons keep their tone, and
+     Reject its red label, with IO's danger border and overlay on top. Reaches into Chip by
+     class rather than changing the primitive; the selectors outrank Chip's own hover rules,
+     which would otherwise repaint the border in the chip's tone. */
+  .agent-chat :global(.chip.approval-button.interactive) {
+    border-color: var(--color-border-tertiary);
+    border-radius: 4px;
+    background: var(--color-interactive-tertiary);
+    color: var(--color-content-primary);
+    font-family: var(--font-sans);
+    font-size: var(--font-md);
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  .agent-chat :global(.chip.approval-button.interactive:hover:not(:disabled)) {
+    border-color: var(--color-border-tertiary);
+    background: var(--color-interactive-tertiary-hover);
+    color: var(--color-content-primary);
+  }
+
+  .agent-chat :global(.chip.approval-button.interactive:active:not(:disabled)) {
+    border-color: var(--color-border-tertiary);
+    background: var(--color-interactive-tertiary-press);
+  }
+
+  .agent-chat :global(.chip.approval-button.approval-reject.interactive) {
+    border-color: var(--color-border-danger);
+    background: var(--color-surface-overlay-danger);
+    color: var(--chip-color);
+  }
+
+  .agent-chat :global(.chip.approval-button.approval-reject.interactive:hover:not(:disabled)),
+  .agent-chat :global(.chip.approval-button.approval-reject.interactive:active:not(:disabled)) {
+    border-color: var(--color-border-danger);
+    background: var(--color-surface-danger);
+    color: var(--chip-color);
   }
 
   .approval-error {

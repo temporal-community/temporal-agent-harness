@@ -409,6 +409,27 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
   markdown.agents = agents.map((agent) => ({ ...agent, description: `${agent.description} Uses a *durable* **workflow** per session; see \`agents.toml\`.` }));
   markdown.sessions = [{ ...markdown.sessions[0]!, initial_user_message: plan }];
 
+  /* Four approvals waiting at once, so the attention queue stacks: short arguments, a list,
+     a long multi-line body, and none at all. */
+  const asked = () => ({ ...meta(1, (clock += 0.5)), message_id: "msg-approvals-0" });
+  const approve = (tool_id: string, tool_name: string, tool_input: Record<string, unknown>) => [
+    frame("tool_requested", { type: "tool_requested", ...asked(), tool_id, tool_name, tool_input }),
+    frame("tool_approval_requested", { type: "tool_approval_requested", ...asked(), tool_id, tool_name, tool_input })
+  ];
+  const approvals = scenario("approvals", "Approvals", [
+    frame("message_accepted", { type: "message_accepted", ...asked(), handler: "ask", payload: { text: "Close out the Northwind account." }, disposition: "opened" }),
+    frame("turn_started", { type: "turn_started", ...asked() }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...asked(), model: "gpt-5.4-mini" }),
+    ...approve("tool-approvals-charge", "charge_card", { customer: "Northwind", amount: 312, currency: "EUR" }),
+    ...approve("tool-approvals-delete", "delete_records", { table: "crm_contacts", ids: [1042, 1043, 1088, 1091, 1102] }),
+    ...approve("tool-approvals-email", "send_email", {
+      to: "ana@example.com",
+      subject: "Your Northwind account is closed",
+      body: "Hi Ana,\n\nYour account is closed and the final invoice of €312 has been charged.\nThe five contacts on file have been removed.\n\nThanks for working with us."
+    }),
+    ...approve("tool-approvals-archive", "archive_workspace", {})
+  ]);
+
   const pastedScript = Array.from({ length: 200 }, (_, i) => `print("pasted line ${i + 1}: ${i % 3 ? "שלום עולם" : "مرحبا بالعالم"}")`).join("\n");
   const longMarkdown = Array.from(
     { length: 300 },
@@ -483,5 +504,5 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     ...turn(3, "Show me the weekly signups chart.", [{ stream: reply, output: { text: reply }, chunk: 160 }], "ask")
   ]);
 
-  return { demo, worst, empty, one, huge, markdown, longcontent, images, attachments, queue, script };
+  return { demo, worst, empty, one, huge, markdown, approvals, longcontent, images, attachments, queue, script };
 }
