@@ -71,11 +71,11 @@ describe("pane ids across the rail and the drawer", () => {
     const { rail, drawer } = boot();
     rail.openPane({ kind: "timeline" }, "graph");
     assert.deepEqual(allIds(drawer), []);
-    assert.deepEqual(allIds(rail), ["graph", "timeline", "chat"]);
+    assert.deepEqual(allIds(rail), ["graph", "timeline", "chat", "usage", "state", "logs", "latency"]);
     assert.equal(rail.focusedId, "timeline");
 
     drawer.openPane({ kind: "timeline" });
-    assert.deepEqual(allIds(rail), ["graph", "chat"]);
+    assert.deepEqual(allIds(rail), ["graph", "chat", "usage", "state", "logs", "latency"]);
     assert.deepEqual(allIds(drawer), ["timeline"]);
 
     rail.focusPane("chat");
