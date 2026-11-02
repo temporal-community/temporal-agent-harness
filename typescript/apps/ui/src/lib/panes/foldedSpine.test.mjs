@@ -43,9 +43,7 @@ describe("a folded column", () => {
     assert.equal(spines(foldedPair(false)).length, 2);
   });
 
-  it("leaves a lone folded pane as one spine", () => {
-    const stack = createPaneStack();
-    stack.toggleCollapse(stack.openPane({ kind: "logs" }));
-    assert.deepEqual(spines(stack), ["Replay log / Logs"]);
+  it("leaves a lone folded pane as one spine, as the default desk's logs and latency are", () => {
+    assert.deepEqual(spines(createPaneStack()), ["Replay log / Logs", "Latency waterfall / Latency"]);
   });
 });

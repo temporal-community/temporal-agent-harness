@@ -29,7 +29,7 @@ describe("the bottom drawer default", () => {
     assert.deepEqual(drawer.groups.map((group) => group.map((pane) => pane.kind)), [["latency"]]);
   });
 
-  it("opens state flow and agent chat on the rail and the timeline in the drawer only when the URL names no desk", () => {
+  it("opens the default desk on the rail and the timeline in the drawer only when the URL names no desk", () => {
     const kinds = (stack) => stack.groups.map((group) => group.map((pane) => pane.kind));
     const visit = (search) => {
       globalThis.window = { location: { pathname: "/", search } };
@@ -42,7 +42,14 @@ describe("the bottom drawer default", () => {
     };
 
     const fresh = visit("");
-    assert.deepEqual(kinds(fresh.rail), [["graph"], ["chat"]]);
+    assert.deepEqual(kinds(fresh.rail), [["graph"], ["chat"], ["usage", "state"], ["logs"], ["latency"]]);
+    const [usage, state] = fresh.rail.groups[2];
+    assert.ok(usage.split && state.split, "tokens stacked over state, both on screen");
+    assert.deepEqual(
+      fresh.rail.collapsedPanes.map((pane) => pane.id),
+      ["logs", "latency"],
+      "logs and latency on the desk, folded"
+    );
     assert.deepEqual(kinds(fresh.drawer), [["timeline"]]);
 
     const linked = visit("?p=logs&p2=latency");
