@@ -12,9 +12,9 @@ Env vars:
     GOVERNED_ANALYTICS_DATA_DIR   where the .duckdb files are (default: the example's data/,
                                   written by `just data`)
 
-The tool policy itself is a separate service, the Dogwood verifier behind the `tool-verifier`
-Nexus endpoint (`just endpoint`, `just verifier`). Without it every gated call fails its
-check and goes to you for approval instead.
+The tool policy itself is a separate service, the Dogwood verifier behind the
+`playpen-verifier` Nexus endpoint (`just endpoint`, `just verifier`). Without it every
+gated call fails its check and goes to you for approval instead.
 """
 
 from __future__ import annotations

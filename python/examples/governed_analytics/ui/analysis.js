@@ -11,9 +11,10 @@
 // -- tool results ---------------------------------------------------------------------------------
 
 /**
- * A Python value's repr, as JSON-like data. A tool's `tool_output` is `str(result)`: for a
- * pydantic model that is `field=value field=value`, its nested models are `Name(field=value)`,
- * and lists, dicts, strings and numbers are Python's own reprs.
+ * A Python value's repr, as JSON-like data: how a Code Mode script's result is rendered, and how
+ * a tool's `tool_output` read before it became JSON. For a pydantic model that is
+ * `field=value field=value`, its nested models are `Name(field=value)`, and lists, dicts, strings
+ * and numbers are Python's own reprs.
  * @param {string} text
  * @returns {PyValue}
  */
@@ -153,12 +154,16 @@ export function parsePyRepr(text) {
 }
 
 /**
- * A tool's result as data: JSON, or a Python repr. `null` when it is neither.
- * @param {string | null} text
+ * A tool's result (`tool_output`) as data. It is JSON, so a non-string value is the data itself;
+ * a string may still hold JSON or a Python repr (a text result, or a session recorded before
+ * results were JSON). `undefined` when there is none or a string holds neither.
+ * @param {unknown} output
  * @returns {PyValue | undefined}
  */
-export function readResult(text) {
-  if (text === null) return undefined;
+export function readResult(output) {
+  if (output === null || output === undefined) return undefined;
+  if (typeof output !== "string") return /** @type {PyValue} */ (output);
+  const text = output;
   try {
     return JSON.parse(text);
   } catch {
@@ -169,6 +174,16 @@ export function readResult(text) {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A tool's result as text to show: a string as it is, anything else as indented JSON.
+ * @param {unknown} output
+ * @returns {string}
+ */
+export function outputText(output) {
+  if (output === null || output === undefined) return "";
+  return typeof output === "string" ? output : JSON.stringify(output, null, 2);
 }
 
 /**

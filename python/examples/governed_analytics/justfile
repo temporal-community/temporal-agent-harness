@@ -3,7 +3,7 @@
 #
 # Local stack (each in its own terminal):
 #   just temporal          # 1. local Temporal dev server (or bring your own)
-#   just endpoint          # 2. once per server: the tool-verifier Nexus endpoint
+#   just endpoint          # 2. once per server: the playpen-verifier Nexus endpoint
 #   just data              # 3. once: the bank's three DuckDB databases
 #   just verifier          # 4. the Dogwood verifier, serving policies/bank.dw
 #   just dev               # 5. session manager + UI on :8000 + this example's worker
@@ -51,7 +51,7 @@ temporal:
 
 # Create the Nexus endpoint the agent asks for verdicts, routed to the verifier's task queue.
 endpoint:
-    temporal operator nexus endpoint create --name tool-verifier \
+    temporal operator nexus endpoint create --name playpen-verifier \
         --target-namespace default --target-task-queue tool-verifier
 
 # Write the bank's three synthetic DuckDB databases into data/ (the same data every run).

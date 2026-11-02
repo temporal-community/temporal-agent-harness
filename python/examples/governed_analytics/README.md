@@ -47,7 +47,7 @@ From this directory, each in its own terminal:
 
 ```sh
 just temporal    # a local Temporal dev server (skip if you have one)
-just endpoint    # once per server: the tool-verifier Nexus endpoint
+just endpoint    # once per server: the playpen-verifier Nexus endpoint
 just data        # once: writes data/analytics.duckdb, risk.duckdb, customer_pii.duckdb
 just verifier    # the Dogwood verifier, enforcing policies/bank.dw
 just dev         # session manager, the console on http://localhost:8000, and the worker
@@ -194,9 +194,9 @@ Nothing in this repo runs Dogwood; these hold only once run against the real ver
 
 ## Troubleshooting
 
-- **The worker logs `BadScheduleNexusOperationAttributes: endpoint "tool-verifier" not found`
+- **The worker logs `BadScheduleNexusOperationAttributes: endpoint "playpen-verifier" not found`
   and the session stalls.** The server the worker is connected to (its startup line shows
-  `address` and `namespace`) has no `tool-verifier` endpoint, so the server rejects the policy
+  `address` and `namespace`) has no `playpen-verifier` endpoint, so the server rejects the policy
   check before the agent can handle it, and the workflow task retries until the endpoint
   exists. Run `just endpoint` against that server (`temporal operator nexus endpoint list`
   shows what's there); the stalled session continues on its own. `just endpoint` targets a

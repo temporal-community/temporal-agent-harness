@@ -10,7 +10,7 @@ Env vars:
     GOVERNED_ANALYTICS_DATA_DIR   where the .duckdb files are (default: the example's data/,
                                   written by `just data`)
 
-The flow asks the Dogwood verifier behind the `tool-verifier` Nexus endpoint before every
+The flow asks the Dogwood verifier behind the `playpen-verifier` Nexus endpoint before every
 step (`just endpoint`, `just verifier`). Without it, every step waits for the verifier.
 """
 

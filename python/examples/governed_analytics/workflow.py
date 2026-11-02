@@ -62,7 +62,7 @@ TASK_QUEUE = "governed-analytics-agent"
 # Tool calls reach the policy as "bank-analyst/<tool>", whatever the task queue.
 ACTION_PREFIX = "bank-analyst"
 # The Nexus endpoint the Dogwood verifier serves (`just endpoint` creates it).
-POLICY_ENDPOINT = "tool-verifier"
+POLICY_ENDPOINT = "playpen-verifier"
 CODE_TOOL_NAME = "run_analysis"
 
 # What a script can call: the data tools, asking a person for access, drawing charts, and

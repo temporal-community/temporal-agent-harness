@@ -4,7 +4,7 @@
 <script lang="ts">
   import type { ToolPart } from "@temporalio/agent-harness-svelte";
 
-  import { CHART_TOOLS, DATA_TOOLS, REPORT_TOOL, highlightPython, policyOf, readResult, readScriptOutput } from "./analysis.js";
+  import { CHART_TOOLS, DATA_TOOLS, REPORT_TOOL, highlightPython, outputText, policyOf, readResult, readScriptOutput } from "./analysis.js";
   import Chart, { CHART_KINDS } from "./Chart.svelte";
   import DataCall from "./DataCall.svelte";
   import ReportCard from "./ReportCard.svelte";
@@ -27,7 +27,7 @@
   const data = $derived(calls.filter((c) => DATA_TOOLS.includes(c.toolName)));
   const denied = $derived(calls.filter((c) => (DATA_TOOLS.includes(c.toolName) || c.toolName === REPORT_TOOL) && policyOf(c).verdict === "denied").length);
   const running = $derived(script !== null && script.state !== "done" && script.state !== "failed" && script.state !== "denied");
-  const output = $derived(script?.state === "done" && script.output ? readScriptOutput(script.output) : null);
+  const output = $derived(script?.state === "done" && script.output ? readScriptOutput(outputText(script.output)) : null);
   const failure = $derived(script?.state === "failed" ? script.error : (output?.error ?? null));
   const source = $derived(String(script?.input.script ?? ""));
   const lineNumbers = $derived(source.split("\n").map((_, i) => i + 1).join("\n"));

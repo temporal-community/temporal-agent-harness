@@ -12,8 +12,11 @@
   import Studio from "./Studio.svelte";
 
   const params = new URLSearchParams(location.search);
-  const API = params.get("api") ?? "http://localhost:8000/api/";
-  const TEMPORAL_UI = params.get("temporal-ui") ?? "http://localhost:8233/namespaces/default/workflows";
+  // Locally the page and the server are on different ports; behind one host (an ingress that
+  // routes /api/ to the server) the API is same-origin.
+  const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
+  const API = params.get("api") ?? (LOCAL ? "http://localhost:8000/api/" : new URL("/api/", location.origin).href);
+  const DEV_SERVER_TEMPORAL_UI = "http://localhost:8233/namespaces/default/workflows";
   const transport = new HttpTransport({ baseUrl: API });
 
   let sessionId = $state(params.get("session") ?? "");
@@ -23,6 +26,11 @@
   let initialPrompt = $state<string | null>(null);
   let sessions = $state<SessionSummary[]>([]);
   let apiDown = $state(false);
+  // Where the Temporal Web UI shows this server's workflows: `?temporal-ui=`, else what the server
+  // reports (it is the same for every session), else the local dev server's.
+  const temporalUi = $derived(
+    params.get("temporal-ui") ?? sessions.find((s) => s.temporal_workflows_url)?.temporal_workflows_url ?? DEV_SERVER_TEMPORAL_UI,
+  );
   let startError = $state<string | null>(null);
 
   // Titles are the first question of each conversation, kept in this browser.
@@ -119,7 +127,7 @@
       sessionId={sessionId || null}
       {transport}
       title={sessionId ? (titles[sessionId] ?? "Untitled analysis") : "New analysis"}
-      temporalUi={TEMPORAL_UI}
+      {temporalUi}
       {initialPrompt}
       oncreate={create}
       ontitle={(text) => sessionId && !titles[sessionId] && setTitle(sessionId, text)}

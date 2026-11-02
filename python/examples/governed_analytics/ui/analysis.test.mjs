@@ -16,6 +16,7 @@ import {
   parsePyRepr,
   policyOf,
   readReport,
+  outputText,
   readResult,
   readScriptOutput,
   reportRoute,
@@ -52,7 +53,16 @@ test("nested models, lists of models, dicts and special floats read as data", ()
   assert.deepEqual(parsePyRepr("welch_t=inf welch_df=None group='a\\nb'"), { welch_t: Infinity, welch_df: null, group: "a\nb" });
 });
 
-test("readResult takes JSON first, a repr next, and gives up on anything else", () => {
+test("outputText shows a string as it is and anything else as indented JSON", () => {
+  assert.equal(outputText("result: 3"), "result: 3");
+  assert.equal(outputText({ a: 1 }), '{\n  "a": 1\n}');
+  assert.equal(outputText(null), "");
+});
+
+test("readResult takes a JSON result as it is, and reads JSON or a repr out of a string", () => {
+  assert.deepEqual(readResult({ tables_read: ["analytics.branches"], rows: [[1]] }), { tables_read: ["analytics.branches"], rows: [[1]] });
+  assert.deepEqual(readResult([1, 2]), [1, 2]);
+  assert.equal(readResult(3), 3);
   assert.deepEqual(readResult('{"a": [1, 2]}'), { a: [1, 2] });
   assert.deepEqual(readResult("chart_id='t1'"), { chart_id: "t1" });
   assert.equal(readResult("not a value ("), undefined);

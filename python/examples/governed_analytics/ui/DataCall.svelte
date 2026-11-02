@@ -18,7 +18,7 @@
 <script lang="ts">
   import type { ToolPart } from "@temporalio/agent-harness-svelte";
 
-  import { dataOrigin, highlightSql, policyOf, readResult, tableKind } from "./analysis.js";
+  import { dataOrigin, highlightSql, outputText, policyOf, readResult, tableKind } from "./analysis.js";
   import ResultView from "./ResultView.svelte";
 
   interface Props {
@@ -133,7 +133,7 @@
             · {origin.restricted ? "holds restricted data, so this session's findings can't be published" : "analytics data only"}
           </p>
         {/if}
-        <ResultView tool={part.toolName} {result} raw={part.output ?? ""} />
+        <ResultView tool={part.toolName} {result} raw={outputText(part.output)} />
       {:else if part.state === "failed" && policy.verdict !== "denied"}
         <h5>Error</h5>
         <pre class="error">{part.error}</pre>

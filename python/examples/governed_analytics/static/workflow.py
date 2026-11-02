@@ -51,7 +51,7 @@ with workflow.unsafe.imports_passed_through():
 TASK_QUEUE = "governed-analytics-static"
 # As the agent's: calls reach the policy as "bank-analyst/<activity>", through the same endpoint.
 ACTION_PREFIX = "bank-analyst"
-POLICY_ENDPOINT = "tool-verifier"
+POLICY_ENDPOINT = "playpen-verifier"
 READ_TABLE = "read_table"
 
 async def sql_policy_input(activity: str, arguments: dict[str, Any]) -> PolicyInput:
