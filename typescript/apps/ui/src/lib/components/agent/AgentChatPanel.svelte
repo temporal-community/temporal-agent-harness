@@ -62,6 +62,7 @@
   import { dissolveClear, inputClearDissolve } from "$lib/motion/inputClearDissolve";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import LongContent from "$lib/components/primitives/LongContent.svelte";
   import { windowedFocus } from "$lib/components/primitives/windowedFocus";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -1898,10 +1899,7 @@
           <span>Connecting to {agentLabel}...</span>
         </div>
       {:else if closed && liveMessages.length === 0}
-        <div class="empty-chat closed-empty">
-          <CheckCircle2 size={18} />
-          <span>{agentLabel} is closed.</span>
-        </div>
+        <EmptyState title="{agentLabel} is closed" icon={CheckCircle2} />
       {:else if error && liveMessages.length === 0}
         <div class="empty-chat error">
           <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
@@ -1915,10 +1913,9 @@
              Gated on the whole run rather than the view: `messages` empties
              again at scrub position zero, and a 1,830-frame session parked at
              its start has plenty to show. -->
-        <div class="empty-chat">
-          <MessageCircle size={18} />
-          <span>No events yet. Ask {agentLabel} something to start this session.</span>
-        </div>
+        <EmptyState title="No events yet" icon={MessageCircle}>
+          <p>Ask {agentLabel} something to start this session.</p>
+        </EmptyState>
       {/if}
 
       <!-- A feed with no articles is announced as an empty feed, so the role waits for rows. -->
@@ -2622,10 +2619,6 @@
 
   .empty-chat.error {
     color: var(--error);
-  }
-
-  .empty-chat.closed-empty {
-    color: var(--success);
   }
 
   .message-rows {

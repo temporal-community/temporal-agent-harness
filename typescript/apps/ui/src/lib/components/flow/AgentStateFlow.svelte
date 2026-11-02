@@ -29,6 +29,7 @@
   import AgentStateNode, { kindFromState, setNodeOpener } from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
+  import StateFlowEmpty from "./StateFlowEmpty.svelte";
 
   /* Asked per rearrangement rather than cached, so the setting takes effect
      without a reload. Absent matchMedia (the self-check paths) means no motion
@@ -49,9 +50,28 @@
     focus: boolean;
     onFocusChange: (focus: boolean) => void;
     onNodeSelect?: (nodeId: string) => void;
+    /**
+     * Whether the whole run, not the cursor's view of it, has a turn. Until it does the
+     * pane shows its empty state, and scrubbing a run that has turns back to its start
+     * keeps the graph.
+     */
+    runHasTurns?: boolean;
+    /** The agent the empty state names. */
+    agentLabel?: string;
+    /** Names of the handlers the agent declares, which the empty state lists. */
+    accepts?: string[];
   }
 
-  let { graph, ready, focus, onFocusChange, onNodeSelect }: Props = $props();
+  let {
+    graph,
+    ready,
+    focus,
+    onFocusChange,
+    onNodeSelect,
+    runHasTurns = true,
+    agentLabel = "",
+    accepts = []
+  }: Props = $props();
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let settled = $state(false);
@@ -241,6 +261,9 @@
   });
 </script>
 
+{#if !runHasTurns}
+  <StateFlowEmpty {agentLabel} {accepts} />
+{:else}
 <div class="flow-wrap" class:settled bind:this={flowWrapElement}>
   <!-- A plain wheel belongs to the rail, so a sideways scroll over the graph still
        moves between panes. Pinch (ctrl+wheel), the corner buttons and dragging
@@ -383,6 +406,7 @@
     </dialog>
   {/if}
 </div>
+{/if}
 
 <style>
   .flow-wrap {

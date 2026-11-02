@@ -1,6 +1,6 @@
 <script lang="ts">
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
-  import { Search, X, XCircle } from "@lucide/svelte";
+  import { ListFilter, ScrollText, Search, X, XCircle } from "@lucide/svelte";
   import { rowIcon } from "$lib/components/flow/WorkflowTimeline.svelte";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
   import { untrack } from "svelte";
@@ -51,6 +51,12 @@
     activeOrdinal: number | null;
     filter?: TranscriptFilter;
     onFilterChange?: (filter: TranscriptFilter) => void;
+    /**
+     * Whether the whole run has any event, not just the run as of the cursor. `groups` is
+     * the run as of the cursor, so gating the filters on it would drop them every time the
+     * reader scrubbed back to the first step.
+     */
+    runHasEvents?: boolean;
   }
 
   let {
@@ -59,7 +65,8 @@
     activeRowId = null,
     activeOrdinal,
     filter = "all",
-    onFilterChange
+    onFilterChange,
+    runHasEvents = true
   }: Props = $props();
   let expandedRows = $state<Record<string, boolean>>({});
   /* Heads the reader folded or opened, by step id; any other keeps logLines' default. */
@@ -430,49 +437,52 @@
 </script>
 
 <section class="transcript" aria-label="Replay logs">
-  <div class="transcript-controls">
-    <div class="filter-row">
-      <div class="filter-chips" role="group" aria-label="Filter logs">
-        {#each filters as item (item.key)}
-          <Chip
-            label={item.label}
-            tone="accent"
-            size="xs"
-            fill="quiet"
-            active={filter === item.key}
-            aria-pressed={filter === item.key}
-            onclick={() => onFilterChange?.(item.key)}
-          />
-        {/each}
+  <!-- Nothing to filter or search in a run with no events, so its empty state stands alone. -->
+  {#if runHasEvents}
+    <div class="transcript-controls">
+      <div class="filter-row">
+        <div class="filter-chips" role="group" aria-label="Filter logs">
+          {#each filters as item (item.key)}
+            <Chip
+              label={item.label}
+              tone="accent"
+              size="xs"
+              fill="quiet"
+              active={filter === item.key}
+              aria-pressed={filter === item.key}
+              onclick={() => onFilterChange?.(item.key)}
+            />
+          {/each}
+        </div>
+        <span class="event-count" dir="auto">
+          {filtering ? `${shownRows}/${plural(totalRows, "event")}` : plural(totalRows, "event")}
+        </span>
       </div>
-      <span class="event-count" dir="auto">
-        {filtering ? `${shownRows}/${plural(totalRows, "event")}` : plural(totalRows, "event")}
-      </span>
+      <div class="field">
+        <Search size={14} aria-hidden="true" />
+        <input
+          type="search"
+          placeholder="Search events"
+          bind:this={searchInput}
+          bind:value={query}
+          aria-label="Search log events"
+          use:inputClearDissolve
+          onkeydown={handleSearchKeydown}
+        />
+        {#if query}
+          <IconButton class="clear-search" label="Clear search" onclick={clearSearch}>
+            <X size={13} aria-hidden="true" />
+          </IconButton>
+        {/if}
+      </div>
     </div>
-    <div class="field">
-      <Search size={14} aria-hidden="true" />
-      <input
-        type="search"
-        placeholder="Search events"
-        bind:this={searchInput}
-        bind:value={query}
-        aria-label="Search log events"
-        use:inputClearDissolve
-        onkeydown={handleSearchKeydown}
-      />
-      {#if query}
-        <IconButton class="clear-search" label="Clear search" onclick={clearSearch}>
-          <X size={13} aria-hidden="true" />
-        </IconButton>
-      {/if}
-    </div>
-  </div>
+  {/if}
 
   <div class="items" tabindex="-1" bind:this={itemsElement} onscroll={follower.handleScroll} {@attach turnFocus}>
     {#if groups.length === 0}
-      <EmptyState title="Step through the stream to build the logs." />
+      <EmptyState title="Step through the stream to build the logs." icon={ScrollText} />
     {:else if visibleGroups.length === 0}
-      <EmptyState title="No events match this filter." />
+      <EmptyState title="No events match this filter." icon={ListFilter} />
     {:else}
       <!-- Keyed, because a scrub inserts into the MIDDLE of this list rather than only
            appending to it. Rows arrive in frame order but render grouped by turn, and

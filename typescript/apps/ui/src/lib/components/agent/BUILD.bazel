@@ -23,6 +23,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/components/primitives:LongContent",
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
@@ -51,6 +52,7 @@ js_library(
     srcs = ["AgentStatePanel.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
