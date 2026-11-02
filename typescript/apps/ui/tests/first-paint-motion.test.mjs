@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 
-import { withFitBound } from "../src/lib/components/flow/AutoFitView.svelte";
+import { knownFitViewport, withFitBound } from "../src/lib/components/flow/AutoFitView.svelte";
 
 const read = (path) => readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");
 const app = read("App.svelte");
@@ -36,17 +36,32 @@ describe("first paint motion", () => {
   it("settles the graph before enabling viewport, node, and edge motion", () => {
     assert.match(flow, /!ready \|\| !settled \|\| reduceMotion\(\)/);
     assert.match(flow, /edge\.animated \? \{ \.\.\.edge, animated: false \} : edge/);
-    assert.match(flow, /\.flow-wrap:not\(\.settled\) :global\(\.svelte-flow__viewport \*\) \{\s*visibility: hidden !important;/);
-    assert.match(autoFit, /const \{ fitView, getNodes \} = useSvelteFlow\(\)/);
-    assert.match(autoFit, /await waitForMeasuredNodes\(request\)/);
-    assert.match(autoFit, /current && current === previous/);
+    assert.match(flow, /\.flow-wrap:not\(\.settled\) :global\(\.svelte-flow__viewport \*\),\s*\.flow-wrap:not\(\.settled\) :global\(\.svelte-flow__minimap-node\) \{\s*visibility: hidden !important;/);
+    assert.match(autoFit, /knownFitViewport\(graphNodes, store\.width, store\.height, fitViewOptions\)/);
+    assert.match(flow, /graphNodes=\{graph\.nodes\}/);
     assert.match(autoFit, /const alone = settled &&/);
     assert.match(autoFit, /duration: alone \? 120 : 0/);
     assert.match(autoFit, /settled = true;\s*onSettled\(\);/);
   });
 
-  it("settles a fitView promise that never resolves", async () => {
+  it("settles a viewport promise that never resolves", async () => {
     const result = await withFitBound(new Promise(() => {}));
     assert.equal(result, true);
+  });
+
+  it("frames the graph from its known sizes, before anything is measured", () => {
+    const nodes = [
+      { id: "a", position: { x: 0, y: 0 }, width: 200, height: 100, data: {} },
+      { id: "b", position: { x: 800, y: 300 }, width: 200, height: 100, data: {} }
+    ];
+    const viewport = knownFitViewport(nodes, 1000, 500, { padding: 0, minZoom: 0.04, maxZoom: 1 });
+    assert.deepEqual(viewport, { x: 0, y: 50, zoom: 1 });
+  });
+
+  it("caps the fit at 1:1 and waits for a pane with a size", () => {
+    const nodes = [{ id: "a", position: { x: 0, y: 0 }, width: 230, height: 130, data: {} }];
+    assert.equal(knownFitViewport(nodes, 1000, 500, { padding: 0.16, minZoom: 0.04, maxZoom: 1 })?.zoom, 1);
+    assert.equal(knownFitViewport(nodes, 0, 500, { padding: 0.16 }), null);
+    assert.equal(knownFitViewport([], 1000, 500, { padding: 0.16 }), null);
   });
 });

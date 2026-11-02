@@ -1,4 +1,4 @@
-import type { Edge, Node } from "@xyflow/svelte";
+import type { Edge, Node, NodeHandle, Position } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
@@ -8,7 +8,14 @@ import type {
 import { kindFromState } from "$lib/components/flow/AgentStateNode.svelte";
 import type { Metric } from "$lib/components/primitives/metrics";
 import { STATUS_TONES } from "$lib/components/primitives/StatusChip.svelte";
-import { formatTokens, summarizeCost, tokenFigure, UNREPORTED_TIP, type CostSummary } from "$lib/cost/pricing";
+import {
+  costLedger,
+  formatTokens,
+  mergeCostSummaries,
+  tokenFigure,
+  UNREPORTED_TIP,
+  type CostSummary
+} from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { handlerReply, outputSchemaTracker, streamingIsData, stripJsonFence } from "$lib/state/handlerReply";
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
@@ -36,6 +43,8 @@ export interface AgentNodeData {
   detail?: string;
   /** A runtime boundary's one line on why its detail is missing. */
   reason?: string;
+  /** The header height the layout reserved around `reason`, which its text may not fill. */
+  headerHeight?: number;
   /** `detail` is a prose reply, drawn as markdown; decided by handlerReply's rule. */
   markdown?: boolean;
   active?: boolean;
@@ -186,6 +195,8 @@ export interface AgentGraphSource {
   executionStatus?: string;
 }
 
+/* Scalar fields only, here and in EvaluationRuntime: a checkpoint copies each record with a
+   spread, so a nested array or object would be shared with the save and corrupt a restore. */
 interface ToolRuntime {
   id: ToolId;
   name: string;
@@ -591,6 +602,9 @@ function sameFailedRetry(a: ToolRuntime | undefined, b: ToolRuntime | undefined)
 /**
  * Consecutive identical failures (same tool name + same error) become one card
  * with a count. Successful / distinct tools stay in order — not a focus-view fold.
+ *
+ * Restacked runtimes are written back to `tools` as copies: the ones in it may belong to a
+ * fold that draws the same turn again.
  */
 function collapseConsecutiveFailedRetries(
   order: RuntimeNodeId[],
@@ -608,9 +622,12 @@ function collapseConsecutiveFailedRetries(
     ) {
       const head = tools.get(toolIdFromRuntimeNodeId(prev))!;
       const next = tools.get(toolIdFromRuntimeNodeId(id))!;
-      head.retryCount = (head.retryCount ?? 1) + 1;
-      head.detail = next.detail;
-      head.output = next.output;
+      tools.set(toolIdFromRuntimeNodeId(prev), {
+        ...head,
+        retryCount: (head.retryCount ?? 1) + 1,
+        detail: next.detail,
+        output: next.output
+      });
       redirect.set(id, prev);
       continue;
     }
@@ -775,6 +792,57 @@ function runtimeLayoutFor(
   };
 }
 
+function nodeDimensions(item: Node<AgentNodeData>): NodeDimensions {
+  return item.type === "agentWorkflow"
+    ? {
+        width: numericData(item.data, "boundaryWidth", runtimeBoundaryWidth(1)),
+        height: numericData(item.data, "boundaryHeight", runtimeBoundaryHeight(1))
+      }
+    : dimensionsForData(item.data);
+}
+
+/* xyflow reads a handle's box from the DOM; these are the same boxes, from the
+   handle rules in AgentStateNode and AgentWorkflowNode. A card's handles sit in
+   its 1px border, pulled out by half of it; a boundary's sit on the node box,
+   pulled out by 1px. */
+function port(id: string, type: NodeHandle["type"], position: string, x: number, y: number): NodeHandle {
+  return { id, type, position: position as Position, x, y, width: 0, height: 0 };
+}
+
+function handlesFor(type: string | undefined, { width, height }: NodeDimensions): NodeHandle[] {
+  if (type === "agentWorkflow") {
+    return [
+      port("target-top", "target", "top", width / 2 - 1, -1),
+      port("source-bottom", "source", "bottom", width / 2 - 1, height + 1)
+    ];
+  }
+  const midX = width / 2 - 0.5;
+  const midY = height / 2 - 0.5;
+  return [
+    port("target-left", "target", "left", 0.5, midY),
+    port("target-top", "target", "top", midX, 0.5),
+    port("target-bottom", "target", "bottom", midX, height - 0.5),
+    port("source-right", "source", "right", width - 0.5, midY),
+    port("source-top", "source", "top", midX, 0.5),
+    port("source-bottom", "source", "bottom", midX, height - 0.5)
+  ];
+}
+
+/**
+ * Every node carries the size it was laid out at, and its ports.
+ *
+ * Without them xyflow hides each new node object until it has measured it in the
+ * DOM, and draws no edge into it until it has found its handles there. Every
+ * frame rebuilds every node, so that was every card, hidden and re-measured, on
+ * every frame. The cards fill exactly this box (AgentStateNode, AgentWorkflowNode).
+ */
+function withKnownSizes(nodes: Node<AgentNodeData>[]): Node<AgentNodeData>[] {
+  return nodes.map((item) => {
+    const dimensions = nodeDimensions(item);
+    return { ...item, ...dimensions, handles: handlesFor(item.type, dimensions) };
+  });
+}
+
 function graphBounds(graph: AgentGraph): GraphBounds {
   if (graph.nodes.length === 0) {
     return { minX: 0, minY: 0, width: 0, height: 0 };
@@ -784,13 +852,7 @@ function graphBounds(graph: AgentGraph): GraphBounds {
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
   for (const item of graph.nodes) {
-    const dimensions =
-      item.type === "agentWorkflow"
-        ? {
-            width: numericData(item.data, "boundaryWidth", runtimeBoundaryWidth(1)),
-            height: numericData(item.data, "boundaryHeight", runtimeBoundaryHeight(1))
-          }
-        : dimensionsForData(item.data);
+    const dimensions = nodeDimensions(item);
     minX = Math.min(minX, item.position.x);
     minY = Math.min(minY, item.position.y);
     maxX = Math.max(maxX, item.position.x + dimensions.width);
@@ -1143,106 +1205,268 @@ function tokenMetric(label: string, settled: number, streaming: boolean, unrepor
 }
 
 export function buildAgentGraph(
-  frames: AgentSseFrame[],
+  frames: readonly AgentSseFrame[],
   options: AgentGraphOptions = {}
 ): AgentGraph {
-  const inputPlacement = options.inputPlacement ?? "external";
-  const showSubagentDispatch = options.showSubagentDispatch ?? true;
-  const outputPlacement = options.outputPlacement ?? "external";
-  const agentInterface = summarizeAgentInterface(options.agentInterface);
-  const schemaOf = outputSchemaTracker();
-  const lingeringTools = options.linger ?? noLingeringTools;
-  let activeTurn: number | null = null;
-  let status: AgentGraph["status"] = "idle";
-  let failed = false;
-  let currentUserMessage = "No message received";
-  let queuedMessage = "";
+  return agentGraphBuilder()(frames, options);
+}
+
+/**
+ * One agent's graph, folded forward and kept between calls, the way stepTimelineBuilder
+ * keeps the step timeline.
+ *
+ * Rebuilding it per commit was a pass over every frame the agent ever sent, which at
+ * 100,000 frames cost most of a live append. While the last frame folded is still at
+ * its index, only the new frames are folded in. A shorter input, or one that is not an
+ * extension, folds on from the last checkpoint it still holds, or starts over if it holds
+ * none; one folded with other placements or another interface starts over.
+ * Drawing the graph reads only the turn in hand, so it runs on every call.
+ */
+export function agentGraphBuilder(): (
+  frames: readonly AgentSseFrame[],
+  options?: AgentGraphOptions
+) => AgentGraph {
+  const keep = agentFoldKeeper();
+  return (frames, options = {}) => keep(frames, options).render(options);
+}
+
+/* How many frames apart the keeper saves the fold, and how many saves it keeps. A step back
+   folds on from the last save at or before the cursor, so it reads at most this many frames
+   rather than the whole run. Past the cap the spacing doubles and every other save goes. */
+const CHECKPOINT_EVERY = 2000;
+const MAX_CHECKPOINTS = 64;
+
+function agentFoldKeeper(every = CHECKPOINT_EVERY): (
+  frames: readonly AgentSseFrame[],
+  options: AgentGraphOptions
+) => AgentGraphFold {
+  let fold: AgentGraphFold | undefined;
+  let foldedWith: AgentGraphOptions = {};
+  let seen = 0;
+  let last: AgentSseFrame | undefined;
+  /* checkpoints[k] puts the fold back at its first (k + 1) * stride frames, the last of which
+     was `frame`; `empty` puts it back at none. Starting over by restoring `empty` rather than
+     with a new fold keeps the later saves, so a jump to the start and back is cheap too. */
+  let checkpoints: { frame: AgentSseFrame; restore: () => void }[] = [];
+  let empty = () => {};
+  let stride = every;
+
+  function save(count: number, frame: AgentSseFrame, at: AgentGraphFold): void {
+    const k = count / stride - 1;
+    if (k > checkpoints.length || checkpoints[k]?.frame === frame) return;
+    /* A save from another history, and every save after it, no longer describe these frames. */
+    checkpoints.length = k;
+    checkpoints.push({ frame, restore: at.checkpoint() });
+    if (checkpoints.length > MAX_CHECKPOINTS) {
+      checkpoints = checkpoints.filter((_, index) => index % 2 === 1);
+      stride *= 2;
+    }
+  }
+
+  return (frames, options) => {
+    if (!fold || !sameFold(foldedWith, options)) {
+      fold = agentGraphFold(options);
+      foldedWith = options;
+      seen = 0;
+      checkpoints = [];
+      empty = fold.checkpoint();
+      stride = every;
+    }
+    const grows = frames.length >= seen && (seen === 0 || frames[seen - 1] === last);
+    /* The last save these frames still hold. One they no longer hold, and those after it,
+       came from frames they replaced. */
+    const reach = Math.min(checkpoints.length, Math.floor(frames.length / stride));
+    let held = reach;
+    while (held > 0 && checkpoints[held - 1].frame !== frames[held * stride - 1]) held -= 1;
+    if (held < reach) checkpoints.length = held;
+    if (!grows || seen < held * stride) {
+      (held > 0 ? checkpoints[held - 1].restore : empty)();
+      seen = held * stride;
+    }
+    for (let index = seen; index < frames.length; index += 1) {
+      fold.add(frames[index]);
+      if ((index + 1) % stride === 0) save(index + 1, frames[index], fold);
+    }
+    seen = frames.length;
+    last = frames[seen - 1];
+    return fold;
+  };
+}
+
+/* An empty interface and a missing one fold alike, and callers hand over a fresh `[]` each time. */
+function sameFold(a: AgentGraphOptions, b: AgentGraphOptions): boolean {
+  return (
+    a.inputPlacement === b.inputPlacement &&
+    a.outputPlacement === b.outputPlacement &&
+    a.showSubagentDispatch === b.showSubagentDispatch &&
+    (a.agentInterface === b.agentInterface ||
+      (!a.agentInterface?.length && !b.agentInterface?.length))
+  );
+}
+
+interface AgentGraphFold {
+  add(frame: AgentSseFrame): void;
+  /** The subagent lifecycle frames folded so far, in order, whether or not this graph draws them. */
+  readonly delegations: readonly AgentSseFrame[];
+  usage(): CostSummary;
+  /** Saves where the fold is; calling what it returns puts the fold back there, any number of times. */
+  checkpoint(): () => void;
+  /** Reads the fold without changing it, so it can draw the same frames any number of times. */
+  render(options: AgentGraphOptions): AgentGraph;
+}
+
+/** Everything add() changes, but for the ledger, the schema tracker and the two logs,
+    which checkpoint() keeps by other means. */
+interface AgentFoldState {
+  activeTurn: number | null;
+  status: AgentGraph["status"];
+  failed: boolean;
+  currentUserMessage: string;
+  queuedMessage: string;
   /* The envelope the rendered text came from — `{type, payload}` as the message was sent —
      so the inspector can show the raw message next to the readable one. */
-  let currentUserEnvelope = "";
-  let inputState = "waiting";
-  let currentModel = "model idle";
-  let modelState = "idle";
-  let reasoningState = "idle";
-  let reasoningDetail = "";
+  currentUserEnvelope: string;
+  inputState: string;
+  currentModel: string;
+  modelState: string;
+  reasoningState: string;
+  reasoningDetail: string;
   /* When the model call that is doing the thinking opened, and when the last thought
      fragment landed — the two ends of "Thought for 4s". Both are frame timestamps the
      stream already stamps; nothing new is measured here. */
-  let reasoningStartTs: number | null = null;
-  let reasoningEndTs: number | null = null;
-  let replyText = "";
-  let replyIsData = false;
-  let replyState = "waiting";
-  let queued = 0;
-  const queuedByTurn = new Map<number, [message: string, envelope: string]>();
-  let runtimeHeaderPrefix: string | undefined;
-  let subagentState = "idle";
-  let subagentSubtitle = "";
-  let subagentDetail = "";
-  const tools = new Map<ToolId, ToolRuntime>();
-  const codeModeChildren = new Map<ToolId, ToolId[]>();
+  reasoningStartTs: number | null;
+  reasoningEndTs: number | null;
+  replyText: string;
+  replyIsData: boolean;
+  replyState: string;
+  queued: number;
+  queuedByTurn: Map<number, [message: string, envelope: string]>;
+  runtimeHeaderPrefix: string | undefined;
+  subagentState: string;
+  subagentSubtitle: string;
+  subagentDetail: string;
+  tools: Map<ToolId, ToolRuntime>;
+  codeModeChildren: Map<ToolId, ToolId[]>;
   /* Keyed by evaluation_id, not tool_id: an agent may chain evaluators over one call. */
-  const evaluations = new Map<string, EvaluationRuntime>();
+  evaluations: Map<string, EvaluationRuntime>;
   /* Gates that have been decided. An evaluation card is about a gate; once the gate is
      resolved the card has no subject left, and leaving it up next to a now-running tool
      reads as though approval were still outstanding. */
-  const resolvedApprovalToolIds = new Set<ToolId>();
+  resolvedApprovalToolIds: Set<ToolId>;
   /* Decided by REFUSAL specifically — the calls whose gate also ended the call. Tracked
      apart from the set above because the linger rule below may only ever apply to these;
      see the note there. */
-  const deniedApprovalToolIds = new Set<ToolId>();
+  deniedApprovalToolIds: Set<ToolId>;
   /* Children are not in `runtimeNodeOrder` and so are not reached by the fold that
      drops settled tools. They get their own set, filled from the same call sites, so
      both halves of the graph answer "has this finished" the same way. */
-  const settledChildToolIds = new Set<ToolId>();
-  const activeCodeModeToolIds: ToolId[] = [];
-  const activeRuntimeToolIds = new Set<ToolId>();
-  let runtimeToolFlowGroup = 0;
-  const runtimeNodeOrder: RuntimeNodeId[] = [];
+  settledChildToolIds: Set<ToolId>;
+  activeCodeModeToolIds: ToolId[];
+  activeRuntimeToolIds: Set<ToolId>;
+  runtimeToolFlowGroup: number;
+  runtimeNodeOrder: RuntimeNodeId[];
   /* What the fold has put in runtimeNodeOrder: a turn of hundreds of tools made its
      `includes` the fold's hottest line. */
-  const runtimeNodes = new Set<RuntimeNodeId>();
-  let inputSeen = false;
-  let outputSeen = false;
-  let latestNodeId: LocalNodeId | null = null;
+  runtimeNodes: Set<RuntimeNodeId>;
+  inputSeen: boolean;
+  outputSeen: boolean;
+  latestNodeId: LocalNodeId | null;
   /**
    * The last frame that touched each node, so no node can be reduced to an
    * apology. Every node in this graph exists BECAUSE a frame put it there, and
    * that frame is a better answer than a sentence saying there is nothing to
    * read — it is the ground truth the rest of the card is derived from.
    */
-  const lastFrameByNode = new Map<LocalNodeId, AgentSseFrame["data"]>();
-  let currentFrame: AgentSseFrame | null = null;
+  lastFrameByNode: Map<LocalNodeId, AgentSseFrame["data"]>;
+  currentFrame: AgentSseFrame | null;
+}
+
+function initialState(): AgentFoldState {
+  return {
+    activeTurn: null,
+    status: "idle",
+    failed: false,
+    currentUserMessage: "No message received",
+    queuedMessage: "",
+    currentUserEnvelope: "",
+    inputState: "waiting",
+    currentModel: "model idle",
+    modelState: "idle",
+    reasoningState: "idle",
+    reasoningDetail: "",
+    reasoningStartTs: null,
+    reasoningEndTs: null,
+    replyText: "",
+    replyIsData: false,
+    replyState: "waiting",
+    queued: 0,
+    queuedByTurn: new Map<number, [message: string, envelope: string]>(),
+    runtimeHeaderPrefix: undefined,
+    subagentState: "idle",
+    subagentSubtitle: "",
+    subagentDetail: "",
+    tools: new Map<ToolId, ToolRuntime>(),
+    codeModeChildren: new Map<ToolId, ToolId[]>(),
+    evaluations: new Map<string, EvaluationRuntime>(),
+    resolvedApprovalToolIds: new Set<ToolId>(),
+    deniedApprovalToolIds: new Set<ToolId>(),
+    settledChildToolIds: new Set<ToolId>(),
+    activeCodeModeToolIds: [],
+    activeRuntimeToolIds: new Set<ToolId>(),
+    runtimeToolFlowGroup: 0,
+    runtimeNodeOrder: [],
+    runtimeNodes: new Set<RuntimeNodeId>(),
+    inputSeen: false,
+    outputSeen: false,
+    latestNodeId: null,
+    lastFrameByNode: new Map<LocalNodeId, AgentSseFrame["data"]>(),
+    currentFrame: null
+  };
+}
+
+function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
+  const inputPlacement = foldOptions.inputPlacement ?? "external";
+  const showSubagentDispatch = foldOptions.showSubagentDispatch ?? true;
+  const outputPlacement = foldOptions.outputPlacement ?? "external";
+  const agentInterface = summarizeAgentInterface(foldOptions.agentInterface);
+  let schemaOf = outputSchemaTracker();
+  /* What schemaOf has been told, so a checkpoint can tell a fresh one the same: it only
+     learns from these. Like `delegations`, only ever pushed to, so a checkpoint keeps the
+     array and its length rather than a copy. */
+  let accepted: AgentSseFrame[] = [];
+  let ledger = costLedger();
+  let delegations: AgentSseFrame[] = [];
+  let s = initialState();
 
   function remember(id: LocalNodeId): void {
-    if (currentFrame) lastFrameByNode.set(id, currentFrame.data);
+    if (s.currentFrame) s.lastFrameByNode.set(id, s.currentFrame.data);
   }
 
   function markInput(): void {
-    inputSeen = true;
+    s.inputSeen = true;
     if (inputPlacement === "runtime") {
       markRuntimeNode("input");
     } else {
-      latestNodeId = "input";
+      s.latestNodeId = "input";
       remember("input");
     }
   }
 
   function markRuntimeNode(id: RuntimeNodeId): void {
-    if (!runtimeNodes.has(id)) {
-      runtimeNodes.add(id);
-      runtimeNodeOrder.push(id);
+    if (!s.runtimeNodes.has(id)) {
+      s.runtimeNodes.add(id);
+      s.runtimeNodeOrder.push(id);
     }
-    latestNodeId = id;
+    s.latestNodeId = id;
     remember(id);
   }
 
   function markOutput(): void {
-    outputSeen = true;
+    s.outputSeen = true;
     if (outputPlacement === "runtime") {
       markRuntimeNode("output");
     } else {
-      latestNodeId = "output";
+      s.latestNodeId = "output";
       remember("output");
     }
   }
@@ -1250,11 +1474,11 @@ export function buildAgentGraph(
   function markTool(toolId: ToolId, parentToolId?: ToolId): ToolRuntimeNodeId {
     const nodeId = toolRuntimeNodeId(toolId);
     if (parentToolId) {
-      const childIds = codeModeChildren.get(parentToolId) ?? [];
+      const childIds = s.codeModeChildren.get(parentToolId) ?? [];
       if (!childIds.includes(toolId)) {
-        codeModeChildren.set(parentToolId, [...childIds, toolId]);
+        s.codeModeChildren.set(parentToolId, [...childIds, toolId]);
       }
-      latestNodeId = nodeId;
+      s.latestNodeId = nodeId;
       remember(nodeId);
       return nodeId;
     }
@@ -1264,22 +1488,22 @@ export function buildAgentGraph(
 
   function flowGroupForTool(toolId: ToolId, parentToolId?: ToolId): number | undefined {
     if (parentToolId) return undefined;
-    const existing = tools.get(toolId)?.flowGroup;
+    const existing = s.tools.get(toolId)?.flowGroup;
     if (typeof existing === "number") return existing;
-    if (activeRuntimeToolIds.size === 0) runtimeToolFlowGroup += 1;
-    activeRuntimeToolIds.add(toolId);
-    return runtimeToolFlowGroup;
+    if (s.activeRuntimeToolIds.size === 0) s.runtimeToolFlowGroup += 1;
+    s.activeRuntimeToolIds.add(toolId);
+    return s.runtimeToolFlowGroup;
   }
 
   /* Called from tool_end, tool_error and a denied approval — and pointedly not from a
      granted one, which tones the card "done" while the call has yet to run. */
   function markToolSettled(toolId: ToolId, parentToolId?: ToolId): void {
-    if (parentToolId) settledChildToolIds.add(toolId);
-    else activeRuntimeToolIds.delete(toolId);
+    if (parentToolId) s.settledChildToolIds.add(toolId);
+    else s.activeRuntimeToolIds.delete(toolId);
   }
 
   function toolRuntime(toolId: ToolId, name: string, parentToolId?: ToolId): ToolRuntime {
-    const existing = tools.get(toolId);
+    const existing = s.tools.get(toolId);
     if (existing) {
       if (parentToolId && !existing.parentToolId) existing.parentToolId = parentToolId;
       if (!parentToolId && typeof existing.flowGroup !== "number") {
@@ -1299,113 +1523,109 @@ export function buildAgentGraph(
     };
   }
 
-  /* The one list of a host's visible children: both the container's size and the
-     child nodes themselves read it, so a settled child cannot leave a hole the box
-     is still sized around. */
-  function codeModeHostChildIds(toolId: ToolId): ToolId[] {
-    return (codeModeChildren.get(toolId) ?? []).filter(
-      (childId) =>
-        tools.has(childId) &&
-        !(options.focus && settledChildToolIds.has(childId) && !lingeringTools.has(childId))
-    );
-  }
-
   function childToolParent(toolId: ToolId, isCodeModeTool: boolean): ToolId | undefined {
     if (isCodeModeTool) return undefined;
     // A call keeps the place its first frame gave it: one the model asked for alongside a
     // host starts while the host runs, but is not one of its script's calls.
-    const existing = tools.get(toolId);
-    return existing ? existing.parentToolId : activeCodeModeToolIds.at(-1);
+    const existing = s.tools.get(toolId);
+    return existing ? existing.parentToolId : s.activeCodeModeToolIds.at(-1);
   }
 
   function markCodeModeStarted(toolId: ToolId): void {
-    if (!activeCodeModeToolIds.includes(toolId)) activeCodeModeToolIds.push(toolId);
+    if (!s.activeCodeModeToolIds.includes(toolId)) s.activeCodeModeToolIds.push(toolId);
   }
 
   function markCodeModeFinished(toolId: ToolId): void {
-    const index = activeCodeModeToolIds.lastIndexOf(toolId);
-    if (index !== -1) activeCodeModeToolIds.splice(index, 1);
+    const index = s.activeCodeModeToolIds.lastIndexOf(toolId);
+    if (index !== -1) s.activeCodeModeToolIds.splice(index, 1);
   }
 
   function resetTurnTools(): void {
-    tools.clear();
-    evaluations.clear();
-    resolvedApprovalToolIds.clear();
-    deniedApprovalToolIds.clear();
-    codeModeChildren.clear();
-    settledChildToolIds.clear();
-    activeCodeModeToolIds.splice(0, activeCodeModeToolIds.length);
-    activeRuntimeToolIds.clear();
-    runtimeToolFlowGroup = 0;
-    for (let index = runtimeNodeOrder.length - 1; index >= 0; index -= 1) {
-      if (isToolRuntimeNodeId(runtimeNodeOrder[index])) {
-        runtimeNodes.delete(runtimeNodeOrder[index]);
-        runtimeNodeOrder.splice(index, 1);
+    s.tools.clear();
+    s.evaluations.clear();
+    s.resolvedApprovalToolIds.clear();
+    s.deniedApprovalToolIds.clear();
+    s.codeModeChildren.clear();
+    s.settledChildToolIds.clear();
+    s.activeCodeModeToolIds.splice(0, s.activeCodeModeToolIds.length);
+    s.activeRuntimeToolIds.clear();
+    s.runtimeToolFlowGroup = 0;
+    for (let index = s.runtimeNodeOrder.length - 1; index >= 0; index -= 1) {
+      if (isToolRuntimeNodeId(s.runtimeNodeOrder[index])) {
+        s.runtimeNodes.delete(s.runtimeNodeOrder[index]);
+        s.runtimeNodeOrder.splice(index, 1);
       }
+    }
+    /* No earlier turn's call is drawn again, and one that sends another frame is remembered
+       afresh; kept, these were a hundred thousand entries every checkpoint had to copy. */
+    for (const id of s.lastFrameByNode.keys()) {
+      if (isToolRuntimeNodeId(id) || isApprovalEvaluationNodeId(id)) s.lastFrameByNode.delete(id);
     }
   }
 
-  for (const frame of frames) {
-    if (!("type" in frame.data)) continue;
-    currentFrame = frame;
-    const outputSchema = schemaOf(frame, options.agentInterface);
+  function add(frame: AgentSseFrame): void {
+    ledger.add(frame);
+    if (!("type" in frame.data)) return;
+    s.currentFrame = frame;
+    if (frame.event === "message_accepted") accepted.push(frame);
+    const outputSchema = schemaOf(frame, foldOptions.agentInterface);
     if (frame.event === "message_accepted") {
       // The one event carrying what was sent, whatever it did to the turn. Only a QUEUED one
       // shows in the queue depth; an "opened" message is about to be the turn, and a "joined"
       // one is already running inside it.
       markInput();
-      currentUserMessage = renderUserMessage(frame.data.handler, frame.data.payload);
-      currentUserEnvelope = JSON.stringify({
+      s.currentUserMessage = renderUserMessage(frame.data.handler, frame.data.payload);
+      s.currentUserEnvelope = JSON.stringify({
         type: frame.data.handler,
         payload: frame.data.payload
       });
       if (frame.data.disposition === "queued") {
-        queued += 1;
-        queuedMessage = currentUserMessage;
-        queuedByTurn.set(frame.data.turn_number, [currentUserMessage, currentUserEnvelope]);
-        inputState = `${queued} queued`;
+        s.queued += 1;
+        s.queuedMessage = s.currentUserMessage;
+        s.queuedByTurn.set(frame.data.turn_number, [s.currentUserMessage, s.currentUserEnvelope]);
+        s.inputState = `${s.queued} queued`;
       } else {
         // The card now shows this message, and turn_started is at least a frame away (the
         // frame a turn jump lands on), so the label can't wait for it.
-        inputState = `turn ${frame.data.turn_number}`;
+        s.inputState = `turn ${frame.data.turn_number}`;
       }
     }
     if (frame.event === "turn_started") {
       markInput();
-      activeTurn = frame.data.turn_number;
-      status = "running";
-      failed = false;
-      inputState = `turn ${frame.data.turn_number}`;
+      s.activeTurn = frame.data.turn_number;
+      s.status = "running";
+      s.failed = false;
+      s.inputState = `turn ${frame.data.turn_number}`;
       // Later queued messages overwrote the card's text; the turn starting now is about its own.
-      const opening = queuedByTurn.get(frame.data.turn_number);
-      if (opening) [currentUserMessage, currentUserEnvelope] = opening;
-      queuedByTurn.delete(frame.data.turn_number);
-      modelState = "waiting";
-      reasoningState = "waiting";
-      reasoningDetail = "";
-      reasoningStartTs = null;
-      reasoningEndTs = null;
-      replyText = "";
-      replyIsData = false;
-      replyState = "waiting";
+      const opening = s.queuedByTurn.get(frame.data.turn_number);
+      if (opening) [s.currentUserMessage, s.currentUserEnvelope] = opening;
+      s.queuedByTurn.delete(frame.data.turn_number);
+      s.modelState = "waiting";
+      s.reasoningState = "waiting";
+      s.reasoningDetail = "";
+      s.reasoningStartTs = null;
+      s.reasoningEndTs = null;
+      s.replyText = "";
+      s.replyIsData = false;
+      s.replyState = "waiting";
       resetTurnTools();
       /* The last turn's reply was just cleared above; its card would sit empty ahead of
          this turn's tools until a reply frame puts it back after them. */
-      if (runtimeNodes.delete("output")) runtimeNodeOrder.splice(runtimeNodeOrder.indexOf("output"), 1);
-      runtimeHeaderPrefix = undefined;
-      if (queued > 0) queued -= 1;
+      if (s.runtimeNodes.delete("output")) s.runtimeNodeOrder.splice(s.runtimeNodeOrder.indexOf("output"), 1);
+      s.runtimeHeaderPrefix = undefined;
+      if (s.queued > 0) s.queued -= 1;
     } else if (frame.event === "model_interaction_started") {
       markRuntimeNode("model");
-      currentModel = frame.data.model ?? "unknown model";
-      modelState = "running";
-      reasoningState = "waiting";
-      reasoningStartTs = frame.data.timestamp;
+      s.currentModel = frame.data.model ?? "unknown model";
+      s.modelState = "running";
+      s.reasoningState = "waiting";
+      s.reasoningStartTs = frame.data.timestamp;
     } else if (frame.event === "model_interaction_ended") {
       markRuntimeNode("model");
-      currentModel = frame.data.model ?? currentModel;
-      modelState = "finished";
-      if (reasoningState === "running" || frame.data.usage?.thought_tokens) {
-        reasoningState = "captured";
+      s.currentModel = frame.data.model ?? s.currentModel;
+      s.modelState = "finished";
+      if (s.reasoningState === "running" || frame.data.usage?.thought_tokens) {
+        s.reasoningState = "captured";
       }
     } else if (frame.event === "thought_summary") {
       markRuntimeNode("reasoning");
@@ -1413,43 +1633,43 @@ export function buildAgentGraph(
          the last frame holds the last few words rather than the thought. Assigning is
          what made a Gemini card look right — its mock summary arrives whole — while a
          real one showed its own tail. */
-      reasoningDetail += thoughtDeltaText(frame.data.delta);
-      reasoningState = "running";
-      reasoningStartTs ??= frame.data.timestamp;
-      reasoningEndTs = frame.data.timestamp;
+      s.reasoningDetail += thoughtDeltaText(frame.data.delta);
+      s.reasoningState = "running";
+      s.reasoningStartTs ??= frame.data.timestamp;
+      s.reasoningEndTs = frame.data.timestamp;
     } else if (frame.event === "reply_delta") {
       markOutput();
-      replyText += frame.data.text;
-      replyIsData = streamingIsData(replyText, outputSchema);
-      replyState = "streaming";
+      s.replyText += frame.data.text;
+      s.replyIsData = streamingIsData(s.replyText, outputSchema);
+      s.replyState = "streaming";
     } else if (frame.event === "text_annotation") {
       markOutput();
-      replyState = "annotated";
+      s.replyState = "annotated";
     } else if (frame.event === "message_handler_end") {
       markOutput();
-      status = "replied";
+      s.status = "replied";
       const reply = handlerReply(frame.data, outputSchema);
-      replyText = reply.text || replyText;
-      replyIsData = reply.json !== undefined;
+      s.replyText = reply.text || s.replyText;
+      s.replyIsData = reply.json !== undefined;
       /* "reply available" was wider than the chip, the same way "awaiting
          approval" was. The noun is carried by the card, which is titled Output. */
-      replyState = "available";
+      s.replyState = "available";
     } else if (frame.event === "message_handler_error") {
       markOutput();
-      status = "error";
-      failed = true;
-      replyText = frame.data.message;
-      replyState = "error";
+      s.status = "error";
+      s.failed = true;
+      s.replyText = frame.data.message;
+      s.replyState = "error";
     } else if (frame.event === "turn_end") {
-      activeTurn = frame.data.turn_number;
-      status = "idle";
-      modelState = "idle";
+      s.activeTurn = frame.data.turn_number;
+      s.status = "idle";
+      s.modelState = "idle";
       /* A run that thought without summarizing has already been marked captured by the
          model_interaction_ended above, and downgrading it here would drop the note the
          card shows in place of the summary it never got. */
-      reasoningState = reasoningDetail || reasoningState === "captured" ? "captured" : "idle";
-      runtimeHeaderPrefix = "Turn end";
-      latestNodeId = null;
+      s.reasoningState = s.reasoningDetail || s.reasoningState === "captured" ? "captured" : "idle";
+      s.runtimeHeaderPrefix = "Turn end";
+      s.latestNodeId = null;
     } else if (
       frame.event === "tool_requested" ||
       frame.event === "tool_start" ||
@@ -1461,7 +1681,7 @@ export function buildAgentGraph(
         "tool_input" in frame.data
           ? codeModeScriptFromToolInput(frame.data.tool_input)
           : null;
-      const isCodeModeTool = script != null || Boolean(tools.get(frame.data.tool_id)?.isCodeMode);
+      const isCodeModeTool = script != null || Boolean(s.tools.get(frame.data.tool_id)?.isCodeMode);
       const parentToolId = childToolParent(frame.data.tool_id, isCodeModeTool);
       markTool(frame.data.tool_id, parentToolId);
       const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name, parentToolId);
@@ -1490,7 +1710,7 @@ export function buildAgentGraph(
           ? "Code Mode script"
           : parentToolId
             ? "Code Mode host call"
-            : modelState === "running"
+            : s.modelState === "running"
               ? "model still running"
               : "waiting to dispatch";
       } else if (frame.event === "tool_start") {
@@ -1541,7 +1761,7 @@ export function buildAgentGraph(
         if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
         markToolSettled(frame.data.tool_id, parentToolId);
       }
-      tools.set(frame.data.tool_id, runtime);
+      s.tools.set(frame.data.tool_id, runtime);
     } else if (
       frame.event === "auto_approval_evaluation_started" ||
       frame.event === "auto_approval_evaluation_ended" ||
@@ -1550,7 +1770,7 @@ export function buildAgentGraph(
     ) {
       /* Kept OUT of the tool's runtime on purpose. The evaluator is separate work running
          somewhere else; it gets its own node, wired to the gated call by one edge. */
-      const evaluation: EvaluationRuntime = evaluations.get(frame.data.evaluation_id) ?? {
+      const evaluation: EvaluationRuntime = s.evaluations.get(frame.data.evaluation_id) ?? {
         id: frame.data.evaluation_id,
         toolId: frame.data.tool_id,
         toolName: frame.data.tool_name,
@@ -1590,12 +1810,12 @@ export function buildAgentGraph(
         evaluation.statusTone = "error";
         evaluation.detail = frame.data.message;
       }
-      evaluations.set(frame.data.evaluation_id, evaluation);
+      s.evaluations.set(frame.data.evaluation_id, evaluation);
       /* Not markRuntimeNode: a satellite is positioned off its tool rather than taking a
          slot in the runtime grid. It is still the latest node, and still remembers the
          frame that put it there. */
-      latestNodeId = approvalEvaluationNodeId(frame.data.evaluation_id);
-      remember(latestNodeId);
+      s.latestNodeId = approvalEvaluationNodeId(frame.data.evaluation_id);
+      remember(s.latestNodeId);
     } else if (
       frame.event === "tool_approval_requested" ||
       frame.event === "tool_approval_resolved"
@@ -1604,7 +1824,7 @@ export function buildAgentGraph(
         "tool_input" in frame.data
           ? codeModeScriptFromToolInput(frame.data.tool_input)
           : null;
-      const isCodeModeTool = script != null || Boolean(tools.get(frame.data.tool_id)?.isCodeMode);
+      const isCodeModeTool = script != null || Boolean(s.tools.get(frame.data.tool_id)?.isCodeMode);
       const parentToolId = childToolParent(frame.data.tool_id, isCodeModeTool);
       markTool(frame.data.tool_id, parentToolId);
       const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name, parentToolId);
@@ -1633,13 +1853,13 @@ export function buildAgentGraph(
         runtime.statusTone = frame.data.approved ? "done" : "error";
         runtime.subtitle = frame.data.approved ? "approval granted" : "approval denied";
         runtime.detail = frame.data.reason ?? runtime.detail;
-        resolvedApprovalToolIds.add(frame.data.tool_id);
+        s.resolvedApprovalToolIds.add(frame.data.tool_id);
         if (!frame.data.approved) {
-          deniedApprovalToolIds.add(frame.data.tool_id);
+          s.deniedApprovalToolIds.add(frame.data.tool_id);
           markToolSettled(frame.data.tool_id, parentToolId);
         }
       }
-      tools.set(frame.data.tool_id, runtime);
+      s.tools.set(frame.data.tool_id, runtime);
     } else if (frame.event === "callback_requested" || frame.event === "callback_resolved") {
       /* Between tool_start and tool_end: the call is parked on a client, usually a person
          answering a question, so it waits the way an approval does until it is answered. */
@@ -1659,7 +1879,7 @@ export function buildAgentGraph(
         runtime.statusTone = "tool";
         runtime.subtitle = "callback answered";
       }
-      tools.set(frame.data.tool_id, runtime);
+      s.tools.set(frame.data.tool_id, runtime);
     } else if (
       frame.event === "subagent_started" ||
       frame.event === "subagent_message_sent" ||
@@ -1667,558 +1887,626 @@ export function buildAgentGraph(
       frame.event === "subagent_stopped" ||
       frame.event === "subagent_stream_unavailable"
     ) {
-      if (!showSubagentDispatch) continue;
+      delegations.push(frame);
+      if (!showSubagentDispatch) return;
       markRuntimeNode("subagent");
-      subagentSubtitle =
+      s.subagentSubtitle =
         "agent_key" in frame.data
           ? `${frame.data.agent_key} · ${frame.data.subagent_id}`
           : frame.data.subagent_id;
-      subagentDetail = frame.data.workflow_id;
+      s.subagentDetail = frame.data.workflow_id;
       if (frame.event === "subagent_started") {
-        subagentState = "started";
+        s.subagentState = "started";
       } else if (frame.event === "subagent_message_sent") {
-        subagentState = `${frame.data.handler} → turn ${frame.data.subagent_turn}`;
+        s.subagentState = `${frame.data.handler} → turn ${frame.data.subagent_turn}`;
       } else if (frame.event === "subagent_reply_received") {
-        subagentState = `reply ${frame.data.outcome}`;
+        s.subagentState = `reply ${frame.data.outcome}`;
       } else if (frame.event === "subagent_stream_unavailable") {
         /* Short enough for the chip to render whole; see replyState above. */
-        subagentState = "unavailable";
+        s.subagentState = "unavailable";
       } else {
-        subagentState = "stopped";
+        s.subagentState = "stopped";
       }
     }
   }
 
-  const retryRedirect = collapseConsecutiveFailedRetries(runtimeNodeOrder, tools);
-  if (latestNodeId && retryRedirect.has(latestNodeId)) {
-    latestNodeId = retryRedirect.get(latestNodeId)!;
-  }
-
-  /* Read before the focus fold, which can drop the reasoning node: the summary
-     below keys "drew a card and said nothing" off the card having existed, and
-     asking runtimeNodeOrder after the splice answers about the wrong thing. */
-  const reasoningSeen = runtimeNodeOrder.includes("reasoning");
-  if (options.focus) {
-    dropSettledTools(runtimeNodeOrder, activeRuntimeToolIds, lingeringTools);
-    /* A finished thought trace is a completed event too, and the transcript
-       holds it either way. While fragments are still arriving it stays. */
-    if (reasoningState !== "running") {
-      const at = runtimeNodeOrder.indexOf("reasoning");
-      if (at >= 0) runtimeNodeOrder.splice(at, 1);
-    }
-    /* Not optional bookkeeping: `active: latestNodeId === id` is what marks the
-       live card, so a turn whose last tool just settled off the canvas would
-       have no active node at all. The newest survivor is where the run is. */
-    if (latestNodeId && !runtimeNodeOrder.includes(latestNodeId)) {
-      latestNodeId = runtimeNodeOrder.at(-1) ?? null;
-    }
-  }
-
-  const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
-  if (embeddedToolLayout && !runtimeNodeOrder.includes("tool-container")) {
-    runtimeNodeOrder.push("tool-container");
-  }
-  const usage = summarizeCost(frames);
-
-  /**
-   * What the thought card says when the thinking produced no text.
-   *
-   * Keyed on the card existing at all, which is the only state that can render blank: this
-   * node is drawn because a thought_summary frame arrived, so a frame arrived and carried
-   * nothing readable — a Pydantic AI signature-only delta, or a shape newer than the
-   * extractor. A run that asks for no summary (`Reasoning(summary=None)`, which is what
-   * examples/sandbox_tools/coding_agent runs on) streams no such frame and draws no card,
-   * so it is already distinguishable; what was not distinguishable is this.
-   */
-  const reasoningSummary = reasoningDetail || (reasoningSeen ? NO_THOUGHT_SUMMARY : "");
-  /* Only once the thinking is over: while fragments are still arriving the end moves, and a
-     number that climbs while you read it is not a duration. */
-  const reasoningSeconds =
-    reasoningState === "captured" && reasoningStartTs != null && reasoningEndTs != null
-      ? Math.max(0, reasoningEndTs - reasoningStartTs)
-      : null;
-
-  /**
-   * What the inspector shows, per node kind. Every branch here ends with the
-   * frame that last touched the node, so the list is never empty: a node exists
-   * because a frame put it there, and printing that frame beats printing a
-   * sentence about having nothing to print.
-   *
-   * The two synthetic nodes — the tool container and the runtime boundary — have
-   * no frame of their own, so they describe what they are made of instead.
-   */
-  function replySection(label: string): AgentNodeContext | null {
-    return streamingIsData(replyText) ? maybeJsonSection(label, stripJsonFence(replyText)) : textSection(label, replyText, "markdown");
-  }
-
-  function contextFor(id: LocalNodeId): AgentNodeContext[] {
-    const sections: Array<AgentNodeContext | null> = [];
-
-    if (id === "input") {
-      const rendered = currentUserMessage || queuedMessage;
-      sections.push(textSection("User message", rendered, "markdown"));
-      if (currentUserEnvelope && currentUserEnvelope !== rendered) {
-        sections.push(maybeJsonSection("Raw message", currentUserEnvelope));
-      }
-    } else if (id === "model") {
-      /* The model's own output and its thinking — the two things asked for by
-         name. Both were already in this scope; nothing reached them because the
-         inspector only ever read `detail`, and this node has never had one. */
-      sections.push(
-        replySection("Model output"),
-        textSection("Thought summary", reasoningSummary, "markdown"),
-        textSection("Model", currentModel)
-      );
-    } else if (id === "reasoning") {
-      sections.push(textSection("Thought summary", reasoningSummary, "markdown"));
-    } else if (id === "output") {
-      sections.push(replySection("Reply"));
-    } else if (id === "subagent") {
-      sections.push(
-        textSection("Subagent", subagentSubtitle),
-        textSection("Workflow", subagentDetail)
-      );
-    } else if (isToolRuntimeNodeId(id)) {
-      const runtime = tools.get(toolIdFromRuntimeNodeId(id));
-      sections.push(
-        runtime?.script ? { label: "Script", text: runtime.script, kind: "code" } : null,
-        maybeJsonSection("Tool input", runtime?.input),
-        maybeJsonSection("Tool output", runtime?.output)
-      );
-    } else if (isApprovalEvaluationNodeId(id)) {
-      /* The EVALUATION's own content. Before this node existed the events were folded into
-         the tool card, so opening the approval showed the tool's input and output — the
-         one thing it is not about. */
-      const evaluation = evaluations.get(id.slice("approval:".length));
-      sections.push(
-        textSection("Evaluator", evaluation?.evaluator),
-        textSection("Verdict", evaluation?.verdict ?? evaluation?.status),
-        textSection("Reason", evaluation?.detail, "markdown"),
-        evaluation?.reasoning
-          ? { label: "Evaluator reasoning", text: evaluation.reasoning, kind: "json" }
-          : null,
-        textSection("Gated call", evaluation?.toolName)
-      );
-    } else if (id === "tool-container") {
-      sections.push(
-        valueSection(
-          "Delegated runtimes",
-          (options.embeddedToolGraphs ?? []).map((graph) => ({
-            status: graph.status,
-            activeTurn: graph.activeTurn,
-            nodes: graph.nodes.length
-          }))
-        )
-      );
-    }
-
-    sections.push(valueSection("Event payload", lastFrameByNode.get(id)));
-    const built = sections.filter((section): section is AgentNodeContext => section != null);
-    /* Unreachable for every id above, and the reason there is no apology string
-       left in this file: a node with nothing else still describes itself. */
-    return built.length > 0 ? built : [{ label: "Node", text: id, kind: "text" }];
-  }
-
-  function nodeDataFor(id: LocalNodeId): AgentNodeData {
-    return { ...baseNodeDataFor(id), context: contextFor(id) };
-  }
-
-  function baseNodeDataFor(id: LocalNodeId): AgentNodeData {
-    if (id === "input") {
-      return {
-        tone: status === "running" ? "queue" : "neutral",
-        title: "Input",
-        state: inputState,
-        subtitle: "user message",
-        /* The text, not the envelope it arrived in. The card used to show the
-           raw `{"type":"ask","payload":{...}}` — barely legible in four lines
-           and plainly wrong now the Result region is big enough to read. The
-           envelope is still in the inspector, as "Raw message". */
-        detail: currentUserMessage || queuedMessage,
-        nodeHeight: resultNodeHeight,
-        active: latestNodeId === id
-      };
-    }
-    if (id === "model") {
-      return {
-        tone: modelState === "running" ? "model" : "neutral",
-        title: "Model interaction",
-        state: modelState,
-        subtitle: currentModel,
-        active: latestNodeId === id,
-        size: "large",
-        metrics: [
-          tokenMetric("input", usage.tokens.input, modelState === "running", usage.unreportedCalls),
-          tokenMetric("output", usage.tokens.output, modelState === "running", usage.unreportedCalls)
-        ]
-      };
-    }
-    if (id === "reasoning") {
-      return {
-        tone:
-          reasoningState === "running" || reasoningState === "captured"
-            ? "reasoning"
-            : "neutral",
-        title: "Thought summary",
-        state: reasoningState,
-        /* How long it thought, once that is a settled number, because that is the question
-           a finished thought card is asked; the token count is what it answers until then. */
-        subtitle:
-          reasoningSeconds != null && reasoningSeconds >= 1
-            ? `Thought for ${formatDuration(reasoningSeconds)}`
-            : usage.tokens.thought > 0
-              ? `${formatTokens(usage.tokens.thought)} thought tokens`
-              : "thinking trace",
-        detail: reasoningSummary,
-        nodeHeight: resultNodeHeight,
-        active: latestNodeId === id
-      };
-    }
-    if (isToolRuntimeNodeId(id)) {
-      const runtime = tools.get(toolIdFromRuntimeNodeId(id));
-      /* Always a string: the Result region is a slot the node reserves, not
-         something that appears once the tool has said anything. */
-      const detail = runtime?.detail ?? "";
-      const childCount = runtime?.id ? codeModeHostChildIds(runtime.id).length : 0;
-      const codeModeDimensions =
-        runtime?.isCodeMode && childCount > 0
-          ? codeModeContainerDimensions(childCount)
-          : null;
-      const toolStatus = runtime?.status ?? "idle";
-      const retryCount = runtime?.retryCount ?? 1;
-      return {
-        tone: runtime?.tone ?? "neutral",
-        title: runtime?.name ?? "Tool",
-        state: retryCount > 1 ? `${toolStatus} ×${retryCount}` : toolStatus,
-        statusTone: runtime?.statusTone,
-        subtitle: runtime?.subtitle ?? "tool lifecycle",
-        detail,
-        size: codeModeDimensions ? "container" : undefined,
-        nodeWidth: codeModeDimensions?.width,
-        nodeHeight: codeModeDimensions?.height ?? resultNodeHeight,
-        /* Only for a Code Mode host: the container class otherwise squeezes the
-           result body to leave room for children, which is right for the subagent
-           container and wrong for a card showing a script. */
-        resultHeight: codeModeDimensions ? codeModeScriptHeight : undefined,
-        active: latestNodeId === id,
-        toolId: runtime?.id,
-        codeMode: runtime?.isCodeMode,
-        flowGroup: runtime?.flowGroup
-      };
-    }
-    if (isApprovalEvaluationNodeId(id)) {
-      const evaluation = evaluations.get(id.slice("approval:".length));
-      return {
-        tone: evaluation?.tone ?? "approval",
-        /* The evaluator, not the tool: this card is about who judged, and the tool it
-           judged is one edge away. */
-        title: evaluation?.evaluator ?? "approval evaluator",
-        state: evaluation?.status ?? "evaluating",
-        statusTone: evaluation?.statusTone,
-        subtitle: evaluation ? `auto approval · ${evaluation.toolName}` : "auto approval",
-        detail: evaluation?.detail ?? "",
-        nodeHeight: stateNodeHeight,
-        active: latestNodeId === id
-      };
-    }
-    if (id === "tool-container") {
-      return {
-        ...delegatedState(options.embeddedToolGraphs ?? []),
-        title: "Subagent activity",
-        subtitle: "delegated runtimes",
-        active: latestNodeId === id,
-        size: "container",
-        nodeWidth: embeddedToolLayout?.dimensions.width ?? stateNodeWidth,
-        nodeHeight: embeddedToolLayout?.dimensions.height ?? stateNodeHeight
-      };
-    }
-    if (id === "subagent") {
-      return {
-        tone:
-          subagentState === "unavailable"
-            ? "error"
-            : subagentState === "stopped"
-              ? "done"
-              : "agent",
-        title: "Subagent",
-        state: subagentState,
-        subtitle: subagentSubtitle,
-        detail: subagentDetail,
-        nodeHeight: resultNodeHeight,
-        active: latestNodeId === id
-      };
-    }
-    if (id === "output") {
-      return {
-        tone: status === "error" ? "error" : replyText ? "done" : "neutral",
-        title: "Output",
-        state: replyState,
-        subtitle: "streaming response",
-        detail: replyText,
-        markdown: !replyIsData && replyState !== "error",
-        nodeHeight: resultNodeHeight,
-        active: latestNodeId === id
-      };
-    }
+  function copied(from: AgentFoldState): AgentFoldState {
     return {
-      tone: "neutral",
-      title: "Unknown",
-      state: "unknown"
+      ...from,
+      queuedByTurn: new Map(from.queuedByTurn),
+      tools: new Map([...from.tools].map(([id, tool]) => [id, { ...tool }])),
+      codeModeChildren: new Map(from.codeModeChildren),
+      evaluations: new Map([...from.evaluations].map(([id, evaluation]) => [id, { ...evaluation }])),
+      resolvedApprovalToolIds: new Set(from.resolvedApprovalToolIds),
+      deniedApprovalToolIds: new Set(from.deniedApprovalToolIds),
+      settledChildToolIds: new Set(from.settledChildToolIds),
+      activeCodeModeToolIds: [...from.activeCodeModeToolIds],
+      activeRuntimeToolIds: new Set(from.activeRuntimeToolIds),
+      runtimeNodeOrder: [...from.runtimeNodeOrder],
+      runtimeNodes: new Set(from.runtimeNodes),
+      lastFrameByNode: new Map(from.lastFrameByNode)
     };
   }
 
-  const runtimeDataById = new Map<RuntimeNodeId, AgentNodeData>(
-    runtimeNodeOrder.map((id) => [id, nodeDataFor(id)])
-  );
-  const runtimeLayout = runtimeLayoutFor(runtimeNodeOrder, runtimeDataById);
-  const boundaryWidth = runtimeLayout.boundaryWidth;
-  const boundaryHeight = runtimeLayout.boundaryHeight;
-
-  const runtimeNode = node(
-    "agent-runtime",
-    layout.runtime,
-    {
-      tone: status === "error" ? "error" : "agent",
-      title: "Agent runtime",
-      state: status === "idle" ? "idle" : status,
-      subtitle: "model calls, tool execution, and internal state",
-      headerPrefix: runtimeHeaderPrefix,
-      boundaryWidth,
-      boundaryHeight,
-      interfaces: agentInterface,
-      /* The boundary is drawn from state rather than from any one frame, so it
-         says what it contains: the run's status and the functions the agent
-         exposes, of which the card itself only has room for two. */
-      context: [
-        {
-          label: "Runtime",
-          text: JSON.stringify(
-            {
-              status,
-              activeTurn,
-              model: currentModel,
-              nodes: runtimeNodeOrder,
-              tokens: usage.tokens
-            },
-            null,
-            2
-          ),
-          kind: "json"
-        },
-        ...(agentInterface.length > 0
-          ? [
-              {
-                label: "Agent interface",
-                text: JSON.stringify(agentInterface, null, 2),
-                kind: "json" as const
-              }
-            ]
-          : [])
-      ]
-    },
-    "agentWorkflow"
-  );
-  const nodes: Node<AgentNodeData>[] = [runtimeNode];
-  if (inputSeen && inputPlacement === "external") {
-    nodes.push(node("input", layout.input, nodeDataFor("input")));
-  }
-  nodes.push(
-    ...runtimeNodeOrder.map((id) =>
-      node(
-        id,
-        runtimeLayout.positions.get(id) ?? { x: layout.gridStartX, y: layout.gridStartY },
-        runtimeDataById.get(id) ?? nodeDataFor(id)
-      )
-    )
-  );
-  /* Which tool cards actually made it onto the canvas this frame. An approval satellite
-     is drawn from its call, so a satellite whose call was folded away (focus view, retry
-     stacking) would leave an edge pointing at nothing. */
-  const drawnToolNodeIds = new Set<string>(
-    runtimeNodeOrder.filter((id) => isToolRuntimeNodeId(id))
-  );
-  for (const parentToolId of codeModeChildren.keys()) {
-    const parentNodeId = toolRuntimeNodeId(parentToolId);
-    const parentPosition = runtimeLayout.positions.get(parentNodeId);
-    if (!parentPosition) continue;
-    /* Survivors repack from the first slot, so the grid has no gaps where the
-       finished calls were. */
-    for (const [index, childToolId] of codeModeHostChildIds(parentToolId).entries()) {
-      const childNodeId = toolRuntimeNodeId(childToolId);
-      const childOffset = codeModeChildPosition(index);
-      nodes.push({
-        ...node(
-          childNodeId,
-          {
-            x: parentPosition.x + childOffset.x,
-            y: parentPosition.y + childOffset.y
-          },
-          nodeDataFor(childNodeId)
-        ),
-        zIndex: 14
-      });
-      drawnToolNodeIds.add(childNodeId);
-    }
-  }
-  if (outputSeen && outputPlacement === "external") {
-    nodes.push(node("output", outputPosition(boundaryWidth), nodeDataFor("output")));
-  }
-
-  const edges: Edge[] = [];
-  /**
-   * Where a gated call's approval satellites hang: under the card that OWNS the call.
-   *
-   * For an ordinary tool that is its own card. For a Code Mode host call it is the HOST's
-   * container, not the child cell inside it — children are packed in a grid, so a
-   * satellite dropped below a child would land on the next child. Hanging it under the
-   * container puts it in empty space, and the edge still runs from the child, so which
-   * host call is being approved stays legible.
-   */
-  function approvalAnchorOwner(toolId: ToolId): ToolRuntimeNodeId {
-    const parentToolId = tools.get(toolId)?.parentToolId;
-    return toolRuntimeNodeId(parentToolId ?? toolId);
-  }
-
-  /* One column per owner, so several gated calls under one Code Mode host do not stack. */
-  const satellitesPerOwner = new Map<ToolRuntimeNodeId, number>();
-
-  /* Each auto approval evaluation as its own card, hung off the gated call by a single
-     edge — the evaluator runs outside the tool, and the graph says so. */
-  for (const evaluation of evaluations.values()) {
-    /* Dismissed once the gate is decided. The card exists to say what is happening to an
-       OPEN approval; after the decision the tool just runs, and a leftover "escalated"
-       card beside it claims the call is still waiting on someone. The transcript, the
-       replay log and the waterfall keep the record.
-
-       TWO EXCEPTIONS, both about not deleting a card before it has been read:
-
-       - A CANCELLED evaluation is kept. It is the one terminal the resolution CAUSES
-         rather than merely follows, so dismissing it on that same resolution would mean
-         an evaluator pre-empted by a human could never be seen to have been pre-empted —
-         and being able to see exactly that is why the cancellation is published at all.
-         It leaves with its tool, at the end of the turn or when focus view drops the call.
-       - A call the decision SETTLED — a DENIAL — lingers a beat so it is seen to finish.
-         Its evaluation lingers with it rather than vanishing out from under the card it
-         is attached to.
-
-       That second exception is gated on the call having been DENIED, not merely on it
-       being in `lingeringTools`. The linger set is "anything that settled in the last
-       beat", which includes a `tool_end` — so keying off it alone meant an approved call
-       put its own tool id back in the set when it FINISHED, and the evaluation card that
-       had been dismissed at the approval reappeared minutes later as the tool wrapped up.
-       Only a refusal can resurrect a card, and only for the beat its own call is held. */
-    const gateDecided = resolvedApprovalToolIds.has(evaluation.toolId);
-    const heldWithRefusedCall =
-      deniedApprovalToolIds.has(evaluation.toolId) &&
-      lingeringTools.has(evaluation.toolId);
-    if (gateDecided && evaluation.status !== "cancelled" && !heldWithRefusedCall) {
-      continue;
-    }
-    const toolNodeId = toolRuntimeNodeId(evaluation.toolId);
-    // The call's card can be gone (focus view drops settled ones); its satellite goes too,
-    // or the edge below would point at a node that is not drawn.
-    if (!drawnToolNodeIds.has(toolNodeId)) continue;
-    const ownerNodeId = approvalAnchorOwner(evaluation.toolId);
-    const ownerPosition = runtimeLayout.positions.get(ownerNodeId);
-    if (!ownerPosition) continue;
-    /* Read off the owner's own card rather than assumed: a Code Mode host is a container
-       sized to its children, so the drop has to clear whatever it actually grew to. */
-    const ownerHeight = numericData(
-      runtimeDataById.get(ownerNodeId) ?? nodeDataFor(ownerNodeId),
-      "nodeHeight",
-      resultNodeHeight
-    );
-    const column = satellitesPerOwner.get(ownerNodeId) ?? 0;
-    satellitesPerOwner.set(ownerNodeId, column + 1);
-    const nodeId = approvalEvaluationNodeId(evaluation.id);
-    nodes.push({
-      ...node(
-        nodeId,
-        {
-          x: ownerPosition.x + column * (stateNodeWidth + approvalEvaluationGapX),
-          y: ownerPosition.y + ownerHeight + approvalEvaluationGapY
-        },
-        nodeDataFor(nodeId)
-      ),
-      zIndex: 14
-    });
-    edges.push(
-      edge(nodeId, toolNodeId, nodeId, {
-        sourceHandle: "source-bottom",
-        targetHandle: "target-top",
-        kind: "approval"
-      })
-    );
-  }
-  const toolPosition = runtimeLayout.positions.get("tool-container");
-  if (toolPosition && embeddedToolLayout) {
-    for (const placement of embeddedToolLayout.placements) {
-      const embeddedGraph = offsetGraph(
-        placement.graph,
-        toolPosition.x + placement.x,
-        toolPosition.y + placement.y,
-        nestedZIndexBoost
-      );
-      nodes.push(...embeddedGraph.nodes);
-      edges.push(...embeddedGraph.edges);
-    }
-  }
-  const reasoningAttachedToModel =
-    runtimeNodeOrder.includes("model") && runtimeNodeOrder.includes("reasoning");
-  const runtimeFlowOrder = reasoningAttachedToModel
-    ? runtimeNodeOrder.filter((id) => id !== "reasoning")
-    : runtimeNodeOrder;
-  if (reasoningAttachedToModel) {
-    edges.push(
-      edge(
-        "flow-model-reasoning",
-        "model",
-        "reasoning",
-        {
-          sourceHandle: "source-bottom",
-          targetHandle: "target-top",
-          kind: "reasoning"
-        }
-      )
-    );
-  }
-  addRuntimeFlowEdges(
-    edges,
-    runtimeFlowOrder,
-    runtimeDataById,
-    runtimeLayout,
-    inputSeen,
-    inputPlacement
-  );
-  if (outputSeen && outputPlacement === "external") {
-    const outputSources = terminalRuntimeSources(runtimeFlowOrder, runtimeDataById);
-    if (outputSources.length > 0) {
-      edges.push(
-        ...outputSources.map((source) =>
-          edge(
-            `flow-${source}-output`,
-            source,
-            "output",
-            { kind: "output" }
-          )
-        )
-      );
-    } else if (inputSeen) {
-      edges.push(
-        edge("flow-input-output", "input", "output", {
-          kind: "output"
-        })
-      );
-    }
+  function checkpoint(): () => void {
+    const saved = copied(s);
+    const usage = ledger.summary();
+    const [delegationLog, delegationCount] = [delegations, delegations.length];
+    const [acceptedLog, acceptedCount] = [accepted, accepted.length];
+    return () => {
+      s = copied(saved);
+      ledger = costLedger(usage);
+      /* New arrays, so the ones this and later checkpoints hold are never written below
+         the lengths they kept. */
+      delegations = delegationLog.slice(0, delegationCount);
+      accepted = acceptedLog.slice(0, acceptedCount);
+      schemaOf = outputSchemaTracker();
+      for (const frame of accepted) schemaOf(frame, foldOptions.agentInterface);
+    };
   }
 
   return {
-    ...markEdgeCues(nodes, edges, options.reducedMotion ?? false),
-    activeTurn,
-    status,
-    failed,
-    usage
+    add,
+    get delegations() {
+      return delegations;
+    },
+    usage: () => ledger.summary(),
+    checkpoint,
+    render
   };
+
+  function render(options: AgentGraphOptions): AgentGraph {
+    const lingeringTools = options.linger ?? noLingeringTools;
+    /* Copies, because the folds below splice the order and restack retried calls, and the
+       next frame folds on from what the turn really holds. */
+    const order = [...s.runtimeNodeOrder];
+    const shownTools = new Map(s.tools);
+    let activeNodeId = s.latestNodeId;
+
+    /* The one list of a host's visible children: both the container's size and the
+       child nodes themselves read it, so a settled child cannot leave a hole the box
+       is still sized around. */
+    function codeModeHostChildIds(toolId: ToolId): ToolId[] {
+      return (s.codeModeChildren.get(toolId) ?? []).filter(
+        (childId) =>
+          shownTools.has(childId) &&
+          !(options.focus && s.settledChildToolIds.has(childId) && !lingeringTools.has(childId))
+      );
+    }
+
+    const retryRedirect = collapseConsecutiveFailedRetries(order, shownTools);
+    if (activeNodeId && retryRedirect.has(activeNodeId)) {
+      activeNodeId = retryRedirect.get(activeNodeId)!;
+    }
+
+    /* Read before the focus fold, which can drop the reasoning node: the summary
+       below keys "drew a card and said nothing" off the card having existed, and
+       asking `order` after the splice answers about the wrong thing. */
+    const reasoningSeen = order.includes("reasoning");
+    if (options.focus) {
+      dropSettledTools(order, s.activeRuntimeToolIds, lingeringTools);
+      /* A finished thought trace is a completed event too, and the transcript
+         holds it either way. While fragments are still arriving it stays. */
+      if (s.reasoningState !== "running") {
+        const at = order.indexOf("reasoning");
+        if (at >= 0) order.splice(at, 1);
+      }
+      /* Not optional bookkeeping: `active: activeNodeId === id` is what marks the
+         live card, so a turn whose last tool just settled off the canvas would
+         have no active node at all. The newest survivor is where the run is. */
+      if (activeNodeId && !order.includes(activeNodeId)) {
+        activeNodeId = order.at(-1) ?? null;
+      }
+    }
+
+    const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
+    if (embeddedToolLayout && !order.includes("tool-container")) {
+      order.push("tool-container");
+    }
+    const usage = ledger.summary();
+
+    /**
+     * What the thought card says when the thinking produced no text.
+     *
+     * Keyed on the card existing at all, which is the only state that can render blank: this
+     * node is drawn because a thought_summary frame arrived, so a frame arrived and carried
+     * nothing readable — a Pydantic AI signature-only delta, or a shape newer than the
+     * extractor. A run that asks for no summary (`Reasoning(summary=None)`, which is what
+     * examples/sandbox_tools/coding_agent runs on) streams no such frame and draws no card,
+     * so it is already distinguishable; what was not distinguishable is this.
+     */
+    const reasoningSummary = s.reasoningDetail || (reasoningSeen ? NO_THOUGHT_SUMMARY : "");
+    /* Only once the thinking is over: while fragments are still arriving the end moves, and a
+       number that climbs while you read it is not a duration. */
+    const reasoningSeconds =
+      s.reasoningState === "captured" && s.reasoningStartTs != null && s.reasoningEndTs != null
+        ? Math.max(0, s.reasoningEndTs - s.reasoningStartTs)
+        : null;
+
+    /**
+     * What the inspector shows, per node kind. Every branch here ends with the
+     * frame that last touched the node, so the list is never empty: a node exists
+     * because a frame put it there, and printing that frame beats printing a
+     * sentence about having nothing to print.
+     *
+     * The two synthetic nodes — the tool container and the runtime boundary — have
+     * no frame of their own, so they describe what they are made of instead.
+     */
+    function replySection(label: string): AgentNodeContext | null {
+      return streamingIsData(s.replyText) ? maybeJsonSection(label, stripJsonFence(s.replyText)) : textSection(label, s.replyText, "markdown");
+    }
+
+    function contextFor(id: LocalNodeId): AgentNodeContext[] {
+      const sections: Array<AgentNodeContext | null> = [];
+
+      if (id === "input") {
+        const rendered = s.currentUserMessage || s.queuedMessage;
+        sections.push(textSection("User message", rendered, "markdown"));
+        if (s.currentUserEnvelope && s.currentUserEnvelope !== rendered) {
+          sections.push(maybeJsonSection("Raw message", s.currentUserEnvelope));
+        }
+      } else if (id === "model") {
+        /* The model's own output and its thinking — the two things asked for by
+           name. Both were already in this scope; nothing reached them because the
+           inspector only ever read `detail`, and this node has never had one. */
+        sections.push(
+          replySection("Model output"),
+          textSection("Thought summary", reasoningSummary, "markdown"),
+          textSection("Model", s.currentModel)
+        );
+      } else if (id === "reasoning") {
+        sections.push(textSection("Thought summary", reasoningSummary, "markdown"));
+      } else if (id === "output") {
+        sections.push(replySection("Reply"));
+      } else if (id === "subagent") {
+        sections.push(
+          textSection("Subagent", s.subagentSubtitle),
+          textSection("Workflow", s.subagentDetail)
+        );
+      } else if (isToolRuntimeNodeId(id)) {
+        const runtime = shownTools.get(toolIdFromRuntimeNodeId(id));
+        sections.push(
+          runtime?.script ? { label: "Script", text: runtime.script, kind: "code" } : null,
+          maybeJsonSection("Tool input", runtime?.input),
+          maybeJsonSection("Tool output", runtime?.output)
+        );
+      } else if (isApprovalEvaluationNodeId(id)) {
+        /* The EVALUATION's own content. Before this node existed the events were folded into
+           the tool card, so opening the approval showed the tool's input and output — the
+           one thing it is not about. */
+        const evaluation = s.evaluations.get(id.slice("approval:".length));
+        sections.push(
+          textSection("Evaluator", evaluation?.evaluator),
+          textSection("Verdict", evaluation?.verdict ?? evaluation?.status),
+          textSection("Reason", evaluation?.detail, "markdown"),
+          evaluation?.reasoning
+            ? { label: "Evaluator reasoning", text: evaluation.reasoning, kind: "json" }
+            : null,
+          textSection("Gated call", evaluation?.toolName)
+        );
+      } else if (id === "tool-container") {
+        sections.push(
+          valueSection(
+            "Delegated runtimes",
+            (options.embeddedToolGraphs ?? []).map((graph) => ({
+              status: graph.status,
+              activeTurn: graph.activeTurn,
+              nodes: graph.nodes.length
+            }))
+          )
+        );
+      }
+
+      sections.push(valueSection("Event payload", s.lastFrameByNode.get(id)));
+      const built = sections.filter((section): section is AgentNodeContext => section != null);
+      /* Unreachable for every id above, and the reason there is no apology string
+         left in this file: a node with nothing else still describes itself. */
+      return built.length > 0 ? built : [{ label: "Node", text: id, kind: "text" }];
+    }
+
+    function nodeDataFor(id: LocalNodeId): AgentNodeData {
+      return { ...baseNodeDataFor(id), context: contextFor(id) };
+    }
+
+    function baseNodeDataFor(id: LocalNodeId): AgentNodeData {
+      if (id === "input") {
+        return {
+          tone: s.status === "running" ? "queue" : "neutral",
+          title: "Input",
+          state: s.inputState,
+          subtitle: "user message",
+          /* The text, not the envelope it arrived in. The card used to show the
+             raw `{"type":"ask","payload":{...}}` — barely legible in four lines
+             and plainly wrong now the Result region is big enough to read. The
+             envelope is still in the inspector, as "Raw message". */
+          detail: s.currentUserMessage || s.queuedMessage,
+          nodeHeight: resultNodeHeight,
+          active: activeNodeId === id
+        };
+      }
+      if (id === "model") {
+        return {
+          tone: s.modelState === "running" ? "model" : "neutral",
+          title: "Model interaction",
+          state: s.modelState,
+          subtitle: s.currentModel,
+          active: activeNodeId === id,
+          size: "large",
+          metrics: [
+            tokenMetric("input", usage.tokens.input, s.modelState === "running", usage.unreportedCalls),
+            tokenMetric("output", usage.tokens.output, s.modelState === "running", usage.unreportedCalls)
+          ]
+        };
+      }
+      if (id === "reasoning") {
+        return {
+          tone:
+            s.reasoningState === "running" || s.reasoningState === "captured"
+              ? "reasoning"
+              : "neutral",
+          title: "Thought summary",
+          state: s.reasoningState,
+          /* How long it thought, once that is a settled number, because that is the question
+             a finished thought card is asked; the token count is what it answers until then. */
+          subtitle:
+            reasoningSeconds != null && reasoningSeconds >= 1
+              ? `Thought for ${formatDuration(reasoningSeconds)}`
+              : usage.tokens.thought > 0
+                ? `${formatTokens(usage.tokens.thought)} thought tokens`
+                : "thinking trace",
+          detail: reasoningSummary,
+          nodeHeight: resultNodeHeight,
+          active: activeNodeId === id
+        };
+      }
+      if (isToolRuntimeNodeId(id)) {
+        const runtime = shownTools.get(toolIdFromRuntimeNodeId(id));
+        /* Always a string: the Result region is a slot the node reserves, not
+           something that appears once the tool has said anything. */
+        const detail = runtime?.detail ?? "";
+        const childCount = runtime?.id ? codeModeHostChildIds(runtime.id).length : 0;
+        const codeModeDimensions =
+          runtime?.isCodeMode && childCount > 0
+            ? codeModeContainerDimensions(childCount)
+            : null;
+        const toolStatus = runtime?.status ?? "idle";
+        const retryCount = runtime?.retryCount ?? 1;
+        return {
+          tone: runtime?.tone ?? "neutral",
+          title: runtime?.name ?? "Tool",
+          state: retryCount > 1 ? `${toolStatus} ×${retryCount}` : toolStatus,
+          statusTone: runtime?.statusTone,
+          subtitle: runtime?.subtitle ?? "tool lifecycle",
+          detail,
+          size: codeModeDimensions ? "container" : undefined,
+          nodeWidth: codeModeDimensions?.width,
+          nodeHeight: codeModeDimensions?.height ?? resultNodeHeight,
+          /* Only for a Code Mode host: the container class otherwise squeezes the
+             result body to leave room for children, which is right for the subagent
+             container and wrong for a card showing a script. */
+          resultHeight: codeModeDimensions ? codeModeScriptHeight : undefined,
+          active: activeNodeId === id,
+          toolId: runtime?.id,
+          codeMode: runtime?.isCodeMode,
+          flowGroup: runtime?.flowGroup
+        };
+      }
+      if (isApprovalEvaluationNodeId(id)) {
+        const evaluation = s.evaluations.get(id.slice("approval:".length));
+        return {
+          tone: evaluation?.tone ?? "approval",
+          /* The evaluator, not the tool: this card is about who judged, and the tool it
+             judged is one edge away. */
+          title: evaluation?.evaluator ?? "approval evaluator",
+          state: evaluation?.status ?? "evaluating",
+          statusTone: evaluation?.statusTone,
+          subtitle: evaluation ? `auto approval · ${evaluation.toolName}` : "auto approval",
+          detail: evaluation?.detail ?? "",
+          nodeHeight: stateNodeHeight,
+          active: activeNodeId === id
+        };
+      }
+      if (id === "tool-container") {
+        return {
+          ...delegatedState(options.embeddedToolGraphs ?? []),
+          title: "Subagent activity",
+          subtitle: "delegated runtimes",
+          active: activeNodeId === id,
+          size: "container",
+          nodeWidth: embeddedToolLayout?.dimensions.width ?? stateNodeWidth,
+          nodeHeight: embeddedToolLayout?.dimensions.height ?? stateNodeHeight
+        };
+      }
+      if (id === "subagent") {
+        return {
+          tone:
+            s.subagentState === "unavailable"
+              ? "error"
+              : s.subagentState === "stopped"
+                ? "done"
+                : "agent",
+          title: "Subagent",
+          state: s.subagentState,
+          subtitle: s.subagentSubtitle,
+          detail: s.subagentDetail,
+          nodeHeight: resultNodeHeight,
+          active: activeNodeId === id
+        };
+      }
+      if (id === "output") {
+        return {
+          tone: s.status === "error" ? "error" : s.replyText ? "done" : "neutral",
+          title: "Output",
+          state: s.replyState,
+          subtitle: "streaming response",
+          detail: s.replyText,
+          markdown: !s.replyIsData && s.replyState !== "error",
+          nodeHeight: resultNodeHeight,
+          active: activeNodeId === id
+        };
+      }
+      return {
+        tone: "neutral",
+        title: "Unknown",
+        state: "unknown"
+      };
+    }
+
+    const runtimeDataById = new Map<RuntimeNodeId, AgentNodeData>(
+      order.map((id) => [id, nodeDataFor(id)])
+    );
+    const runtimeLayout = runtimeLayoutFor(order, runtimeDataById);
+    const boundaryWidth = runtimeLayout.boundaryWidth;
+    const boundaryHeight = runtimeLayout.boundaryHeight;
+
+    const runtimeNode = node(
+      "agent-runtime",
+      layout.runtime,
+      {
+        tone: s.status === "error" ? "error" : "agent",
+        title: "Agent runtime",
+        state: s.status === "idle" ? "idle" : s.status,
+        subtitle: "model calls, tool execution, and internal state",
+        headerPrefix: s.runtimeHeaderPrefix,
+        boundaryWidth,
+        boundaryHeight,
+        interfaces: agentInterface,
+        /* The boundary is drawn from state rather than from any one frame, so it
+           says what it contains: the run's status and the functions the agent
+           exposes, of which the card itself only has room for two. */
+        context: [
+          {
+            label: "Runtime",
+            text: JSON.stringify(
+              {
+                status: s.status,
+                activeTurn: s.activeTurn,
+                model: s.currentModel,
+                nodes: order,
+                tokens: usage.tokens
+              },
+              null,
+              2
+            ),
+            kind: "json"
+          },
+          ...(agentInterface.length > 0
+            ? [
+                {
+                  label: "Agent interface",
+                  text: JSON.stringify(agentInterface, null, 2),
+                  kind: "json" as const
+                }
+              ]
+            : [])
+        ]
+      },
+      "agentWorkflow"
+    );
+    const nodes: Node<AgentNodeData>[] = [runtimeNode];
+    if (s.inputSeen && inputPlacement === "external") {
+      nodes.push(node("input", layout.input, nodeDataFor("input")));
+    }
+    nodes.push(
+      ...order.map((id) =>
+        node(
+          id,
+          runtimeLayout.positions.get(id) ?? { x: layout.gridStartX, y: layout.gridStartY },
+          runtimeDataById.get(id) ?? nodeDataFor(id)
+        )
+      )
+    );
+    /* Which tool cards actually made it onto the canvas this frame. An approval satellite
+       is drawn from its call, so a satellite whose call was folded away (focus view, retry
+       stacking) would leave an edge pointing at nothing. */
+    const drawnToolNodeIds = new Set<string>(
+      order.filter((id) => isToolRuntimeNodeId(id))
+    );
+    for (const parentToolId of s.codeModeChildren.keys()) {
+      const parentNodeId = toolRuntimeNodeId(parentToolId);
+      const parentPosition = runtimeLayout.positions.get(parentNodeId);
+      if (!parentPosition) continue;
+      /* Survivors repack from the first slot, so the grid has no gaps where the
+         finished calls were. */
+      for (const [index, childToolId] of codeModeHostChildIds(parentToolId).entries()) {
+        const childNodeId = toolRuntimeNodeId(childToolId);
+        const childOffset = codeModeChildPosition(index);
+        nodes.push({
+          ...node(
+            childNodeId,
+            {
+              x: parentPosition.x + childOffset.x,
+              y: parentPosition.y + childOffset.y
+            },
+            nodeDataFor(childNodeId)
+          ),
+          zIndex: 14
+        });
+        drawnToolNodeIds.add(childNodeId);
+      }
+    }
+    if (s.outputSeen && outputPlacement === "external") {
+      nodes.push(node("output", outputPosition(boundaryWidth), nodeDataFor("output")));
+    }
+
+    const edges: Edge[] = [];
+    /**
+     * Where a gated call's approval satellites hang: under the card that OWNS the call.
+     *
+     * For an ordinary tool that is its own card. For a Code Mode host call it is the HOST's
+     * container, not the child cell inside it — children are packed in a grid, so a
+     * satellite dropped below a child would land on the next child. Hanging it under the
+     * container puts it in empty space, and the edge still runs from the child, so which
+     * host call is being approved stays legible.
+     */
+    function approvalAnchorOwner(toolId: ToolId): ToolRuntimeNodeId {
+      const parentToolId = shownTools.get(toolId)?.parentToolId;
+      return toolRuntimeNodeId(parentToolId ?? toolId);
+    }
+
+    /* One column per owner, so several gated calls under one Code Mode host do not stack. */
+    const satellitesPerOwner = new Map<ToolRuntimeNodeId, number>();
+
+    /* Each auto approval evaluation as its own card, hung off the gated call by a single
+       edge — the evaluator runs outside the tool, and the graph says so. */
+    for (const evaluation of s.evaluations.values()) {
+      /* Dismissed once the gate is decided. The card exists to say what is happening to an
+         OPEN approval; after the decision the tool just runs, and a leftover "escalated"
+         card beside it claims the call is still waiting on someone. The transcript, the
+         replay log and the waterfall keep the record.
+
+         TWO EXCEPTIONS, both about not deleting a card before it has been read:
+
+         - A CANCELLED evaluation is kept. It is the one terminal the resolution CAUSES
+           rather than merely follows, so dismissing it on that same resolution would mean
+           an evaluator pre-empted by a human could never be seen to have been pre-empted —
+           and being able to see exactly that is why the cancellation is published at all.
+           It leaves with its tool, at the end of the turn or when focus view drops the call.
+         - A call the decision SETTLED — a DENIAL — lingers a beat so it is seen to finish.
+           Its evaluation lingers with it rather than vanishing out from under the card it
+           is attached to.
+
+         That second exception is gated on the call having been DENIED, not merely on it
+         being in `lingeringTools`. The linger set is "anything that settled in the last
+         beat", which includes a `tool_end` — so keying off it alone meant an approved call
+         put its own tool id back in the set when it FINISHED, and the evaluation card that
+         had been dismissed at the approval reappeared minutes later as the tool wrapped up.
+         Only a refusal can resurrect a card, and only for the beat its own call is held. */
+      const gateDecided = s.resolvedApprovalToolIds.has(evaluation.toolId);
+      const heldWithRefusedCall =
+        s.deniedApprovalToolIds.has(evaluation.toolId) &&
+        lingeringTools.has(evaluation.toolId);
+      if (gateDecided && evaluation.status !== "cancelled" && !heldWithRefusedCall) {
+        continue;
+      }
+      const toolNodeId = toolRuntimeNodeId(evaluation.toolId);
+      // The call's card can be gone (focus view drops settled ones); its satellite goes too,
+      // or the edge below would point at a node that is not drawn.
+      if (!drawnToolNodeIds.has(toolNodeId)) continue;
+      const ownerNodeId = approvalAnchorOwner(evaluation.toolId);
+      const ownerPosition = runtimeLayout.positions.get(ownerNodeId);
+      if (!ownerPosition) continue;
+      /* Read off the owner's own card rather than assumed: a Code Mode host is a container
+         sized to its children, so the drop has to clear whatever it actually grew to. */
+      const ownerHeight = numericData(
+        runtimeDataById.get(ownerNodeId) ?? nodeDataFor(ownerNodeId),
+        "nodeHeight",
+        resultNodeHeight
+      );
+      const column = satellitesPerOwner.get(ownerNodeId) ?? 0;
+      satellitesPerOwner.set(ownerNodeId, column + 1);
+      const nodeId = approvalEvaluationNodeId(evaluation.id);
+      nodes.push({
+        ...node(
+          nodeId,
+          {
+            x: ownerPosition.x + column * (stateNodeWidth + approvalEvaluationGapX),
+            y: ownerPosition.y + ownerHeight + approvalEvaluationGapY
+          },
+          nodeDataFor(nodeId)
+        ),
+        zIndex: 14
+      });
+      edges.push(
+        edge(nodeId, toolNodeId, nodeId, {
+          sourceHandle: "source-bottom",
+          targetHandle: "target-top",
+          kind: "approval"
+        })
+      );
+    }
+    const toolPosition = runtimeLayout.positions.get("tool-container");
+    if (toolPosition && embeddedToolLayout) {
+      for (const placement of embeddedToolLayout.placements) {
+        const embeddedGraph = offsetGraph(
+          placement.graph,
+          toolPosition.x + placement.x,
+          toolPosition.y + placement.y,
+          nestedZIndexBoost
+        );
+        nodes.push(...embeddedGraph.nodes);
+        edges.push(...embeddedGraph.edges);
+      }
+    }
+    const reasoningAttachedToModel =
+      order.includes("model") && order.includes("reasoning");
+    const runtimeFlowOrder = reasoningAttachedToModel
+      ? order.filter((id) => id !== "reasoning")
+      : order;
+    if (reasoningAttachedToModel) {
+      edges.push(
+        edge(
+          "flow-model-reasoning",
+          "model",
+          "reasoning",
+          {
+            sourceHandle: "source-bottom",
+            targetHandle: "target-top",
+            kind: "reasoning"
+          }
+        )
+      );
+    }
+    addRuntimeFlowEdges(
+      edges,
+      runtimeFlowOrder,
+      runtimeDataById,
+      runtimeLayout,
+      s.inputSeen,
+      inputPlacement
+    );
+    if (s.outputSeen && outputPlacement === "external") {
+      const outputSources = terminalRuntimeSources(runtimeFlowOrder, runtimeDataById);
+      if (outputSources.length > 0) {
+        edges.push(
+          ...outputSources.map((source) =>
+            edge(
+              `flow-${source}-output`,
+              source,
+              "output",
+              { kind: "output" }
+            )
+          )
+        );
+      } else if (s.inputSeen) {
+        edges.push(
+          edge("flow-input-output", "input", "output", {
+            kind: "output"
+          })
+        );
+      }
+    }
+
+    const cued = markEdgeCues(nodes, edges, options.reducedMotion ?? false);
+    return {
+      nodes: withKnownSizes(cued.nodes),
+      edges: cued.edges,
+      activeTurn: s.activeTurn,
+      status: s.status,
+      failed: s.failed,
+      usage
+    };
+  }
 }
 
 function graphSourceLabel(agent: AgentGraphSource): string {
@@ -2296,6 +2584,7 @@ function scopedGraph(
             tone: unreadableLooks[unreadable],
             state: unreadable,
             reason,
+            headerHeight: runtimeHeaderHeight + reasonShift,
             context: [
               unreadableContext(delegation, agent.executionStatus),
               ...(item.data.context ?? [])
@@ -2371,11 +2660,59 @@ function composeStatus(statuses: AgentGraph["status"][]): AgentGraph["status"] {
   return "idle";
 }
 
+type TreeGraphOptions = Pick<AgentGraphOptions, "focus" | "linger" | "reducedMotion">;
+
 export function buildAgentTreeGraph(
   agents: AgentGraphSource[],
   /* Forwarded to every agent in the tree, not just the root: a focus mode that
      only applied to the parent would leave a busy subagent drawing every card. */
-  options: Pick<AgentGraphOptions, "focus" | "linger" | "reducedMotion"> = {}
+  options: TreeGraphOptions = {}
+): AgentGraph {
+  return agentTreeGraphBuilder()(agents, options);
+}
+
+/**
+ * The tree's graph with one agentGraphBuilder fold per agent, kept between calls: a
+ * frame folds into the agent that sent it, and every other agent's fold is left alone.
+ * Each agent is still drawn on every call, since a parent's boundary is sized around
+ * its children's graphs. `checkpointEvery` overrides how many frames apart each fold is
+ * saved, so tests can cross saves with short runs.
+ */
+export function agentTreeGraphBuilder(checkpointEvery?: number): (
+  agents: AgentGraphSource[],
+  options?: TreeGraphOptions
+) => AgentGraph {
+  let keepers = new Map<string, ReturnType<typeof agentFoldKeeper>>();
+  return (agents, options = {}) => {
+    const next = new Map<string, ReturnType<typeof agentFoldKeeper>>();
+    const folds = new Map<AgentGraphSource, AgentGraphFold>();
+    for (const agent of agents) {
+      const keep =
+        next.get(agent.workflowId) ?? keepers.get(agent.workflowId) ?? agentFoldKeeper(checkpointEvery);
+      next.set(agent.workflowId, keep);
+      folds.set(agent, keep(agent.frames, agentGraphOptions(agent, options)));
+    }
+    keepers = next;
+    return treeGraph(agents, folds, options);
+  };
+}
+
+function agentGraphOptions(agent: AgentGraphSource, options: TreeGraphOptions): AgentGraphOptions {
+  return {
+    inputPlacement: agent.role === "subagent" ? "runtime" : "external",
+    showSubagentDispatch: false,
+    outputPlacement: agent.role === "subagent" ? "runtime" : "external",
+    agentInterface: agent.agentInterface,
+    focus: options.focus,
+    linger: options.linger,
+    reducedMotion: options.reducedMotion
+  };
+}
+
+function treeGraph(
+  agents: AgentGraphSource[],
+  folds: ReadonlyMap<AgentGraphSource, AgentGraphFold>,
+  options: TreeGraphOptions
 ): AgentGraph {
   if (agents.length === 0) return buildAgentGraph([], options);
 
@@ -2399,7 +2736,7 @@ export function buildAgentTreeGraph(
     delegations.set(workflowId, created);
     return created;
   };
-  for (const frame of agents.flatMap((agent) => agent.frames)) {
+  for (const frame of agents.flatMap((agent) => folds.get(agent)!.delegations)) {
     if (frame.event === "subagent_message_sent") {
       delegationOf(frame.data.workflow_id).reply = undefined;
     } else if (frame.event === "subagent_reply_received") {
@@ -2424,15 +2761,9 @@ export function buildAgentTreeGraph(
     const childGraphs = (childrenByParent.get(agent.workflowId) ?? [])
       .filter((child) => !nextSeen.has(child.workflowId))
       .map((child) => buildNestedAgentGraph(child, nextSeen));
-    const graph = buildAgentGraph(agent.frames, {
-      inputPlacement: agent.role === "subagent" ? "runtime" : "external",
-      showSubagentDispatch: false,
-      outputPlacement: agent.role === "subagent" ? "runtime" : "external",
-      agentInterface: agent.agentInterface,
-      embeddedToolGraphs: childGraphs,
-      focus: options.focus,
-      linger: options.linger,
-      reducedMotion: options.reducedMotion
+    const graph = folds.get(agent)!.render({
+      ...agentGraphOptions(agent, options),
+      embeddedToolGraphs: childGraphs
     });
     const scoped = scopedGraph(agent, graph, 0, 0, delegations.get(agent.workflowId));
     builtGraphs.push(scoped);
@@ -2453,7 +2784,8 @@ export function buildAgentTreeGraph(
     nextX += graphWidth(graph) + 95;
     return positioned;
   });
-  const nodes = positionedRoots.flatMap((graph) => graph.nodes);
+  /* Again, because nesting rewrites a boundary's size after its own graph was built. */
+  const nodes = withKnownSizes(positionedRoots.flatMap((graph) => graph.nodes));
   const edges = positionedRoots.flatMap((graph) => graph.edges);
 
   return {
@@ -2462,6 +2794,6 @@ export function buildAgentTreeGraph(
     activeTurn: builtGraphs.find((graph) => graph.activeTurn != null)?.activeTurn ?? null,
     status: composeStatus(builtGraphs.map((graph) => graph.status)),
     failed: builtGraphs.some((graph) => graph.failed),
-    usage: summarizeCost(agents.flatMap((agent) => agent.frames))
+    usage: mergeCostSummaries(agents.map((agent) => folds.get(agent)!.usage()))
   };
 }

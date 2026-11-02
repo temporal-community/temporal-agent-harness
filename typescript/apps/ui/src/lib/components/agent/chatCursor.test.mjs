@@ -17,6 +17,7 @@ import { AgentRunController } from "$lib/state/agentRun.svelte.ts";
 import { codeModeHostsByRow } from "$lib/state/codeModeNesting.ts";
 import { buildReplayLog } from "$lib/state/replayLog.ts";
 import { foldTurnThought } from "$lib/state/thoughtSummary.ts";
+import { buildTranscript } from "$lib/state/transcript.ts";
 import AgentChatPanel from "./AgentChatPanel.svelte";
 
 const common = {
@@ -91,6 +92,21 @@ describe("the chat pane and the replay cursor", () => {
     assert.ok(composer, "the composer is still there");
     assert.doesNotMatch(composer, /disabled/, "scrubbing back does not disable the composer");
     assert.equal(composer, composerOf(liveBody), "and it is the live composer, unchanged");
+    run.goTo(run.total);
+  });
+
+  it("draws the same at every cursor as the transcript and turns rebuilt from the visible frames", () => {
+    const raw = (props) => render(AgentChatPanel, { props: { ...common, onJumpToLive: () => {}, ...props } }).body;
+    for (let cursor = 1; cursor <= run.total; cursor += 7) {
+      run.goTo(cursor);
+      const view = run.chatView;
+      const rebuilt = {
+        ...view,
+        items: buildTranscript(run.replayTimeline.slice(0, cursor), run.agentInterfaces[run.session.workflow_id]),
+        logGroups: undefined
+      };
+      assert.equal(raw(view), raw(rebuilt), `the chat differs at ${cursor}`);
+    }
     run.goTo(run.total);
   });
 });

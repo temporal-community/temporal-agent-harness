@@ -6,7 +6,7 @@
  * focus switch thrown — arrives as a wholly new set of positions and lands as a
  * jump cut. The nodes are the same nodes, and nothing on screen said so.
  *
- * Two rules, and they are the whole module:
+ * Two rules for travel:
  *
  * - A node in both the old array and the new one travels between them. The
  *   travel is what says it is the same node in a new place.
@@ -16,6 +16,7 @@
  *
  * Deciding *when* a rearrangement is worth animating is the caller's; this only
  * answers whether one happened at all, and what it looks like part-way through.
+ * Between rearrangements, keepUnchanged hands the flow back what did not change.
  */
 
 export interface TweenPosition {
@@ -28,6 +29,65 @@ export interface TweenNode {
   position: TweenPosition;
   /** Written by the flow onto the array it is bound to; see `lerpNodes`. */
   selected?: boolean;
+}
+
+/* What the flow writes onto the array it is bound to, which the projection never sets. */
+const flowOwned = new Set(["measured", "selected", "dragging", "resizing"]);
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]))
+  );
+}
+
+function sameElement(was: Record<string, unknown>, node: Record<string, unknown>): boolean {
+  const keys = new Set([...Object.keys(was), ...Object.keys(node)]);
+  for (const key of keys) {
+    if (!flowOwned.has(key) && !sameValue(was[key], node[key])) return false;
+  }
+  return true;
+}
+
+/**
+ * `next`, keeping every node or edge from `previous` that it did not change.
+ *
+ * xyflow skips a node or edge it is handed back by reference (adoptUserNodes,
+ * getLayoutedEdges), and a card it skips does not re-render. A changed one still
+ * keeps what the flow wrote on it, the measured size while its size holds, and
+ * its `data` while that holds. Returns `previous` itself when nothing changed.
+ */
+export function keepUnchanged<T extends { id: string }>(previous: readonly T[], next: readonly T[]): T[] {
+  if (previous.length === 0) return next as T[];
+  const before = new Map(previous.map((item) => [item.id, item as Record<string, unknown>]));
+  let changed = previous.length !== next.length;
+  const kept = next.map((item, index) => {
+    const was = before.get(item.id);
+    const node = item as Record<string, unknown>;
+    if (!was) {
+      changed = true;
+      return item;
+    }
+    if (sameElement(was, node)) {
+      if (previous[index] !== was) changed = true;
+      return was as T;
+    }
+    changed = true;
+    const sameSize = was.width === node.width && was.height === node.height;
+    return {
+      ...item,
+      ...(was.selected === undefined ? {} : { selected: was.selected }),
+      ...(sameSize && was.measured !== undefined ? { measured: was.measured } : {}),
+      ...("data" in node && sameValue(was.data, node.data) ? { data: was.data } : {})
+    } as T;
+  });
+  return changed ? kept : (previous as T[]);
 }
 
 /** Whether something that stayed also moved, which is the only case worth animating. */

@@ -25,7 +25,7 @@
     AgentNodeContext,
     AgentNodeData
   } from "$lib/state/flowProjection";
-  import { lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
+  import { keepUnchanged, lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
   import AgentStateNode, { kindFromState, setNodeOpener } from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
@@ -114,14 +114,17 @@
    * assignment and pays nothing.
    */
   $effect(() => {
-    const next = graph.nodes;
-    edges =
+    /* untracked: this effect writes `nodes` and `edges`, and reading them as
+       dependencies would make every interpolated frame re-enter the effect that
+       produced it. */
+    const previous = untrack(() => nodes);
+    const next = keepUnchanged(previous, graph.nodes);
+    edges = keepUnchanged(
+      untrack(() => edges),
       ready && settled
         ? graph.edges
-        : graph.edges.map((edge) => (edge.animated ? { ...edge, animated: false } : edge));
-    /* untracked: this effect writes `nodes`, and reading it as a dependency
-       would make every interpolated frame re-enter the effect that produced it. */
-    const previous = untrack(() => nodes);
+        : graph.edges.map((edge) => (edge.animated ? { ...edge, animated: false } : edge))
+    );
 
     if (tweenFrame) cancelAnimationFrame(tweenFrame);
     if (!ready || !settled || reduceMotion() || !nodesMovedInPlace(previous, next)) {
@@ -136,7 +139,7 @@
       const t = Math.min(1, (performance.now() - start) / tweenMs);
       /* Ease out: the graph leaves briskly and arrives gently, which is what
          makes a rearrangement read as one move rather than a slide. */
-      nodes = lerpNodes(previous, next, 1 - (1 - t) ** 3);
+      nodes = keepUnchanged(nodes, lerpNodes(previous, next, 1 - (1 - t) ** 3));
       if (t < 1) {
         tweenFrame = requestAnimationFrame(step);
         return;
@@ -247,7 +250,6 @@
     bind:edges
     {nodeTypes}
     {defaultEdgeOptions}
-    fitView
     {fitViewOptions}
     {minZoom}
     {maxZoom}
@@ -263,6 +265,7 @@
   >
     <AutoFitView
       signature={fitSignature}
+      graphNodes={graph.nodes}
       {fitViewOptions}
       {ready}
       hold={tweening}
@@ -391,10 +394,12 @@
   }
 
   /* Keep the canvas chrome in place while Svelte Flow measures its first node
-     set. Only the graph plane waits, so revealing final geometry cannot flash
-     the whole pane. */
+     set. Only the graph plane and the minimap's marks of it wait, so revealing
+     final geometry cannot flash the whole pane, and the minimap cannot draw the
+     unmeasured graph first. */
   .flow-wrap:not(.settled) :global(.svelte-flow__viewport),
-  .flow-wrap:not(.settled) :global(.svelte-flow__viewport *) {
+  .flow-wrap:not(.settled) :global(.svelte-flow__viewport *),
+  .flow-wrap:not(.settled) :global(.svelte-flow__minimap-node) {
     visibility: hidden !important;
   }
 

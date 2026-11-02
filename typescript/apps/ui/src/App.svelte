@@ -431,7 +431,7 @@
     );
     if (action == null) return;
     event.preventDefault();
-    applyReplayAction(action, replaySurface);
+    applyReplayAction(action, replaySurface, event.repeat);
   }
 
   /* Which rail the keys act on, read off where the reader last put their hands
