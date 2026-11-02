@@ -1,0 +1,16 @@
+# Read by `docker build -f python/examples/demo-catalog.DOCKERFILE .` (BuildKit takes the
+# .dockerignore named after the Dockerfile). Keeps the image to what Bazel builds from: no local
+# secrets, no host build output. Paths are relative to the build context, the repo root.
+.git
+.claude
+**/.env
+**/.env.local
+**/temporal.toml
+bazel-*
+user.bazelrc
+.venv
+.venv-bazel
+**/node_modules
+**/dist
+**/__pycache__
+python/examples/code_mode_memory/memories

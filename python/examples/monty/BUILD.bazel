@@ -93,6 +93,7 @@ harness_module_binary(
         ":workflow",
         "//python/temporal_agent_harness:plugin",
         "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_harness/utils:task_queue",
         "@pypi//google_genai",
         "@pypi//temporalio",
     ],

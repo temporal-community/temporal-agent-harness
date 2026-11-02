@@ -19,6 +19,7 @@ Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
     OPENAI_API_KEY                            required — the agent calls the OpenAI API
     OPENAI_HELLO_TASK_QUEUE                   task queue to poll (default: openai-hello)
+    TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
     stream_to_provider,
 )
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.openai_hello.workflow import TASK_QUEUE, OpenAIHelloAgentWorkflow
 
@@ -53,7 +55,7 @@ async def main() -> None:
         force=True,
     )
 
-    task_queue = os.environ.get("OPENAI_HELLO_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("OPENAI_HELLO_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")

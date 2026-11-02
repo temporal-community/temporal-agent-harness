@@ -27,6 +27,9 @@ export interface SessionSummary {
   agent_workflow_type: string;
   execution_status?: string;
   closed?: boolean;
+  /** The Temporal Web UI's workflows page for the session's namespace; a workflow's page is this
+   *  followed by `/<workflow id>`. Absent when the server does not know where that UI is. */
+  temporal_workflows_url?: string | null;
 }
 
 /** Where sessions are created. `HttpTransport` is one. */

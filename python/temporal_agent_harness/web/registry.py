@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, StringConstraints, ValidationError
 from pydantic.json_schema import SkipJsonSchema
 
 from temporal_agent_harness.harness.agent_schema import agent_init_data_schema_from_document
+from temporal_agent_harness.utils.task_queue import task_queue_name
 from temporal_agent_harness.web.session_manager import AgentDescriptor, AgentRegistry, AgentStart
 
 _Required = Annotated[str, StringConstraints(min_length=1)]
@@ -60,7 +61,9 @@ def load_agent_registry(path: Path | str) -> AgentRegistry:
 
     An entry's optional ``schema`` is the path, relative to the TOML file, of the agent's schema
     document (``temporal-agent-harness schema module:Class -o X.schema.json``). Its init data
-    becomes the descriptor's :class:`AgentStart`; the agent's code is never imported.
+    becomes the descriptor's :class:`AgentStart`; the agent's code is never imported. Each
+    ``task_queue`` is put under this process's ``TASK_QUEUE_PREFIX`` (see
+    :func:`~temporal_agent_harness.utils.task_queue.task_queue_name`), as the workers poll it.
     """
 
     registry_path = Path(path)
@@ -81,7 +84,7 @@ def load_agent_registry(path: Path | str) -> AgentRegistry:
             AgentDescriptor(
                 key=entry.key,
                 workflow_type=entry.workflow_type,
-                task_queue=entry.task_queue,
+                task_queue=task_queue_name(entry.task_queue),
                 label=entry.label,
                 description=" ".join(entry.description.split()),
                 start=(

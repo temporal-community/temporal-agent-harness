@@ -24,6 +24,7 @@ Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
     OPENAI_API_KEY                            required — the agent calls the OpenAI API
     PYDANTIC_AI_HELLO_TASK_QUEUE              task queue to poll (default: pydantic-ai-hello)
+    TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
 from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.pydantic_ai_hello.workflow import (
     TASK_QUEUE,
@@ -54,7 +56,7 @@ async def main() -> None:
         force=True,
     )
 
-    task_queue = os.environ.get("PYDANTIC_AI_HELLO_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("PYDANTIC_AI_HELLO_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")

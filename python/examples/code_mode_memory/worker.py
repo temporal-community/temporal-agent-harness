@@ -13,6 +13,9 @@ Env vars:
     TEMPORAL_CONFIG_FILE    path to a temporal.toml (set in .env.local)
     TEMPORAL_PROFILE        profile name to load (default: "default")
     GEMINI_API_KEY          required — the agent calls the Gemini Interactions API
+    CODE_MODE_MEMORY_TASK_QUEUE
+                            task queue to poll (default: code-mode-memory)
+    TASK_QUEUE_PREFIX       put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from temporalio.worker import Worker
 
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.code_mode_memory.local_disk import LocalDisk, SkillsDisk
 from examples.code_mode_memory.workflow import TASK_QUEUE, CodeModeMemoryAgentWorkflow
@@ -48,12 +52,13 @@ async def main() -> None:
             AgentHarnessPlugin(filesystems=[LocalDisk, SkillsDisk]),
         ],
     )
+    task_queue = os.environ.get("CODE_MODE_MEMORY_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
     worker = Worker(
         client,
-        task_queue=TASK_QUEUE,
+        task_queue=task_queue,
         workflows=[CodeModeMemoryAgentWorkflow],
     )
-    print(f"Code Mode memory worker ready: taskQueue={TASK_QUEUE}", flush=True)
+    print(f"Code Mode memory worker ready: taskQueue={task_queue}", flush=True)
     await worker.run()
 
 

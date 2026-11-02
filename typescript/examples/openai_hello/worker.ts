@@ -16,11 +16,12 @@
 //     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
 //     OPENAI_API_KEY                            required: the agent calls the OpenAI API
 //     OPENAI_HELLO_TS_TASK_QUEUE                task queue to poll (default: openai-hello-ts)
+//     TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 
 import { fileURLToPath } from "node:url";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
+import { AgentHarnessPlugin, taskQueueName } from "@temporalio/agent-harness-worker";
 import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
 import { TASK_QUEUE } from "./agents.ts";
 
@@ -38,7 +39,7 @@ const connection = await NativeConnection.connect(connectionOptions);
 const worker = await Worker.create({
   connection,
   namespace: namespace ?? "default",
-  taskQueue: process.env.OPENAI_HELLO_TS_TASK_QUEUE || TASK_QUEUE,
+  taskQueue: process.env.OPENAI_HELLO_TS_TASK_QUEUE || taskQueueName(TASK_QUEUE),
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
   // Model activity timeouts are the workflow's own (agents.ts): a plugin's `modelParams` reach
   // only the workflows a client carrying the plugin starts, and the session manager starts these.
