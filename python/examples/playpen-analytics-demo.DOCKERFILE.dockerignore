@@ -1,0 +1,4 @@
+# Read by `docker build -f python/examples/playpen-analytics-demo.DOCKERFILE .` (BuildKit takes
+# the .dockerignore named after the Dockerfile). The image fetches its sources at pinned commits,
+# so it needs nothing from the build context.
+*
