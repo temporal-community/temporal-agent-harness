@@ -11,6 +11,7 @@
 //     TEMPORAL_PROFILE          profile name to load (default: "default")
 //     GEMINI_API_KEY            required: the conversational agents call the Gemini API
 //     MONTY_AGENT_TASK_QUEUE   task queue to poll (default: monty-dynamic-agent-ts)
+//     TASK_QUEUE_PREFIX        put in front of the default queue's name, if set
 //
 // This worker hosts the three Monty agents (MontyDynamicAgentTs + the two conversational agents),
 // not the session manager. The packaged session manager is hosted by
@@ -21,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { GoogleGenAI } from "@google/genai";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
+import { AgentHarnessPlugin, taskQueueName } from "@temporalio/agent-harness-worker";
 import { GoogleGenAIPlugin } from "@temporalio/agent-harness-worker/ai-sdks/google-genai-plugin";
 import { TOOL_ACTIVITIES } from "./activity-bodies.ts";
 import { TASK_QUEUE } from "./workflow.ts";
@@ -41,7 +42,7 @@ const connection = await NativeConnection.connect(connectionOptions);
 const worker = await Worker.create({
   connection,
   namespace: namespace ?? "default",
-  taskQueue: process.env.MONTY_AGENT_TASK_QUEUE ?? TASK_QUEUE,
+  taskQueue: process.env.MONTY_AGENT_TASK_QUEUE || taskQueueName(TASK_QUEUE),
   // All three Monty agents run here: MontyChatSubagentAgentTs drives MontyDynamicAgentTs as a
   // subagent, so the child runs on this same queue.
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),

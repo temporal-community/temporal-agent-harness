@@ -36,6 +36,7 @@ import {
   functionParam,
   googleGenaiClient,
 } from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+import { workflowInfo } from "@temporalio/workflow";
 import {
   SET_MODEL_DESCRIPTION,
   SUPPORTED_MODELS,
@@ -43,7 +44,7 @@ import {
   runFunctionCall,
 } from "./conversational-workflow.ts";
 import { askUser } from "./ask-user.ts";
-import { MontyDynamicAgentTs, TASK_QUEUE } from "./workflow.ts";
+import { MontyDynamicAgentTs } from "./workflow.ts";
 
 const DEFAULT_MODEL = SUPPORTED_MODELS[0];
 
@@ -114,7 +115,11 @@ replies with the results.`,
     // subagent. Built statically from its handlers; no child is started here. Yields start_monty /
     // monty_run_script / stop_monty. Plus ask_user, to ask the user something mid-turn.
     const modelTools = [
-      ...subagentToolset(MontyDynamicAgentTs, { key: SUBAGENT_KEY, taskQueue: TASK_QUEUE }),
+      // This worker hosts the script-runner too, on whatever queue it was given.
+      ...subagentToolset(MontyDynamicAgentTs, {
+        key: SUBAGENT_KEY,
+        taskQueue: workflowInfo().taskQueue,
+      }),
       askUser,
     ];
     const toolsByName = new Map(modelTools.map((t) => [t.name, t]));

@@ -28,3 +28,11 @@ ts_project(
         "//typescript/packages/worker:node_modules/@temporalio/external-storage-s3-aws-sdk",
     ],
 )
+
+ts_project(
+    name = "task-queue",
+    srcs = ["task-queue.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    visibility = ["//visibility:public"],
+)

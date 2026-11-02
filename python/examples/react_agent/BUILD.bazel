@@ -42,6 +42,7 @@ harness_module_binary(
         "//python/temporal_agent_harness:plugin",
         "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
         "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_harness/utils:task_queue",
         "@pypi//openai_agents",
         "@pypi//temporalio",
     ],

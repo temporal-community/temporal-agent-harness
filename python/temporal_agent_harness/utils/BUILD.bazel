@@ -17,3 +17,10 @@ py_library(
         "@pypi//temporalio",
     ],
 )
+
+py_library(
+    name = "task_queue",
+    srcs = ["task_queue.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+)

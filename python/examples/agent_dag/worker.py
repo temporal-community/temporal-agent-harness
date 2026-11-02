@@ -16,6 +16,7 @@ Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
     OPENAI_API_KEY                            required — both agents call the OpenAI API
     AGENT_DAG_TASK_QUEUE                      task queue to poll (default: agent-dag)
+    TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     stream_to_provider,
 )
 from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.agent_dag.step_agent import TASK_QUEUE, DagStepAgentWorkflow
 from examples.agent_dag.step_tools import TRAVEL_TOOLS
@@ -52,7 +54,7 @@ async def main() -> None:
         force=True,
     )
 
-    task_queue = os.environ.get("AGENT_DAG_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("AGENT_DAG_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")

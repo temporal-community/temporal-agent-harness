@@ -23,6 +23,7 @@ Env vars (set in the repo-root .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
     OPENAI_API_KEY                            required — the agent calls the OpenAI API
     REACT_AGENT_TASK_QUEUE                    task queue to poll (default: react-agent)
+    TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
     stream_to_provider,
 )
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.react_agent.human_tools import HUMAN_TOOLS
 from examples.react_agent.tool_activities import ALL_TOOLS
@@ -61,7 +63,7 @@ async def main() -> None:
         force=True,
     )
 
-    task_queue = os.environ.get("REACT_AGENT_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("REACT_AGENT_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
     MCP_SERVER_NAME = "f1-data"
     F1_MCP_SERVER_HOME = os.environ.get(
         "F1_MCP_SERVER_HOME",
