@@ -1,5 +1,5 @@
-// ABOUTME: Guards the session anchor in the app's top-left chrome — the session's name
-// and its status, beside the switch that opens the Session Manager.
+// ABOUTME: Guards the session anchor in the app's top bar — the session's name and its
+// status — and the switch that opens the Session Manager, at the row's start.
 //
 // This exists because that strip has already been lost once: moving the manager out of a
 // dropdown and into a drawer replaced the whole trigger with a lone icon, and the console
@@ -31,8 +31,10 @@ const slice = (text, open, close, label) => {
   return text.slice(start, end);
 };
 
-/* The minimap's lead zone: the app's top-left, and the only place this strip belongs. */
+/* The minimap's lead zone, centred in the top bar: the only place this strip belongs. */
 const lead = slice(app, "{#snippet lead()}", "{/snippet}", "App's minimap lead");
+/* The row's start, beside the mark: the Session Manager's switch and New session. */
+const start = slice(app, "{#snippet start()}", "{/snippet}", "App's minimap start");
 /* The launcher display, which starts sessions and names the current one. */
 const launcher = slice(
   controls,
@@ -42,17 +44,18 @@ const launcher = slice(
 );
 
 describe("the session anchor in the app chrome", () => {
-  it("is rendered in the minimap lead, beside the drawer switch", () => {
+  it("is rendered in the minimap lead, with the drawer switch at the row's start", () => {
     assert.match(
       lead,
       /<SessionControls\b[\s\S]*display="launcher"/,
-      "the app's top-left must render the session launcher, not only the drawer icon"
+      "the top bar must render the session launcher, not only the drawer icon"
     );
     assert.match(
-      lead,
-      /<PanelLeft\b/,
-      "the drawer's own switch must stay in the lead beside the anchor"
+      start,
+      /session-drawer-trigger[\s\S]*<PanelLeft\b[\s\S]*>Sessions<\/span>/,
+      "the drawer's own switch must sit at the row's start, named in words"
     );
+    assert.doesNotMatch(lead, /<PanelLeft\b/, "the switch is not repeated beside the anchor");
   });
 
   it("speaks the session's name and its status", () => {
@@ -73,12 +76,13 @@ describe("the session anchor in the app chrome", () => {
     );
     const identity = slice(controls, '{#snippet identity()}', '{/snippet}', 'read-only session identity');
     assert.doesNotMatch(identity, /onclick=|aria-expanded=/, "only the drawer switch toggles session history");
-    assert.match(controls, /aria-haspopup="dialog"/, "creation opens its own dialog");
+    assert.match(start, /aria-haspopup="dialog"/, "creation opens its own dialog");
     assert.match(
-      launcher,
-      /session-new"[\s\S]*onclick=\{openNewSessionMenu\}[\s\S]*session-anchor"/,
-      "New session must precede the current session in the chrome"
+      start,
+      /session-drawer-trigger[\s\S]*session-new"[\s\S]*onclick=\{openNewSession\}[\s\S]*>New<\/span>/,
+      "New session must follow the Sessions switch at the row's start"
     );
+    assert.doesNotMatch(launcher, /session-new/, "nor is it repeated beside the anchor");
     assert.doesNotMatch(
       controls.slice(controls.indexOf('<section class="session-manager"')),
       /label="New session"/,
@@ -97,7 +101,6 @@ describe("the session anchor in the app chrome", () => {
       "connecting={run.connecting}",
       "sending={run.sending}",
       "creatingSession={run.creatingSession}",
-      "onEnsureAgents={() => run.refreshAgents()}",
       "closed={run.sessionClosed}",
       "error={run.connectionError}",
       "{pendingLabel}"
