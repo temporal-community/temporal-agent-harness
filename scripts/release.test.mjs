@@ -84,11 +84,11 @@ test('bumps stable versions and rejects anything else', () => {
 });
 
 test('release units map to branches, tags and publish workflows', () => {
-  for (const [unit, bump] of [['python', 'patch'], ['npm', 'major']]) validateInputs(unit, bump);
+  for (const [unit, bump] of [['pypi', 'patch'], ['npm', 'major']]) validateInputs(unit, bump);
   for (const args of [['client', 'patch'], ['../npm', 'patch'], ['npm', '--help']]) {
     assert.throws(() => validateInputs(...args));
   }
-  const python = releaseDetails('release/python-v0.9.0');
+  const python = releaseDetails('release/pypi-v0.9.0');
   assert.equal(python.tag, '0.9.0');
   assert.equal(python.publishWorkflow, 'publish.yml');
   const npm = releaseDetails('release/npm-v0.2.0');
@@ -96,7 +96,7 @@ test('release units map to branches, tags and publish workflows', () => {
   assert.equal(npm.publishWorkflow, 'publish-npm.yml');
   assert.deepEqual(tagDetails('npm-v0.2.0'), npm);
   assert.deepEqual(tagDetails('0.9.0'), python);
-  for (const branch of ['main', 'release/npm-client-v0.1.1', 'release/python-v0.9', 'release/npm-v0.2.0-rc.1']) {
+  for (const branch of ['main', 'release/npm-client-v0.1.1', 'release/pypi-v0.9', 'release/npm-v0.2.0-rc.1']) {
     assert.throws(() => releaseDetails(branch));
   }
   for (const tag of ['v0.9.0', 'npm-client-v0.1.1', 'npm-v0.2']) assert.throws(() => tagDetails(tag));
@@ -191,8 +191,8 @@ test('npm release validation checks version, metadata and lockstep ranges', () =
   assert.throws(() => validateNpmRelease('0.1.0', repository), /registry dependencies only/);
 }));
 
-test('prepare python bumps pyproject, locks, repins the README and describes the PR', () => fixture((root) => {
-  const env = { RELEASE_UNIT: 'python', RELEASE_BUMP: 'minor', GITHUB_REF: 'refs/heads/main',
+test('prepare pypi bumps pyproject, locks, repins the README and describes the PR', () => fixture((root) => {
+  const env = { RELEASE_UNIT: 'pypi', RELEASE_BUMP: 'minor', GITHUB_REF: 'refs/heads/main',
     GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: join(root, 'outputs'), RUNNER_TEMP: root };
   const calls = [];
   prepare(env, (command, args, options) => {
@@ -204,8 +204,8 @@ test('prepare python bumps pyproject, locks, repins the README and describes the
   assert.match(readFileSync('python/pyproject.toml', 'utf8'), /^version = "0\.2\.0"$/m);
   assert.match(readFileSync('README.md', 'utf8'), /\[ui\]==0\.2\.0'/);
   const outputs = readFileSync(env.GITHUB_OUTPUT, 'utf8');
-  assert.match(outputs, /^unit=python$/m);
-  assert.match(outputs, /^branch=release\/python-v0\.2\.0$/m);
+  assert.match(outputs, /^unit=pypi$/m);
+  assert.match(outputs, /^branch=release\/pypi-v0\.2\.0$/m);
   assert.match(outputs, /^tag=0\.2\.0$/m);
   assert.match(outputs, /^test_targets=\/\/python\/tests:test_packaged_distributions$/m);
   const body = readFileSync(join(root, 'release-body.md'), 'utf8');
@@ -236,9 +236,9 @@ test('prepare npm bumps every lockstep package, refreshes the lockfile and lists
 test('prepare refuses to run off main or beside an open release PR, changing nothing', () => fixture(() => {
   assert.throws(() => prepare({ RELEASE_UNIT: 'npm', RELEASE_BUMP: 'patch',
     GITHUB_REF: 'refs/heads/feature', GITHUB_REPOSITORY: repository }, () => assert.fail('External call')), /from main/);
-  assert.throws(() => prepare({ RELEASE_UNIT: 'python', RELEASE_BUMP: 'patch',
+  assert.throws(() => prepare({ RELEASE_UNIT: 'pypi', RELEASE_BUMP: 'patch',
     GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: repository }, () =>
-    JSON.stringify([{ headRefName: 'release/python-v0.1.1', url: 'https://example.test/pr' }])),
+    JSON.stringify([{ headRefName: 'release/pypi-v0.1.1', url: 'https://example.test/pr' }])),
   /already exists/);
   assert.match(readFileSync('python/pyproject.toml', 'utf8'), /^version = "0\.1\.0"$/m);
   assert.equal(lockstepVersion(lockstepPackages()), '0.1.0');
@@ -246,8 +246,8 @@ test('prepare refuses to run off main or beside an open release PR, changing not
 
 test('PR creation link prefills base, branch, title and multiline body', () => {
   const body = 'Release notes\n\nDependency: ^0.2.0 & checks passed.';
-  const url = new URL(releasePrUrl(repository, 'release/python-v0.9.0', body));
-  assert.equal(decodeURIComponent(url.pathname), `/${repository}/compare/main...release/python-v0.9.0`);
+  const url = new URL(releasePrUrl(repository, 'release/pypi-v0.9.0', body));
+  assert.equal(decodeURIComponent(url.pathname), `/${repository}/compare/main...release/pypi-v0.9.0`);
   assert.equal(url.searchParams.get('quick_pull'), '1');
   assert.equal(url.searchParams.get('title'), 'Release 0.9.0');
   assert.equal(url.searchParams.get('body'), body);
@@ -276,9 +276,9 @@ test('finish tags the merged commit, creates a pre-release from the PR body, the
   assert.deepEqual(dispatchCall, ['gh', 'workflow', 'run', 'publish-npm.yml', '--repo', repository, '--ref', 'npm-v0.1.1']);
 }, '0.1.1'));
 
-test('finish releases python with a bare tag and publish.yml, and drops --prerelease from 1.0', () => fixture(() => {
+test('finish releases pypi with a bare tag and publish.yml, and drops --prerelease from 1.0', () => fixture(() => {
   const mock = mockGitHub();
-  assert.equal(finish(event('release/python-v1.0.0'), repository, mock.run), '1.0.0');
+  assert.equal(finish(event('release/pypi-v1.0.0'), repository, mock.run), '1.0.0');
   const releaseCall = mock.calls.find((call) => call[1] === 'release' && call[2] === 'create');
   assert(!releaseCall.includes('--prerelease'));
   assert.deepEqual(mock.calls.at(-1), ['gh', 'workflow', 'run', 'publish.yml', '--repo', repository, '--ref', '1.0.0']);
@@ -310,7 +310,7 @@ test('finish rejects unmerged, foreign, misnamed or stale PRs before any externa
   const mock = mockGitHub();
   assert.throws(() => finish(event('release/npm-v0.1.2'), repository, mock.run), /Tag must match/);
   assert.equal(mock.calls.length, 1);
-  assert.throws(() => finish(event('release/python-v0.1.2'), repository, mock.run), /pyproject/);
+  assert.throws(() => finish(event('release/pypi-v0.1.2'), repository, mock.run), /pyproject/);
 }, '0.1.1'));
 
 test('npm-plan accepts only a matching npm release tag and prints the publish order', () => fixture((root) => {
