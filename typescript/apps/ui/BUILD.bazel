@@ -135,6 +135,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:Select",
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:ThinkingOrb",
         "//typescript/apps/ui/src/lib/components/primitives:TipCard",
         "//typescript/apps/ui/src/lib/components/primitives:TraceImages",
         "//typescript/apps/ui/src/lib/components/primitives:TraceRow",

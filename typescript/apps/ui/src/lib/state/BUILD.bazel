@@ -848,6 +848,7 @@ vitest_test(
         ":toolImages",
         "//typescript/apps/ui/src:app",
         "//typescript/apps/ui/src/lib/components/agent:ReplyStatus",
+        "//typescript/apps/ui/src/lib/components/primitives:ThinkingOrb",
     ],
 )
 
