@@ -638,6 +638,18 @@ describe("the latency waterfall", () => {
     });
   });
 
+  // --- an empty run: its empty state alone, with no reading of zeros over it ----------------------
+  /* "0 turns, 0s total" over the empty state reads as a measurement of nothing. The timeline is
+     the whole run, not the cursor's, so this cannot drop the reading mid-scrub. */
+  it("shows only its empty state on a run with no turns, and its reading once there are turns", () => {
+    const draw = (timeline) =>
+      render(LatencyWaterfall, { props: { timeline, viewIndex: 0, onScrub() {} } }).body;
+    const empty = draw(buildStepTimeline([]));
+    assert.doesNotMatch(empty, /class="waterfall-head/);
+    assert.match(empty, /Step through the stream to chart per-step latency\./);
+    assert.match(draw(buildStepTimeline(scaleScenario("frames100k").frames)), /class="waterfall-head/);
+  });
+
   // --- at scale: rows in view, and a strip where a lane is too crowded for bars --------------------
   describe("at scale", () => {
     const draw = (timeline, viewIndex = 0) =>
