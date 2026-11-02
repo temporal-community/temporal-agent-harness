@@ -27,7 +27,7 @@ Paths are under `python/temporal_agent_harness/`, `typescript/packages/core/src/
 | `harness/code_mode/{driver,tool,stubs,vfs,okf,okf_tool,mount_decl,activity_fs}.py` | core `harness/code-mode/` at the same names, with `base64.ts` (the workflow sandbox has no `Buffer`); the activity side of `activity_fs` and `okf` in worker `harness/code-mode/` |
 | `harness/code_mode/monty_stepper.py` | worker `harness/code-mode/monty-stepper.ts` |
 | `harness/code_mode/_texts.py` | core `harness/code-mode/texts.ts`; both generated from `contract/code_mode/` |
-| — | core `harness/py-repr.ts`: Python's `repr()`, which the Python harness shows the model |
+| — | core `harness/py-repr.ts`: Python's `repr()`, which Code Mode shows the model |
 | `plugin.py` | worker `plugin.ts` |
 | `utils/large_payload.py` | worker `utils/large-payload.ts`, `utils/s3.ts` |
 | `ai_sdks/jev/evaluator.py` | core and worker `ai-sdks/jev/evaluator.ts` |
@@ -65,6 +65,7 @@ change, or adds a row here saying which SDK has it and why.
 | A subagent send tool's input key | The child handler's own parameter name, read from its signature | The handler's `inputName` (default `message`) | A JavaScript function's parameter names can't be read reliably |
 | A Code Mode script's Monty crash (not a timeout) | A fixed crash message | `MontyCrashedError: <message>` from the Node binding | The two Monty bindings report a crash differently |
 | File errors from an in-workflow VFS mount | Python's `OSError` wording | `[Errno n] … '<virtual path>'`; activity-backed mounts give Python's wording | The in-workflow filesystem formats its own errors |
+| What a tool result's JSON is (`tool_end.tool_output`) | pydantic's JSON form of the value (`to_jsonable_python`): a model's fields, a `set` or `tuple` as a list, a `datetime` as its ISO string. A value pydantic can't encode, or a float that is not finite, fails the call with `ToolOutputNotJson` | The value as JSON, through an object's `toJSON` (a `Date` is its ISO string); an `undefined` property is absent. A `Map`, `Set` or other built-in object, a function, symbol or bigint, a number that is not finite, an `undefined` array item, or a cycle fails the call with `ToolOutputNotJson`, naming where the value is | The same rule (fail rather than change a value silently) over each language's values; `JSON.stringify` would turn a `Map` into `{}`, so TypeScript checks the value itself |
 | Cancelling a stream poll from a worker | The RPC is cancelled | The poll is abandoned and ends when the server answers; the worker's native connection ignores abort signals | `@temporalio/worker`'s `NativeConnection` doesn't support aborting a call |
 
 ### In TypeScript first, Python to follow
@@ -78,6 +79,6 @@ change, or adds a row here saying which SDK has it and why.
 
 ### Not yet the same
 
-- `tool_end.tool_output` is the result as Python's `str()` renders it in both SDKs, which is a
-  Python repr for a structured result; the protocol is to carry structured results instead (stage
-  5b of the polyglot monorepo plan).
+- A tool that raises an `ApplicationError` publishes `tool_error` with Python's `str()` of it,
+  which starts with the error's type (`ToolOutputNotJson: tool 'x' returned ...`); TypeScript's
+  `tool_error.message` is the error's own message.

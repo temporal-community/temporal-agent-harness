@@ -1,5 +1,5 @@
 {
-  "description": "An activity tool, a workflow tool, and a tool that fails.",
+  "description": "An activity tool, a structured result, a workflow tool, a tool with no result, and a tool that fails.",
   "actions": [
     {
       "action": "send",
@@ -17,10 +17,26 @@
           },
           {
             "step": "tool",
+            "id": "call-lookup",
+            "name": "lookup",
+            "args": {
+              "key": "k1"
+            }
+          },
+          {
+            "step": "tool",
             "id": "call-echo",
             "name": "echo",
             "args": {
               "text": "hi"
+            }
+          },
+          {
+            "step": "tool",
+            "id": "call-noop",
+            "name": "noop",
+            "args": {
+              "text": "x"
             }
           },
           {

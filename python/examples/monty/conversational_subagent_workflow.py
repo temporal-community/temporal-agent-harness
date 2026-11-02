@@ -11,9 +11,9 @@ model-authored script inline, via a ``run_travel_code`` Code Mode tool
 drives the barebones :class:`~.workflow.MontyDynamicAgentWorkflow` — whose sole ``@agent.accepts``
 handler, ``run_script(RunScript) -> TextReply``, runs a script in its own Code Mode over the same
 travel tools — as a **subagent**. The script-runner is wired with
-``agent.subagent_toolset(MontyDynamicAgentWorkflow, key="monty", task_queue=TASK_QUEUE)``,
-which generates three model-facing tools: ``start_monty`` (start an instance, returns a short
-handle), ``monty_run_script`` (send a script to that instance and get its reply), and
+``agent.subagent_toolset(MontyDynamicAgentWorkflow, key="monty", task_queue=...)`` on this
+workflow's own queue, which generates three model-facing tools: ``start_monty`` (start an
+instance, returns a short handle), ``monty_run_script`` (send a script to that instance and get its reply), and
 ``stop_monty`` (shut it down). So ``monty_run_script`` is the subagent counterpart of the inline
 agent's ``run_travel_code`` tool — same capability, now across a real parent→subagent boundary.
 
@@ -66,7 +66,7 @@ with workflow.unsafe.imports_passed_through():
 
     from examples.monty.ask_user import ask_user
     from examples.monty.conversational_workflow import SUPPORTED_MODELS, SetModel
-    from examples.monty.workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
+    from examples.monty.workflow import MontyDynamicAgentWorkflow
 
 
 DEFAULT_MODEL = SUPPORTED_MODELS[0]
@@ -130,7 +130,8 @@ class MontyChatSubagentWorkflow:
             *agent.subagent_toolset(
                 MontyDynamicAgentWorkflow,
                 key=SUBAGENT_KEY,
-                task_queue=TASK_QUEUE,
+                # This worker hosts the script-runner too, on whatever queue it was given.
+                task_queue=workflow.info().task_queue,
             ),
             ask_user,
         ]

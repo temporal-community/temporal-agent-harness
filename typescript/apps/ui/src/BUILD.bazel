@@ -43,6 +43,7 @@ js_library(
     name = "app",
     srcs = ["app.css"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/theme:io-tokens"],
 )
 
 js_library(

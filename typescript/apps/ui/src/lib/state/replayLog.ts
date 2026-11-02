@@ -14,6 +14,7 @@ import { handlerReply, outputSchemaTracker } from "$lib/state/handlerReply";
 import { HISTORY_GAP_NOTE, rootLogOffset } from "$lib/state/historyGap";
 import { replyRunKey } from "$lib/state/replyRuns";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
+import { toolOutputText } from "$lib/state/toolOutput";
 
 export type ReplayActor =
   | "user"
@@ -474,7 +475,7 @@ function rowFromFrame(
       body: frame.data.tool_name,
       toolId: frame.data.tool_id,
       toolName: frame.data.tool_name,
-      output: frame.data.tool_output,
+      output: toolOutputText(frame.data.tool_output),
       status: "done"
     };
   }

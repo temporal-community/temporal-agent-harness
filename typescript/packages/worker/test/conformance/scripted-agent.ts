@@ -29,12 +29,33 @@ export const add = activityTool({
   activityOptions: { startToCloseTimeout: "30 seconds" },
 });
 
+export const lookup = activityTool({
+  name: "lookup",
+  description: "Look up an entry: a structured result.",
+  inputSchema: z.object({ key: z.string() }),
+  outputSchema: z.object({
+    key: z.string(),
+    tags: z.array(z.string()),
+    count: z.number().int(),
+    found: z.boolean(),
+    note: z.string().nullable(),
+  }),
+  activityOptions: { startToCloseTimeout: "30 seconds" },
+});
+
 const echo = tool({
   name: "echo",
   description: "Return the text unchanged.",
   inputSchema: z.object({ text: z.string() }),
   outputSchema: z.string(),
   execute: async ({ text }) => text,
+});
+
+const noop = tool({
+  name: "noop",
+  description: "Do nothing: no result.",
+  inputSchema: z.object({ text: z.string() }),
+  execute: async () => undefined,
 });
 
 const fail = tool({
@@ -64,7 +85,9 @@ const askClient = tool({
 
 const TOOLS: Record<(typeof TOOL_NAMES)[number], AnyHarnessTool> = {
   add,
+  lookup,
   echo,
+  noop,
   fail,
   gated,
   ask_client: askClient,
@@ -141,7 +164,14 @@ async function playScript(
 
 export const ScriptedAgent = defineAgent({
   name: SCRIPTED_AGENT,
-  approvalPolicyDefault: ToolApprovalPolicy.allowTools(["add", "echo", "fail", "ask_client"]),
+  approvalPolicyDefault: ToolApprovalPolicy.allowTools([
+    "add",
+    "lookup",
+    "echo",
+    "noop",
+    "fail",
+    "ask_client",
+  ]),
   states: { entries: state(Entries) },
   handlers: {
     run_reject: play("Play the script; refused while a turn is open.", MidTurn.REJECT),

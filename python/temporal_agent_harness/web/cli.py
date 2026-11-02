@@ -57,6 +57,11 @@ Temporal connection:
 
       TEMPORAL_CONFIG_FILE=./temporal.toml temporal-agent-harness serve ./agents.toml
 
+Task queues:
+  TASK_QUEUE_PREFIX, set to the same value for `serve`, `session-manager` and every agent
+  worker, moves the whole deployment onto its own queues: agents.toml's queues and the
+  session manager's workflow id and queue all become `<prefix>-<name>`.
+
 Examples:
   temporal-agent-harness session-manager
   temporal-agent-harness serve ./agents.toml
@@ -170,13 +175,14 @@ def main(argv: list[str] | None = None) -> None:
     )
     # Imported lazily: reaching for the default task queue shouldn't drag the session-manager
     # module into `--help` on the other subcommand.
+    from temporal_agent_harness.utils.task_queue import task_queue_name
     from temporal_agent_harness.web.session_manager import SESSION_MANAGER_TASK_QUEUE
 
     session_manager.add_argument(
         "--task-queue",
-        default=SESSION_MANAGER_TASK_QUEUE,
+        default=task_queue_name(SESSION_MANAGER_TASK_QUEUE),
         help="Task queue to poll. Must match what the server expects "
-        "(default: %(default)r).",
+        "(default: %(default)r, under $TASK_QUEUE_PREFIX when set).",
     )
     session_manager.add_argument(
         "--identity",

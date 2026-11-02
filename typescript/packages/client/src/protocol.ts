@@ -22,6 +22,18 @@
  */
 export type AutoApprovalVerdict = "approve" | "deny" | "escalate";
 /**
+ * Any JSON value.
+ */
+export type JsonValue =
+  | JsonValue[]
+  | {
+      [k: string]: JsonValue | undefined;
+    }
+  | string
+  | boolean
+  | number
+  | null;
+/**
  * What an admitted message actually did to the agent's turn — the OUTCOME half of
  * `MidTurn`'s declaration.
  *
@@ -690,9 +702,9 @@ export interface ToolEndEvent {
    */
   tool_name: string;
   /**
-   * The tool's final, single result payload.
+   * The tool's final, single result, as JSON: the value as the worker's data converter encodes it. A string result is a JSON string; a tool with no result gives null.
    */
-  tool_output: string;
+  tool_output: JsonValue;
 }
 /**
  * A tool invocation has failed.

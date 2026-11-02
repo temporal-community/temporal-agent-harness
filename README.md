@@ -43,7 +43,7 @@ Two ways in, depending on what you want:
 
 | I want to… | Do this |
 | --- | --- |
-| **See it work** — chat with real agents in a browser | [Run the example agents](#try-it--run-the-example-agents) from a checkout |
+| **See it work** — chat with real agents in a browser | [Run the example agents](#try-the-example-agents) from a checkout |
 | **Build my own agent** | [Install from PyPI](#build-with-it--install-from-pypi) |
 
 The examples are the fastest path to something running, and they are **not shipped in the
@@ -219,7 +219,7 @@ Two artifacts come out of a release, and they pin differently:
 
 **This project is very early and experimental - `main` may break at any time.**
 
-Releases are cut manually, when the maintainers judge the state stable. This project is
+Releases are cut when the maintainers judge the state stable ([how](RELEASE.md)). This project is
 **experimental** and pre-1.0: APIs will change between releases, without warning. Pinning is what
 keeps that churn from reaching you unannounced — so pin, and upgrade deliberately when you want
 to try out new harness capabilities.
@@ -996,7 +996,7 @@ UIs run the Node and pnpm Bazel pins — see
 ## Run the examples
 
 These run from a checkout or an unpacked
-[release archive](#try-it--run-the-example-agents) — the steps are identical.
+[release archive](#try-the-example-agents) — the steps are identical.
 
 One `.env.local` at the **project root** serves every example. Create it once:
 
@@ -1114,3 +1114,5 @@ design documentation — the agent protocol, the streaming model, human-in-the-l
 agents-as-subagents — lives under [`docs/internal/`](docs/internal). Contributor setup
 (repository layout, the root `justfile`, UI development, and packaging) is in
 [`docs/internal/development.md`](docs/internal/development.md).
+Release readiness, SDK parity, versioning, and publishing steps are in
+[`RELEASE.md`](RELEASE.md).

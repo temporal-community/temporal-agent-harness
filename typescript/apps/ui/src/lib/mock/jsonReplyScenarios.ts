@@ -1,6 +1,6 @@
 /* Dev-only fixtures for the structured-reply surfaces (JsonReply, the log's "Handler reply",
    the graph's Output node). Selected with `?mock=<name>` in a dev build; see main.ts. */
-import type { AgentInterfaceFunction, AgentSseFrame, FileCitationAnnotation, Session, TokenUsage } from "$lib/api/types";
+import type { AgentInterfaceFunction, AgentSseFrame, FileCitationAnnotation, JsonValue, Session, TokenUsage } from "$lib/api/types";
 import { agents, frame, meta, usage, type MockScenario } from "./scenarios";
 
 interface Reply {
@@ -414,9 +414,9 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     { length: 300 },
     (_, i) => `${i + 1}. **Rendered line ${i + 1}** — ${i % 4 === 0 ? "שלום עולם" : i % 4 === 1 ? "مرحبا بالعالم" : i % 4 === 2 ? "顧客データ" : "<script>literal text</script>"}`
   ).join("\n");
-  const toolOutput = JSON.stringify({
+  const toolOutput = {
     rows: Array.from({ length: 500 }, (_, i) => ({ id: i, path: `/workspace/${"segment/".repeat(8)}record-${i}.json`, value: "x".repeat(80) }))
-  });
+  };
   const longAt = (turnNumber: number, delta = 0.2) => ({ ...meta(turnNumber, (clock += delta)), message_id: `long-${turnNumber}` });
   const longcontent = scenario("longcontent", "Long content", [
     frame("message_accepted", { type: "message_accepted", ...longAt(1), handler: "ask", payload: { text: pastedScript }, disposition: "opened" }),
@@ -447,13 +447,13 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     "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";
   const checkeredBlob = "/api/blobs/ce9d2a52f9f5ea24736f8cacae021acc0e9bfde3e2f7b7d2c7b20c4e0a4a85a0.bin";
   const goneBlob = `/api/blobs/${"0".repeat(64)}.bin`;
-  const blobRef = (url: string) => ({ blob_ref: { key: url.split("/").at(-1), bytes: 465, media_type: "image/png", url } });
+  const blobRef = (url: string) => ({ blob_ref: { key: url.split("/").at(-1) ?? url, bytes: 465, media_type: "image/png", url } });
   function toolTurn(n: number): AgentSseFrame[] {
     const m = (d = 0.3) => ({ ...meta(n, (clock += d)), message_id: `msg-${n}-0` });
-    const tool = (id: string, name: string, input: Record<string, unknown>, output: unknown) => [
+    const tool = (id: string, name: string, input: Record<string, unknown>, output: JsonValue) => [
       frame("tool_requested", { type: "tool_requested", ...m(), tool_id: id, tool_name: name, tool_input: input }),
       frame("tool_start", { type: "tool_start", ...m(), tool_id: id, tool_name: name, tool_input: input }),
-      frame("tool_end", { type: "tool_end", ...m(1.2), tool_id: id, tool_name: name, tool_output: JSON.stringify(output) })
+      frame("tool_end", { type: "tool_end", ...m(1.2), tool_id: id, tool_name: name, tool_output: output })
     ];
     const reply = "Generated a checkered tile and took a screenshot. One older render has expired.";
     return [

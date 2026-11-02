@@ -22,6 +22,12 @@ describe("graph focus toggle", () => {
     assert.doesNotMatch(control, /<Wrench/);
   });
 
+  it("leaves a plain wheel to the rail, so a sideways scroll is not taken as zoom", () => {
+    const flow = source.match(/<SvelteFlow[\s\S]*?>/)?.[0] ?? "";
+    assert.match(flow, /preventScrolling=\{false\}/);
+    assert.doesNotMatch(flow, /panOnScroll|zoomOnPinch=\{false\}/);
+  });
+
   it("unfills Lucide icons in controls without touching xyflow's own glyphs", () => {
     assert.match(
       source,

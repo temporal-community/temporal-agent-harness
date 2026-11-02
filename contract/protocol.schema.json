@@ -664,6 +664,38 @@
       "title": "CallbackResolved",
       "type": "object"
     },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Any JSON value."
+    },
     "MessageAccepted": {
       "description": "One inbound message passed admission — what was sent, and what it did to the turn.\n\nThe first event of a message's life, published from the synchronous admission prologue\nof ``send_agent_message``. It is the ONLY event carrying the message's content, which is\nwhy it is standalone rather than folded into :class:`TurnStarted`: a message that JOINS\nan open turn starts no turn of its own, so there would be nothing to fold it into.",
       "properties": {
@@ -1325,10 +1357,9 @@
           "type": "string"
         },
         "tool_output": {
-          "default": "",
-          "description": "The tool's final, single result payload.",
-          "title": "Tool Output",
-          "type": "string"
+          "$ref": "#/$defs/JsonValue",
+          "default": null,
+          "description": "The tool's final, single result, as JSON: the value as the worker's data converter encodes it. A string result is a JSON string; a tool with no result gives null."
         }
       },
       "required": [

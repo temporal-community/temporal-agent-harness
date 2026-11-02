@@ -446,7 +446,7 @@ function traceScenario(stage: "travel" | "failed"): MockScenario {
   frames.push(
     frame("tool_start", { type: "tool_start", ...at(2, 5.1), ...first }),
     frame("tool_start", { type: "tool_start", ...at(2, 5.15), ...read }),
-    frame("tool_end", { type: "tool_end", ...at(2, 5.2), ...read, tool_output: JSON.stringify({ trips: [] }) }),
+    frame("tool_end", { type: "tool_end", ...at(2, 5.2), ...read, tool_output: { trips: [] } }),
     frame("tool_end", { type: "tool_end", ...at(2, 5.3), ...first, tool_output: "{'trips': []}" })
   );
 
@@ -464,7 +464,7 @@ function traceScenario(stage: "travel" | "failed"): MockScenario {
     frame("tool_start", { type: "tool_start", ...at(2, 13.4), ...second }),
     frame("tool_start", { type: "tool_start", ...at(2, 13.45), ...open }),
     frame("state_patch", { type: "state_patch", ...at(2, 13.5), state_id: "trip_board", version: 1, ops: [{ op: "add", path: "/trips/-", value: { city: "Paris" } }] }),
-    frame("tool_end", { type: "tool_end", ...at(2, 13.55), ...open, tool_output: JSON.stringify({ trip_id: "trip-7" }) })
+    frame("tool_end", { type: "tool_end", ...at(2, 13.55), ...open, tool_output: { trip_id: "trip-7" } })
   );
   if (stage === "travel") {
     gate(flights, 13.6);

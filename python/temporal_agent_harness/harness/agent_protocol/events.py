@@ -23,7 +23,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
     AutoApprovalVerdict,
@@ -731,8 +731,10 @@ class ToolEndEvent(ToolEvent[Literal[AgentEventType.TOOL_END]]):
     """A tool invocation has completed."""
 
     type: Literal[AgentEventType.TOOL_END] = AgentEventType.TOOL_END
-    tool_output: str = Field(
-        default="", description="The tool's final, single result payload."
+    tool_output: JsonValue = Field(
+        default=None,
+        description="The tool's final, single result, as JSON: the value as the worker's data "
+        "converter encodes it. A string result is a JSON string; a tool with no result gives null.",
     )
 
 

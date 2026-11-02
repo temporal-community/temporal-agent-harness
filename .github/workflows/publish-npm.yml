@@ -1,13 +1,16 @@
 name: Publish to npm
 
+# Publishes every public @temporalio/agent-harness* package at the tag's version, in dependency
+# order, using npm trusted publishing (OIDC): each package's trusted publisher names THIS repo,
+# THIS workflow file and THIS environment, so the three must match. Dispatched by
+# finish-release.yml against an npm-v<version> tag; rerun it against the same tag to retry.
+
 on:
+  # Retry against an existing release tag, never a branch. finish-release.yml dispatches this.
+  workflow_dispatch:
   push:
     tags:
-      - npm-client-v*
-      - npm-svelte-v*
-      - npm-react-v*
-  # Retry against an existing npm release tag, never a branch.
-  workflow_dispatch:
+      - npm-v*
 
 permissions:
   contents: read
@@ -30,30 +33,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Validate the release tag and package
-        id: package
-        run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, appendFileSync } from 'node:fs';
-          import assert from 'node:assert/strict';
-          const match = /^npm-(client|svelte|react)-v(\d+\.\d+\.\d+)$/.exec(process.env.GITHUB_REF_NAME);
-          assert(process.env.GITHUB_REF_TYPE === 'tag' && match,
-            'Select a stable release tag such as npm-client-v0.1.1.');
-          const [, pkg, version] = match;
-          const directory = `typescript/packages/${pkg}`;
-          const manifest = JSON.parse(readFileSync(`${directory}/package.json`, 'utf8'));
-          assert.equal(manifest.name, `@temporalio/agent-harness-${pkg}`);
-          assert.equal(manifest.version, version, 'Tag must match package.json version');
-          assert(!manifest.private, 'Package must be publishable');
-          assert.equal(manifest.publishConfig.access, 'public');
-          assert.equal(manifest.publishConfig.registry, 'https://registry.npmjs.org/');
-          assert.equal(manifest.repository.url,
-            `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`);
-          for (const value of Object.values(manifest.dependencies ?? {})) {
-            assert(!/^(file:|link:|workspace:)/.test(value), 'Publish registry dependencies only');
-          }
-          appendFileSync(process.env.GITHUB_OUTPUT, `directory=${directory}\n`);
-          JS
+      # Every publishable package is at the tag's version with the metadata provenance needs, and
+      # depends on its siblings at exactly that version.
+      - name: Validate the release tag and packages
+        id: plan
+        run: node scripts/release.mjs npm-plan
 
       # OIDC requires npm >=11.5.1; Node 22's bundled npm may be older.
       - name: Install npm with trusted publishing support
@@ -73,20 +57,41 @@ jobs:
           key: bazel-disk-other-${{ github.sha }}
           restore-keys: bazel-disk-other-
 
-      # The package's tests, including the check of its tarball against package.json
-      # (bazel/npm_package.bzl), then that same tarball, :pkg_tgz, written out: --config=ci leaves
-      # cached outputs in the cache unless asked for them.
-      - name: Test and build the package
-        id: pack
+      # The packages' tests, including the check of each tarball against its package.json
+      # (bazel/npm_package.bzl), then those same tarballs, :pkg_tgz, written out: --config=ci
+      # leaves cached outputs in the cache unless asked for them.
+      - name: Test and build the packages
         env:
-          PACKAGE_DIRECTORY: ${{ steps.package.outputs.directory }}
+          DIRECTORIES: ${{ steps.plan.outputs.directories }}
         run: |
+          set -euo pipefail
           flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
-          bazel test "//$PACKAGE_DIRECTORY/..." "${flags[@]}"
-          bazel build "//$PACKAGE_DIRECTORY:pkg_tgz" "${flags[@]}" --remote_download_toplevel
-          tarball="$(bazel info execution_root "${flags[@]}")/$(bazel cquery "//$PACKAGE_DIRECTORY:pkg_tgz" "${flags[@]}" --output=files)"
-          tar -tvzf "$tarball"
-          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          targets=()
+          for directory in $DIRECTORIES; do targets+=("//$directory:pkg_tgz"); done
+          bazel test //typescript/packages/... "${flags[@]}"
+          bazel build "${targets[@]}" "${flags[@]}" --remote_download_toplevel
+          root="$(bazel info execution_root "${flags[@]}")"
+          mkdir "$RUNNER_TEMP/tarballs"
+          for directory in $DIRECTORIES; do
+            tarball="$root/$(bazel cquery "//$directory:pkg_tgz" "${flags[@]}" --output=files)"
+            cp "$tarball" "$RUNNER_TEMP/tarballs/$(basename "$directory").tgz"
+            tar -tvzf "$tarball"
+          done
 
+      # In dependency order, so a consumer never sees a binding whose client is not yet published.
+      # A package already at this version on the registry is skipped, so a rerun after a partial
+      # failure publishes only what is missing.
       - name: Publish with OIDC
-        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance
+        env:
+          DIRECTORIES: ${{ steps.plan.outputs.directories }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          for directory in $DIRECTORIES; do
+            name="$(node -p "require('./$directory/package.json').name")"
+            if npm view "$name@$VERSION" version --registry=https://registry.npmjs.org/ >/dev/null 2>&1; then
+              echo "::notice::$name@$VERSION is already on npm; skipping"
+              continue
+            fi
+            npm publish "$RUNNER_TEMP/tarballs/$(basename "$directory").tgz" --access public --provenance
+          done

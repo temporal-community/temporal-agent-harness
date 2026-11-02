@@ -252,7 +252,7 @@ importers:
         version: 7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: 5.0.1
-        version: 5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@20.14.5)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@21.0.4)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   examples/monty:
     dependencies:
@@ -263,10 +263,10 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
       '@temporalio/agent-harness':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../../packages/core
       '@temporalio/agent-harness-worker':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../../packages/worker
       '@temporalio/envconfig':
         specifier: ^1.24.0
@@ -303,10 +303,10 @@ importers:
         specifier: ~0.14.3
         version: 0.14.3(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(supports-color@8.1.1)(ws@8.21.3)(zod@4.6.7)
       '@temporalio/agent-harness':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../../packages/core
       '@temporalio/agent-harness-worker':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../../packages/worker
       '@temporalio/envconfig':
         specifier: ^1.24.0
@@ -368,7 +368,7 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
       '@temporalio/agent-harness-client':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../client
       '@temporalio/common':
         specifier: ^1.24.0
@@ -405,7 +405,7 @@ importers:
   packages/react:
     dependencies:
       '@temporalio/agent-harness-client':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../client
     devDependencies:
       '@testing-library/react':
@@ -421,8 +421,8 @@ importers:
         specifier: ^19.3.0
         version: 19.3.0(@types/react@19.3.0)
       happy-dom:
-        specifier: ^20.14.5
-        version: 20.14.5
+        specifier: ^21.0.4
+        version: 21.0.4
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -437,12 +437,12 @@ importers:
         version: 7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: ^5.0.1
-        version: 5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@20.14.5)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@21.0.4)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/svelte:
     dependencies:
       '@temporalio/agent-harness-client':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../client
     devDependencies:
       '@sveltejs/package':
@@ -455,8 +455,8 @@ importers:
         specifier: ^22.20.4
         version: 22.20.4
       happy-dom:
-        specifier: ^20.14.5
-        version: 20.14.5
+        specifier: ^21.0.4
+        version: 21.0.4
       svelte:
         specifier: ^5.57.2
         version: 5.57.2
@@ -471,7 +471,7 @@ importers:
         version: 7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
       vitest:
         specifier: ^5.0.1
-        version: 5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@20.14.5)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@21.0.4)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/worker:
     dependencies:
@@ -479,10 +479,10 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
       '@temporalio/agent-harness':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../core
       '@temporalio/agent-harness-client':
-        specifier: ^0.1.0
+        specifier: ^0.2.0
         version: link:../client
       '@temporalio/client':
         specifier: ^1.24.0
@@ -2506,8 +2506,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  happy-dom@20.14.5:
-    resolution: {integrity: sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ==}
+  happy-dom@21.0.4:
+    resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
     engines: {node: '>=20.0.0'}
 
   has-flag@4.0.0:
@@ -5669,7 +5669,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  happy-dom@20.14.5:
+  happy-dom@21.0.4:
     dependencies:
       '@types/node': 22.20.4
       '@types/whatwg-mimetype': 3.0.2
@@ -6806,7 +6806,7 @@ snapshots:
     optionalDependencies:
       vite: 7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
 
-  vitest@5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@20.14.5)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)):
+  vitest@5.0.1(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(happy-dom@21.0.4)(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.1(vite@7.3.7(@types/node@22.20.4)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
@@ -6825,7 +6825,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 22.20.4
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
     transitivePeerDependencies:
       - msw
 

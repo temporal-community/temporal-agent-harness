@@ -88,8 +88,3 @@ class SystemOneResult(BaseModel):
     )
     choices: dict[str, ChoiceResult] = {}
     scores: dict[str, ScoreResult] = {}
-
-    def __str__(self) -> str:
-        # The harness publishes ``str(result)`` as a tool's ``tool_output``; JSON reads better
-        # in the console than pydantic's default repr.
-        return self.model_dump_json(indent=2)

@@ -73,6 +73,28 @@ describe("a subagent's own flow arrows", () => {
     );
   });
 
+  /* Turn 1's Output stayed in the graph once turn 2 began, drawn as an empty "waiting"
+     card between Input and the tools the subagent was still running. */
+  it("drop the last turn's Output while the next turn works", () => {
+    const secondTurn = [
+      ...sub.frames,
+      frame("turn_started", { user_message: "now book it", turn_number: 3 }),
+      frame("model_interaction_started", { model: "gpt-5.1" }),
+      frame("tool_start", { tool_id: "t1", tool_name: "book_flight", tool_input: {} })
+    ];
+    const idsOf = (frames) =>
+      buildAgentTreeGraph([parent, { ...sub, frames, stopped: false }])
+        .nodes.map((node) => node.id)
+        .filter((id) => id.startsWith("wf-a::"));
+
+    const working = idsOf(secondTurn);
+    assert.ok(working.some((id) => id.includes("t1")), "the running tool is drawn");
+    assert.ok(!working.includes("wf-a::output"), "no Output while turn 3 is still working");
+
+    const replied = idsOf([...secondTurn, frame("message_handler_end", { output: { text: "booked" } })]);
+    assert.ok(replied.includes("wf-a::output"), "Output returns once turn 3 replies");
+  });
+
   /* A rewritten node id that no edge follows is the other way this fails, and it
      looks identical on screen: scopedGraph prefixes both, so they must still meet. */
   it("meet the nodes they name, prefixes and all", () => {
@@ -196,6 +218,18 @@ describe("a subagent's own flow arrows", () => {
       );
     }
     assert.equal(kindFromState(container.data.state, container.data.tone), "complete");
+  });
+
+  /* Svelte Flow lifts a selected node by 1000 unless told not to. Clicking the Subagent
+     activity container to inspect it selected it, and on closing the dialog it sat at 1010
+     over the subagent boundaries at 11, hiding every card inside them. */
+  it("are not buried by a selected container", () => {
+    const flowSource = readFileSync(
+      new URL("../src/lib/components/flow/AgentStateFlow.svelte", import.meta.url),
+      "utf8"
+    );
+    const canvas = flowSource.slice(flowSource.indexOf("<SvelteFlow"), flowSource.indexOf("<AutoFitView"));
+    assert.match(canvas, /\belevateNodesOnSelect=\{false\}/);
   });
 
   it("are not flattened onto one rung by the edge layer's own z-index", () => {

@@ -14,6 +14,7 @@ import { handlerReply, outputSchemaTracker, streamingIsData, stripJsonFence } fr
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
 import { formatDuration } from "$lib/state/replayLog";
 import { NO_THOUGHT_SUMMARY, thoughtDeltaText } from "$lib/state/thoughtSummary";
+import { toolOutputText } from "$lib/state/toolOutput";
 
 export type AgentNodeTone =
   | "neutral"
@@ -1388,6 +1389,9 @@ export function buildAgentGraph(
       replyIsData = false;
       replyState = "waiting";
       resetTurnTools();
+      /* The last turn's reply was just cleared above; its card would sit empty ahead of
+         this turn's tools until a reply frame puts it back after them. */
+      if (runtimeNodes.delete("output")) runtimeNodeOrder.splice(runtimeNodeOrder.indexOf("output"), 1);
       runtimeHeaderPrefix = undefined;
       if (queued > 0) queued -= 1;
     } else if (frame.event === "model_interaction_started") {
@@ -1519,8 +1523,8 @@ export function buildAgentGraph(
           : parentToolId
             ? "host call completed"
             : "execution completed";
-        runtime.detail = frame.data.tool_output;
-        runtime.output = frame.data.tool_output;
+        runtime.detail = toolOutputText(frame.data.tool_output);
+        runtime.output = runtime.detail;
         if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
         markToolSettled(frame.data.tool_id, parentToolId);
       } else if (frame.event === "tool_error") {

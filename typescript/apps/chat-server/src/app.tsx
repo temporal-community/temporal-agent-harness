@@ -30,6 +30,7 @@ import {
 import { resolveAgentKey, type RoutingTable, type BotRoute } from './routing.ts';
 import {
   formatToolInput,
+  formatToolOutput,
   keepTyping,
   openStream,
   renderToolActivity,
@@ -953,8 +954,7 @@ export function createChatServer(opts: ChatServerOptions): Chat {
                   toolId,
                   toolName: String(frame.data.tool_name ?? 'tool'),
                   toolInput: frame.data.tool_input as Record<string, unknown> | undefined,
-                  toolOutput:
-                    typeof frame.data.tool_output === 'string' ? frame.data.tool_output : undefined,
+                  toolOutput: formatToolOutput(frame.data.tool_output),
                   message: typeof frame.data.message === 'string' ? frame.data.message : undefined,
                 },
                 thread.adapter,

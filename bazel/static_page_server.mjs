@@ -8,6 +8,10 @@ import { extname, join, resolve, sep } from "node:path";
 
 const [directory, defaultPort, port = defaultPort] = process.argv.slice(2);
 const root = resolve(directory);
+// Off a laptop (a container behind an ingress), HOST=0.0.0.0 makes the page reachable, and
+// BASE_PATH (e.g. /studio) serves it under that path prefix of a shared host.
+const host = process.env.HOST ?? "127.0.0.1";
+const basePath = (process.env.BASE_PATH ?? "").replace(/\/+$/, "");
 
 const types = {
   ".css": "text/css",
@@ -31,7 +35,24 @@ async function fileFor(pathname) {
 }
 
 createServer(async (request, response) => {
-  const path = await fileFor(new URL(request.url, "http://localhost").pathname);
+  let pathname = new URL(request.url, "http://localhost").pathname;
+  if (request.url === "/healthz") {
+    response.writeHead(200).end("ok");
+    return;
+  }
+  if (basePath) {
+    if (pathname === basePath) {
+      // Relative URLs in index.html resolve against the directory, so add its slash.
+      response.writeHead(308, { Location: basePath + "/" }).end();
+      return;
+    }
+    if (!pathname.startsWith(basePath + "/")) {
+      response.writeHead(404).end();
+      return;
+    }
+    pathname = pathname.slice(basePath.length);
+  }
+  const path = await fileFor(pathname);
   if (!path) {
     response.writeHead(404).end();
     return;
@@ -42,6 +63,6 @@ createServer(async (request, response) => {
     "Cache-Control": "no-cache",
   });
   response.end(await readFile(path));
-}).listen(Number(port), "127.0.0.1", () => {
-  console.log(`Serving http://127.0.0.1:${port}/`);
+}).listen(Number(port), host, () => {
+  console.log(`Serving http://${host}:${port}${basePath}/`);
 });

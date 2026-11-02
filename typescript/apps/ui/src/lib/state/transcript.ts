@@ -2,6 +2,7 @@ import type { AgentInterfaceFunction, AgentSseFrame, FileCitationAnnotation } fr
 import { handlerReply, outputSchemaTracker, streamingIsData } from "$lib/state/handlerReply";
 import { messageKey, promptField, renderUserMessage } from "$lib/state/inboundMessageText";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
+import { toolOutputText } from "$lib/state/toolOutput";
 
 export type TranscriptItem =
   | {
@@ -283,7 +284,7 @@ export function transcriptBuilder(): (
         }
         else if (frame.event === "tool_end") {
           item.status = "done";
-          item.output = frame.data.tool_output;
+          item.output = toolOutputText(frame.data.tool_output);
         } else if (frame.event === "tool_error") {
           item.status = "failed";
           item.message = frame.data.message;

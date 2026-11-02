@@ -15,6 +15,7 @@ Env vars (set in .env.local — see .env.example):
                                               (TYPESAFE_AI_API_KEY is accepted as an alias)
     TYPESAFE_DEFAULT_MODEL                    optional SDK default (the workflow requests jev-latest)
     TICTACTOE_AGENT_TASK_QUEUE                task queue to poll (default: tictactoe-agent)
+    TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
 from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.tictactoe import activities
 from examples.tictactoe.workflow import TASK_QUEUE, TicTacToeAgentWorkflow
@@ -41,7 +43,7 @@ async def main() -> None:
         force=True,
     )
 
-    task_queue = os.environ.get("TICTACTOE_AGENT_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("TICTACTOE_AGENT_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     # Checked up front so a missing key fails at startup, not on the first turn.
     if not activities.typesafe_api_key():
