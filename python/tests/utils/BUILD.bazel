@@ -13,3 +13,15 @@ harness_pytest_test(
         "@pypi//temporalio",
     ],
 )
+
+harness_pytest_test(
+    name = "test_task_queue",
+    srcs = ["test_task_queue.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_harness/web:registry",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)

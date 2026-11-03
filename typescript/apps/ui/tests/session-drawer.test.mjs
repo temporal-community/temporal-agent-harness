@@ -44,7 +44,7 @@ describe("Session Manager drawer", () => {
     const stack = createPaneStack();
     stack.hydrateFromQuery();
 
-    assert.deepEqual(stack.panes.map((pane) => pane.id), ["graph", "chat"]);
+    assert.deepEqual(stack.panes.map((pane) => pane.id), ["graph", "chat", "usage", "state", "logs", "latency"]);
     assert.deepEqual(stack.unknownPanes, {
       tokens: [{ written: "sessions", meant: null }],
       fellBack: true

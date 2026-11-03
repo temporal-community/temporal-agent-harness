@@ -78,16 +78,16 @@
   const DRAWER_MIN_H = 96;
   /* Only reached when there is nothing measurable to fit to — a drawer holding a
      pane with no natural height, or opened before its trace has loaded. */
-  const DRAWER_DEFAULT_H = 340;
+  const DRAWER_DEFAULT_H = 240;
   /* Not pixel-tight. A fitted drawer sitting exactly on its last row reads as
      clipped rather than fitted, sub-pixel rounding is enough to raise a scrollbar
      on a trace that fits, and during a live run this is where the next turn
      appears before anything has to move. */
   const DRAWER_FIT_SLACK = 12;
-  /* An unattended fit stops well short of the row's own ceiling. Nothing that happens
-     without being asked for should be able to take three fifths of the window; the
-     reader who wants that drags for it, and the gutter goes all the way to 60vh. */
-  const DRAWER_FIT_MAX_FRACTION = 0.5;
+  /* An unattended fit stops well short of the row's own ceiling. The default desk stacks
+     two panes in one column above it, which need the height more than a long trace
+     does; the reader who wants the trace drags for it, and the gutter goes to 60vh. */
+  const DRAWER_FIT_MAX_FRACTION = 0.25;
   /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
      grid — so a drawer is never set larger than it can be drawn. */
   const DRAWER_MAX_FRACTION = 0.6;
@@ -431,7 +431,7 @@
     );
     if (action == null) return;
     event.preventDefault();
-    applyReplayAction(action, replaySurface);
+    applyReplayAction(action, replaySurface, event.repeat);
   }
 
   /* Which rail the keys act on, read off where the reader last put their hands
@@ -874,6 +874,11 @@
           ready={motionReady}
           onFocusChange={(next) => run.setGraphFocus(next)}
           onNodeSelect={selectNode}
+          runHasTurns={run.stepTimeline.turns.length > 0}
+          agentLabel={run.runInfo.agentLabel}
+          accepts={(run.session ? run.agentInterfaces[run.session.workflow_id] ?? [] : []).map(
+            (item) => item.name
+          )}
         />
       {:else if pane.kind === "chat" && run.sessionGone && run.frames.length === 0}
         <EmptyState title="This session's workflow no longer exists and nothing was cached" />
@@ -960,6 +965,7 @@
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}
+          runHasEvents={run.fullReplayLog.groups.length > 0}
           activeTurnNumber={run.currentLogRow?.turnNumber ?? null}
           activeRowId={run.currentLogRow?.id ?? null}
           activeOrdinal={run.currentLogRow?.ordinal ?? null}

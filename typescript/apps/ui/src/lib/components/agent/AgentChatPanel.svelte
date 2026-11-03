@@ -62,6 +62,7 @@
   import { dissolveClear, inputClearDissolve } from "$lib/motion/inputClearDissolve";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import LongContent from "$lib/components/primitives/LongContent.svelte";
   import { windowedFocus } from "$lib/components/primitives/windowedFocus";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -79,7 +80,8 @@
     formatElapsedDuration,
     formatTimestamp,
     rowIdentifiers,
-    type ReplayLogRow
+    type ReplayLogRow,
+    type TurnLogGroup
   } from "$lib/state/replayLog";
   import {
     replyAnnouncement,
@@ -139,6 +141,12 @@
     /** The conversation as of the replay cursor. */
     items: TranscriptItem[];
     logs?: ReplayLogRow[];
+    /**
+     * `logs` by turn, when the caller has the log's own groups. A turn's rows are read from
+     * here instead of regrouping every row, and a group keeps its identity until its turn
+     * changes, so a cursor step costs the turns rather than the run.
+     */
+    logGroups?: TurnLogGroup[];
     /**
      * The whole run, for what is live state rather than history: pending approvals, the
      * composer's recall, and whether the session has anything in it at all. Default to the
@@ -243,6 +251,7 @@
   let {
     items,
     logs = [],
+    logGroups,
     liveItems,
     liveLogs,
     live = true,
@@ -386,18 +395,18 @@
       .filter((message) => message.role === "user")
       .map((message) => message.text)
   );
-  const logsByTurn = $derived(groupLogsByTurn(logs));
-  /* Every timed row, shown or not: what a turn's duration and tokens are read from. */
-  const timedLogsByTurn = $derived(
-    Map.groupBy(
-      logs.filter((row) => row.timestamp > 0),
-      (row) => row.turnNumber
-    )
+  /* Every row, timed or not: a turn_end stamped 0 still ends its turn. The log's groups
+     only cover turns past 0, so rows before the first turn are grouped here, if ever read. */
+  const allRowsByTurn = $derived(Map.groupBy(logs, (row) => row.turnNumber));
+  const rowsByTurn = $derived(
+    logGroups ? new Map(logGroups.map((group) => [group.turnNumber, group.rows])) : allRowsByTurn
   );
-  /* Every row, timed or not: a turn_end stamped 0 still ends its turn. */
-  const rowsByTurn = $derived(Map.groupBy(logs, (row) => row.turnNumber));
-  const latestTurn = $derived(logs.reduce((max, row) => Math.max(max, row.turnNumber), 0));
-  const latestProgress = $derived(turnProgress(rowsByTurn.get(latestTurn) ?? []));
+  const latestTurn = $derived(
+    logGroups
+      ? logGroups.reduce((max, group) => Math.max(max, group.turnNumber), 0)
+      : logs.reduce((max, row) => Math.max(max, row.turnNumber), 0)
+  );
+  const latestProgress = $derived(turnProgress(rowsOfTurn(latestTurn)));
   /* As of the view: a cursor parked mid-turn reads that turn as running, timed to the cursor. */
   const turnRunning = $derived(!closed && latestTurn > 0 && latestProgress.phase.kind !== "done");
   /* Live, a sent message is pending before its turn has published anything. */
@@ -824,15 +833,21 @@
     ].includes(row.event);
   }
 
-  function groupLogsByTurn(rows: ReplayLogRow[]): Map<number, ReplayLogRow[]> {
-    const grouped = new Map<number, ReplayLogRow[]>();
-    for (const row of rows) {
-      if (!showLogInApp(row)) continue;
-      const current = grouped.get(row.turnNumber) ?? [];
-      current.push(row);
-      grouped.set(row.turnNumber, current);
-    }
-    return grouped;
+  function rowsOfTurn(turnNumber: number): ReplayLogRow[] {
+    return (turnNumber > 0 ? rowsByTurn : allRowsByTurn).get(turnNumber) ?? [];
+  }
+
+  /* A turn's rows are a new array whenever its turn changes, so a filter of them can be kept. */
+  const shownRowsOf = new WeakMap<ReplayLogRow[], ReplayLogRow[]>();
+  const timedRowsOf = new WeakMap<ReplayLogRow[], ReplayLogRow[]>();
+  function filteredRows(
+    cache: WeakMap<ReplayLogRow[], ReplayLogRow[]>,
+    rows: ReplayLogRow[],
+    keep: (row: ReplayLogRow) => boolean
+  ): ReplayLogRow[] {
+    let kept = cache.get(rows);
+    if (!kept) cache.set(rows, (kept = rows.filter(keep)));
+    return kept;
   }
 
   function resolvedApprovalIds(rows: ReplayLogRow[]): Set<string> {
@@ -875,8 +890,8 @@
   }
 
   function logsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
-    if (turnNumber == null) return [];
-    return logsByTurn.get(turnNumber) ?? [];
+    if (turnNumber == null || turnNumber <= 0) return [];
+    return filteredRows(shownRowsOf, rowsOfTurn(turnNumber), showLogInApp);
   }
 
   function activeLogForTurn(turnNumber: number | undefined): ReplayLogRow | null {
@@ -884,9 +899,10 @@
     return rows[rows.length - 1] ?? null;
   }
 
+  /* Every timed row, shown or not: what a turn's duration and tokens are read from. */
   function allLogsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
     if (turnNumber == null) return [];
-    return timedLogsByTurn.get(turnNumber) ?? [];
+    return filteredRows(timedRowsOf, rowsOfTurn(turnNumber), (row) => row.timestamp > 0);
   }
 
   function turnActivitySummary(
@@ -957,7 +973,7 @@
     duration: string | null,
     thought: TurnThought | null
   ): string {
-    const progress = turnProgress(rowsByTurn.get(turnNumber ?? 0) ?? []);
+    const progress = turnProgress(rowsOfTurn(turnNumber ?? 0));
     const summary = settledSummary(progress.tools, thought?.seconds ?? 0);
     return duration ? `${summary} · ${duration}` : summary;
   }
@@ -1883,10 +1899,7 @@
           <span>Connecting to {agentLabel}...</span>
         </div>
       {:else if closed && liveMessages.length === 0}
-        <div class="empty-chat closed-empty">
-          <CheckCircle2 size={18} />
-          <span>{agentLabel} is closed.</span>
-        </div>
+        <EmptyState title="{agentLabel} is closed" icon={CheckCircle2} />
       {:else if error && liveMessages.length === 0}
         <div class="empty-chat error">
           <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
@@ -1900,10 +1913,9 @@
              Gated on the whole run rather than the view: `messages` empties
              again at scrub position zero, and a 1,830-frame session parked at
              its start has plenty to show. -->
-        <div class="empty-chat">
-          <MessageCircle size={18} />
-          <span>No events yet. Ask {agentLabel} something to start this session.</span>
-        </div>
+        <EmptyState title="No events yet" icon={MessageCircle}>
+          <p>Ask {agentLabel} something to start this session.</p>
+        </EmptyState>
       {/if}
 
       <!-- A feed with no articles is announced as an empty feed, so the role waits for rows. -->
@@ -2607,10 +2619,6 @@
 
   .empty-chat.error {
     color: var(--error);
-  }
-
-  .empty-chat.closed-empty {
-    color: var(--success);
   }
 
   .message-rows {

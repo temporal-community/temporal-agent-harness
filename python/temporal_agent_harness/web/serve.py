@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from temporal_agent_harness.ui import packaged_ui_dist
+from temporal_agent_harness.utils.task_queue import task_queue_name
 from temporal_agent_harness.web.client import verify_temporal_reachable
 from temporal_agent_harness.web.registry import load_agent_registries
 
@@ -33,12 +34,20 @@ def create_app(*registry_paths: str | Path) -> "FastAPI":
     # Imported here rather than at module scope so that importing this module (e.g. to reach
     # ``create_app`` from a custom launcher) doesn't require FastAPI — it only arrives with the
     # ``ui`` extra.
-    from temporal_agent_harness.web import create_agent_harness_app
+    from temporal_agent_harness.web import (
+        SESSION_MANAGER_ID,
+        SESSION_MANAGER_TASK_QUEUE,
+        create_agent_harness_app,
+    )
 
     if not registry_paths:
         raise ValueError("create_app requires at least one registry path.")
     registry = load_agent_registries(registry_paths)
-    return create_agent_harness_app(registry=registry)
+    return create_agent_harness_app(
+        registry=registry,
+        manager_workflow_id=task_queue_name(SESSION_MANAGER_ID),
+        manager_task_queue=task_queue_name(SESSION_MANAGER_TASK_QUEUE),
+    )
 
 
 def run_server(

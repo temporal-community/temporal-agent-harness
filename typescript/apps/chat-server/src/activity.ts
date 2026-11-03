@@ -133,6 +133,15 @@ export function formatToolInput(
   return '```json\n' + clip(JSON.stringify(input, null, 2), max) + '\n```';
 }
 
+/**
+ * A tool's result, which `tool_end` carries as JSON, as the task card's output text: a string as
+ * it is, anything else as indented JSON, and nothing for a tool with no result.
+ */
+export function formatToolOutput(output: unknown): string | undefined {
+  if (output === null || output === undefined) return undefined;
+  return typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+}
+
 const STATUS: Record<ToolActivity['phase'], TaskUpdateChunk['status']> = {
   pending: 'pending',
   start: 'in_progress',

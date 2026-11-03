@@ -22,6 +22,22 @@
  */
 export type AutoApprovalVerdict = "approve" | "deny" | "escalate";
 /**
+ * Why an agent closed: on the `agent_closed` event and `AgentStatus.close_reason`.
+ */
+export type CloseReason = "requested" | "idle_timeout_expired";
+/**
+ * Any JSON value.
+ */
+export type JsonValue =
+  | JsonValue[]
+  | {
+      [k: string]: JsonValue | undefined;
+    }
+  | string
+  | boolean
+  | number
+  | null;
+/**
  * What an admitted message actually did to the agent's turn — the OUTCOME half of
  * `MidTurn`'s declaration.
  *
@@ -38,6 +54,19 @@ export type AutoApprovalVerdict = "approve" | "deny" | "escalate";
  */
 export type MessageDisposition = "opened" | "joined" | "queued";
 
+/**
+ * The agent closed: it admits no more messages, and its workflow completes once
+ * `@agent.teardown` (if any) returns.
+ *
+ * `AgentStatus.close_reason` carries the same reason for a client that queries instead.
+ */
+export interface AgentClosed {
+  type: "agent_closed";
+  /**
+   * Why the agent closed: REQUESTED for a `close` signal, IDLE_TIMEOUT_EXPIRED when `close_after_idle` ran out.
+   */
+  reason: CloseReason;
+}
 /**
  * Transport envelope for one stream event.
  *
@@ -84,6 +113,7 @@ export interface AgentEvent {
     | MessageHandlerError
     | TurnStarted
     | TurnEnded
+    | AgentClosed
     | ModelInteractionStarted
     | ModelInteractionEnded
     | ToolRequested
@@ -522,7 +552,8 @@ export interface SubagentStarted {
   workflow_id: string;
 }
 /**
- * This agent stopped a subagent it was driving (signalled `close` + dropped it).
+ * This agent stopped a subagent it was driving (signalled `close` + dropped it), or
+ * dropped one that something else had closed or ended.
  */
 export interface SubagentStopped {
   type: "subagent_stopped";
@@ -690,9 +721,9 @@ export interface ToolEndEvent {
    */
   tool_name: string;
   /**
-   * The tool's final, single result payload.
+   * The tool's final, single result, as JSON: the value as the worker's data converter encodes it. A string result is a JSON string; a tool with no result gives null.
    */
-  tool_output: string;
+  tool_output: JsonValue;
 }
 /**
  * A tool invocation has failed.
@@ -818,6 +849,7 @@ export type AgentStreamItem =
   | MessageHandlerError
   | TurnStarted
   | TurnEnded
+  | AgentClosed
   | ModelInteractionStarted
   | ModelInteractionEnded
   | ToolRequested

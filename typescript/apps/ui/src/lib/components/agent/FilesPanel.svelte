@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FilePen, FilePlus, FileX } from "@lucide/svelte";
+  import { FilePen, FilePlus, FileX, FolderTree } from "@lucide/svelte";
   import FileViewerDialog from "./FileViewerDialog.svelte";
   import MountTrees from "./MountTrees.svelte";
   import OKFGraphDialog from "./OKFGraphDialog.svelte";
@@ -88,6 +88,7 @@ mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]`
   {#if mounts.length === 0}
     <EmptyState
       title="No agent in this run tracks a filesystem mount."
+      icon={FolderTree}
       language="python"
       code={MOUNT_EXAMPLE}
     >
@@ -101,6 +102,7 @@ mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]`
     {#if nothingYet}
       <EmptyState
         title={allIndexed ? "This session hasn't touched a file in any mount yet." : "No mount holds a file yet."}
+        icon={FolderTree}
       />
     {:else}
       <Reading label={readingLabel} {headline} />

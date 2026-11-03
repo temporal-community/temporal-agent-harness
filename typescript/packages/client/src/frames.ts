@@ -14,6 +14,7 @@ export type AgentEventType = Protocol.AgentEventType;
 export type TokenUsage = Protocol.TokenUsage;
 export type MessageDisposition = Protocol.MessageDisposition;
 export type AutoApprovalVerdict = Protocol.AutoApprovalVerdict;
+export type CloseReason = Protocol.CloseReason;
 
 export interface AgentEventMetadata extends Omit<Protocol.AgentEvent, "event"> {
   /** The root-stream position to resume from: pass it back as `from_offset`. Several
@@ -31,6 +32,8 @@ type Payload<TType extends AgentEventType> = Extract<Protocol.AgentStreamItem, {
 interface Narrowed {
   text_annotation: { delta: TextAnnotationDelta };
   state_patch: { ops: JsonPatchOp[] };
+  /** JSON parsed from the wire never holds `undefined`, which the generated type allows. */
+  tool_end: { tool_output: JsonValue };
 }
 
 /** The flattened SSE `data` of one event type. */

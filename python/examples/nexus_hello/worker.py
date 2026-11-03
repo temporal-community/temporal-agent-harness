@@ -11,6 +11,7 @@ Env vars (set in .env.local - see .env.example):
                                                namespace, e.g. "default")
     OPENAI_API_KEY                            required - the agent calls the OpenAI API
     NEXUS_HELLO_TASK_QUEUE                    task queue to poll (default: nexus-hello)
+    TASK_QUEUE_PREFIX                         put in front of the default queue's name, if set
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
     stream_to_provider,
 )
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from .workflow import TASK_QUEUE, NexusHelloAgentWorkflow
 
@@ -44,7 +46,7 @@ async def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         force=True,
     )
-    task_queue = os.environ.get("NEXUS_HELLO_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("NEXUS_HELLO_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")

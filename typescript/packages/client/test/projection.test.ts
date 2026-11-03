@@ -192,7 +192,8 @@ test("every subagent in the merged stream gets its own view, linked from the par
     agentKey: "researcher",
     workflowId: "wf-s1",
     lifecycle: "running",
-    unavailable: null
+    unavailable: null,
+    closeReason: null
   });
   assert.deepEqual(s1.messages.map((m) => [m.id, m.status, m.parts.map((part) => part.type)]), [
     ["c1", "done", ["reply_delta", "subagent"]]
@@ -234,6 +235,18 @@ test("a stopped subagent, and one whose stream was lost, say so", () => {
   const closed = p.root!.messages[0]!.parts[0];
   assert.equal(closed?.type === "subagent" ? closed.status : null, "ok");
   assert.equal(p.agents.get("root.s1")!.info.lifecycle, "stopped");
+});
+
+test("an agent that closed records why", () => {
+  const f = new Frames();
+  const p = project([
+    f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, { message_id: "a" })
+  ]);
+  assert.equal(p.root!.info.closeReason, null);
+
+  p.apply(f.make("agent_closed", { reason: "idle_timeout_expired" }, { turn_number: 0, message_id: null }));
+  assert.equal(p.root!.info.closeReason, "idle_timeout_expired");
+  assert.equal(p.takeChanges().agents[0]![1].info?.closeReason, "idle_timeout_expired");
 });
 
 test("published messages never change afterwards", () => {

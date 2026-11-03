@@ -10,6 +10,7 @@ js_library(
         ":AgentStateNode",
         ":AgentWorkflowNode",
         ":AutoFitView",
+        ":StateFlowEmpty",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@xyflow/svelte",
         "//typescript/apps/ui:node_modules/svelte",
@@ -68,6 +69,18 @@ js_library(
     srcs = ["HotkeyHelp.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = ["//typescript/apps/ui/src/lib/state:replayHotkeys"],
+)
+
+js_library(
+    name = "StateFlowEmpty",
+    srcs = ["StateFlowEmpty.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@xyflow/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
+    ],
 )
 
 js_library(
@@ -137,6 +150,7 @@ js_library(
         ":ModelBreakdown",
         ":UsageLineChart",
         ":usageChart",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:Reading",
         "//typescript/apps/ui/src/lib/cost:pricing",
@@ -192,6 +206,17 @@ vitest_test(
         ":AgentWorkflowNode",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "StateFlowEmpty_test",
+    src = "StateFlowEmpty.test.mjs",
+    deps = [
+        ":AgentStateFlow",
+        ":StateFlowEmpty",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
 

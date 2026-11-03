@@ -3,7 +3,7 @@ name: Prepare release
 # Bumps a release unit's version on main and pushes a release branch for a human to open a PR
 # from. Merging that PR releases (finish-release.yml). See RELEASE.md.
 #
-#   python  python/pyproject.toml, uv.lock and the README's pins; tag <version>; PyPI.
+#   pypi    python/pyproject.toml, uv.lock and the README's pins; tag <version>; PyPI.
 #   npm     every @temporalio/agent-harness* package at one version; tag npm-v<version>; npm.
 
 on:
@@ -12,7 +12,7 @@ on:
       unit:
         description: What to release
         type: choice
-        options: [python, npm]
+        options: [pypi, npm]
         required: true
       bump:
         description: Version increment
@@ -51,8 +51,8 @@ jobs:
         uses: pnpm/action-setup@v6
         with:
           package_json_file: typescript/package.json
-      # python: it refreshes python/uv.lock with `uv lock`.
-      - if: inputs.unit == 'python'
+      # pypi: it refreshes python/uv.lock with `uv lock`.
+      - if: inputs.unit == 'pypi'
         uses: astral-sh/setup-uv@v10.3.0
 
       - name: Bump the version
@@ -74,8 +74,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/bazel-disk
-          key: bazel-disk-${{ inputs.unit == 'python' && 'py313' || 'other' }}-${{ github.sha }}
-          restore-keys: bazel-disk-${{ inputs.unit == 'python' && 'py313' || 'other' }}-
+          key: bazel-disk-${{ inputs.unit == 'pypi' && 'py313' || 'other' }}-${{ github.sha }}
+          restore-keys: bazel-disk-${{ inputs.unit == 'pypi' && 'py313' || 'other' }}-
 
       # The release's own artifacts build and pass their checks at the new version: the wheel and
       # sdist, or every package's tests including the check of its tarball against package.json.

@@ -72,6 +72,7 @@
 </script>
 
 <script lang="ts">
+  import { Braces } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
@@ -258,6 +259,7 @@
          is printed rather than described. -->
     <EmptyState
       title="No agent in this run has published observable state."
+      icon={Braces}
       language="python"
       code='self._plan = self._runner.state("plan", PlanState())'
     >

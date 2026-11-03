@@ -701,6 +701,107 @@ export const SubagentParentAgent = defineAgent({
   },
 });
 
+// -- close after idle ---------------------------------------------------------------------------
+
+export const IdleProbeData = z.object({ teardown_ms: z.number().default(0) }).meta({
+  title: "IdleProbeData",
+});
+
+/** Closes after a second idle; records when it started, last finished a turn, and closed. Its
+ *  turns wait on signals rather than timers, so every timer in its history is the idle clock. */
+export const IdleProbeAgent = defineAgent({
+  name: "IdleProbeAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+  closeAfterIdleDefault: "1 second",
+  initData: { schema: IdleProbeData, required: false },
+  handlers: {
+    work: handler({
+      description: "Hold the turn open until a release signal arrives.",
+      input: z.object({}),
+      output: TextReply,
+      midTurn: MidTurn.ENQUEUE,
+    }),
+  },
+  create: ({ data }) => {
+    const timeline = {
+      started_at: Date.now(),
+      last_turn_ended_at: null as number | null,
+      closed_at: null as number | null,
+    };
+    setHandler(defineQuery<typeof timeline>("timeline"), () => timeline);
+    let released = false;
+    setHandler(releaseSignal, () => void (released = true));
+    return {
+      async teardown() {
+        timeline.closed_at = Date.now();
+        if (data?.teardown_ms) await sleep(data.teardown_ms);
+      },
+      async work() {
+        await condition(() => released);
+        released = false;
+        timeline.last_turn_ended_at = Date.now();
+        return { text: "done" };
+      },
+    };
+  },
+});
+
+export const IdleChildAgent = defineAgent({
+  name: "IdleChildAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+  closeAfterIdleDefault: "300 milliseconds",
+  handlers: {
+    ask: handler({ description: "Echo the question.", input: TextMessage, output: TextReply }),
+  },
+  create: () => ({ ask: async ({ text }) => ({ text }) }),
+});
+
+export const IdleParentAgent = defineAgent({
+  name: "IdleParentAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+  handlers: {
+    start_child: handler({
+      description: "Start a child through the generated start tool.",
+      input: z.object({}),
+      output: TextReply,
+      midTurn: MidTurn.ENQUEUE,
+    }),
+    ask_child: handler({
+      description: "Ask a child something, reporting a failed send as text.",
+      input: z.object({ subagent: z.string() }),
+      output: TextReply,
+      midTurn: MidTurn.ENQUEUE,
+    }),
+  },
+  create: ({ runner }) => {
+    const tools = new Map(
+      subagentToolset(IdleChildAgent, { key: "child", taskQueue: workflowInfo().taskQueue }).map(
+        (t) => [t.name, t],
+      ),
+    );
+    return {
+      async start_child() {
+        const start = tools.get("start_child")!;
+        return { text: (await runner.runTool("start", start, {})) as string };
+      },
+      async ask_child({ subagent }) {
+        const send = tools.get("child_ask")!;
+        try {
+          const out = (await runner.runTool("ask", send, {
+            subagent,
+            message: { text: "hello" },
+          })) as { text: string };
+          return out;
+        } catch (e) {
+          const messages: string[] = [];
+          for (let c: unknown = e; c instanceof Error; c = c.cause) messages.push(c.message);
+          return { text: `error: ${messages.join(": ")}` };
+        }
+      },
+    };
+  },
+});
+
 /** An ApprovalProbeAgent whose own policy lets its gated tool run, so it runs as a subagent. */
 export const AllowedToolProbeAgent = defineAgent({
   name: "AllowedToolProbeAgent",
@@ -877,6 +978,46 @@ export const ToolRetryAgent = defineAgent({
           .runTool("t1", tool, { text })
           .catch((e: unknown) => `caught:${e instanceof Error ? e.name : String(e)}`),
       };
+    },
+  }),
+});
+
+// -- tool_end's output as JSON ---------------------------------------------------------------------
+
+export const issueReceipt = activityTool({
+  name: "issue_receipt",
+  description: "An activity tool with a structured result.",
+  inputSchema: TextInput,
+  inherentlySafe: true,
+});
+export const mapResultTool = activityTool({
+  name: "map_result",
+  description: "An activity tool whose result has no JSON form.",
+  inputSchema: TextInput,
+  inherentlySafe: true,
+  activityOptions: { startToCloseTimeout: "30 seconds", retry: { maximumAttempts: 1 } },
+});
+const recordNothing = tool({
+  name: "record_nothing",
+  description: "An inline tool with no result.",
+  inputSchema: TextInput,
+  inherentlySafe: true,
+  execute: async () => undefined,
+});
+
+export const ToolOutputAgent = defineAgent({
+  name: "ToolOutputAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
+  handlers: { act },
+  create: ({ runner }) => ({
+    async act({ text }) {
+      await runner.runTool("receipt", issueReceipt, { text });
+      await runner.runTool("nothing", recordNothing, { text });
+      const failed = await runner
+        .runTool("map", mapResultTool, { text })
+        .then(() => "map tool did not fail")
+        .catch((e: unknown) => `caught:${e instanceof Error ? e.name : String(e)}`);
+      return { text: failed };
     },
   }),
 });

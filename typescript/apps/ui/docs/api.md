@@ -489,7 +489,7 @@ tool_progress_delta: {
 tool_end: {
   tool_id: string
   tool_name: string
-  tool_output: string
+  tool_output: JsonValue  // the result as JSON; null for a tool with no result
 }
 
 tool_error: {

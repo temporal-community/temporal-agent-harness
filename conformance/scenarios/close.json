@@ -1,0 +1,53 @@
+{
+  "description": "A close signal sent while a turn waits on the client: the waiting callback fails, the turn finishes, agent_closed follows, and a message sent after it is refused.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_enqueue",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-hold",
+            "name": "ask_client",
+            "args": {
+              "question": "Continue?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Stopped."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-hold"
+    },
+    {
+      "action": "close"
+    },
+    {
+      "action": "await",
+      "event": "agent_closed"
+    },
+    {
+      "action": "send",
+      "handler": "run_enqueue",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Never runs."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

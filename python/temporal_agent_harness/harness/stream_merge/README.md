@@ -61,10 +61,10 @@ without revisiting this.
   workflow, and Temporal caps concurrent in-flight updates **per workflow at 10**; releasing a
   stopped child's cursor frees its slot.
 - **Graceful degradation (no retries — recovery is a fresh attach).** A subagent stream can fail to
-  deliver short of normal end-of-stream — a stopped/completed child whose stream isn't yet replayable,
-  or the per-workflow concurrent-update cap (`RPCError` when too many cursors poll one workflow). It
-  surfaces three ways: the pull **raises** (cap), **cleanly ends** mid-turn (completed workflow), or
-  **hangs** (poll against a completed child that neither yields nor returns). When the merge gives up
+  deliver short of normal end-of-stream — a closed child whose history has expired or that no
+  compatible worker can answer the read query for, or the per-workflow concurrent-update cap (`RPCError` when too many cursors poll one workflow). It
+  surfaces three ways: the pull **raises** (cap), **cleanly ends** mid-turn (a child closed mid-turn), or
+  **hangs** (a poll that neither yields nor returns). When the merge gives up
   on a child it (1) **releases its close gates** — a `gone` child's `subagent_reply_received` is
   treated as satisfied, so the parent's reply *and everything sequenced after it* still flow (without
   this, a dead child's never-coming `turn_end` strands the parent — the observed **hang**); (2)

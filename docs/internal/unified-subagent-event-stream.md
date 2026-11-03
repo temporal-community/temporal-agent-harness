@@ -495,14 +495,15 @@ holds again.
 ### Graceful degradation <a name="graceful-degradation"></a>
 
 A subagent stream can fail to deliver for reasons short of normal end-of-stream — most importantly a
-**stopped/completed child** whose stream isn't yet replayable (the known `workflow_streams`
-limitation), or the **per-workflow concurrent-in-flight-update cap** (`subscribe()` long-polls via an
+**closed child** whose history has expired or that no compatible worker can answer the
+`__temporal_workflow_stream_poll` query for (a closed run's stream is otherwise drained through that
+read-only query, since temporalio 1.35.0), or the **per-workflow concurrent-in-flight-update cap** (`subscribe()` long-polls via an
 `__temporal_workflow_stream_poll` *update*, and Temporal caps concurrent in-flight updates **per
 workflow at 10**; the 11th poll fails with `RPCError: limit on number of concurrent in-flight
 updates has been reached (10)`). The failure can surface three ways: the pull **raises** (the cap),
-the pull **cleanly ends** mid-turn (`StopAsyncIteration` from a completed workflow whose backlog
-stops before `turn_end`), or — the one we actually saw — the pull **hangs** (a poll against a
-completed child that neither yields nor returns).
+the pull **cleanly ends** mid-turn (`StopAsyncIteration` from a child closed mid-turn, whose backlog
+stops before `turn_end`), or the pull **hangs** (a poll that neither yields nor returns; before
+temporalio 1.35.0 this is what a poll against a completed child did).
 
 The governing principle (**no retries** — recovery is a fresh `attach`, i.e. a page refresh): **a
 subagent stream that can't deliver must never crash *or wedge* the parent.** The parent's own stream
@@ -627,10 +628,11 @@ ever does, document that `attach` replays from the live base, not absolute 0. Ou
    cursor is mid-turn (force-close every cursor on merge exit; the consumer already sees the
    terminal on the root). A child cursor that becomes unreadable mid-stream is likewise dropped, not
    fatal (see [Graceful degradation](#graceful-degradation)).
-4. **Dead/unreadable child on replay (the observed hang).** On replaying a session whose subagent
-   was stopped, the parent's `subagent_reply_received(C,T)` is already in the backlog, but the child
-   `C` is now a completed workflow whose stream can't be read — so mounting it on
-   `subagent_message_sent` yields a pull that hangs (or errors, or cleanly ends mid-turn). The
+4. **Dead/unreadable child on replay.** On replaying a session whose subagent was stopped, the
+   parent's `subagent_reply_received(C,T)` is already in the backlog and the child `C` is a closed
+   workflow. Its retained stream normally replays (temporalio 1.35.0+), so `C` merges like a live
+   child. If the read fails instead (history expired, no compatible worker, or a pre-1.35 hang),
+   mounting it on `subagent_message_sent` yields a pull that hangs, errors, or cleanly ends mid-turn. The
    close gate would then strand `reply_received` and, by within-stream order, the parent's entire
    tail. **Handled** by [Graceful degradation](#graceful-degradation): the merge gives up on the
    child (releasing its close gate, dropping its cursor, emitting a `subagent_stream_unavailable` marker),
@@ -744,11 +746,10 @@ Status legend: 🧭 not started · 🚧 in progress · ✅ done.
   subagents, grandchild recursion, the resume/skip-preamble cases, and the per-child stall-deadline
   backstop (a dead child is given up on its own deadline despite a chatty sibling). Integration in
   `tests/examples/monty/test_subagent_e2e.py`: a real parent→subagent merged `send_message` against a
-  **live** subagent, plus `test_attach_after_stopped_subagent_degrades_gracefully` — a real
-  attach-after-`stop_subagent` that exercises the actual degradation path (the completed child is
-  unreadable, so the merge releases the close gate, the parent renders fully, and a
-  `subagent_stream_unavailable` marker is surfaced). An upstream `workflow_streams` terminated-stream
-  fix would make that child readable and the degradation moot.
+  **live** subagent, plus `test_attach_after_stopped_subagent_replays_its_turns_in_brackets` — a real
+  attach-after-`stop_subagent` that replays the completed child's retained stream and nests its turns
+  in the parent's brackets with no `subagent_stream_unavailable` marker. The degradation path for a
+  child whose reads fail is covered by the `stream_merge` unit tests.
 
 ```
 W1 ─┐

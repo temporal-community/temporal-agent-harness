@@ -41,9 +41,11 @@ The integration publishes only what a model integration would, and only what the
 | `subagent_start`, `subagent_send`, `subagent_stop` | nothing; the runner's subagent calls |
 | `raise` | nothing; the handler raises `message` and later steps never run |
 
-Its tools are `add` (an activity tool), `echo` (a workflow tool), `fail` (raises), `gated` (needs
+Its tools are `add` (an activity tool), `lookup` (an activity tool with a structured result),
+`echo` (a workflow tool), `noop` (a workflow tool with no result), `fail` (raises), `gated` (needs
 approval) and `ask_client` (a callback tool). A failed tool call or subagent turn does not end the
-handler, as in a model loop.
+handler, as in a model loop. `tool_end` carries each result as JSON, so `lookup`'s is an object
+and `noop`'s is `null`, from either SDK.
 
 Before any golden comparison, the test derives from each message's script the events the
 integration must publish and compares them with the recorded stream. A mismatch there means the
@@ -56,6 +58,12 @@ event it is waiting for. Only one handler can run at any moment, so a stream's o
 
 A stopped subagent's stream cannot be read, so a scenario that stops one first waits for the
 subagent's last `turn_end`.
+
+A scenario may set the `config` (an `AgentConfig`) the agent starts with, such as a
+`close_after_idle`, and its `close` action sends the agent the `close` signal. The scripted
+agent's teardown never returns, so a closed agent's workflow keeps running: a message sent after
+it closes is refused by the agent, with the `AgentClosed` that `<name>.sends.jsonl` records,
+rather than by the server for a completed workflow.
 
 ## Normalization
 

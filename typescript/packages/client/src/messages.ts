@@ -4,6 +4,7 @@
 import type {
   AutoApprovalVerdict,
   JsonRecord,
+  JsonValue,
   MessageDisposition,
   TextAnnotation,
   TokenUsage
@@ -106,8 +107,8 @@ export interface ToolPart {
   toolName: string;
   state: ToolState;
   input: JsonRecord;
-  /** The tool's result as the harness rendered it for the model. */
-  output: string | null;
+  /** The tool's result as JSON once it is `done` (`null` until then, or for a tool with none). */
+  output: JsonValue;
   error: string | null;
   /** The latest progress report from a tool still running. */
   progress: string | null;

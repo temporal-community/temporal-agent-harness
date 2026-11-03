@@ -9,14 +9,14 @@ rest: what to decide, what to write down, and what to do when something fails.
 
 | Unit | Packages | Version source | Tag |
 | --- | --- | --- | --- |
-| `python` | `temporal-agent-harness` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
+| `pypi` | `temporal-agent-harness` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
 | `npm` | Every `@temporalio/agent-harness*` package under [typescript/packages](typescript/packages), at **one shared version**: `-client`, `-react` and `-svelte` publish today; `@temporalio/agent-harness` (core) and `-worker` publish from [their first release](#first-typescript-sdk-release) | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
 
 `@temporal-agent-harness/codegen` is private build tooling with no release. Examples ship in the
 repository, not in any package: release notes name the tag to check out.
 
 The TypeScript runtime uses the Python server, session manager and console, so a server or console
-change needs a `python` release even when the motivating feature is TypeScript. The two units
+change needs a `pypi` release even when the motivating feature is TypeScript. The two units
 release independently otherwise; nothing requires their version numbers to match.
 
 ### Versions
@@ -83,14 +83,14 @@ Judgment calls the pipeline cannot make. Put the answers in the release PR descr
 ## Release
 
 1. **Actions → Prepare release → Run workflow** on `main`. Choose the unit and the bump.
-   - `python`: bumps `pyproject.toml`, runs `uv lock`, moves the README's install pins forward,
+   - `pypi`: bumps `pyproject.toml`, runs `uv lock`, moves the README's install pins forward,
      then runs `bazel test //python/tests:test_packaged_distributions` at the new version.
    - `npm`: bumps every lockstep manifest and dependency range, refreshes `pnpm-lock.yaml`, then
      runs `bazel test //typescript/packages/...`.
 
    It pushes `release/<unit>-v<version>` and refuses to run beside an open release PR for the unit.
 2. Open the PR from the link in the run summary. Replace the placeholder release notes in the
-   description. Review the diff: for `python`, the lockfile should change only the project's own
+   description. Review the diff: for `pypi`, the lockfile should change only the project's own
    version unless a dependency moved; for `npm`, every manifest and `.aspect/` record.
 3. Wait for CI, get a review, **merge**. [Release merged PR](.github/workflows/finish-release.yml)
    then tags the merged commit, creates a GitHub Release from the description (marked pre-release

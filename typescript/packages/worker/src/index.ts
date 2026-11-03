@@ -33,6 +33,7 @@ export {
   localPayloadStorage,
   type CheckableStorageDriver,
 } from "./utils/large-payload.ts";
+export { TASK_QUEUE_PREFIX_ENV, taskQueueName } from "./utils/task-queue.ts";
 export {
   ConfigError,
   collectFilesystemActivities,

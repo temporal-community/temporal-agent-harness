@@ -491,8 +491,11 @@ function isRailSlotAction(action: ReplayAction): action is `railFocusSlot${RailS
  * What a key does, in one place. The window handler calls this and so does
  * `replayHotkeys.test.mjs`, which is the only way that check can compare what two bindings
  * *do* rather than what they are named.
+ *
+ * `held` is the key event's `repeat`: the relative cursor moves coalesce a held key's repeats
+ * to one per frame (AgentRunController.stepBack and friends), and every other action ignores it.
  */
-export function applyReplayAction(action: ReplayAction, surface: ReplaySurface): void {
+export function applyReplayAction(action: ReplayAction, surface: ReplaySurface, held = false): void {
   const { run, rail } = surface;
 
   /* Ahead of the switch rather than as nine cases of it. A type predicate rather than a
@@ -508,22 +511,22 @@ export function applyReplayAction(action: ReplayAction, surface: ReplaySurface):
      compile error, and that only holds while every case falls out of the bottom. */
   switch (action) {
     case "stepBack":
-      run.stepBack();
+      run.stepBack(held);
       break;
     case "stepForward":
-      run.stepForward();
+      run.stepForward(held);
       break;
     case "previousStep":
-      run.previousStep();
+      run.previousStep(held);
       break;
     case "nextStep":
-      run.nextStep();
+      run.nextStep(held);
       break;
     case "previousTurn":
-      run.previousTurn();
+      run.previousTurn(held);
       break;
     case "nextTurn":
-      run.nextTurn();
+      run.nextTurn(held);
       break;
     case "first":
       run.goTo(0);
