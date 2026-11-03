@@ -90,23 +90,47 @@ describe("the Logs pane during a scrub", () => {
     }
   });
 
-  /* Only a reader's own click may fold a row, so the pane keeps what they opened. The
-     check above allows a write from anywhere that is not an effect; this names the one
-     place that is meant to have it, so deleting the toggle is not a silent pass. */
-  it("folds a row only from the reader's own click", () => {
+  /* Only a reader's own request may open or fold a row, so the pane keeps what they opened.
+     The check above allows a write from anywhere that is not an effect; this names the places
+     that are meant to have it, so deleting one is not a silent pass. Two requests qualify: a
+     click on the row (toggleRow), and a State flow card's "view in logs" (revealLogRow). */
+  it("folds a row only from the reader's own request", () => {
     const writes = [...nodes(ast.instance)]
       .filter((node) => node.type === "AssignmentExpression" && text(node.left) === "expandedRows")
       .map((node) => node.start);
-    assert.equal(writes.length, 1, "expandedRows should have exactly one writer");
+    const writers = ["toggleRow", "revealLogRow"].map((name) => {
+      const fn = [...nodes(ast.instance)].find(
+        (node) => node.type === "FunctionDeclaration" && node.id?.name === name
+      );
+      assert.ok(fn, `${name} should still exist`);
+      return fn;
+    });
+    assert.equal(writes.length, writers.length, "expandedRows should have exactly one writer per request");
+    for (const write of writes) {
+      assert.ok(
+        writers.some((fn) => write > fn.start && write < fn.end),
+        "every writer of expandedRows should be toggleRow or revealLogRow"
+      );
+    }
+  });
 
-    const toggle = [...nodes(ast.instance)].find(
-      (node) => node.type === "FunctionDeclaration" && node.id?.name === "toggleRow"
+  /* revealLogRow opens a row, so it must never be reachable from the cursor: the only thing that
+     may call it is the effect reading the `reveal` prop, which changes only on "view in logs". */
+  it("reveals a row only when asked to, never because the cursor moved", () => {
+    const calls = [...nodes(ast.instance)].filter(
+      (node) => node.type === "CallExpression" && text(node.callee) === "revealLogRow"
     );
-    assert.ok(toggle, "toggleRow should still exist");
-    assert.ok(
-      writes[0] > toggle.start && writes[0] < toggle.end,
-      "the only writer of expandedRows should be toggleRow"
+    assert.equal(calls.length, 1, "revealLogRow should have exactly one caller");
+    const effect = [...nodes(ast.instance)].find(
+      (node) =>
+        node.type === "CallExpression" &&
+        text(node.callee) === "$effect" &&
+        node.start < calls[0].start &&
+        node.end > calls[0].end
     );
+    assert.ok(effect, "revealLogRow should be called from an $effect");
+    assert.match(text(effect), /\breveal\b/, "that effect should be the one reading `reveal`");
+    assert.doesNotMatch(text(effect), /activeRowId|activeOrdinal/, "the reveal effect must not read the cursor");
   });
 
   /* --- the rows are keyed --------------------------------------------------- */

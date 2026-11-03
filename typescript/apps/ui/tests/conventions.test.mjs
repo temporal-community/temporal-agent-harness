@@ -119,6 +119,7 @@ const HOVER_LAYOUT_PROPERTY = /\b(transform|(?:min-|max-)?height|padding(?:-[\w-
 
 /* Literal times in styles that are a loop's own cycle, not a UI moment's duration. */
 const DURATION_ALLOWED = [
+  { file: "lib/components/agent/TranscriptPanel.svelte", literal: "1800ms", why: "a revealed row's outline, held long enough to find once the scroll stops" },
   { file: "lib/components/chat/SessionControls.svelte", literal: "800ms", why: "the refresh button's spinner cycle" },
   { file: "lib/components/primitives/StateGlyph.svelte", literal: "1s", why: "the running glyph's spinner cycle" },
   { file: "lib/components/primitives/StatusChip.svelte", literal: "900ms", why: "a live status icon's breathing cycle" }

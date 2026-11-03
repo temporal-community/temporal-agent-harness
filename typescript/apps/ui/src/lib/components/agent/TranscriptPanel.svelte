@@ -3,7 +3,7 @@
   import { Search, X, XCircle } from "@lucide/svelte";
   import { rowIcon } from "$lib/components/flow/WorkflowTimeline.svelte";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import type { Attachment } from "svelte/attachments";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -51,6 +51,11 @@
     activeOrdinal: number | null;
     filter?: TranscriptFilter;
     onFilterChange?: (filter: TranscriptFilter) => void;
+    /**
+     * A row to bring to the reader: a State flow card's "view in logs". The nonce makes
+     * asking for the same row twice a second request rather than no change.
+     */
+    reveal?: { rowId: string; nonce: number } | null;
   }
 
   let {
@@ -59,7 +64,8 @@
     activeRowId = null,
     activeOrdinal,
     filter = "all",
-    onFilterChange
+    onFilterChange,
+    reveal = null
   }: Props = $props();
   let expandedRows = $state<Record<string, boolean>>({});
   /* Heads the reader folded or opened, by step id; any other keeps logLines' default. */
@@ -342,7 +348,7 @@
   });
 
   /* Each drawn turn's rows, by turn number, to reveal a row the turn has not drawn. */
-  const rowLists: Record<number, { scrollToIndex(index: number): void; measure(): void } | null> = {};
+  const rowLists: Record<number, { scrollToIndex(index: number, align?: "auto" | "start"): void; measure(): void } | null> = {};
 
   function remeasureLogRow(turnNumber: number): void {
     rowLists[turnNumber]?.measure();
@@ -380,6 +386,48 @@
       return line ? lineElementId(line) : `log-row-${activeRowId}`;
     });
     follower.to(target, revealActiveTurn);
+  });
+
+  /* The row a reveal landed on, marked for a moment so the eye finds it once the scroll stops. */
+  let revealedRowId = $state<string | null>(null);
+  let revealTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Bring one row to the reader, unlike following the cursor in every way that matters: it
+   * was asked for, so it opens the row, unfolds the step and clears the filter or search that
+   * hid it, and scrolls even if the reader had scrolled away. It never moves the replay cursor.
+   */
+  async function revealLogRow(rowId: string): Promise<void> {
+    const row = groups.flatMap((group) => group.rows).find((item) => item.id === rowId);
+    if (!row) return;
+    if (!matchesFilter(row, filter)) onFilterChange?.("all");
+    const needle = query.trim().toLowerCase();
+    if (needle && !matchesQuery(row, needle)) query = "";
+    expandedRows = { ...expandedRows, [rowId]: true };
+    await tick();
+    const owner = visibleGroups.find((group) => group.rows.some((item) => item.id === rowId));
+    const folded = owner && linesFor(owner).find((line) => line.kind === "step" && line.collapsed && line.rowIds.has(rowId));
+    if (folded && folded.kind === "step") {
+      collapsedSteps = { ...collapsedSteps, [folded.step.id]: false };
+      await tick();
+    }
+    const index = visibleGroups.findIndex((group) => group.rows.some((item) => item.id === rowId));
+    if (index < 0) return;
+    const group = visibleGroups[index];
+    const lineIndex = linesFor(group).findIndex((line) => line.kind === "row" && line.row.id === rowId);
+    revealedRowId = rowId;
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(() => (revealedRowId = null), 1800);
+    /* The turn first, so its rows are drawn, then the row inside it, to the top: it has just
+       opened, so its details run down from there. */
+    turnList().scrollToIndex(index, { align: "start" });
+    requestAnimationFrame(() => rowLists[group.turnNumber]?.scrollToIndex(lineIndex, "start"));
+  }
+
+  $effect(() => {
+    const target = reveal;
+    if (!target) return;
+    untrack(() => void revealLogRow(target.rowId));
   });
 
   function isRowExpanded(rowId: string): boolean {
@@ -582,7 +630,7 @@
               {@const glyph = rowGlyph(row)}
               <article
                 id={lineElementId(line)}
-                class={["log-line", tone, active && "active-row"]}
+                class={["log-line", tone, active && "active-row", revealedRowId === row.id && "revealed"]}
               >
                 <TraceRow
                   {glyph}
@@ -853,6 +901,30 @@
     color: var(--text-2);
     font-size: var(--font-xs);
     line-height: 1.45;
+  }
+
+  /* A row a State flow card asked for: an outline that fades out, so it reads as "this one"
+     without taking the cursor's own mark. */
+  .log-line.revealed {
+    animation: row-revealed 1800ms var(--ease-out) both;
+  }
+
+  @keyframes row-revealed {
+    0%,
+    40% {
+      box-shadow: inset 0 0 0 1px var(--accent);
+      background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    100% {
+      box-shadow: inset 0 0 0 1px transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .log-line.revealed {
+      animation: none;
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
   }
 
   .log-line.active-row {

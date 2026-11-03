@@ -41,6 +41,7 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
+  import { latestLogRowForNode } from "$lib/state/nodeLogRows";
   import { countPendingRequests, pendingRequestLabel } from "$lib/state/pendingRequests";
   import { focusReturnTarget } from "$lib/state/quickSwitch";
   import { sessionHeadline } from "$lib/state/sessionHistory";
@@ -274,6 +275,24 @@
       sending: run.sending
     })
   );
+
+  /* What the Logs pane is asked to bring forward; the nonce makes a second press on the same
+     card a second request. */
+  let logReveal = $state<{ rowId: string; nonce: number } | null>(null);
+
+  /**
+   * A card's "view in logs": its latest row, in a Logs pane brought to the reader. An open
+   * Logs pane is reused wherever it is, rail or drawer, and pulled next to the graph only
+   * within its own stack; a closed one opens beside the graph that asked. The replay cursor
+   * does not move: this is "show me", not "take me back to".
+   */
+  function viewNodeInLogs(nodeId: string, originPaneId: string): void {
+    const holder = [stack, drawer].find((candidate) => candidate.has("logs"));
+    if (holder) holder.openPane({ kind: "logs" }, holder.has(originPaneId) ? originPaneId : null);
+    else (drawer.has(originPaneId) ? drawer : stack).openPane({ kind: "logs" }, originPaneId);
+    const row = latestLogRowForNode(nodeId, run.replayLog.rows);
+    if (row) logReveal = { rowId: row.id, nonce: (logReveal?.nonce ?? 0) + 1 };
+  }
 
   function selectNode(nodeId: string): void {
     const localNodeId = nodeId.split("::").at(-1) ?? nodeId;
@@ -874,6 +893,7 @@
           ready={motionReady}
           onFocusChange={(next) => run.setGraphFocus(next)}
           onNodeSelect={selectNode}
+          onViewInLogs={(nodeId) => viewNodeInLogs(nodeId, pane.id)}
         />
       {:else if pane.kind === "chat" && run.sessionGone && run.frames.length === 0}
         <EmptyState title="This session's workflow no longer exists and nothing was cached" />
@@ -965,6 +985,7 @@
           activeOrdinal={run.currentLogRow?.ordinal ?? null}
           filter={transcriptFilter}
           onFilterChange={(next) => (transcriptFilter = next)}
+          reveal={logReveal}
         />
       {/if}
     </div>

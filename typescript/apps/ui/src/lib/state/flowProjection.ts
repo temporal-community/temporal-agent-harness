@@ -40,6 +40,8 @@ export interface AgentNodeData {
   markdown?: boolean;
   active?: boolean;
   size?: "default" | "large" | "container";
+  /** A card drawn as something other than a step: "prompt" is the reader's own words. */
+  variant?: "prompt";
   runtimeRole?: "parent" | "subagent";
   statusTone?: AgentNodeTone;
   /** Lit ports by handle id, each in a CSS color; set by markEdgeCues. */
@@ -955,9 +957,12 @@ function runtimeEdgeOptions(
 ): Parameters<typeof edge>[3] {
   const sourcePosition = runtimeLayout.positions.get(source as RuntimeNodeId);
   const targetPosition = runtimeLayout.positions.get(target as RuntimeNodeId);
+  /* A subagent keeps its Output inside the runtime, so its last leg is built here rather
+     than with the parent's external Output edges. It is the same leg, so the same kind. */
+  const kind = target === "output" ? "output" : "main";
   return sourcePosition && targetPosition && sourcePosition.y !== targetPosition.y
-    ? { sourceHandle: "source-bottom", targetHandle: "target-top", kind: "main", wrap: true }
-    : { kind: "main" };
+    ? { sourceHandle: "source-bottom", targetHandle: "target-top", kind, wrap: true }
+    : { kind };
 }
 
 function runtimeFlowSegments(
@@ -1826,8 +1831,11 @@ export function buildAgentGraph(
   function baseNodeDataFor(id: LocalNodeId): AgentNodeData {
     if (id === "input") {
       return {
-        tone: status === "running" ? "queue" : "neutral",
+        /* Queue-toned only while a message actually waits behind the running turn: the
+           run being busy is the runtime's news, not the message's. */
+        tone: queuedByTurn.size > 0 ? "queue" : "neutral",
         title: "Input",
+        variant: "prompt",
         state: inputState,
         subtitle: "user message",
         /* The text, not the envelope it arrived in. The card used to show the
@@ -1950,7 +1958,10 @@ export function buildAgentGraph(
     }
     if (id === "output") {
       return {
-        tone: status === "error" ? "error" : replyText ? "done" : "neutral",
+        /* Off replyState, the field the card's status word is read from. The run's
+           `status` is reset to idle by turn_end, so an Output toned off it went green the
+           moment a failed turn ended (the error is reply text too) while it still said ERROR. */
+        tone: replyState === "error" ? "error" : replyText ? "done" : "neutral",
         title: "Output",
         state: replyState,
         subtitle: "streaming response",

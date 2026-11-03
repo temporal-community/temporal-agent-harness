@@ -57,7 +57,7 @@ describe("token contrast", () => {
   it("keeps a runtime boundary's quiet text and status word at WCAG AA on its tinted band", () => {
     const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
     const band = read("../src/lib/components/flow/AgentWorkflowNode.svelte").match(
-      /\.workflow-head \{[^}]*background: color-mix\(in srgb, var\(--status-color\) (\d+)%, var\(--surface-1\)\)/
+      /\.workflow-boundary \{[^}]*background: color-mix\(in srgb, var\(--status-color\) (\d+)%, var\(--surface-1\)\)/
     );
     assert.ok(band, "the header band's tint");
     assert.match(
