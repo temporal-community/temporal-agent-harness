@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
     AutoApprovalVerdict,
+    CloseReason,
     MessageDisposition,
 )
 
@@ -95,6 +96,14 @@ class AgentEventType(StrEnum):
     agent's true quiescence signal — the single reliable point a consumer can terminate on.
     Like TURN_STARTED it belongs to no one message, so its ``message_id`` is ``None``.
     See :class:`TurnEnded`."""
+
+    AGENT_CLOSED = "agent_closed"
+    """The agent has closed and its turn loop has exited. ``reason`` says why: a ``close``
+    signal, or ``close_after_idle`` running out while nothing was running or queued. From the
+    moment it closes the agent rejects new messages with ``AgentClosed``; this event follows
+    once any participant still running has finished, so it comes after that participant's
+    events. Published outside any turn (``turn_number`` 0, empty ``turn_id``, ``message_id``
+    ``None``). See :class:`AgentClosed`."""
 
     MODEL_INTERACTION_STARTED = "model_interaction_started"
     """The agent has begun ONE interaction with the model — a single streaming
@@ -827,7 +836,8 @@ class SubagentStarted(StreamEvent[Literal[AgentEventType.SUBAGENT_STARTED]]):
 
 
 class SubagentStopped(StreamEvent[Literal[AgentEventType.SUBAGENT_STOPPED]]):
-    """This agent stopped a subagent it was driving (signalled ``close`` + dropped it)."""
+    """This agent stopped a subagent it was driving (signalled ``close`` + dropped it), or
+    dropped one that something else had closed or ended."""
 
     type: Literal[AgentEventType.SUBAGENT_STOPPED] = AgentEventType.SUBAGENT_STOPPED
     subagent_id: str = Field(
@@ -1024,6 +1034,20 @@ class MessageHandlerError(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_ERR
     )
 
 
+class AgentClosed(StreamEvent[Literal[AgentEventType.AGENT_CLOSED]]):
+    """The agent closed: it admits no more messages, and its workflow completes once
+    ``@agent.teardown`` (if any) returns.
+
+    ``AgentStatus.close_reason`` carries the same reason for a client that queries instead.
+    """
+
+    type: Literal[AgentEventType.AGENT_CLOSED] = AgentEventType.AGENT_CLOSED
+    reason: CloseReason = Field(
+        description="Why the agent closed: REQUESTED for a ``close`` signal, "
+        "IDLE_TIMEOUT_EXPIRED when ``close_after_idle`` ran out."
+    )
+
+
 class AgentStateSnapshot(StreamEvent[Literal[AgentEventType.STATE_SNAPSHOT]]):
     """The full value of one piece of observable agent state.
 
@@ -1074,6 +1098,7 @@ AgentStreamItem = Annotated[
     | MessageHandlerError
     | TurnStarted
     | TurnEnded
+    | AgentClosed
     | ModelInteractionStarted
     | ModelInteractionEnded
     | ToolRequested

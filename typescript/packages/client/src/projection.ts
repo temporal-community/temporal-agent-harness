@@ -11,6 +11,7 @@
 import type {
   AgentEventFrame,
   AgentSseFrame,
+  CloseReason,
   JsonRecord,
   JsonValue
 } from "./frames.ts";
@@ -40,6 +41,8 @@ export interface AgentInfo {
   lifecycle: "running" | "stopped";
   /** Why its own events could not be read, if they could not. Its parent's view is unaffected. */
   unavailable: string | null;
+  /** Why it closed, once its `agent_closed` arrives: nothing more will arrive from it. */
+  closeReason: CloseReason | null;
 }
 
 /** One agent's changes since the last flush. `info` is present when it changed, and always the
@@ -220,6 +223,8 @@ export class AgentProjection {
         return this.#setStatus("busy");
       case "turn_end":
         return this.#setStatus("idle");
+      case "agent_closed":
+        return this.setInfo({ closeReason: frame.data.reason });
       case "model_interaction_started":
         return this.#append(id, {
           type: "model_interaction",
@@ -628,7 +633,8 @@ export class SessionProjection {
         agentKey: null,
         workflowId: null,
         lifecycle: "running",
-        unavailable: null
+        unavailable: null,
+        closeReason: null
       });
       this.agents.set(agentId, agent);
     }

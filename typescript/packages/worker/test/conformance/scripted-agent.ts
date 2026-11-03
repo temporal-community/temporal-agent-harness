@@ -4,7 +4,7 @@
 // states them, and leaves everything else to the harness core, through the public authoring API
 // only. A worker bundles this module as its workflows; worker.ts registers the `add` activity.
 
-import { workflowInfo } from "@temporalio/workflow";
+import { condition, workflowInfo } from "@temporalio/workflow";
 import { z } from "zod";
 import {
   MidTurn,
@@ -181,6 +181,13 @@ export const ScriptedAgent = defineAgent({
   create: ({ runner, state: { entries } }) => {
     const subagents = new Map<string, string>();
     const run = (script: Script) => playScript(runner, entries, subagents, script);
-    return { run_reject: run, run_enqueue: run, run_accept: run };
+    return {
+      run_reject: run,
+      run_enqueue: run,
+      run_accept: run,
+      // Keep a closed agent's workflow running, so a message sent after close reaches the agent
+      // and is refused by it rather than by the server for a completed workflow.
+      teardown: () => condition(() => false),
+    };
   },
 });

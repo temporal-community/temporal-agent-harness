@@ -14,6 +14,7 @@ export type AgentEventType = Protocol.AgentEventType;
 export type TokenUsage = Protocol.TokenUsage;
 export type MessageDisposition = Protocol.MessageDisposition;
 export type AutoApprovalVerdict = Protocol.AutoApprovalVerdict;
+export type CloseReason = Protocol.CloseReason;
 
 export interface AgentEventMetadata extends Omit<Protocol.AgentEvent, "event"> {
   /** The root-stream position to resume from: pass it back as `from_offset`. Several

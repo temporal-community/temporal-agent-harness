@@ -27,7 +27,7 @@ classifiers = [
 # harness doesn't drag in Gemini or boto3.
 dependencies = [
     "temporalio>=1.31.0",  # provides temporalio.contrib.workflow_streams (experimental)
-    "pydantic>=2.0",
+    "pydantic>=2.12",
     "pyyaml>=6.0",  # reading and writing OKF bundles (code_mode.okf)
 ]
 
