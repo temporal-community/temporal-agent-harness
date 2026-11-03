@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from temporalio.api.enums.v1 import TaskQueueType
 from temporalio.api.taskqueue.v1 import TaskQueue
 from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowUpdateFailedError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
@@ -87,13 +87,24 @@ class AnswerCallback(_Action):
     error: str | None = None
 
 
-Action = Annotated[Send | Await | Approve | AnswerCallback, Field(discriminator="action")]
+class Close(_Action):
+    """Send the root agent the ``close`` signal."""
+
+    action: Literal["close"] = "close"
+
+
+Action = Annotated[
+    Send | Await | Approve | AnswerCallback | Close, Field(discriminator="action")
+]
 
 
 class Scenario(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     description: str
+    config: AgentConfig = Field(
+        default_factory=AgentConfig, description="The AgentConfig the root agent starts with."
+    )
     actions: list[Action]
 
 
@@ -277,7 +288,7 @@ async def record(client: Client, task_queue: str, scenario: Scenario) -> Recordi
     """Play ``scenario`` against a new scripted agent and record what it publishes."""
     workflow_id = f"conformance-{uuid.uuid4()}"
     await client.start_workflow(
-        ScriptedAgent.run, AgentConfig(), id=workflow_id, task_queue=task_queue
+        ScriptedAgent.run, scenario.config, id=workflow_id, task_queue=task_queue
     )
     agent_client = AgentClient(client, workflow_id)
     root = _StreamReader(client, workflow_id)
@@ -295,6 +306,12 @@ async def record(client: Client, task_queue: str, scenario: Scenario) -> Recordi
                         )
                     except MidTurnRejectedError:
                         sends.append(SendResult(send=number, error="MidTurnRejected"))
+                    except WorkflowUpdateFailedError as e:
+                        # The agent refused it: record the error type it gave, not its text.
+                        error_type = getattr(e.cause, "type", None)
+                        if error_type is None:
+                            raise
+                        sends.append(SendResult(send=number, error=error_type))
                     else:
                         message_ids[number] = reply.message_id
                         sends.append(
@@ -318,6 +335,8 @@ async def record(client: Client, task_queue: str, scenario: Scenario) -> Recordi
                     await agent_client.provide_callback_result(
                         action.tool_id, result=action.result, error=action.error
                     )
+                case Close():
+                    await client.get_workflow_handle(workflow_id).signal("close")
         await _wait_until_idle(agent_client, client, workflow_id, root)
         streams = [list(root.events)]
         for child_id, turns in _turns_sent_to_subagents(root.events).items():

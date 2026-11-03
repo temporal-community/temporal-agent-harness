@@ -22,6 +22,10 @@
  */
 export type AutoApprovalVerdict = "approve" | "deny" | "escalate";
 /**
+ * Why an agent closed: on the `agent_closed` event and `AgentStatus.close_reason`.
+ */
+export type CloseReason = "requested" | "idle_timeout_expired";
+/**
  * Any JSON value.
  */
 export type JsonValue =
@@ -50,6 +54,19 @@ export type JsonValue =
  */
 export type MessageDisposition = "opened" | "joined" | "queued";
 
+/**
+ * The agent closed: it admits no more messages, and its workflow completes once
+ * `@agent.teardown` (if any) returns.
+ *
+ * `AgentStatus.close_reason` carries the same reason for a client that queries instead.
+ */
+export interface AgentClosed {
+  type: "agent_closed";
+  /**
+   * Why the agent closed: REQUESTED for a `close` signal, IDLE_TIMEOUT_EXPIRED when `close_after_idle` ran out.
+   */
+  reason: CloseReason;
+}
 /**
  * Transport envelope for one stream event.
  *
@@ -96,6 +113,7 @@ export interface AgentEvent {
     | MessageHandlerError
     | TurnStarted
     | TurnEnded
+    | AgentClosed
     | ModelInteractionStarted
     | ModelInteractionEnded
     | ToolRequested
@@ -534,7 +552,8 @@ export interface SubagentStarted {
   workflow_id: string;
 }
 /**
- * This agent stopped a subagent it was driving (signalled `close` + dropped it).
+ * This agent stopped a subagent it was driving (signalled `close` + dropped it), or
+ * dropped one that something else had closed or ended.
  */
 export interface SubagentStopped {
   type: "subagent_stopped";
@@ -830,6 +849,7 @@ export type AgentStreamItem =
   | MessageHandlerError
   | TurnStarted
   | TurnEnded
+  | AgentClosed
   | ModelInteractionStarted
   | ModelInteractionEnded
   | ToolRequested

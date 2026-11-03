@@ -12,7 +12,10 @@ js_library(
     name = "scaleScenarios",
     srcs = ["scaleScenarios.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = [":scenarios"],
+    deps = [
+        ":jsonReplyScenarios",
+        ":scenarios",
+    ],
 )
 
 js_library(

@@ -54,9 +54,8 @@ class DriveSubagent(BaseModel):
     stop: bool = Field(
         default=True,
         description="If true (default), stop the subagent at the end of the turn. Set false to "
-        "leave it alive+idle — needed by the client stream-merge test, since a stopped subagent "
-        "is a COMPLETED workflow whose stream can't yet be read post-completion (a known "
-        "workflow_streams limitation with an upstream fix in flight).",
+        "leave it alive+idle, so the live stream-merge test reads the subagent while it is still "
+        "running.",
     )
 
 

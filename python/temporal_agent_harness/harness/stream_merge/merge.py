@@ -477,8 +477,8 @@ async def merge_stream(
     genuinely-concurrent events; ``should_stop`` ends the run after a chosen terminal event. Always
     honors per-stream offset order and both brackets.
 
-    A subagent stream that can't be read (a completed/stopped subagent, an over-subscribed
-    workflow) or stalls is given up on — its close gate released so the parent flows, and a
+    A subagent stream that can't be read (an over-subscribed workflow, a closed run whose history
+    has expired) or stalls is given up on — its close gate released so the parent flows, and a
     synthetic ``subagent_stream_unavailable`` marker emitted; the merge never retries (a fresh attach
     recovers). ``stall_grace_seconds`` bounds how long a stalled child may block a buffered parent
     reply before that give-up (a liveness backstop, not an ordering input)."""

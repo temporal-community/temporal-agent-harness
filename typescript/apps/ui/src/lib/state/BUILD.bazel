@@ -648,6 +648,7 @@ vitest_test(
     name = "incrementalProjections_test",
     src = "incrementalProjections.test.mjs",
     deps = [
+        ":flowProjection",
         ":replayTimeline",
         ":replyRuns",
         ":stepTimeline",
@@ -738,6 +739,7 @@ vitest_test(
     deps = [
         ":paneStack.svelte",
         "//typescript/apps/ui/src/lib/panes:PaneRail",
+        "//typescript/apps/ui/src/lib/panes:registry",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
@@ -790,6 +792,7 @@ vitest_test(
     src = "replayLogFold.test.mjs",
     deps = [
         ":replayLog",
+        ":replayTimeline",
         "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scenarios",
     ],
@@ -818,6 +821,17 @@ vitest_test(
     deps = [
         ":agentRun.svelte",
         ":replayLog",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "heldStepping_test",
+    src = "heldStepping.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":replayHotkeys",
         "//typescript/apps/ui/src/lib/mock:scenarios",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
@@ -940,6 +954,18 @@ vitest_test(
     name = "toolImages_test",
     src = "toolImages.test.mjs",
     deps = [":toolImages"],
+)
+
+vitest_test(
+    name = "transcriptAt_test",
+    src = "transcriptAt.test.mjs",
+    deps = [
+        ":replayTimeline",
+        ":transcript",
+        "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+    ],
 )
 
 vitest_test(

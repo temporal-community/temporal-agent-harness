@@ -26,9 +26,16 @@ function stubWindow() {
 
 const ids = (stack) => stack.groups.map((group) => group.map((pane) => pane.id));
 
+/* The state flow and the chat: the default desk without the columns after them. */
+function twoColumnStack() {
+  const stack = createPaneStack();
+  for (const id of ["usage", "state", "logs", "latency"]) stack.closePane(id);
+  return stack;
+}
+
 /* graph | usage+decisions (stacked) | chat | logs */
 function deskWithStack() {
-  const stack = createPaneStack();
+  const stack = twoColumnStack();
   stack.openPane({ kind: "logs" });
   stack.openPane({ kind: "usage" });
   stack.openPane({ kind: "decisions" });
@@ -112,7 +119,7 @@ describe("moving a pane between rails", () => {
   beforeEach(stubWindow);
 
   it("uses the same landing rules in both directions and writes p and p2", () => {
-    const main = createPaneStack();
+    const main = twoColumnStack();
     const drawer = createPaneStack({ queryPrefix: "2", initial: [] });
     main.openPane({ kind: "logs" });
     drawer.openPane({ kind: "latency" });
@@ -133,7 +140,7 @@ describe("moving a pane between rails", () => {
   });
 
   it("round-trips an empty main rail after its last pane moves to the drawer", () => {
-    const main = createPaneStack();
+    const main = twoColumnStack();
     const drawer = createPaneStack({ queryPrefix: "2", initial: [] });
     drawer.openPane({ kind: "latency" });
 
@@ -157,7 +164,7 @@ describe("a single-pane drawer", () => {
 
   /* graph | chat | logs on the rail, the timeline folded in the drawer. */
   function desk() {
-    const main = createPaneStack();
+    const main = twoColumnStack();
     const drawer = createPaneStack({ queryPrefix: "2", initial: [], single: true });
     main.openPane({ kind: "logs" });
     drawer.openPane({ kind: "timeline" });
@@ -215,7 +222,7 @@ describe("dockFocusedPane — the keyboard route into and out of the drawer", ()
   beforeEach(stubWindow);
 
   function desk() {
-    const main = createPaneStack();
+    const main = twoColumnStack();
     const drawer = createPaneStack({ queryPrefix: "2", initial: [], single: true });
     main.openPane({ kind: "logs" });
     drawer.openPane({ kind: "timeline" });
@@ -243,7 +250,7 @@ describe("dockFocusedPane — the keyboard route into and out of the drawer", ()
   });
 
   it("lands in an empty drawer alone, focused, rather than needing an occupant to trade with", () => {
-    const main = createPaneStack();
+    const main = twoColumnStack();
     const drawer = createPaneStack({ queryPrefix: "2", initial: [], single: true });
     main.focusPane("chat");
     dockFocusedPane(main, drawer);
@@ -274,7 +281,7 @@ describe("throttled address-bar writes", () => {
     const replace = window.history.replaceState;
     window.history.replaceState = (state, title, url) => (writes.push(url), replace(state, title, url));
     const cursor = () => new URLSearchParams(window.location.search).get("i");
-    const stack = createPaneStack();
+    const stack = twoColumnStack();
 
     stack.writeQuery(1);
     assert.equal(writes.length, 1, "the first write lands at once");
@@ -305,6 +312,91 @@ describe("throttled address-bar writes", () => {
     assert.equal(cursor(), "5");
     vi.advanceTimersByTime(1_000);
     assert.equal(writes.length, 4, "and nothing trails a lone write");
+  });
+});
+
+/* A new session used to inherit the desk of the one the reader left, so a rearranged session
+   handed its arrangement to every session opened after it and the default was only ever seen
+   once. A session with no desk of its own now opens on the default; one with a desk keeps it. */
+describe("switching sessions", () => {
+  const DEFAULT = [["graph"], ["chat"], ["usage", "state"], ["logs"], ["latency"]];
+
+  afterEach(() => {
+    delete globalThis.window;
+    delete globalThis.localStorage;
+    delete globalThis.sessionStorage;
+  });
+
+  function rearranged() {
+    installBrowserSurface();
+    const stack = createPaneStack();
+    stack.noteRailWidth(1440);
+    stack.enterSession("wf-old");
+    for (const id of ["usage", "state", "logs", "latency"]) stack.closePane(id);
+    stack.openPane({ kind: "timeline" });
+    stack.setGroupSize("chat", 900);
+    assert.deepEqual(ids(stack), [["graph"], ["chat"], ["timeline"]]);
+    return stack;
+  }
+
+  it("opens a new session on the default desk, fitted to the rail, whatever the last one became", () => {
+    const stack = rearranged();
+    stack.enterSession("wf-new");
+    assert.deepEqual(ids(stack), DEFAULT);
+    const width = stack.groups.reduce(
+      (sum, group) => sum + (group.every((pane) => pane.collapsed) ? 42 : stack.sizeOfGroup(group)),
+      0
+    );
+    assert.equal(width, 1440, "fitted like a first visit");
+  });
+
+  it("gives a session back the desk the reader left it with", () => {
+    const stack = rearranged();
+    stack.enterSession("wf-new");
+    stack.enterSession("wf-old");
+    assert.deepEqual(ids(stack), [["graph"], ["chat"], ["timeline"]]);
+    assert.equal(stack.sizeOfGroup(stack.groups[1]), 900);
+  });
+
+  it("restores a saved desk from before the reload instead of the default", () => {
+    rearranged().persistActiveDesk();
+    const reloaded = createPaneStack();
+    reloaded.noteRailWidth(1440);
+    reloaded.enterSession("wf-other");
+    reloaded.enterSession("wf-old");
+    assert.deepEqual(ids(reloaded), [["graph"], ["chat"], ["timeline"]]);
+  });
+
+  /* With no desk in the address bar, a reload used to lay the session's saved widths on the
+     default columns, so a wide saved state flow pushed every other column off the rail. */
+  it("opens a session's saved desk whole when the link names no desk, and the link's when it does", () => {
+    rearranged().persistActiveDesk();
+
+    const bare = createPaneStack();
+    bare.hydrateFromQuery();
+    bare.noteRailWidth(1440);
+    bare.enterSession("wf-old");
+    assert.deepEqual(ids(bare), [["graph"], ["chat"], ["timeline"]]);
+    assert.equal(bare.sizeOfGroup(bare.groups[1]), 900);
+
+    window.location.search = "?p=graph,logs";
+    const linked = createPaneStack();
+    linked.hydrateFromQuery();
+    linked.noteRailWidth(1440);
+    linked.enterSession("wf-old");
+    assert.deepEqual(ids(linked), [["graph"], ["logs"]], "a link that names a desk still wins");
+  });
+
+  it("shares no pane between sessions, so resizing one leaves the other alone", () => {
+    installBrowserSurface();
+    const stack = createPaneStack();
+    stack.noteRailWidth(1440);
+    stack.enterSession("wf-a");
+    const before = stack.sizeOfGroup(stack.groups[1]);
+    stack.enterSession("wf-b");
+    stack.setGroupSize("chat", 700);
+    stack.enterSession("wf-a");
+    assert.equal(stack.sizeOfGroup(stack.groups[1]), before);
   });
 });
 
@@ -407,22 +499,23 @@ describe("a drawer swap across shutting and reloading", () => {
   it("stores the arrival in the drawer and its occupant on the rail", () => {
     swapped();
     assert.equal(query("p2"), "chat");
-    assert.equal(query("p"), "graph,timeline");
-    assert.deepEqual(deskIds(), [["graph"], ["timeline"]]);
+    assert.equal(query("p"), "graph,timeline,usage+state,logs,latency");
+    assert.deepEqual(deskIds(), [["graph"], ["timeline"], ["usage", "state"], ["logs"], ["latency"]]);
   });
 
   it("comes back from a reload exactly as swapped, each pane once, with no default added", () => {
     swapped();
     const reloaded = boot();
     assert.deepEqual(ids(reloaded.drawer), [["chat"]]);
-    assert.deepEqual(ids(reloaded.rail), [["graph"], ["timeline"]]);
+    assert.deepEqual(ids(reloaded.rail), [["graph"], ["timeline"], ["usage", "state"], ["logs"], ["latency"]]);
+    assert.ok(reloaded.rail.groups[2].every((pane) => pane.split), "the stats column reopens stacked");
     const all = everyId(reloaded);
     assert.equal(new Set(all).size, all.length, "no pane is open twice");
 
     reloaded.rail.enterSession("wf-other");
     reloaded.rail.enterSession(SESSION);
     assert.deepEqual(ids(reloaded.drawer), [["chat"]], "the drawer is global, not per session");
-    assert.deepEqual(ids(reloaded.rail), [["graph"], ["timeline"]]);
+    assert.deepEqual(ids(reloaded.rail), [["graph"], ["timeline"], ["usage", "state"], ["logs"], ["latency"]]);
   });
 
   it("keeps the arrival through shutting, reloading shut, and reopening", () => {
@@ -435,7 +528,7 @@ describe("a drawer swap across shutting and reloading", () => {
     const reloaded = boot();
     assert.ok(reloaded.drawer.allFolded, "it reloads shut");
     assert.deepEqual(ids(reloaded.drawer), [["chat"]]);
-    assert.deepEqual(ids(reloaded.rail), [["graph"], ["timeline"]]);
+    assert.deepEqual(ids(reloaded.rail), [["graph"], ["timeline"], ["usage", "state"], ["logs"], ["latency"]]);
 
     reloaded.drawer.foldAll(false);
     persist(reloaded);

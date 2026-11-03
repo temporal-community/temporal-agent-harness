@@ -45,6 +45,7 @@ from temporalio import activity
 from temporalio.client import Client, WorkflowUpdateFailedError
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import (
     MidTurnRejectedError,
@@ -298,6 +299,16 @@ class SubagentActivities:
             raise ApplicationError(
                 str(cause) if cause else "subagent rejected the message",
                 type=getattr(cause, "type", None) or "SubagentSendRejected",
+                non_retryable=True,
+            ) from e
+        except RPCError as e:
+            # The parent started this child, so a missing workflow is one that has already
+            # ended: closed from outside, terminated, or failed.
+            if e.status != RPCStatusCode.NOT_FOUND:
+                raise
+            raise ApplicationError(
+                f"subagent workflow {req.child_workflow_id!r} is no longer running",
+                type="AgentClosed",
                 non_retryable=True,
             ) from e
         return _TurnProgress(
