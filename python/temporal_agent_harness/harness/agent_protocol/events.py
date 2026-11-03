@@ -319,8 +319,8 @@ class AgentEventType(StrEnum):
 
     Unlike every other event here, this one is **never published by a workflow** — it is
     SYNTHESIZED CLIENT-SIDE by the stream merge and injected into the merged logical stream. It is
-    emitted when a mounted subagent stream can't be read (today: a stopped/completed subagent, whose
-    stream ``workflow_streams`` can't yet replay — an upstream workflow_streams fix is in flight) 
+    emitted when a mounted subagent stream can't be read (an over-subscribed workflow, a closed run
+    whose history has expired or that no compatible worker can answer the read query for)
     or stalls without delivering its turn. It is purely informational and **non-fatal**: the parent's
     own stream is self-sufficient (it already carries the subagent's ``subagent_reply_received`` and 
     the send-tool's result), so the parent renders fully; only the subagent's own turn DETAIL is
