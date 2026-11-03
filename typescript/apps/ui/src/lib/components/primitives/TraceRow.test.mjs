@@ -138,6 +138,13 @@ describe("TraceRow", () => {
     assert.match(app, /@media \(prefers-reduced-motion: reduce\) \{\s*\.disclosure-chevron,\s*\.disclosure \.trace-glyph > \* \{\s*transition: none;/);
   });
 
+  it("draws a badge before the words, inside the row's button", () => {
+    const badge = createRawSnippet(() => ({ render: () => "<span class=\"probe-badge\">tool start</span>" }));
+    const row = html({ badge, name: "search_flights", expandable: true });
+    assert.match(row, /<button[^>]*>[\s\S]*<span class="trace-copy[^"]*"><span class="probe-badge">tool start<\/span>[\s\S]*search_flights[\s\S]*<\/button>/);
+    assert.doesNotMatch(html({ name: "x" }), /probe-badge/);
+  });
+
   it("draws media under the line whether or not the row is open", () => {
     const media = createRawSnippet(() => ({ render: () => "<p class=\"probe-media\">media</p>" }));
     const closed = html({ name: "image_generation", expandable: true, media });
