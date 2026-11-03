@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncGenerator
@@ -46,6 +47,9 @@ _DEV_SERVER_ARGS = [
     "--dynamic-config-value",
     'system.system.refreshNexusEndpointsMinWait="0s"',
 ]
+
+# A Nexus handler that raises is retried rather than failed, so an unbounded result() would hang.
+_RESULT_TIMEOUT_SECONDS = 30
 
 
 class AskMessage(BaseModel):
@@ -169,7 +173,7 @@ async def test_poll_messages_delivers_via_async_callback(env: WorkflowEnvironmen
             id=f"caller-{session_id}",
             task_queue=caller_task_queue,
         )
-        result = await handle.result()
+        result = await asyncio.wait_for(handle.result(), _RESULT_TIMEOUT_SECONDS)
 
         assert result.turn_number == 1
         assert not result.poll_closed
@@ -245,7 +249,7 @@ async def test_send_agent_message_survives_handler_worker_restart(
                 id=f"caller-restart-msg1-{session_id}",
                 task_queue=caller_task_queue,
             )
-            result_1 = await handle_1.result()
+            result_1 = await asyncio.wait_for(handle_1.result(), _RESULT_TIMEOUT_SECONDS)
         assert result_1.turn_number == 1
 
         handler_worker_1 = Worker(
@@ -260,7 +264,7 @@ async def test_send_agent_message_survives_handler_worker_restart(
                 id=f"caller-restart-msg2-{session_id}",
                 task_queue=caller_task_queue,
             )
-            result_2 = await handle_2.result()
+            result_2 = await asyncio.wait_for(handle_2.result(), _RESULT_TIMEOUT_SECONDS)
         assert result_2.turn_number == 2, (
             "turn counter must advance after a handler worker restart"
         )
@@ -341,7 +345,7 @@ async def test_poll_messages_closed_when_workflow_already_completed(
             id=f"poll-only-caller-{session_id}",
             task_queue=caller_task_queue,
         )
-        result = await handle.result()
+        result = await asyncio.wait_for(handle.result(), _RESULT_TIMEOUT_SECONDS)
 
         assert result.poll_closed
         assert result.poll_item_count == 0
@@ -531,7 +535,7 @@ async def test_send_agent_message_rejects_malformed_input(
             id=f"malformed-caller-{session_id}",
             task_queue=caller_task_queue,
         )
-        result = await handle.result()
+        result = await asyncio.wait_for(handle.result(), _RESULT_TIMEOUT_SECONDS)
 
         assert result.error_type == "NexusOperationError"
         assert "sessionId" in result.error_message
@@ -573,7 +577,7 @@ async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
             id=f"full-surface-caller-{session_id}",
             task_queue=caller_task_queue,
         )
-        result = await handle.result()
+        result = await asyncio.wait_for(handle.result(), _RESULT_TIMEOUT_SECONDS)
 
         assert result.handler_names == ["use_tool"]
         assert result.handler_mid_turns == ["reject"]
