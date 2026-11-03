@@ -1,0 +1,40 @@
+{
+  "description": "An agent started with close_after_idle closes itself once its turn has ended and it has sat idle that long, and a message sent after it is refused.",
+  "config": {
+    "close_after_idle": 1
+  },
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_enqueue",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Hello."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "agent_closed"
+    },
+    {
+      "action": "send",
+      "handler": "run_enqueue",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Never runs."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

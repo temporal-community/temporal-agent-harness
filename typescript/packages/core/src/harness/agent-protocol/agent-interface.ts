@@ -22,6 +22,15 @@ export type MidTurn = (typeof MidTurn)[keyof typeof MidTurn];
 export const MessageDisposition = { OPENED: "opened", JOINED: "joined", QUEUED: "queued" } as const;
 export type MessageDisposition = (typeof MessageDisposition)[keyof typeof MessageDisposition];
 
+/** Why an agent closed: on the `agent_closed` event and `AgentStatus.close_reason`. */
+export const CloseReason = {
+  /** A `close` signal arrived: from a client, an operator, or a parent's `stopSubagent`. */
+  REQUESTED: "requested",
+  /** The agent sat idle for its whole `close_after_idle` and the runner closed it. */
+  IDLE_TIMEOUT_EXPIRED: "idle_timeout_expired",
+} as const;
+export type CloseReason = (typeof CloseReason)[keyof typeof CloseReason];
+
 /** What an auto-mode evaluator decides, named after AI SDK 7's tool-approval outcomes. */
 export const ApprovalVerdict = {
   APPROVED: "approved",
@@ -291,6 +300,13 @@ export const AgentConfigSchema = z.object({
     .regex(AGENT_ID_PATTERN)
     .nullish()
     .transform((v) => v ?? null),
+  // Seconds idle before the runner closes the agent; 0 never closes. Null leaves the agent's
+  // default (`closeAfterIdleDefault`) in force.
+  close_after_idle: z
+    .number()
+    .nonnegative()
+    .nullish()
+    .transform((v) => v ?? null),
 });
 export type AgentConfig = z.output<typeof AgentConfigSchema>;
 export type AgentConfigInput = z.input<typeof AgentConfigSchema>;
@@ -406,6 +422,8 @@ export interface AgentStatus {
   subagents: SubagentInfo[];
   approval_policy: ToolApprovalPolicy;
   has_auto_approval_evaluator: boolean;
+  /** Why the agent closed, or null while it is open. */
+  close_reason: CloseReason | null;
 }
 
 /** One turn of the current run (a continued run keeps its last 20), as the `agent_state` query indexes it. */

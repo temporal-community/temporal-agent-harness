@@ -18,7 +18,6 @@ import {
   defineSignal,
   defineUpdate,
   getExternalWorkflowHandle,
-  isCancellation,
   log,
   proxyActivities,
   setHandler,
@@ -26,6 +25,7 @@ import {
   uuid4,
   ActivityFailure,
 } from "@temporalio/workflow";
+import { msToNumber } from "@temporalio/common/lib/time.js";
 import { WorkflowStream, type WorkflowTopicHandle } from "@temporalio/workflow-streams/workflow";
 import {
   AGENT_ID_LENGTH,
@@ -38,6 +38,7 @@ import {
   WIRE_VERDICT,
   CLOSE_SIGNAL,
   CallbackResultSchema,
+  CloseReason,
   DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
   DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
   MessageDisposition,
@@ -163,8 +164,11 @@ export class AgentWorkflowRunner {
   readonly #events: WorkflowTopicHandle<AgentEvent>;
   readonly #handlers: Readonly<Record<string, HandlerDecl>>;
   readonly #evaluator: AutoModeEvaluator | undefined;
+  // Milliseconds idle before the runner closes the agent; null never closes on idle.
+  readonly #closeAfterIdleMs: number | null;
 
   #closed = false;
+  #closeReason: CloseReason | null = null;
   #currentTurn = 0;
   #currentTurnId: string | null = null;
   #participants = 0;
@@ -186,6 +190,16 @@ export class AgentWorkflowRunner {
       options.autoApprovalCriteriaDefault ??
       AutoApprovalCriteria.empty();
     this.agentId = config.agent_id ?? shortHex(AGENT_ID_LENGTH);
+    const closeAfterIdleMs =
+      config.close_after_idle !== null
+        ? config.close_after_idle * 1000
+        : options.closeAfterIdleDefault === undefined
+          ? 0
+          : msToNumber(options.closeAfterIdleDefault);
+    if (closeAfterIdleMs < 0)
+      throw new TypeError("closeAfterIdleDefault must not be negative; use 0 or omit it for never");
+    // 0 is "never", kept as null from here on so there is one spelling.
+    this.#closeAfterIdleMs = closeAfterIdleMs > 0 ? closeAfterIdleMs : null;
     this.stream = new WorkflowStream();
     this.#events = this.stream.topic<AgentEvent>(TURN_EVENTS_TOPIC);
     // Before any handler is installed: a buffered first message is dispatched by setHandler, and
@@ -209,9 +223,7 @@ export class AgentWorkflowRunner {
     });
     setHandler(agentStatusQuery, () => this.status);
     setHandler(agentInterfaceQuery, () => this.#agentInterface());
-    setHandler(closeSignal, () => {
-      this.#closed = true;
-    });
+    setHandler(closeSignal, () => this.#close(CloseReason.REQUESTED));
   }
 
   // -- public surface -------------------------------------------------------------------------
@@ -303,6 +315,7 @@ export class AgentWorkflowRunner {
       })),
       approval_policy: this.#policy,
       has_auto_approval_evaluator: this.#evaluator !== undefined,
+      close_reason: this.#closeReason,
     };
   }
 
@@ -360,40 +373,64 @@ export class AgentWorkflowRunner {
   // -- the turn loop --------------------------------------------------------------------------
 
   async run(impls: Readonly<Record<string, HandlerImpl<HandlerDecl>>>): Promise<void> {
-    try {
-      while (!this.#closed) {
-        await condition(
-          () =>
-            this.#canOpenTurn ||
-            this.#joining.length > 0 ||
-            this.#closed,
-        );
-        if (this.#closed) break;
-        for (let joined = this.#joining.shift(); joined; joined = this.#joining.shift()) {
-          void this.#runParticipant(impls, joined, true);
-        }
-        if (this.#canOpenTurn) {
-          const admitted = this.#pendingTurns.shift()!;
-          this.#currentTurn += 1;
-          this.#currentTurnId = admitted.turn_id;
-          this.#participants = 1;
-          this.pub(admitted.turn_id, admitted.turn_number, { type: "turn_started" }, null);
-          void this.#runParticipant(impls, admitted, false);
-        }
+    while (!this.#closed) {
+      await this.#waitForWork();
+      if (this.#closed) break;
+      for (let joined = this.#joining.shift(); joined; joined = this.#joining.shift()) {
+        void this.#runParticipant(impls, joined, true);
       }
-      await condition(() => this.#participants === 0);
-    } catch (e) {
-      if (isCancellation(e)) {
-        await CancellationScope.nonCancellable(async () => {
-          this.stream.detachPollers();
-          await condition(allHandlersFinished);
-        });
+      if (this.#canOpenTurn) {
+        const admitted = this.#pendingTurns.shift()!;
+        this.#currentTurn += 1;
+        this.#currentTurnId = admitted.turn_id;
+        this.#participants = 1;
+        this.pub(admitted.turn_id, admitted.turn_number, { type: "turn_started" }, null);
+        void this.#runParticipant(impls, admitted, false);
       }
-      throw e;
     }
-    // Parked polls are handed the last events (turn_end included) before the run completes.
+    await condition(() => this.#participants === 0);
+    if (this.#closeReason !== null)
+      this.pub("", 0, { type: "agent_closed", reason: this.#closeReason }, null);
+  }
+
+  /**
+   * @internal The last step of a run, after teardown: parked stream polls are handed the last
+   * events, then every handler finishes. Not before teardown, which may publish too, and whose
+   * whole duration the stream must stay readable for: a poll arriving once pollers are detached
+   * is refused.
+   */
+  async finish(): Promise<void> {
     this.stream.detachPollers();
     await condition(allHandlersFinished);
+  }
+
+  /**
+   * Wait until there is something for the turn loop to do, or the agent closes. With
+   * `close_after_idle` set this is also the idle clock: while the agent is idle the wait carries
+   * that timeout, and running out closes the agent; while a turn runs the wait also wakes when the
+   * agent goes idle, so the loop comes back here and starts the clock afresh.
+   */
+  async #waitForWork(): Promise<void> {
+    const hasWork = () => this.#canOpenTurn || this.#joining.length > 0 || this.#closed;
+    if (this.#closeAfterIdleMs === null) {
+      await condition(hasWork);
+    } else if (!this.#idle) {
+      await condition(() => hasWork() || this.#idle);
+    } else if (!(await condition(hasWork, this.#closeAfterIdleMs)) && this.#idle) {
+      // The idle check covers a message admitted in the same workflow task as the timer firing.
+      this.#close(CloseReason.IDLE_TIMEOUT_EXPIRED);
+    }
+  }
+
+  /** Stop admitting messages and let the turn loop exit. The first reason sticks. */
+  #close(reason: CloseReason): void {
+    this.#closeReason ??= reason;
+    this.#closed = true;
+  }
+
+  /** No turn running, nothing queued, no join waiting to be dispatched. */
+  get #idle(): boolean {
+    return !this.#hasPendingWork && this.#joining.length === 0;
   }
 
   // -- the stream -----------------------------------------------------------------------------
@@ -469,6 +506,15 @@ export class AgentWorkflowRunner {
   // -- send_agent_message ---------------------------------------------------------------------
 
   #validateSendAgentMessage(raw: unknown): void {
+    // A closed agent's loop has exited, so an admitted message would never run.
+    if (this.#closeReason !== null) {
+      throw ApplicationFailure.create({
+        type: "AgentClosed",
+        nonRetryable: true,
+        message: `The agent is closed (${this.#closeReason}) and accepts no more messages.`,
+        details: [{ reason: this.#closeReason }],
+      });
+    }
     const message = AgentMessageSchema.parse(raw);
     assertPortableJson(message.payload, `Payload for function '${message.type}'`);
     const handler = Object.hasOwn(this.#handlers, message.type)
@@ -932,7 +978,11 @@ export class AgentWorkflowRunner {
 
   // -- subagents ------------------------------------------------------------------------------
 
-  /** Start a child agent; returns its short, tree-unique handle (also its agent_id). */
+  /**
+   * Start a child agent; returns its short, tree-unique handle (also its agent_id). The child never
+   * closes on idle: `close_after_idle` is always pushed down as 0, overriding both `config` and the
+   * child's own default.
+   */
   async startSubagent(
     agentKey: string,
     workflowType: string,
@@ -942,7 +992,7 @@ export class AgentWorkflowRunner {
     let handle = `${this.agentId}-${shortHex(AGENT_ID_LENGTH)}`;
     while (this.#subagents.has(handle)) handle = `${this.agentId}-${shortHex(AGENT_ID_LENGTH)}`;
     const workflowId = `${agentKey}-subagent-${uuid4()}`;
-    const childConfig = { ...config, agent_id: handle };
+    const childConfig = { ...config, agent_id: handle, close_after_idle: 0 };
     await startChild(workflowType, {
       args: data === undefined ? [childConfig] : [childConfig, data],
       workflowId,
@@ -1034,6 +1084,17 @@ export class AgentWorkflowRunner {
         ) {
           this.#publishReplyReceived(inst, msgType, acceptedTurnFromError(cause), "error");
         }
+        if (cause instanceof ApplicationFailure && cause.type === "AgentClosed") {
+          // Something other than this parent closed or ended the child, so the handle is dead.
+          this.#forgetClosedSubagent(inst);
+          throw ApplicationFailure.create({
+            type: "AgentClosed",
+            nonRetryable: true,
+            message: `Subagent '${handle}' has closed and accepts no more messages. Start a new one with start_${inst.agent_key}.`,
+            details: [{ subagent_id: handle }],
+            cause,
+          });
+        }
         throw e;
       }
       inst.last_consumed_offset = result.consumed_offset;
@@ -1042,6 +1103,17 @@ export class AgentWorkflowRunner {
     } finally {
       inst.serving += 1;
     }
+  }
+
+  /** Drop a subagent something else closed or ended; only the first send to find it publishes. */
+  #forgetClosedSubagent(inst: SubagentInstance): void {
+    if (!this.#subagents.delete(inst.handle)) return;
+    this.publish({
+      type: "subagent_stopped",
+      subagent_id: inst.handle,
+      agent_key: inst.agent_key,
+      workflow_id: inst.workflow_id,
+    });
   }
 
   #publishReplyReceived(

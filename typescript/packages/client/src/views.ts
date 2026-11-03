@@ -38,6 +38,7 @@ export function applyAgentUpdate(
     workflowId: null,
     lifecycle: "running",
     unavailable: null,
+    closeReason: null,
     agentStatus: "idle",
     messages: [],
     states: {}
@@ -77,6 +78,7 @@ const EMPTY_ROOT: AgentView = Object.freeze({
   workflowId: null,
   lifecycle: "running",
   unavailable: null,
+  closeReason: null,
   agentStatus: "idle",
   messages: Object.freeze([]) as readonly HarnessMessage[],
   states: Object.freeze({})

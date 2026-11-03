@@ -642,6 +642,19 @@ function rowFromFrame(
     };
   }
 
+  if (frame.event === "agent_closed") {
+    return {
+      ...base,
+      actor: "system",
+      tone: "neutral",
+      label:
+        frame.data.reason === "idle_timeout_expired"
+          ? "Agent closed: idle timeout expired"
+          : "Agent closed",
+      status: "closed"
+    };
+  }
+
   if (frame.event === "message_handler_error") {
     return {
       ...base,
