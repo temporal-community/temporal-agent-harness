@@ -9,7 +9,7 @@ import {
   emptyValues,
   validate,
   type SchemaField
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-harness-svelte";
 
 /** Whether starting `agent` needs a form first: it takes init data, required or not. */
 export function takesInitData(agent: AgentDescriptor): boolean {

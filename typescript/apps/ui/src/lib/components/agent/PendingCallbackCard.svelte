@@ -12,7 +12,7 @@
   import { callbackAlreadyResolved } from "$lib/api/httpClient";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
-  import { buildPayload, emptyValues, resultForm, validate, type SchemaField } from "@temporalio/agent-harness-client";
+  import { buildPayload, emptyValues, resultForm, validate, type SchemaField } from "@temporalio/agent-harness-svelte";
   import { focusFirstProblem, problemSummary } from "$lib/components/chat/schemaForm";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   import PendingCard from "./PendingCard.svelte";

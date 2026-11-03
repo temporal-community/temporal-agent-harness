@@ -59,8 +59,9 @@ published_npm_package(
         "package.json",
         ":dist",
     ],
-    # The example pages serve it (static_page).
-    visibility = ["//python/examples:__subpackages__"],
+    # The example pages serve it (static_page). The console's node_modules links the same
+    # :pkg, through the npm repo, which is outside this package.
+    visibility = ["//visibility:public"],
 )
 
 # The sources and tests type-checked together, as `pnpm run check` does.

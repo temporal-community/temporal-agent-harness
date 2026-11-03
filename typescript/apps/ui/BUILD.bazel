@@ -220,9 +220,6 @@ svelte_check_bin.svelte_check_test(
         ":config",
         ":node_modules",
         ":sources",
-        # The event protocol's types, which src/lib/api/types.ts imports by path (type-only, so
-        # no source target depends on it).
-        "//typescript/packages/client/src:protocol",
     ],
     # Its declarations, which a test's runfiles leave out by default.
     include_types = True,

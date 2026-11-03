@@ -151,7 +151,7 @@ js_library(
     name = "handlerRouting",
     srcs = ["handlerRouting.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-client"],
+    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-svelte"],
 )
 
 js_library(
@@ -186,7 +186,7 @@ js_library(
     name = "initData",
     srcs = ["initData.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-client"],
+    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-svelte"],
 )
 
 js_library(

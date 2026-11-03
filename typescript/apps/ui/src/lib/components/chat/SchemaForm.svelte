@@ -2,7 +2,7 @@
   // Renders one handler's input schema as a form. Purely schema-driven — see the client's schemaForm.ts.
   // Recurses through itself for nested object fields.
   import { Check, Minus, Plus } from "@lucide/svelte";
-  import { emptyValue, fieldPath, type SchemaField } from "@temporalio/agent-harness-client";
+  import { emptyValue, fieldPath, type SchemaField } from "@temporalio/agent-harness-svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Select from "$lib/components/primitives/Select.svelte";
   // Self-import so a nested object field recurses. This is the Svelte 5 way; the legacy

@@ -8,7 +8,7 @@
    */
   import { Check, CircleX } from "@lucide/svelte";
   import { untrack, type Snippet } from "svelte";
-  import { buildPayload, describeSchema, emptyValues, validate } from "@temporalio/agent-harness-client";
+  import { buildPayload, describeSchema, emptyValues, validate } from "@temporalio/agent-harness-svelte";
   import type { AgentInterfaceFunction, JsonRecord } from "$lib/api/types";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";

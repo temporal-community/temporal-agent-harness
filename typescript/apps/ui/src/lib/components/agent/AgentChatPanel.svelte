@@ -115,7 +115,7 @@
   import PendingCard from "./PendingCard.svelte";
   import type { ClientToolStatus } from "$lib/state/clientToolProvider";
   import ReplyStatus from "./ReplyStatus.svelte";
-  import { singleStringField } from "@temporalio/agent-harness-client";
+  import { singleStringField } from "@temporalio/agent-harness-svelte";
   type MessageTargetRole = "parent" | "subagent";
   /**
    * One agent a message can be addressed to, with its OWN discovered handler surface.
