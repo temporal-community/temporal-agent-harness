@@ -62,14 +62,6 @@ uv.override_package(
     target = "//bazel/excluded:temporal_nexus_mcp",
 )
 
-# temporalio ships native code, so rules_py cannot merge temporalio-typesafe's temporalio/typesafe
-# into it and puts that wheel on sys.path instead; extend_path makes temporalio find it there.
-uv.override_package(
-    name = "temporalio",
-    lock = "//python:uv.lock",
-    post_install_patches = ["//bazel:temporalio_extend_path.patch"],
-)
-
 # pywin32 (moto -> docker, on Windows only) has no wheel for any other platform. The hub's
 # gazelle_index_whls lists every locked wheel regardless of its environment markers, so the
 # Gazelle manifest cannot build while it is installable; this build does not target Windows.
