@@ -8,10 +8,18 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Protocol constants — workflow must use these exact names
@@ -684,13 +692,42 @@ class AgentConfig(BaseModel):
     this when starting a subagent — pushing down the same ``handle`` it uses to reference the child
     (its own id plus one fresh segment) — so the child's own event stream is labelled with the
     id the parent (and a UI merging the streams) already knows it by. ``None`` → a top-level agent
-    generates its own single-segment id. This is the one ``AgentConfig`` field a parent populates
-    per-child rather than passing through unchanged.
+    generates its own single-segment id. Besides ``close_after_idle`` (always ``timedelta(0)`` for
+    a subagent), it is the one ``AgentConfig`` field a parent sets per child rather than passing
+    through unchanged.
+
+    ``close_after_idle`` — how long the agent may sit idle (no turn running, nothing queued)
+    before the runner closes it, exactly as a ``close`` signal would but with
+    :attr:`CloseReason.IDLE_TIMEOUT_EXPIRED`. ``None`` → use the agent's default (the runner's
+    ``close_after_idle_default=``); ``timedelta(0)`` → never close on idle, which is how a
+    caller switches off an agent's default. Crosses the wire as a number of seconds. A
+    subagent never closes on idle: its parent starts it with ``timedelta(0)``, so a child never
+    closes under a parent still holding its handle.
     """
+
+    model_config = ConfigDict(ser_json_temporal="seconds")
 
     approval_policy: ToolApprovalPolicy | None = None
     auto_approval_criteria: AutoApprovalCriteria | None = None
     agent_id: AgentId | None = None
+    close_after_idle: timedelta | None = None
+
+    @field_validator("close_after_idle")
+    @classmethod
+    def _reject_negative_idle(cls, value: timedelta | None) -> timedelta | None:
+        if value is not None and value < timedelta(0):
+            raise ValueError("close_after_idle must not be negative; use timedelta(0) for never")
+        return value
+
+
+class CloseReason(StrEnum):
+    """Why an agent closed: on the ``agent_closed`` event and :attr:`AgentStatus.close_reason`."""
+
+    REQUESTED = "requested"
+    """A ``close`` signal arrived: from a client, an operator, or a parent's ``stop_subagent``."""
+
+    IDLE_TIMEOUT_EXPIRED = "idle_timeout_expired"
+    """The agent sat idle for its whole ``close_after_idle`` and the runner closed it."""
 
 
 # ---------------------------------------------------------------------------
@@ -1099,6 +1136,9 @@ class AgentStatus:
         default_factory=ToolApprovalPolicy.always_require_human_approval
     )
     has_auto_approval_evaluator: bool = False
+    # Why the agent closed, or ``None`` while it is open. Once set, ``send_agent_message``
+    # rejects every new message with ``AgentClosed``.
+    close_reason: CloseReason | None = None
     # The live ``AutoApprovalCriteria`` are deliberately NOT surfaced here, even though
     # they are serializable. A tool's *declared* criteria set is a decorator argument
     # living in code, and the runner holds no tool registry to enumerate those from — so

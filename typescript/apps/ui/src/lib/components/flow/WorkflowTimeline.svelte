@@ -1,6 +1,7 @@
 <script lang="ts" module>
   import {
     Bot,
+    ChartGantt,
     ChevronLeft,
     ChevronRight,
     Cpu,
@@ -865,7 +866,7 @@
 >
   {#if timeline.workflow.rowCount === 0}
     <div class="empty" data-drawer-fit>
-      <EmptyState title="Step through the stream to chart run-wide spans." />
+      <EmptyState title="Step through the stream to chart run-wide spans." icon={ChartGantt} />
     </div>
   {:else}
     <div

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from nexusrpc import HandlerError, HandlerErrorType
 from nexusrpc.handler import StartOperationContext, service_handler, sync_operation
 from temporalio import nexus
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowUpdateStage
 from temporalio.contrib.workflow_streams import PollInput
 from temporalio.service import RPCError
 
@@ -343,6 +343,7 @@ class AgentServiceHandler:
                 self._workflow_id(input.session_id),
                 _WORKFLOW_STREAM_POLL_UPDATE,
                 PollInput(from_offset=input.cursor, topics=[TURN_EVENTS_TOPIC]),
+                wait_for_stage=WorkflowUpdateStage.ACCEPTED,
                 result_type=PollMessagesOutput,
             )
         except RPCError as e:

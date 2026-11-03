@@ -78,6 +78,43 @@ function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
 /** A bare frame is the root's; a timeline entry says whose it is, and only the root's are read. */
 type TranscriptInput = AgentSseFrame | { frame: AgentSseFrame; role?: string };
 
+type TranscriptFold = ((
+  frames: readonly TranscriptInput[],
+  agentInterface?: AgentInterfaceFunction[]
+) => TranscriptItem[]) & {
+  /** `buildTranscript(frames.slice(0, cursor))` for the frames last folded, cut from that result. */
+  at(cursor: number): TranscriptItem[];
+};
+
+/** Kept until the fold starts over. */
+interface CutRun {
+  /** An item the cursor sits inside, folded from its own frames, by how many it has read. */
+  partial: Map<number, { read: number; item: TranscriptItem; fold: TranscriptFold; frames: TranscriptInput[] }>;
+  previous: TranscriptItem[];
+}
+
+/* The frames a reply is folded from: the handler its message went to decides prose or
+   data, and its annotations become citations when it ends. */
+const MESSAGE_SOURCES = new Set<string>([
+  "message_accepted",
+  "text_annotation",
+  "reply_delta",
+  "message_handler_error",
+  "message_handler_end"
+]);
+const NO_SOURCES: number[] = [];
+
+const countBelow = (sorted: readonly number[], limit: number, end = sorted.length): number => {
+  let low = 0;
+  let high = end;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (sorted[middle]! < limit) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+};
+
 export function buildTranscript(
   frames: readonly TranscriptInput[],
   agentInterface?: AgentInterfaceFunction[]
@@ -90,10 +127,7 @@ export function buildTranscript(
  * replayTimelineBuilder). An item a new frame updates is copied first, so items handed
  * out earlier never change: a keyed each skips an item whose object is the same.
  */
-export function transcriptBuilder(): (
-  frames: readonly TranscriptInput[],
-  agentInterface?: AgentInterfaceFunction[]
-) => TranscriptItem[] {
+export function transcriptBuilder(): TranscriptFold {
   let seen = 0;
   let last: TranscriptInput | undefined;
   let iface: AgentInterfaceFunction[] | undefined;
@@ -105,8 +139,16 @@ export function transcriptBuilder(): (
   let replyIndexByMessage = new Map<string, number>();
   let toolIndexById = new Map<string, number>();
   let citationsByMessage = new Map<string, FileCitationAnnotation[]>();
+  let from: number[] = [];
+  let changed: number[] = [];
+  let sources: number[][] = [];
+  let sourcesByMessage = new Map<string, number[]>();
+  let sourcesByTool = new Map<string, number[]>();
+  let run: CutRun = { partial: new Map(), previous: [] };
+  let input: readonly TranscriptInput[] = [];
+  let result: TranscriptItem[] = [];
 
-  return (frames, agentInterface) => {
+  const fold = ((frames, agentInterface) => {
     if (agentInterface !== iface || frames.length < seen || (seen > 0 && frames[seen - 1] !== last)) {
       seen = 0;
       iface = agentInterface;
@@ -115,8 +157,15 @@ export function transcriptBuilder(): (
       replyIndexByMessage = new Map();
       toolIndexById = new Map();
       citationsByMessage = new Map();
+      from = [];
+      changed = [];
+      sources = [];
+      sourcesByMessage = new Map();
+      sourcesByTool = new Map();
+      run = { partial: new Map(), previous: [] };
     }
     const fresh = items.length;
+    let position = seen;
     /* Copy an item made by an earlier call before the first edit in this one. */
     const copied = new Set<number>();
     const editable = (index: number | undefined): TranscriptItem | undefined => {
@@ -125,15 +174,29 @@ export function transcriptBuilder(): (
         items[index] = { ...items[index]! };
         copied.add(index);
       }
+      changed[index] = position;
       return items[index];
+    };
+    const sourcesOf = (byId: Map<string, number[]>, id: string): number[] => {
+      let list = byId.get(id);
+      if (!list) byId.set(id, (list = []));
+      list.push(position);
+      return list;
+    };
+    const opened = (list: number[]): void => {
+      from.push(position);
+      changed.push(position);
+      sources.push(list);
     };
     const foldFrame = (frame: AgentSseFrame): void => {
       if (!("type" in frame.data)) return;
       const { turn_number, timestamp } = frame.data;
       const key = messageKey(frame);
       const schema = schemaOf(frame, agentInterface);
+      if (MESSAGE_SOURCES.has(frame.event)) sourcesOf(sourcesByMessage, key);
 
       if (frame.event === "message_accepted") {
+        opened(NO_SOURCES);
         items.push({
           kind: "user",
           id: `user-${key}`,
@@ -153,6 +216,7 @@ export function transcriptBuilder(): (
       if (frame.event === "thought_summary") {
         const text = thoughtDeltaText(frame.data.delta);
         if (text) {
+          opened(NO_SOURCES);
           items.push({
             kind: "thought",
             id: `thought-${key}-${frame.data.timestamp}`,
@@ -168,6 +232,7 @@ export function transcriptBuilder(): (
         if (itemIndex == null) {
           itemIndex = items.length;
           replyIndexByMessage.set(key, itemIndex);
+          opened(sourcesByMessage.get(key)!);
           items.push({
             kind: "agent",
             id: `reply-${key}`,
@@ -201,6 +266,7 @@ export function transcriptBuilder(): (
         if (itemIndex == null) {
           itemIndex = items.length;
           replyIndexByMessage.set(key, itemIndex);
+          opened(sourcesByMessage.get(key)!);
           items.push({
             kind: "agent",
             id: `reply-${key}`,
@@ -238,10 +304,12 @@ export function transcriptBuilder(): (
         frame.event === "tool_error"
       ) {
         const toolId = frame.data.tool_id;
+        const toolSources = sourcesOf(sourcesByTool, toolId);
         let itemIndex = toolIndexById.get(toolId);
         if (itemIndex == null) {
           itemIndex = items.length;
           toolIndexById.set(toolId, itemIndex);
+          opened(toolSources);
           items.push({
             kind: "tool",
             id: `tool-${toolId}`,
@@ -291,13 +359,50 @@ export function transcriptBuilder(): (
         }
       }
     };
-    for (let position = seen; position < frames.length; position += 1) {
+    for (; position < frames.length; position += 1) {
       const item = frames[position]!;
       if (!("frame" in item)) foldFrame(item);
       else if (item.role !== "subagent") foldFrame(item.frame);
     }
     seen = frames.length;
     last = frames[seen - 1];
-    return items.slice();
+    input = frames;
+    return (result = items.slice());
+  }) as TranscriptFold;
+
+  /**
+   * `buildTranscript(input.slice(0, cursor))`, cut from the transcript folded over all of
+   * `input` instead of rebuilt from frame one.
+   *
+   * Items are in the order their first frame arrived, so the cut is a prefix. An item no
+   * frame at or past the cursor changed is the full transcript's own object; only the few
+   * the cursor sits inside (a reply still streaming, a tool still running) are folded again,
+   * from their own frames. Those are kept by how far they have read, so a step that leaves
+   * them alone hands back the same objects, and a cut equal to the last one is that array.
+   */
+  fold.at = (cursor) => {
+    const full = result;
+    const end = Math.min(Math.max(cursor, 0), input.length);
+    const kept = countBelow(from, end, full.length);
+    const cut = full.slice(0, kept);
+    for (let index = 0; index < kept; index += 1) {
+      if (changed[index]! < end) continue;
+      const positions = sources[index]!;
+      const read = countBelow(positions, end);
+      let partial = run.partial.get(index);
+      if (partial?.read !== read) {
+        partial ??= { read: 0, item: full[index]!, fold: transcriptBuilder(), frames: [] };
+        while (partial.frames.length < read) partial.frames.push(input[positions[partial.frames.length]!]!);
+        const id = full[index]!.id;
+        partial.item = partial.fold(partial.frames.slice(0, read), iface).find((item) => item.id === id)!;
+        partial.read = read;
+        run.partial.set(index, partial);
+      }
+      cut[index] = partial.item;
+    }
+    const previous = run.previous;
+    if (previous.length === cut.length && cut.every((item, index) => item === previous[index])) return previous;
+    return (run.previous = cut);
   };
+  return fold;
 }

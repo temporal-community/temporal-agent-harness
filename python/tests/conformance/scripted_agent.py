@@ -126,6 +126,12 @@ class ScriptedAgent:
         )
         self._subagents: dict[str, str] = {}
 
+    @agent.teardown
+    async def hold_open(self) -> None:
+        """Keep a closed agent's workflow running, so a message sent after close reaches the
+        agent and is refused by it rather than by the server for a completed workflow."""
+        await workflow.wait_condition(lambda: False)
+
     @agent.accepts(mid_turn=MidTurn.REJECT)
     async def run_reject(self, script: Script) -> ScriptReply:
         """Play the script; refused while a turn is open."""

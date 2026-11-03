@@ -22,6 +22,9 @@
       "$ref": "#/$defs/TurnEnded"
     },
     {
+      "$ref": "#/$defs/AgentClosed"
+    },
+    {
       "$ref": "#/$defs/ModelInteractionStarted"
     },
     {
@@ -98,6 +101,27 @@
     }
   ],
   "$defs": {
+    "AgentClosed": {
+      "description": "The agent closed: it admits no more messages, and its workflow completes once\n``@agent.teardown`` (if any) returns.\n\n``AgentStatus.close_reason`` carries the same reason for a client that queries instead.",
+      "properties": {
+        "type": {
+          "const": "agent_closed",
+          "default": "agent_closed",
+          "title": "Type",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/CloseReason",
+          "description": "Why the agent closed: REQUESTED for a ``close`` signal, IDLE_TIMEOUT_EXPIRED when ``close_after_idle`` ran out."
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ],
+      "title": "AgentClosed",
+      "type": "object"
+    },
     "AgentEvent": {
       "description": "Transport envelope for one stream event.\n\nThe single concrete type published on — and subscribed to from — the\n``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload\n(``event``) and adds the routing metadata the harness stamps at publish time.\nProducers never build this — they construct a payload and the publisher wraps\nit — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp``\ncan only ever be set by the harness. Being a concrete type (not a bare union), it is\nalso a clean ``type`` for the workflow-stream topic and subscribe ``result_type``.",
       "properties": {
@@ -138,6 +162,7 @@
           "description": "The wrapped stream-event payload — a discriminated union over ``type`` that Temporal's Pydantic converter reconstructs to the concrete payload subtype on read.",
           "discriminator": {
             "mapping": {
+              "agent_closed": "#/$defs/AgentClosed",
               "auto_approval_evaluation_ended": "#/$defs/AutoApprovalEvaluationEnded",
               "auto_approval_evaluation_error": "#/$defs/AutoApprovalEvaluationError",
               "auto_approval_evaluation_started": "#/$defs/AutoApprovalEvaluationStarted",
@@ -190,6 +215,9 @@
             },
             {
               "$ref": "#/$defs/TurnEnded"
+            },
+            {
+              "$ref": "#/$defs/AgentClosed"
             },
             {
               "$ref": "#/$defs/ModelInteractionStarted"
@@ -664,6 +692,15 @@
       "title": "CallbackResolved",
       "type": "object"
     },
+    "CloseReason": {
+      "description": "Why an agent closed: on the ``agent_closed`` event and :attr:`AgentStatus.close_reason`.",
+      "enum": [
+        "requested",
+        "idle_timeout_expired"
+      ],
+      "title": "CloseReason",
+      "type": "string"
+    },
     "JsonValue": {
       "anyOf": [
         {
@@ -1040,7 +1077,7 @@
       "type": "object"
     },
     "SubagentStopped": {
-      "description": "This agent stopped a subagent it was driving (signalled ``close`` + dropped it).",
+      "description": "This agent stopped a subagent it was driving (signalled ``close`` + dropped it), or\ndropped one that something else had closed or ended.",
       "properties": {
         "type": {
           "const": "subagent_stopped",

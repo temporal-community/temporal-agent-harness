@@ -49,7 +49,7 @@ from temporalio.contrib.workflow_streams import (
     WorkflowStreamClient,
     WorkflowTopicHandle,
 )
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness.state import StateRef
@@ -68,6 +68,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     TOOL_APPROVAL_UPDATE,
     TURN_EVENTS_TOPIC,
     AcceptedFunction,
+    AgentClosed,
     AgentConfig,
     AgentEvent,
     AgentMessage,
@@ -81,6 +82,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     CallbackResolved,
     CallbackResult,
     CallbackResultAck,
+    CloseReason,
     MessageAccepted,
     MessageContext,
     MessageDisposition,
@@ -1564,6 +1566,8 @@ class _WorkflowStatus:
         self._callbacks: dict[str, _CallbackEntry] = {}
         # Subagents this agent is driving, keyed by child ``subagent_id``.
         self._subagents: dict[str, _SubagentInstance] = {}
+        # Why the agent closed; ``None`` while it is open.
+        self.close_reason: CloseReason | None = None
 
     @property
     def current_turn(self) -> int:
@@ -1893,9 +1897,10 @@ class _WorkflowStatus:
             )
         return inst
 
-    def remove_subagent(self, handle: str) -> None:
-        """Drop a subagent from the registry (after it is stopped). Idempotent."""
-        self._subagents.pop(handle, None)
+    def remove_subagent(self, handle: str) -> bool:
+        """Drop a subagent from the registry (after it is stopped). Idempotent; returns whether
+        it was still registered."""
+        return self._subagents.pop(handle, None) is not None
 
     def active_subagents(self) -> list[SubagentInfo]:
         """The active subagents projected for the ``agent_status`` query.
@@ -1931,6 +1936,7 @@ class _WorkflowStatus:
             subagents=self.active_subagents(),
             approval_policy=self._approval_policy,
             has_auto_approval_evaluator=self._has_auto_approval_evaluator,
+            close_reason=self.close_reason,
         )
 
 
@@ -1961,6 +1967,7 @@ class AgentWorkflowRunner:
         approval_policy_default: ToolApprovalPolicy,
         auto_approval_criteria_default: AutoApprovalCriteria | None = None,
         auto_mode_evaluator: AutoModeEvaluator | None = None,
+        close_after_idle_default: timedelta | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@agent.init``::
 
@@ -1984,6 +1991,13 @@ class AgentWorkflowRunner:
         on every later ``set_approval_policy``), since it would report a machine deciding
         while none was; with the switch off or no criteria for a tool, gated calls simply
         reach the human gate exactly as they would have.
+
+        ``close_after_idle_default`` closes the agent once it has been idle (no turn running,
+        nothing queued) for that long, publishing ``agent_closed`` with
+        :attr:`CloseReason.IDLE_TIMEOUT_EXPIRED` and completing the workflow. The clock starts
+        when the turn loop starts and again whenever the agent goes idle; only an admitted
+        message stops it. ``None`` or ``timedelta(0)`` never closes on idle. A caller's
+        ``AgentConfig.close_after_idle`` overrides it, so a caller can also switch it off.
 
         The accepted messages are NOT configured here — they are
         discovered from the agent's ``@agent.accepts`` handler methods, which also declare
@@ -2015,6 +2029,18 @@ class AgentWorkflowRunner:
             if config.auto_approval_criteria is not None
             else auto_approval_criteria_default
         )
+        close_after_idle = (
+            config.close_after_idle
+            if config.close_after_idle is not None
+            else close_after_idle_default
+        )
+        if close_after_idle is not None and close_after_idle < timedelta(0):
+            raise ValueError(
+                "close_after_idle_default must not be negative; use None or timedelta(0) "
+                "for never"
+            )
+        # ``timedelta(0)`` is "never", kept as None from here on so there is one spelling.
+        self._close_after_idle: timedelta | None = close_after_idle or None
         # This agent's short id, stamped on every event it publishes and reported on its status
         # query. A parent assigns it when starting a subagent (pushing down the same short handle
         # it references the child by — see start_subagent); a top-level agent left with no id
@@ -2201,6 +2227,17 @@ class AgentWorkflowRunner:
         )
 
     def _validate_send_agent_message(self, message: AgentMessage) -> None:
+        # A closed agent's loop has exited, so an admitted message would never run. Rejecting
+        # it here keeps it out of history and gives the caller a typed error, on which it can
+        # start a new session (``AgentClient.start_and_submit_message``).
+        if self._status.close_reason is not None:
+            raise ApplicationError(
+                f"The agent is closed ({self._status.close_reason.value}) and accepts no "
+                f"more messages.",
+                {"reason": self._status.close_reason.value},
+                type="AgentClosed",
+                non_retryable=True,
+            )
         # Route by the envelope ``type`` (the handler's function name); reject an unknown
         # function, then validate the ``payload`` against that handler's input model. So the
         # dispatch loop only ever sees a known handler + an already-coerced input.
@@ -2974,7 +3011,20 @@ class AgentWorkflowRunner:
         return ctx.model_copy(update={"message_id": _CURRENT_MESSAGE_ID.get()})
 
     def _handle_close(self) -> None:
+        self._close(CloseReason.REQUESTED)
+
+    def _close(self, reason: CloseReason) -> None:
+        """Stop admitting messages and let the turn loop exit. Synchronous, so no message can
+        be admitted between the decision to close and the close itself. The first reason
+        sticks: a ``close`` signal after an idle close changes nothing."""
+        if self._status.close_reason is None:
+            self._status.close_reason = reason
         self._closed = True
+
+    @property
+    def _idle(self) -> bool:
+        """No turn running, nothing queued, no join waiting to be dispatched."""
+        return not self._status.has_pending_work and not self._joining
 
     # -- Turn loop ----------------------------------------------------------
 
@@ -3005,9 +3055,7 @@ class AgentWorkflowRunner:
         joined handler's work is never silently discarded.
         """
         while not self._closed:
-            await workflow.wait_condition(
-                lambda: self._status.can_open_turn or bool(self._joining) or self._closed
-            )
+            await self._wait_for_work()
             if self._closed:
                 break
             # Joins first: they belong to the turn that is already open, and draining them
@@ -3035,6 +3083,37 @@ class AgentWorkflowRunner:
         # refcount is also the same counter that closes the turn bracket, so "the turn ended"
         # and "it is safe to complete" cannot disagree.
         await workflow.wait_condition(lambda: not self._status.turn_active)
+        reason = self._status.close_reason
+        if reason is not None:
+            self._pub("", 0, AgentClosed(reason=reason), message_id=None)
+
+    async def _wait_for_work(self) -> None:
+        """Wait until there is something for the turn loop to do, or the agent closes.
+
+        With ``close_after_idle`` set this is also the idle clock. While the agent is idle the
+        wait carries that timeout, and running out closes the agent. While a turn is running
+        the wait also wakes when the agent goes idle, so the loop comes back here and starts
+        the clock afresh."""
+
+        def has_work() -> bool:
+            return self._status.can_open_turn or bool(self._joining) or self._closed
+
+        if self._close_after_idle is None:
+            await workflow.wait_condition(has_work)
+        elif not self._idle:
+            await workflow.wait_condition(lambda: has_work() or self._idle)
+        else:
+            try:
+                await workflow.wait_condition(
+                    has_work,
+                    timeout=self._close_after_idle,
+                    timeout_summary="close_after_idle",
+                )
+            except asyncio.TimeoutError:
+                # A message admitted in the same workflow task as the timer firing is work,
+                # so the agent is no longer idle and stays open.
+                if self._idle:
+                    self._close(CloseReason.IDLE_TIMEOUT_EXPIRED)
 
     def _spawn_participant(self, agent: object, admitted: _Admission, *, joined: bool) -> None:
         """Run one admitted message inside its turn, as its own asyncio task.
@@ -3177,17 +3256,21 @@ class AgentWorkflowRunner:
         workflow-side resolves ``handle`` → ``workflow_id`` internally.
 
         ``data`` is the child's init data, passed as its second workflow argument; ``None``
-        starts the child with its config alone."""
+        starts the child with its config alone.
+
+        The child never closes on idle, since a child that closed itself would leave this parent
+        holding a handle to nothing: ``close_after_idle`` is always pushed down as
+        ``timedelta(0)``, overriding both ``config`` and the child's own default."""
         handle = self._fresh_subagent_handle()
         workflow_id = f"{agent_key}-subagent-{workflow.uuid4()}"
         # Push the handle down as the child's own agent_id so the child stamps it on every event
         # it publishes — unifying "the id the parent references this subagent by" with "the id on
         # the subagent's own stream", which is what lets a client merge the two streams coherently
-        # (and, since the handle is tree-unique, group by agent_id without collisions). This is the
-        # one config field the parent overrides per-child (everything else passes through
-        # unchanged); a caller-supplied agent_id would not match the parent's handle.
+        # (and, since the handle is tree-unique, group by agent_id without collisions); a
+        # caller-supplied agent_id would not match the parent's handle. close_after_idle is the
+        # only other field overridden, to 0 (see the docstring); everything else passes through.
         child_config = (config if config is not None else AgentConfig()).model_copy(
-            update={"agent_id": handle}
+            update={"agent_id": handle, "close_after_idle": timedelta(0)}
         )
         await workflow.start_child_workflow(
             workflow_type,
@@ -3298,7 +3381,11 @@ class AgentWorkflowRunner:
                     heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
                     result_type=SubagentTurnResult,
                 )
-            except ApplicationError as e:
+            except ActivityError as activity_error:
+                # The activity's ApplicationError arrives as this ActivityError's cause.
+                e = activity_error.cause
+                if not isinstance(e, ApplicationError):
+                    raise
                 # A turn the child ACCEPTED but that then errored (or produced no reply) opened
                 # a bracket on our stream that must be closed. A pre-acceptance rejection ran
                 # no child turn, so there is nothing to close.
@@ -3318,6 +3405,17 @@ class AgentWorkflowRunner:
                     self._publish_subagent_reply_received(
                         inst, msg_type, accepted_turn, outcome="error"
                     )
+                if e.type == "AgentClosed":
+                    # Something other than this parent closed or ended the child, so the handle
+                    # is dead. Drop it, as stop_subagent would, and tell the model how to go on.
+                    self._forget_closed_subagent(inst)
+                    raise ApplicationError(
+                        f"Subagent {handle!r} has closed and accepts no more messages. "
+                        f"Start a new one with start_{inst.agent_key}.",
+                        {"subagent_id": handle},
+                        type="AgentClosed",
+                        non_retryable=True,
+                    ) from e
                 raise
             inst.last_consumed_offset = result.consumed_offset
             # Close the bracket on OUR stream now that the agent (this workflow) actually holds
@@ -3328,6 +3426,19 @@ class AgentWorkflowRunner:
             return result.output
         finally:
             inst.release_gate()
+
+    def _forget_closed_subagent(self, inst: _SubagentInstance) -> None:
+        """Deregister a subagent that something else closed or ended, publishing :class:`SubagentStopped`
+        so a consumer unmounts its stream exactly as after ``stop_subagent``. Only the first
+        of several gathered sends that find it closed publishes."""
+        if self._status.remove_subagent(inst.handle):
+            self.publish(
+                SubagentStopped(
+                    subagent_id=inst.handle,
+                    agent_key=inst.agent_key,
+                    workflow_id=inst.workflow_id,
+                )
+            )
 
     @staticmethod
     def _accepted_turn_from_error(e: ApplicationError) -> int:

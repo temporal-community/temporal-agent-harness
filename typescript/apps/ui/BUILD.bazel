@@ -115,6 +115,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/flow:HotkeyHelp",
         "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
         "//typescript/apps/ui/src/lib/components/flow:ModelBreakdown",
+        "//typescript/apps/ui/src/lib/components/flow:StateFlowEmpty",
         "//typescript/apps/ui/src/lib/components/flow:StepController",
         "//typescript/apps/ui/src/lib/components/flow:UsageLineChart",
         "//typescript/apps/ui/src/lib/components/flow:UsageReading",

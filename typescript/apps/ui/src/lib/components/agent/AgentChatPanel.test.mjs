@@ -108,6 +108,26 @@ describe("the pending-approval card", () => {
   });
 });
 
+/* The chat drew its own icon-and-line empty states while every other pane drew EmptyState,
+   including this same pane when a session's workflow is gone. */
+describe("an empty chat", () => {
+  const empty = (props) =>
+    stripComments(
+      render(AgentChatPanel, {
+        props: { items: [], logs: [], agentLabel: "Planner", sessionId: "wf-root", ...props }
+      }).body
+    );
+
+  it("says so with the EmptyState every other pane uses, open or closed", () => {
+    assert.match(empty({}), /class="empty-state[^"]*"[\s\S]*?<p class="empty-title[^"]*">No events yet<\/p>/);
+    assert.match(empty({ closed: true }), /class="empty-state[^"]*"[\s\S]*?<p class="empty-title[^"]*">Planner is closed<\/p>/);
+  });
+
+  it("keeps a failure as an error line, not an empty state", () => {
+    assert.doesNotMatch(empty({ error: "Worker lost: boom" }), /class="empty-state/);
+  });
+});
+
 /* The ID shown beside a copy button is the one it copies: both sit in one `.copyable`. */
 describe("chat copy controls", () => {
   it("offers the error message a failed session shows", () => {
