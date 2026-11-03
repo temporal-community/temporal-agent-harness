@@ -15,14 +15,11 @@
 
   let { data }: Props = $props();
 
-  const boundaryWidth = $derived(
-    typeof data.boundaryWidth === "number" ? data.boundaryWidth : 930
-  );
-  const boundaryHeight = $derived(
-    typeof data.boundaryHeight === "number" ? data.boundaryHeight : 240
-  );
   const headerPrefix = $derived(
     typeof data.headerPrefix === "string" ? data.headerPrefix : null
+  );
+  const headerHeight = $derived(
+    typeof data.headerHeight === "number" ? `${data.headerHeight}px` : undefined
   );
   const interfaces = $derived(
     Array.isArray(data.interfaces) ? data.interfaces : []
@@ -48,12 +45,9 @@
   const titleTip = $derived(data.title.length > 40 ? data.title : undefined);
 </script>
 
-<div
-  class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}
-  style={`width: ${boundaryWidth}px; height: ${boundaryHeight}px;`}
->
+<div class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}>
   <Handle id="target-top" class="workflow-handle" type="target" position={Position.Top} />
-  <div class="workflow-head">
+  <div class="workflow-head" style:min-height={headerHeight}>
     <div class="workflow-title-group">
       <span class="workflow-title-row" data-tip={titleTip} data-tip-below>
         <StateGlyph kind={statusKind} {running} />
@@ -92,12 +86,14 @@
 </div>
 
 <style>
-  /* Rounded like the cards it holds (see --radius-card in app.css), and coloured the
-     same way: the runtime's tone tints the head and the hairline, over IO's neutral
-     surfaces. No lift — it is the ground the cards stand on. */
+  /* The node box flowProjection sizes from boundaryWidth/boundaryHeight. Rounded like the
+     cards it holds (see --radius-card in app.css), and coloured the same way: the runtime's
+     tone tints the head and the hairline. No lift — it is the ground the cards stand on. */
   .workflow-boundary {
     --status-color: var(--accent);
     --frame-border: color-mix(in srgb, var(--status-color) 34%, var(--color-border-primary));
+    width: 100%;
+    height: 100%;
     /* Takes the pointer, so hovering a subagent's frame is not hovering the Subagent activity
        card under it: that card's footer would come up over the frame, as if it were the frame's. */
     pointer-events: auto;
@@ -132,7 +128,8 @@
   .status-error { --status-color: var(--error); }
   .status-live { --status-color: var(--live); }
 
-  /* Zero-sized for the same reason as AgentStateNode's .node-handle. */
+  /* Zero-sized for the same reason as AgentStateNode's .node-handle, on the node box and
+     pulled out by 1px. flowProjection's handlesFor mirrors this, so change both. */
   :global(.workflow-handle) {
     width: 0;
     height: 0;

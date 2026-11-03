@@ -1,4 +1,7 @@
 <script lang="ts" module>
+  import { getViewportForBounds } from "@xyflow/svelte";
+  import type { FitViewOptions, Node, Viewport } from "@xyflow/svelte";
+
   export function nextFrame(): Promise<void> {
     return new Promise((resolve) => {
       if (typeof requestAnimationFrame === "function") {
@@ -9,7 +12,7 @@
     });
   }
 
-  /* xyflow's fitView promise can stay pending, which would strand the canvas hidden. */
+  /* xyflow's viewport promise can stay pending, which would strand the canvas hidden. */
   export function withFitBound(pending: Promise<boolean>): Promise<boolean> {
     let finished = false;
     let result = false;
@@ -31,15 +34,49 @@
     })();
     return Promise.race([arrived, bound]).then(() => (finished ? result : true));
   }
+
+  /**
+   * The framing for the sizes the nodes were laid out at, so the first fit needs
+   * nothing from the DOM. xyflow's own fitView waits until it has measured every
+   * node, which is a frame after they mount at best, and never while a stream
+   * keeps handing it new ones. Null until the pane has a size.
+   */
+  export function knownFitViewport(
+    nodes: readonly Node[],
+    width: number,
+    height: number,
+    options: FitViewOptions<Node>
+  ): Viewport | null {
+    if (!width || !height || nodes.length === 0) return null;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const node of nodes) {
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + (node.width ?? 0));
+      maxY = Math.max(maxY, node.position.y + (node.height ?? 0));
+    }
+    return getViewportForBounds(
+      { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+      width,
+      height,
+      options.minZoom ?? 0.5,
+      options.maxZoom ?? 2,
+      options.padding ?? 0.1
+    );
+  }
 </script>
 
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
-  import { useSvelteFlow } from "@xyflow/svelte";
-  import type { FitViewOptions, Node } from "@xyflow/svelte";
+  import { useStore, useSvelteFlow } from "@xyflow/svelte";
 
   interface Props {
     signature: string;
+    /** Where the nodes are going, which mid-tween is not where the canvas has them. */
+    graphNodes: readonly Node[];
     fitViewOptions: FitViewOptions<Node>;
     /** Snapshot paint and stream catch-up have reached their final frame. */
     ready: boolean;
@@ -52,8 +89,9 @@
     hold?: boolean;
   }
 
-  let { signature, fitViewOptions, ready, onSettled, hold = false }: Props = $props();
-  const { fitView, getNodes } = useSvelteFlow();
+  let { signature, graphNodes, fitViewOptions, ready, onSettled, hold = false }: Props = $props();
+  const { setViewport } = useSvelteFlow();
+  const store = useStore();
   let previousSignature = "";
   let fitRequest = 0;
   let settled = false;
@@ -64,64 +102,31 @@
    * the rest. That is what a page load looks like: the graph settles over a few
    * hundred ms and asks to be reframed several times on the way.
    *
-   * The first settled fit is always immediate. Once the canvas has been shown,
-   * an isolated later change gets its animation.
+   * The first fit is always immediate. Once the canvas has been shown, an
+   * isolated later change gets its animation.
    */
   const quietMs = 300;
   let lastFitAt = typeof performance === "undefined" ? 0 : performance.now();
-
-  function measuredSignature(): string {
-    const nodes = getNodes();
-    if (
-      nodes.length === 0 ||
-      nodes.some(
-        (node) =>
-          typeof node.measured?.width !== "number" ||
-          typeof node.measured?.height !== "number"
-      )
-    ) {
-      return "";
-    }
-    return nodes
-      .map((node) => `${node.id}:${node.measured?.width}x${node.measured?.height}`)
-      .join("|");
-  }
-
-  async function waitForMeasuredNodes(request: number): Promise<boolean> {
-    /* Svelte Flow writes measured dimensions after mounting each node. Two
-       identical frames mean the snapshot handoff or remount did not merely
-       leave us holding the previous node set's measurements. */
-    let previous = "";
-    while (request === fitRequest) {
-      await nextFrame();
-      const current = measuredSignature();
-      if (current && current === previous) return true;
-      previous = current;
-    }
-    return false;
-  }
 
   onDestroy(() => {
     fitRequest += 1;
   });
 
   async function runFit(request: number): Promise<void> {
-    const initial = !settled;
     await tick();
-    if (!(await waitForMeasuredNodes(request))) return;
-
-    const fitted = await withFitBound(fitView({ ...fitViewOptions, duration: 0 }));
-    await nextFrame();
-    if (
-      request !== fitRequest ||
-      !fitted ||
-      !measuredSignature()
-    ) return;
+    /* Waits only for the pane to have a size, which a pane opened hidden or
+       still being laid out does not have yet; superseded ends the wait. */
+    let viewport = knownFitViewport(graphNodes, store.width, store.height, fitViewOptions);
+    while (request === fitRequest && (!viewport || !store.panZoom)) {
+      await nextFrame();
+      viewport = knownFitViewport(graphNodes, store.width, store.height, fitViewOptions);
+    }
+    if (request !== fitRequest || !viewport) return;
 
     const alone = settled && performance.now() - lastFitAt > quietMs;
     lastFitAt = performance.now();
-    await withFitBound(fitView({ ...fitViewOptions, duration: alone ? 120 : 0 }));
-    if (request !== fitRequest || !initial) return;
+    await withFitBound(setViewport(viewport, { duration: alone ? 120 : 0 }));
+    if (request !== fitRequest || settled) return;
     settled = true;
     onSettled();
   }

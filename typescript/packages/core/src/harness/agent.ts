@@ -14,6 +14,7 @@ import {
   workflowInfo,
   type ActivityOptions,
 } from "@temporalio/workflow";
+import type { Duration } from "@temporalio/common";
 import { z } from "zod";
 import {
   AgentConfigSchema,
@@ -393,6 +394,12 @@ export interface AgentDefinition<
   approvalPolicyDefault: ToolApprovalPolicy;
   autoApprovalCriteriaDefault?: AutoApprovalCriteria;
   autoModeEvaluator?: AutoModeEvaluator;
+  /**
+   * Close the agent once it has been idle (no turn running, nothing queued) this long, publishing
+   * `agent_closed` with reason `idle_timeout_expired`. Omitted or 0 never closes on idle. A
+   * caller's `AgentConfig.close_after_idle` (seconds; 0 for never) overrides it.
+   */
+  closeAfterIdleDefault?: Duration;
   create(ctx: AgentContext<S, D>): AgentImpl<H>;
 }
 
@@ -451,6 +458,7 @@ export function defineAgent<
       approvalPolicyDefault: definition.approvalPolicyDefault,
       autoApprovalCriteriaDefault: definition.autoApprovalCriteriaDefault,
       autoModeEvaluator: definition.autoModeEvaluator,
+      closeAfterIdleDefault: definition.closeAfterIdleDefault,
       states: definition.states,
       data,
     });
@@ -471,10 +479,16 @@ export function defineAgent<
     try {
       await runner.run(impl as Record<string, HandlerImpl<HandlerDecl>>);
     } catch (e) {
-      if (isCancellation(e) && impl.teardown) await CancellationScope.nonCancellable(impl.teardown);
+      if (isCancellation(e)) {
+        await CancellationScope.nonCancellable(async () => {
+          await impl.teardown?.();
+          await runner.finish();
+        });
+      }
       throw e;
     }
     await impl.teardown?.();
+    await runner.finish();
   };
   Object.defineProperty(workflow, "name", { value: definition.name });
   return Object.assign(workflow, { definition });

@@ -2,6 +2,7 @@
   import Reading from "$lib/components/primitives/Reading.svelte";
   import UsageLineChart from "$lib/components/flow/UsageLineChart.svelte";
   import ModelBreakdown from "$lib/components/flow/ModelBreakdown.svelte";
+  import { Coins } from "@lucide/svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import type { Metric } from "$lib/components/primitives/metrics";
   import {
@@ -146,7 +147,7 @@
   {#if !unmeasured && usageTimeline.length === 0}
     <!-- Nothing has been metered yet, so there is no zero to report and no time
          to chart: a wall of zeros over an empty axis reads as a broken panel. -->
-    <EmptyState title="No model calls yet">
+    <EmptyState title="No model calls yet" icon={Coins}>
       <p>Token counts and the chart appear after the agent's first model call.</p>
     </EmptyState>
   {:else}

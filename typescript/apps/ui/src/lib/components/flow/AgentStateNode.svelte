@@ -335,9 +335,10 @@
 </div>
 
 <style>
-  /* A column whose height flowProjection reserves (min-height, inline), so the
-     body flexes into whatever the header and tag leave rather than sizing to
-     its text — the card must not grow as a reply streams in. */
+  /* A column whose height flowProjection reserves (the node box, and min-height
+     inline), so the body flexes into whatever the header and tag leave rather
+     than sizing to its text — the card must not grow as a reply streams in.
+     It fills the node box, because that box is where xyflow puts its ports. */
   .state-node {
     --status-color: var(--text-3);
     /* The card's own tone tints the whole tray, over IO's neutral surface, so the colour
@@ -349,7 +350,7 @@
     display: flex;
     flex-direction: column;
     width: 230px;
-    min-height: 96px;
+    min-height: 100%;
     border: 1px solid var(--card-border);
     border-radius: var(--radius-card);
     background:
@@ -458,7 +459,6 @@
 
   .state-node.large {
     width: 255px;
-    min-height: 112px;
   }
 
   /* A container's own body has to fit above the children laid out inside it.
@@ -520,7 +520,8 @@
 
   /* Zero-sized, min-size included: xyflow's 5px minimum centered the handle on
      the border, which ended every edge 2.5px short of the card. The -0.5px
-     margin is half the card's border, so the edge ends on the border's midline. */
+     margin is half the card's border, so the edge ends on the border's midline.
+     flowProjection's handlesFor hands xyflow these same boxes, so change both. */
   :global(.node-handle) {
     width: 0;
     height: 0;

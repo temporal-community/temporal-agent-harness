@@ -180,21 +180,6 @@ export function isSingletonKind(kind: PaneKind): boolean {
 }
 
 /**
- * Whether a pane still means anything once a different session is on screen.
- *
- * A root view does: "the logs" is the logs of whatever is running, so it follows
- * the reader from one session to the next. A keyed root view — `logs:wf-123`,
- * scoped to one workflow of the run it was opened in — is as run-bound as any
- * drill-in, and closing it is kinder than leaving it titled after a workflow
- * that is no longer on screen.
- */
-export function survivesSessionChange(id: string): boolean {
-  const parsed = parsePaneId(id);
-  if (!parsed) return false;
-  return parsed.key == null;
-}
-
-/**
  * Whether the pane's chrome still has to say its title, or the badge has
  * already said it.
  *

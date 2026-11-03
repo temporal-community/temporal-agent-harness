@@ -6,7 +6,6 @@ import {
   paneKindToken,
   parsePaneId,
   SPINE_SIZE,
-  survivesSessionChange,
   type PaneKind
 } from "$lib/panes/registry";
 import { edgeShares, SPLIT_MIN, type PaneDropEdge } from "$lib/panes/paneDrop";
@@ -145,17 +144,31 @@ function rememberedSize(size: unknown): number | null {
 }
 
 /**
- * Narration beside the thing it narrates.
+ * Everything a newcomer needs open at once, in a fixed place.
  *
- * The desk used to open on the chat, which made the chat the way in: a newcomer
- * arrived at a prompt and had to know what to type before the console showed them
- * anything. The example is already running by the time this renders, so the first
- * two columns are the account of that run and the run itself. The chat is one
- * gesture away, and comes forward on its own when a tool needs approving —
- * approvals are answered nowhere else.
+ * A reader who has never added a pane should not have to learn how before they
+ * can see the run, and a demo needs the same screen every time. So the desk opens
+ * on the state flow, the chat beside it at full height, and the tokens stacked
+ * over the agent state, with the logs and the latency waterfall folded to spines
+ * after them: on the desk, one click from open, without costing the width. The
+ * state flow gives up width to fit the rest; see `#fillOnce`. The stacked pair
+ * splits evenly: a fixed height for either one squeezes the other to nothing once
+ * the drawer is opened tall.
  */
 function defaultGroups(): Pane[][] {
-  return [[makePane({ kind: "graph" })], [makePane({ kind: "chat" })]];
+  const usage = makePane({ kind: "usage" });
+  const state = makePane({ kind: "state" });
+  usage.split = state.split = true;
+  const logs = makePane({ kind: "logs" });
+  const latency = makePane({ kind: "latency" });
+  logs.collapsed = latency.collapsed = true;
+  return [
+    [makePane({ kind: "graph" })],
+    [makePane({ kind: "chat" })],
+    [usage, state],
+    [logs],
+    [latency]
+  ];
 }
 
 /**
@@ -235,6 +248,9 @@ export class PaneStack {
   /* Held rather than re-derived, so a drawer that empties stays empty instead of
      conjuring the console's default desk out of the fallback path. */
   readonly #initial: Pane[][];
+  /* The desk a session with none of its own opens on, built fresh each time: the panes
+     of #initial are the first session's, and carry whatever that session did to them. */
+  readonly #defaults: () => Pane[][];
   readonly #keys: { panes: string; collapsed: string; cursor: string; bleed: string };
   readonly single: boolean;
   peer: PaneStack | null = null;
@@ -252,7 +268,9 @@ export class PaneStack {
       cursor: QUERY_CURSOR + suffix,
       bleed: QUERY_BLEED + suffix
     };
-    this.#initial = options?.initial ?? defaultGroups();
+    const given = options?.initial;
+    this.#defaults = given ? () => given.map((group) => group.map((pane) => ({ ...pane }))) : defaultGroups;
+    this.#initial = this.#defaults();
     this.groups = this.#initial;
     if (this.groups.length === 0) this.focusedId = null;
   }
@@ -314,6 +332,8 @@ export class PaneStack {
   /** Last measured rail width. Zero means not measured yet. */
   #railWidth = 0;
   #fillPending = true;
+  /** Whether the address bar named this stack's desk on load. */
+  #deskFromLink = false;
 
   locate(id: string): PaneLocation | null {
     return this.locateIn(this.groups, id);
@@ -357,24 +377,31 @@ export class PaneStack {
    *
    * A desk describes a run, so it cannot outlive the reader's attention to that
    * run. The one they are leaving is parked whole, and coming back to it later
-   * restores it, panes, widths, folds and tabs alike. Going somewhere new keeps
-   * the shape they have been working in — the columns, their order, their widths
-   * — and drops what pointed into the run they left, which is the difference
-   * between arriving in a session and arriving in a session littered with another
-   * one's leftovers.
+   * restores it, panes, widths, folds and tabs alike. A session with no desk of its
+   * own opens on the default desk, fitted to the rail like a first visit: a new
+   * session starts from the same screen every time, not from whatever the last
+   * one was rearranged into.
    *
-   * The first session of a visit is not a switch. The address bar already built
-   * the arrangement — a shared link, or the defaults — and that arrangement has
-   * no widths. The widths remembered for this session go back on before it is
-   * recorded, or the recording replaces them with empty sizes and the rail
-   * draws every column at its minimum.
+   * The first session of a visit is not a switch. A link that names a desk wins
+   * the arrangement, but has no widths: the ones remembered for this session go
+   * back on before it is recorded, or the recording replaces them with empty sizes
+   * and the rail draws every column at its minimum. With no desk in the link, the
+   * session's own saved desk comes back whole, as a switch would bring it back:
+   * its widths on the default's columns pushed those columns off the rail.
    */
   enterSession(sessionId: string): void {
     if (this.activeSessionId === sessionId) return;
     if (this.activeSessionId == null) {
-      /* The link wins the arrangement. Widths are not in the link. */
       this.activeSessionId = sessionId;
-      this.#adoptStoredSizes(sessionId);
+      const saved = this.#deskFromLink ? null : this.#deskFromStorage(sessionId);
+      if (saved?.length) {
+        this.groups = this.#unique(saved);
+        if (!this.focusedId || !this.has(this.focusedId)) {
+          this.focusedId = (this.expandedPanes[0] ?? this.panes[0])?.id ?? null;
+        }
+      } else {
+        this.#adoptStoredSizes(sessionId);
+      }
       this.#fillOnce();
       this.#desks.set(sessionId, this.groups);
       writeStoredDesk(sessionId, this.groups as StoredDesk);
@@ -385,12 +412,15 @@ export class PaneStack {
     writeStoredDesk(this.activeSessionId, this.groups as StoredDesk);
     /* The drawer is not per session, so whatever it holds now wins over a parked
        or stored copy of the same pane. */
-    const restored = this.#unique(
-      this.#desks.get(sessionId) ?? this.#deskFromStorage(sessionId) ?? this.#carriedOver()
-    );
+    const saved = this.#desks.get(sessionId) ?? this.#deskFromStorage(sessionId);
+    const restored = this.#unique(saved ?? this.#defaults());
     this.#desks.set(sessionId, restored);
     this.groups = restored;
     this.activeSessionId = sessionId;
+    if (!saved) {
+      this.#fillPending = true;
+      this.#fillOnce();
+    }
     /* The pane that had focus may have been one of the leftovers. */
     if (!this.focusedId || !this.has(this.focusedId)) {
       this.focusedId = (this.expandedPanes[0] ?? this.panes[0])?.id ?? null;
@@ -442,9 +472,10 @@ export class PaneStack {
 
   /**
    * A first visit has no saved widths, so the flexible column takes what the
-   * defaults leave of the rail, once, and keeps it as its own width. After that
-   * nothing fills the rail: a window resize changes no column, and room left
-   * over sits empty at the end of the rail.
+   * defaults leave of the rail, or gives back what they overflow it by down to
+   * its minimum, once, and keeps that as its own width. After that nothing fits
+   * the rail: a window resize changes no column, room left over sits empty at
+   * the end of the rail, and a rail too narrow scrolls.
    *
    * Waits for both a measured rail and the session's stored widths, so a
    * reload never fills over a width the reader saved.
@@ -463,7 +494,7 @@ export class PaneStack {
       (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.sizeOfGroup(item)),
       0
     );
-    if (used < this.#railWidth) {
+    if (used !== this.#railWidth) {
       this.setGroupSize(group[0].id, this.sizeOfGroup(group) + this.#railWidth - used);
     }
   }
@@ -507,34 +538,6 @@ export class PaneStack {
     pane.split = Boolean(stored.split);
     pane.share = typeof stored.share === "number" ? stored.share : null;
     return pane;
-  }
-
-  /**
-   * The desk for a session the reader has not opened yet: the one they are on,
-   * minus every pane that named something in the run they are leaving.
-   *
-   * Copies, because the desk being left is parked as it stands — panes shared
-   * between the two would mean resizing a column here quietly resized it there.
-   */
-  #carriedOver(): Pane[][] {
-    const carried: Pane[][] = [];
-    for (const group of this.groups) {
-      const kept = group.filter((pane) => survivesSessionChange(pane.id));
-      if (kept.length === 0) continue;
-      const shared = kept.length > 1;
-      carried.push(
-        kept.map((pane) => ({
-          ...pane,
-          joinedAt: ++touchCounter,
-          /* A column that lost panes is no longer the arrangement it was. */
-          split: shared && pane.split,
-          share: shared ? pane.share : null
-        }))
-      );
-    }
-    /* Closing the last drill-in must not leave the reader facing an empty rail —
-       unless empty is what this stack opens on, which is what a drawer is. */
-    return carried.length > 0 ? carried : this.#initial;
   }
 
   /**
@@ -1054,6 +1057,7 @@ export class PaneStack {
     const params = new URLSearchParams(window.location.search);
 
     const raw = params.get(this.#keys.panes);
+    this.#deskFromLink = raw != null;
     if (raw != null) {
       if (raw === "") {
         this.groups = [];
@@ -1181,7 +1185,7 @@ export function dockFocusedPane(from: PaneStack, to: PaneStack): void {
 /**
  * Open the timeline when a visit names no desk.
  *
- * The rail already opens on the state flow and the chat. This is the other
+ * The rail already opens on its own default desk. This is the other
  * half: the pane the drawer exists for. A link that already spells `p` or
  * `p2` — including an explicit empty value — is a desk someone arranged, and
  * hydrate has already restored it, so it is left alone.

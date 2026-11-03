@@ -29,7 +29,7 @@ describe("launcher rows", () => {
       ["chat", "logs", "graph", "timeline", "latency", "usage", "state", "decisions", "files"],
       "an open view must stay in the list so it can be switched off"
     );
-    assert.deepEqual(openKinds([rail, drawer]), ["chat", "graph"]);
+    assert.deepEqual(openKinds([rail, drawer]), ["chat", "logs", "graph", "latency", "usage", "state"]);
   });
 
   it("put one divider between every run's views and the opt-in ones, wherever panes are open", () => {
@@ -49,6 +49,7 @@ describe("launcher rows", () => {
 
   it("do not count a scoped drill-in as the launcher's view", () => {
     const { rail, drawer } = desk();
+    rail.closePane("logs");
     rail.openPane({ kind: "logs", key: "wf-1" });
     assert.ok(!launcherItems([rail, drawer]).find((item) => item.kind === "logs").open);
   });
@@ -58,16 +59,16 @@ describe("toggling a view", () => {
   it("opens a closed view beside the focused pane, and repeated opens chain rightward", () => {
     const { rail, drawer } = desk();
     rail.focusPane("graph");
-    toggleView("logs", rail, [rail, drawer]);
-    toggleView("usage", rail, [rail, drawer]);
-    assert.deepEqual(ids(rail), ["graph", "logs", "usage", "chat"]);
-    assert.equal(rail.focusedId, "usage");
+    toggleView("timeline", rail, [rail, drawer]);
+    toggleView("files", rail, [rail, drawer]);
+    assert.deepEqual(ids(rail), ["graph", "timeline", "files", "chat", "usage", "state", "logs", "latency"]);
+    assert.equal(rail.focusedId, "files");
   });
 
   it("closes an open view, and closes it in the drawer when that is where it is", () => {
     const { rail, drawer } = desk();
     toggleView("chat", rail, [rail, drawer]);
-    assert.deepEqual(ids(rail), ["graph"]);
+    assert.deepEqual(ids(rail), ["graph", "usage", "state", "logs", "latency"]);
 
     drawer.openPane({ kind: "latency" });
     toggleView("latency", rail, [rail, drawer]);

@@ -34,6 +34,12 @@ export const BriefedAgent = defineAgent({
 });
 ```
 
+Add `closeAfterIdleDefault: "30 minutes"` to close an agent once no one has sent it a message
+for that long, such as one behind a chat box whose session is not kept. An idle agent consumes no
+compute while it waits, so leave this out for agents you want to keep. A caller overrides it with
+`close_after_idle` (seconds, `0` for never) on the `AgentConfig`. Subagents never close on idle:
+their parent decides when they end.
+
 Its worker, in `worker.ts`:
 
 ```ts

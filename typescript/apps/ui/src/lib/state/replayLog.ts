@@ -642,6 +642,19 @@ function rowFromFrame(
     };
   }
 
+  if (frame.event === "agent_closed") {
+    return {
+      ...base,
+      actor: "system",
+      tone: "neutral",
+      label:
+        frame.data.reason === "idle_timeout_expired"
+          ? "Agent closed: idle timeout expired"
+          : "Agent closed",
+      status: "closed"
+    };
+  }
+
   if (frame.event === "message_handler_error") {
     return {
       ...base,
@@ -824,7 +837,12 @@ export function buildReplayLog(
  */
 export function replayLogAt(full: ReplayLog, input: readonly ReplayLogInput[], cursor: number): ReplayLog {
   let kept = 0;
-  while (kept < full.rows.length && full.rows[kept]!.index <= cursor) kept += 1;
+  let high = full.rows.length;
+  while (kept < high) {
+    const middle = (kept + high) >> 1;
+    if (full.rows[middle]!.index <= cursor) kept = middle + 1;
+    else high = middle;
+  }
   const rows = full.rows.slice(0, kept);
   const cut = full.rows[kept];
   if (cut?.runStartIndex != null && cut.runStartIndex <= cursor) {
@@ -839,6 +857,14 @@ export function replayLogAt(full: ReplayLog, input: readonly ReplayLogInput[], c
   const shortened = rows.length > kept ? rows[kept]! : null;
   const groups: TurnLogGroup[] = [];
   for (const group of full.groups) {
+    /* A group's rows are in frame order too, so most groups are wholly on one side. */
+    if (shortened?.turnNumber !== group.turnNumber) {
+      if (group.rows[group.rows.length - 1]!.index <= cursor) {
+        groups.push(group);
+        continue;
+      }
+      if (group.rows[0]!.index > cursor) continue;
+    }
     const groupRows = group.rows.filter((row) => row.index <= cursor);
     if (shortened?.turnNumber === group.turnNumber) groupRows.push(shortened);
     else if (groupRows.length === group.rows.length) {

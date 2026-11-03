@@ -155,7 +155,8 @@ describe("UsageReading", () => {
     assert.match(text(html), /No model calls yet/);
     assert.match(html, /class="empty-state/, "through the shared EmptyState");
     assert.deepEqual(figures(html), [], "no zero wall");
-    assert.doesNotMatch(html, /<svg/, "and no empty axis");
+    assert.equal(html.match(/<svg/g)?.length, 1, "and no empty axis");
+    assert.match(html, /class="empty-icon[^"]*"[^>]*>[\s\S]{0,40}?<svg/, "the one svg is the empty state's icon");
   });
 
   /* Wide used to be two columns. The figures sat at the top of the first, and the

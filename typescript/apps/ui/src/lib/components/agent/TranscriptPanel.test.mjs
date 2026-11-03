@@ -231,6 +231,28 @@ describe("the Logs pane during a scrub", () => {
 
 /* The filter used to let the cursor's row through whatever it was, so Errors on a run with
    none read "1/215 events" over a lone "Turn ended". A filter shows what matches it. */
+/* Filter chips, a search field and "0 events" over a run with nothing in it are controls with
+   nothing to act on. They go only when the whole run is empty: at the cursor's first step of a
+   run that has events, they stay, or scrubbing to the start would drop them and bring them back. */
+describe("the Logs pane on an empty run", () => {
+  const draw = (props) =>
+    stripComments(
+      render(TranscriptPanel, {
+        props: { groups: [], activeTurnNumber: null, activeOrdinal: null, ...props }
+      }).body
+    );
+
+  it("shows only its empty state when the run has no events", () => {
+    const html = draw({ runHasEvents: false });
+    assert.doesNotMatch(html, /class="transcript-controls/);
+    assert.match(html, /Step through the stream to build the logs\./);
+  });
+
+  it("keeps the filters at the first step of a run that has events", () => {
+    assert.match(draw({ runHasEvents: true }), /class="transcript-controls/);
+  });
+});
+
 describe("the Logs pane's filter", () => {
   const draw = (groups, filter, row) =>
     stripComments(

@@ -1,6 +1,7 @@
 /* Dev-only fixtures for production-scale load: a session list and a transcript far longer than
    any demo. Selected with `?mock=<name>` in a dev build; see main.ts. */
 import type { AgentDescriptor, AgentInterfaceFunction, AgentSseFrame, JsonRecord, OKFConcept, OKFGraph, OKFLink, Session, SubagentUnavailableCode } from "$lib/api/types";
+import { codeModeScenario } from "./jsonReplyScenarios";
 import { agents, frame, meta, usage, type MockScenario } from "./scenarios";
 
 const startedAt = 1_789_126_400;
@@ -1807,6 +1808,8 @@ export function scaleScenario(name: string): MockScenario | undefined {
       return agentsScenario(name === "agents300");
     case "subagents":
       return subagentScenario(new URLSearchParams(globalThis.location?.search).get("data") ?? "demo");
+    case "codemode":
+      return codeModeScenario();
     default: {
       const mixed = name.match(/^mixed(\d+)x(\d+)$/);
       if (mixed) return mixedScenario(Number(mixed[1]), Number(mixed[2]));

@@ -23,6 +23,7 @@ from temporal_agent_harness.harness.agent_protocol.agent_interface import (
     AutoApprovalCriteriaSet,
     AutoApprovalVerdict,
     AutoApprovalDecision,
+    CloseReason,
     MessageContext,
     MessageDisposition,
     MidTurn,
@@ -42,6 +43,7 @@ from temporal_agent_harness.harness.agent_protocol.agent_interface import (
 )
 from temporal_agent_harness.harness.agent_protocol.events import (
     TURN_EVENTS_TOPIC,
+    AgentClosed,
     AgentEvent,
     AgentEventType,
     AgentStatePatch,
@@ -108,6 +110,7 @@ __all__ = [
     "AutoApprovalCriteriaSet",
     "AutoApprovalVerdict",
     "AutoApprovalDecision",
+    "CloseReason",
     "MessageContext",
     "MessageDisposition",
     "MidTurn",
@@ -135,6 +138,7 @@ __all__ = [
     "MessageHandlerError",
     "TurnStarted",
     "TurnEnded",
+    "AgentClosed",
     "ModelInteractionStarted",
     "ModelInteractionEnded",
     "ToolEvent",
