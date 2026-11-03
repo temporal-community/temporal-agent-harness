@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import ThinkingOrb from "$lib/components/primitives/ThinkingOrb.svelte";
   import { formatReplyElapsed } from "$lib/state/replyStatus";
 
   interface Props {
@@ -26,18 +27,12 @@
   });
 
   const elapsed = $derived(formatReplyElapsed(startedAt, (live ? wall : null) ?? now));
-  /* A chevron wavefront: each cell lights one step after the cell before it, rows bending back. */
-  const CELLS = Array.from({ length: 9 }, (_, i) => (i % 3) + Math.abs(Math.floor(i / 3) - 1));
 </script>
 
 <!-- Seen, not heard: the chat's own status region says what changed, once. -->
 <span class="reply-status" aria-hidden="true" title={label}>
   <span class="trace-glyph">
-    <span class="pixels">
-      {#each CELLS as step, index (index)}
-        <span style:--step={step}></span>
-      {/each}
-    </span>
+    <ThinkingOrb size={13} class="reply-orb" />
     {@render children?.()}
   </span>
   <span class="label reply-shimmer">{label}</span>
@@ -58,19 +53,9 @@
     line-height: 1;
   }
 
-  /* 11px, the visual weight of a 13px StateGlyph's ring, in the trace's own glyph cell. */
-  .pixels {
-    display: grid;
-    grid-template-columns: repeat(3, 3px);
-    grid-auto-rows: 3px;
-    gap: 1px;
-  }
-
-  .pixels > span {
-    background: var(--accent-soft);
-    opacity: 0.15;
-    animation: reply-pixel-on var(--duration-pixel-cycle) var(--ease-in-out) infinite;
-    animation-delay: calc(var(--step) * var(--duration-pixel-step));
+  /* 13px, a StateGlyph's size, in the trace's own glyph cell, in the working loader's accent. */
+  .reply-status :global(.reply-orb) {
+    --thinking-orb-color: var(--accent-soft);
   }
 
   .label {
@@ -89,22 +74,5 @@
     font-family: var(--font-mono);
     font-size: var(--figure-size);
     font-variant-numeric: tabular-nums;
-  }
-
-  @keyframes reply-pixel-on {
-    0%,
-    100% {
-      opacity: 0.15;
-    }
-    35% {
-      opacity: 1;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .pixels > span {
-      animation: none;
-      opacity: 0.35;
-    }
   }
 </style>

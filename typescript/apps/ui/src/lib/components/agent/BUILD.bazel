@@ -258,7 +258,10 @@ js_library(
     name = "ReplyStatus",
     srcs = ["ReplyStatus.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui/src/lib/state:replyStatus"],
+    deps = [
+        "//typescript/apps/ui/src/lib/components/primitives:ThinkingOrb",
+        "//typescript/apps/ui/src/lib/state:replyStatus",
+    ],
 )
 
 js_library(

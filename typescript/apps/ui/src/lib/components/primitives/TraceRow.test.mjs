@@ -149,7 +149,8 @@ describe("TraceRow", () => {
 
 /* The turn header's thinking loader was a 15px grid of 4px cells at the row's edge, larger than
    the glyphs below it and 1.5px off their column, so the tree rule looked shifted. It is a glyph
-   in the same cell now: 11px, centered where the glyphs and the rule are. */
+   in the same cell now: the turning mark at a glyph's 13px, centered where the glyphs and the
+   rule are. */
 describe("the trace's glyph column", () => {
   const app = readFileSync(new URL("../../../app.css", import.meta.url), "utf8");
   const chat = readFileSync(new URL("../agent/AgentChatPanel.svelte", import.meta.url), "utf8");
@@ -168,14 +169,11 @@ describe("the trace's glyph column", () => {
     assert.doesNotMatch(status, /\n\s*\.trace-glyph \{/, "nor does the loader");
     assert.match(html({ name: "x" }), /<span class="trace-glyph">/);
     const loader = stripComments(render(ReplyStatus, { props: { label: "Thinking", startedAt: null, now: null } }).body);
-    assert.match(loader, /<span class="trace-glyph[^"]*">\s*<span class="pixels[^"]*">/);
+    assert.match(loader, /<span class="trace-glyph[^"]*">\s*<svg[^>]*class="thinking-orb\b/);
   });
 
   it("draws the loader at a glyph's weight", () => {
-    const pixels = ruleIn(status, ".pixels");
-    assert.match(pixels, /grid-template-columns: repeat\(3, 3px\);/);
-    assert.match(pixels, /grid-auto-rows: 3px;/);
-    assert.match(pixels, /gap: 1px;/);
+    assert.match(status, /<ThinkingOrb size=\{13\}/);
   });
 
   /* 1px inset plus half of 15px is 8.5px, the middle of the 1px rule drawn 8px past the rows'
