@@ -22,13 +22,18 @@ session creation have nothing to answer them, since both are workflow queries.
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
 ``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
-of an ``agents.toml`` registry.
+of an ``agents.toml`` registry. ``--openapi`` exports the HTTP contract with the ``ui`` extra.
+
+``init`` copies a bundled starter; ``skills`` locates or installs this release's agent skill.
+``doctor`` reads configuration and service status without creating or resetting workflows.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
 from temporal_agent_harness.web.client import (
     DEFAULT_TEMPORAL_ADDRESS,
@@ -37,7 +42,7 @@ from temporal_agent_harness.web.client import (
 
 TEMPORAL_CONNECTION_HELP = """\
 Temporal connection:
-  Every subcommand resolves its connection with temporalio's standard client config, so the
+  Service commands and doctor resolve connections with temporalio's standard client config, so the
   server and the session-manager worker land on the same namespace when configured the same
   way. In precedence order:
 
@@ -95,12 +100,17 @@ def _schema(args: argparse.Namespace) -> None:
         load_agent_class,
     )
 
-    if [args.agent is not None, args.protocol, args.registry].count(True) != 1:
+    if [args.agent is not None, args.protocol, args.registry, args.openapi].count(True) != 1:
         raise SystemExit(
-            "temporal-agent-harness schema: give one of an agent class, --protocol or --registry"
+            "temporal-agent-harness schema: give one of an agent class, --protocol, --registry or --openapi"
         )
     try:
-        if args.protocol:
+        if args.openapi:
+            from temporal_agent_harness.web.app import create_agent_harness_app
+            from temporal_agent_harness.web.session_manager import AgentRegistry
+
+            text = json.dumps(create_agent_harness_app(registry=AgentRegistry(agents=[])).openapi(), indent=2) + "\n"
+        elif args.protocol:
             text = dump_protocol_schema()
         elif args.registry:
             from temporal_agent_harness.web.registry import dump_registry_schema
@@ -115,6 +125,31 @@ def _schema(args: argparse.Namespace) -> None:
     else:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(text)
+
+
+def _development(args: argparse.Namespace) -> None:
+    from temporal_agent_harness.development import create_starter, install_skill, skill_path
+
+    try:
+        if args.command == "init":
+            print(create_starter(Path(args.destination)))
+            print("Follow the starter's README.md to install dependencies and run the services.")
+        elif args.command == "skills":
+            print(skill_path() if args.action == "path" else install_skill(Path(args.dest)))
+        else:
+            from temporal_agent_harness.web.doctor import diagnose
+
+            report = diagnose(Path(args.registry) if args.registry else None, args.api_url, args.timeout)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print("Versions: " + ", ".join(f"{k}={v}" for k, v in report["versions"].items()))
+                for check in report["checks"]:
+                    print(f"{'OK' if check['ok'] else 'FAIL'} {check['check']}: {check['detail']}")
+            if not report["ok"]:
+                raise SystemExit(1)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"temporal-agent-harness {args.command}: {error}") from None
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -132,13 +167,26 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="temporal-agent-harness",
-        description="Run the packaged Temporal agent harness: the web UI over your "
-        "agents.toml registries, and the session-manager worker they need. Or print an "
-        "agent's schema for client codegen.",
+        description="Build and run Temporal agents: create a starter, install a coding-agent skill, "
+        "export schemas, diagnose services, or run the shared API/UI and session manager.",
         epilog=TEMPORAL_CONNECTION_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+
+    init = subparsers.add_parser("init", help="Copy the bundled OpenAI starter without overwriting files.")
+    init.add_argument("destination")
+    init.set_defaults(handler=_development)
+    skills = subparsers.add_parser("skills", help="Locate or install this SDK release's coding-agent skill.")
+    skills.add_argument("action", choices=("path", "install"))
+    skills.add_argument("--dest", default=".agents/skills", help="Parent directory for the installed skill.")
+    skills.set_defaults(handler=_development)
+    doctor = subparsers.add_parser("doctor", parents=[connection], help="Read-only configuration and service diagnostics.")
+    doctor.add_argument("--registry", help="Validate this TOML registry and its referenced schemas.")
+    doctor.add_argument("--api-url", default="http://localhost:8000")
+    doctor.add_argument("--timeout", type=float, default=5)
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(handler=_development)
 
     serve = subparsers.add_parser(
         "serve",
@@ -217,6 +265,7 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Print the schema of an agents.toml registry instead of one agent's schema.",
     )
+    schema.add_argument("--openapi", action="store_true", help="Generate the HTTP API schema (requires the ui extra; no running server needed).")
     schema.add_argument(
         "-o", "--output", default=None, help="Write to this file instead of stdout."
     )

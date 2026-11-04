@@ -49,10 +49,12 @@
     "./ai-sdks/openai-agents-harness": {
       "types": "./dist/src/ai-sdks/openai-agents-harness.d.ts",
       "default": "./dist/src/ai-sdks/openai-agents-harness.js"
-    }
+    },
+    "./skill": "./skills/temporal-harness-typescript/SKILL.md"
   },
   "files": [
-    "dist/src"
+    "dist/src",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json --outDir dist",

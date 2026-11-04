@@ -72,6 +72,9 @@ jobs:
         if: env.SAVE_CACHE == 'true'
         run: touch "$RUNNER_TEMP/bazel-build-start"
 
+      - name: Check packaged API references
+        run: python3 scripts/sync-agent-resources.py --check
+
       # `--` so the `-//python/...` exclusion is read as a target pattern, not a flag.
       - name: Run the tests
         run: bazel test --config=${{ matrix.config }} --config=ci --disk_cache="$HOME/.cache/bazel-disk" -- ${{ matrix.targets }}

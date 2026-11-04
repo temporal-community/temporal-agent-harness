@@ -1,0 +1,34 @@
+# Your TypeScript harness agent
+
+This starter was bundled with @temporalio/agent-harness __HARNESS_VERSION__. It needs Node 22.18+,
+npm, uv, the Temporal CLI, and an OpenAI API key. Its weather tool returns sample data.
+
+```bash
+npm install
+cp env.example .env.local
+# Set OPENAI_API_KEY in .env.local; never commit the key.
+npm run schema
+npm run skill
+```
+
+Run these from this directory in separate terminals:
+
+```bash
+temporal server start-dev
+uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness session-manager
+uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness serve agents.toml
+npm start
+```
+
+Skip the first command when your configured Temporal service already exists. The default is
+localhost:7233, namespace default. Export identical TEMPORAL_* settings in every service terminal;
+`.env.local` loads only into the Node worker. Leave TASK_QUEUE_PREFIX unset for this starter.
+The API, console and session-manager worker are Python; your agent worker runs in Node.
+
+Open http://localhost:8000, start OpenAI Hello (TypeScript), and send `ask` a weather question.
+Expand the tool trace to see get_weather and its sample result. `ping` echoes a typed text message
+without calling a model. Reload the page to reconnect. Temporal's own UI is at localhost:8233.
+
+Run `npm run doctor` for read-only diagnostics. After changing the agent, run `npm run schema`
+and restart `npm start`; use a new session for changed workflow behavior. Commit the schema and
+package-lock.json. For application clients, consult the installed skill's references/api.md.

@@ -29,6 +29,7 @@ published_npm_package(
         "LICENSE",
         "README.md",
         "package.json",
+        ":skills",
         "//typescript/packages/core/src:index",
         "//typescript/packages/core/src/ai-sdks:openai-agents-harness",
         "//typescript/packages/core/src/ai-sdks/google-genai-plugin:index",
@@ -41,5 +42,14 @@ published_npm_package(
         "//typescript/packages/core/src/harness/code-mode:vfs",
     ],
     replace_prefixes = {"src/": "dist/src/"},
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "skills",
+    srcs = glob(
+        ["skills/**"],
+        exclude = ["skills/**/BUILD.bazel"],
+    ),
     visibility = ["//visibility:public"],
 )

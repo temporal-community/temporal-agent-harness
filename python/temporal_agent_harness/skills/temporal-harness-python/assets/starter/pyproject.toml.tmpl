@@ -1,0 +1,12 @@
+[project]
+name = "my-harness-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["temporal-agent-harness[ui,openai-agents]==__HARNESS_VERSION__"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["my_agent*"]

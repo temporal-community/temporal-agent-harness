@@ -1,0 +1,22 @@
+import { fileURLToPath } from "node:url";
+import { loadClientConnectConfig } from "@temporalio/envconfig";
+import { NativeConnection, Worker } from "@temporalio/worker";
+import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
+import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
+
+if (!process.env.OPENAI_API_KEY) throw new Error("Set OPENAI_API_KEY in .env.local");
+
+const { connectionOptions, namespace } = loadClientConnectConfig();
+const connection = await NativeConnection.connect(connectionOptions);
+try {
+  const worker = await Worker.create({
+    connection,
+    namespace: namespace ?? "default",
+    taskQueue: "openai-hello-ts",
+    workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
+    plugins: [new OpenAIAgentsPlugin(), new AgentHarnessPlugin()],
+  });
+  await worker.run();
+} finally {
+  await connection.close();
+}

@@ -9,12 +9,13 @@
 #
 # Usage, from the repository root: scripts/check-installed-npm.sh <directory holding the tarballs>
 # The directory holds one tarball per package, named client.tgz, react.tgz, svelte.tgz, core.tgz
-# and worker.tgz.
+# worker.tgz and codegen.tgz.
 set -euo pipefail
 
 tarballs="$(cd "${1:?usage: $0 <directory holding the tarballs>}" && pwd)"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+starter="$(mktemp -d)"
+trap 'rm -rf "$work" "$starter"' EXIT
 cd "$work"
 
 echo "Installing $(ls "$tarballs" | tr '\n' ' ')into an empty project"
@@ -30,11 +31,11 @@ openai_agents="$(manifest worker '.peerDependencies["@temporalio/openai-agents"]
 temporal="$(npm view "@temporalio/openai-agents@$openai_agents" 'dependencies.@temporalio/worker' | tail -1)"
 echo "Temporal SDK $temporal, from @temporalio/openai-agents@$openai_agents"
 temporal_packages=()
-for name in activity client common envconfig plugin worker workflow workflow-streams; do
+for name in activity client common envconfig plugin testing worker workflow workflow-streams; do
   temporal_packages+=("@temporalio/$name@$temporal")
 done
 npm install --no-package-lock --no-audit --no-fund --loglevel=error \
-  "$tarballs"/*.tgz react@19 react-dom@19 @types/react@19 svelte@5 "typescript@$typescript" \
+  "$tarballs"/*.tgz react@19 react-dom@19 @types/react@19 svelte@5 "typescript@$typescript" @types/node@22 \
   "@temporalio/openai-agents@$temporal" "${temporal_packages[@]}" \
   "@openai/agents-core@$(manifest worker '.peerDependencies["@openai/agents-core"]')" \
   "@openai/agents-openai@$(manifest worker '.peerDependencies["@openai/agents-openai"]')" \
@@ -107,3 +108,65 @@ cat > tsconfig.json <<'JSON'
 JSON
 ./node_modules/.bin/tsc -p tsconfig.json
 echo "Installed packages work at $version"
+
+echo "The installed SDK creates a starter, activates its skill, and generates application types"
+./node_modules/.bin/agent-harness init "$starter"
+# A sibling directory prevents the parent probe's node_modules from hiding a missing dependency.
+cd "$starter"
+starter_temporal="$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).dependencies["@temporalio/worker"]')"
+npm install --no-package-lock --no-audit --no-fund --loglevel=error \
+  "$tarballs"/*.tgz "@temporalio/testing@$starter_temporal"
+npm run schema
+npm run skill
+./node_modules/.bin/harness-codegen agent.schema.json -o Agent.ts
+./node_modules/.bin/tsc --ignoreConfig --noEmit --skipLibCheck --module nodenext --target es2022 Agent.ts
+node --input-type=module - <<'PROBE'
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
+import { TestWorkflowEnvironment } from '@temporalio/testing';
+import { AgentClient } from '@temporalio/agent-harness-worker/harness/agent-client';
+assert(existsSync('.agents/skills/temporal-harness-typescript/references/api.md'));
+const schema = JSON.parse(readFileSync('agent.schema.json', 'utf8'));
+assert.equal(schema.agent, 'OpenAIHelloAgentTs');
+const env = await TestWorkflowEnvironment.createLocal({
+  server: process.env.TEMPORAL_CLI_PATH ? {
+    executable: { type: 'existing-path', path: process.env.TEMPORAL_CLI_PATH },
+  } : {},
+});
+let logs = '';
+const childEnv = { ...process.env, TEMPORAL_ADDRESS: env.address,
+  TEMPORAL_NAMESPACE: 'default', OPENAI_API_KEY: 'unused-ping-test' };
+delete childEnv.TEMPORAL_CONFIG_FILE;
+delete childEnv.TEMPORAL_PROFILE;
+delete childEnv.TASK_QUEUE_PREFIX;
+const worker = spawn(process.execPath, ['dist/worker.js'], { env: childEnv });
+worker.stdout.on('data', data => { logs += data; });
+worker.stderr.on('data', data => { logs += data; });
+const stopped = once(worker, 'exit');
+let deadline;
+try {
+  await Promise.race([new Promise((_, reject) => {
+    deadline = setTimeout(() => reject(new Error('Starter ping timed out')), 60000);
+  }), (async () => {
+  await env.client.workflow.start('OpenAIHelloAgentTs', {
+    workflowId: 'installed-starter', taskQueue: 'openai-hello-ts', args: [{}],
+  });
+  const agent = new AgentClient(env.client, 'installed-starter');
+  const events = [];
+  for await (const [event] of await agent.sendMessage('ping', { text: 'installed starter works' })) events.push(event);
+  assert(events.some(event => event.event?.type === 'message_handler_end' && JSON.stringify(event).includes('installed starter works')));
+  await env.client.workflow.getHandle('installed-starter').terminate();
+  })()]);
+} catch (error) { console.error(logs); throw error; }
+finally {
+  clearTimeout(deadline);
+  worker.kill('SIGINT');
+  const force = setTimeout(() => worker.kill('SIGKILL'), 10000);
+  await stopped;
+  clearTimeout(force);
+  await env.teardown();
+}
+PROBE
+echo "Installed starter and generated client work"

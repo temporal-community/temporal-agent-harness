@@ -1,0 +1,35 @@
+# Your Python harness agent
+
+This starter was bundled with temporal-agent-harness __HARNESS_VERSION__. It needs Python 3.11+,
+uv, the Temporal CLI, and an OpenAI API key. Its weather tool returns sample data.
+
+```bash
+uv sync
+cp env.example .env.local
+# Set OPENAI_API_KEY in .env.local; never commit the key.
+uv run temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
+uv run temporal-agent-harness skills install
+```
+
+Run these from this directory in separate terminals:
+
+```bash
+temporal server start-dev
+uv run temporal-agent-harness session-manager
+uv run temporal-agent-harness serve agents.toml
+uv run --env-file .env.local python -m my_agent.worker
+```
+
+Skip the first command when your configured Temporal service already exists. The default is
+localhost:7233, namespace default. Export the same connection settings in every terminal;
+`.env.local` above loads only into the agent worker. Keep TASK_QUEUE_PREFIX consistent.
+
+Open http://localhost:8000, start OpenAI Hello (Python), and send `ask` a weather question.
+Expand the tool trace to see get_weather and its sample result. `ping` echoes a typed text
+message without calling a model, useful for checking the worker connection. Reload the page
+to reconnect. Temporal's own workflow UI is at http://localhost:8233.
+
+Run `uv run temporal-agent-harness doctor --registry agents.toml` for read-only diagnostics.
+After changing the agent, regenerate the schema and restart the worker; use a new session for
+changed workflow behavior. Commit your schema and uv.lock. For application clients, consult
+`.agents/skills/temporal-harness-python/references/api.md`.

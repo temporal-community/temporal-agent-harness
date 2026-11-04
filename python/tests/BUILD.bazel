@@ -30,3 +30,16 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+harness_pytest_test(
+    name = "test_development",
+    srcs = ["test_development.py"],
+    imports = [".."],
+    deps = [
+        ":conftest",
+        "//python/temporal_agent_harness:development",
+        "//python/temporal_agent_harness/web:cli",
+        "//python/temporal_agent_harness/web:doctor",
+        "@pypi//pytest",
+    ],
+)

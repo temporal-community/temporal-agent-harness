@@ -10,14 +10,19 @@ rest: what to decide, what to write down, and what to do when something fails.
 | Unit | Packages | Version source | Tag |
 | --- | --- | --- | --- |
 | `python` | `temporal-agent-harness` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
-| `npm` | Every `@temporalio/agent-harness*` package under [typescript/packages](typescript/packages), at **one shared version**: `-client`, `-react` and `-svelte` publish today; `@temporalio/agent-harness` (core) and `-worker` publish from [their first release](#first-typescript-sdk-release) | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
+| `npm` | Every `@temporalio/agent-harness*` package under [typescript/packages](typescript/packages), at **one shared version**: `@temporalio/agent-harness` (core), `-worker`, `-client`, `-react`, `-svelte`, and `-codegen` | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
 
-`@temporal-agent-harness/codegen` is private build tooling with no release. Examples ship in the
-repository, not in any package: release notes name the tag to check out.
+`@temporalio/agent-harness-codegen` ships in the same npm lockstep release. Configure its npm
+trusted publisher before its first publication. Examples ship in the
+repository: release notes name the tag to check out. The small `init` starters and language
+skills are bundled in the SDK packages.
 
 The TypeScript runtime uses the Python server, session manager and console, so a server or console
 change needs a `python` release even when the motivating feature is TypeScript. The two units
 release independently otherwise; nothing requires their version numbers to match.
+
+Before the first release of the development commands, remove the “next release” availability
+notices from the READMEs and agent-development guide after the pinned packages are publishable.
 
 ### Versions
 
@@ -53,7 +58,9 @@ Every pull request, including a release PR, runs [tests.yml](.github/workflows/t
   the CLI, imports every integration, and runs the conformance scenarios against the install;
   [check-installed-npm.sh](scripts/check-installed-npm.sh) installs the built tarballs into an
   empty project, checks the bindings resolve that client, and type-checks a consumer of every
-  package. Both run from the repository root against Bazel's outputs; the Python one holds
+  package. Both also materialize a starter from installed resources, install its skill, generate
+  schemas, and execute a model-free `ping` turn on a local Temporal service. The npm check
+  generates and type-checks an application client. Both run from the repository root against Bazel's outputs; the Python one holds
   third-party versions to `uv.lock`, so a dependency the lock has not caught up with is a change to
   make in a PR, not a release-day surprise.
 
@@ -83,7 +90,7 @@ Judgment calls the pipeline cannot make. Put the answers in the release PR descr
 ## Release
 
 1. **Actions → Prepare release → Run workflow** on `main`. Choose the unit and the bump.
-   - `python`: bumps `pyproject.toml`, runs `uv lock`, moves the README's install pins forward,
+   - `python`: bumps `pyproject.toml`, runs `uv lock`, moves install pins in the root and language guides and bundled references forward,
      then runs `bazel test //python/tests:test_packaged_distributions` at the new version.
    - `npm`: bumps every lockstep manifest and dependency range, refreshes `pnpm-lock.yaml`, then
      runs `bazel test //typescript/packages/...`.
