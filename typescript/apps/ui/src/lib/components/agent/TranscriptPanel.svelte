@@ -3,9 +3,9 @@
   import { ListFilter, ScrollText, Search, X, XCircle } from "@lucide/svelte";
   import { rowIcon } from "$lib/components/flow/WorkflowTimeline.svelte";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import type { Attachment } from "svelte/attachments";
-  import Chip from "$lib/components/primitives/Chip.svelte";
+  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import type { StatusKind } from "$lib/components/primitives/StatusChip.svelte";
   import TraceImages from "$lib/components/primitives/TraceImages.svelte";
@@ -34,6 +34,7 @@
   import { rowHasDetails, type TraceStep } from "$lib/state/replyStatus";
   import { STEP_GLYPHS, logLines, type LogLine } from "$lib/state/logTree";
   import { formatTokens } from "$lib/cost/pricing";
+  import { BrainCircuit, MessageSquare, Radio } from "@lucide/svelte";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
 
@@ -199,13 +200,28 @@
      only for turns that are drawn or revealed. */
   const lineCache = new WeakMap<
     readonly ReplayLogRow[],
-    { collapsed: Record<string, boolean>; filtering: boolean; lines: LogLine[]; offsets: Map<string, string> }
+    {
+      collapsed: Record<string, boolean>;
+      filtering: boolean;
+      lines: LogLine[];
+      offsets: Map<string, string>;
+      /** The widest offset in the turn, in characters, so every row's column is that wide. */
+      offsetWidth: number;
+      /** The step each row is an event of, for its details. */
+      stepOf: Map<string, TraceStep>;
+    }
   >();
   function cachedLines(group: TurnLogGroup) {
     const hit = lineCache.get(group.rows);
     if (hit && hit.collapsed === collapsedSteps && hit.filtering === filtering) return hit;
     const lines = logLines(group.rows, collapsedSteps, filtering);
-    const entry = { collapsed: collapsedSteps, filtering, lines, offsets: lineOffsets(lines, group.startedAt) };
+    const offsets = lineOffsets(lines, group.startedAt);
+    const stepOf = new Map<string, TraceStep>();
+    for (const line of lines) {
+      if (line.kind === "step") for (const row of line.step.rows) stepOf.set(row.id, line.step);
+    }
+    const offsetWidth = Math.max(4, ...[...offsets.values()].map((offset) => offset.length));
+    const entry = { collapsed: collapsedSteps, filtering, lines, offsets, offsetWidth, stepOf };
     lineCache.set(group.rows, entry);
     return entry;
   }
@@ -393,15 +409,127 @@
     return expandedRows[rowId] ?? false;
   }
 
+  /** One row open at a time: opening another closes the one before, so details never pile up
+      down the pane. */
   function toggleRow(rowId: string): void {
-    expandedRows = {
-      ...expandedRows,
-      [rowId]: !isRowExpanded(rowId)
-    };
+    expandedRows = isRowExpanded(rowId) ? {} : { [rowId]: true };
   }
 
   function toggleStep(line: Extract<LogLine, { kind: "step" }>): void {
     collapsedSteps = { ...collapsedSteps, [line.step.id]: !line.collapsed };
+  }
+
+  /* The row a trail or a call's event list last took the reader to, marked so they can see where
+     they landed even when the event has nothing to open. */
+  let revealedRowId = $state<string | null>(null);
+
+  /** Unfold a call, open one of its events and bring that row into view: a folded call's trail
+      icon, or an event in an open row's call. */
+  function revealRow(group: TurnLogGroup, step: TraceStep, rowId: string): void {
+    collapsedSteps = { ...collapsedSteps, [step.id]: false };
+    revealedRowId = rowId;
+    if (!isRowExpanded(rowId)) toggleRow(rowId);
+    /* The windowed rows place it from estimates, and unfolding the call just changed every
+       height after it, so the first jump can miss. Settle it over a few frames: jump to the
+       row until it is drawn, then put it a third of the way down the pane until it holds.
+       Only this pane's own scroller moves (see followScroll.ts). */
+    let frames = 0;
+    let held = 0;
+    const settle = () => {
+      const box = itemsElement;
+      if (!box || frames++ > 12 || held >= 2) return;
+      const row = document.getElementById(`log-row-${rowId}`);
+      if (!row) {
+        const index = linesFor(group).findIndex((line) => line.kind === "row" && line.row.id === rowId);
+        if (index >= 0) rowLists[group.turnNumber]?.scrollToIndex(index);
+      } else {
+        const view = box.getBoundingClientRect();
+        const rect = row.getBoundingClientRect();
+        const inView = rect.top >= view.top && rect.bottom <= view.bottom;
+        held = inView ? held + 1 : 0;
+        if (!inView) box.scrollTop += rect.top - view.top - view.height / 3;
+      }
+      requestAnimationFrame(settle);
+    };
+    void tick().then(settle);
+  }
+
+  /** A run of the same event, drawn once with its count: thirty progress events are one icon. */
+  function eventRuns(rows: readonly ReplayLogRow[]): Array<{ row: ReplayLogRow; count: number; ids: string[] }> {
+    const runs: Array<{ row: ReplayLogRow; count: number; ids: string[] }> = [];
+    for (const row of rows) {
+      const last = runs.at(-1);
+      if (last && last.row.event === row.event) {
+        last.count += 1;
+        last.ids.push(row.id);
+      } else runs.push({ row, count: 1, ids: [row.id] });
+    }
+    return runs;
+  }
+
+  const eventWords = (row: ReplayLogRow) => row.event.replaceAll("_", " ");
+
+  /** Who an event is from, as a hue (its bar and trail icon) and the chip tone of the same hue. */
+  const ACTOR_HUE: Record<ReplayActor, string> = {
+    user: "var(--queue)",
+    queue: "var(--queue)",
+    agent: "var(--queue)",
+    system: "var(--text-4)",
+    model: "var(--model)",
+    reasoning: "var(--reasoning)",
+    tool: "var(--tool)",
+    approval: "var(--live)",
+    subagent: "var(--accent)",
+    error: "var(--error)"
+  };
+  const ACTOR_TONE: Record<ReplayActor, ChipTone> = {
+    user: "queue",
+    queue: "queue",
+    agent: "queue",
+    system: "neutral",
+    model: "model",
+    reasoning: "reasoning",
+    tool: "tool",
+    approval: "live",
+    subagent: "accent",
+    error: "error"
+  };
+  const actorHue = (actor: ReplayActor) => ACTOR_HUE[actor];
+
+  function actorIcon(actor: ReplayActor): typeof XCircle {
+    switch (actor) {
+      case "user":
+      case "queue":
+      case "agent":
+        return MessageSquare;
+      case "system":
+        return Radio;
+      case "reasoning":
+        return BrainCircuit;
+      case "error":
+        return XCircle;
+      case "model":
+      case "tool":
+      case "approval":
+      case "subagent":
+        return rowIcon({ kind: actor });
+      default: {
+        const unhandled: never = actor;
+        throw new Error(`No icon for log actor ${String(unhandled)}`);
+      }
+    }
+  }
+
+  const rowHue = (row: ReplayLogRow) => (row.tone === "error" ? "var(--error)" : actorHue(row.actor));
+  const rowTone = (row: ReplayLogRow) => (row.tone === "error" ? "error" : ACTOR_TONE[row.actor]);
+
+  /** A trail icon's color: how the event ended, once it has, else who it is from. */
+  function trailHue(row: ReplayLogRow): string {
+    const glyph = rowGlyph(row);
+    if (glyph === "error") return "var(--error)";
+    if (glyph === "complete") return "var(--success)";
+    if (glyph === "approval") return "var(--live)";
+    return actorHue(row.actor);
   }
 
   /**
@@ -544,7 +672,7 @@
             {/if}
           </header>
 
-          <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
+          <div class="log-lines" id={`turn-${group.turnNumber}-logs`} style:--offset-ch={cachedLines(group).offsetWidth}>
             <WindowedRows
               items={linesFor(group)}
               getKey={(line) => line.id}
@@ -563,7 +691,12 @@
               {#if line.kind === "step"}
                 {@const step = line.step}
                 {@const cells = stepCells(step)}
-                <article id={lineElementId(line)} class={["log-line", "log-step", tone, active && "active-row"]}>
+                <!-- Folded, the call's bar runs on through its trail, so the two read as one line. -->
+                <article
+                  id={lineElementId(line)}
+                  class={["log-line", "log-step", tone, active && "active-row"]}
+                  style:--hue={step.state === "failed" || step.state === "rejected" ? "var(--error)" : actorHue(step.rows[0]!.actor)}
+                >
                   <TraceRow
                     glyph={STEP_GLYPHS[step.state]}
                     name={step.name}
@@ -577,7 +710,32 @@
                     expandable
                     expanded={!line.collapsed}
                     onToggle={() => toggleStep(line)}
+                    media={line.collapsed ? trail : undefined}
                   />
+                  {#snippet trail()}
+                    {@const runs = eventRuns(step.rows)}
+                    <div class="trail-line" style:--depth={line.depth > 0 ? line.depth : undefined}>
+                      <span class="trail-offset" aria-hidden="true"></span>
+                      <span class="trail-glyph" aria-hidden="true"></span>
+                      <div class="trail" role="group" aria-label={`${step.name} events`}>
+                        {#each runs as run, index (run.row.id)}
+                          {@const Icon = actorIcon(run.row.actor)}
+                          {#if index > 0}<span class="trail-link" aria-hidden="true"></span>{/if}
+                          <button
+                            type="button"
+                            class="trail-event"
+                            style:color={trailHue(run.row)}
+                            aria-label={run.count > 1 ? `${run.row.label}, ${run.count} in a row` : run.row.label}
+                            data-tip={eventWords(run.row)}
+                            onclick={() => revealRow(group, step, run.row.id)}
+                          >
+                            <Icon size={12} aria-hidden="true" />
+                            {#if run.count > 1}<span class="trail-count">×{run.count}</span>{/if}
+                          </button>
+                        {/each}
+                      </div>
+                    </div>
+                  {/snippet}
                 </article>
               {:else}
               {@const row = line.row}
@@ -590,20 +748,23 @@
               {@const expanded = isRowExpanded(row.id)}
               {@const status = statusNote(row)}
               {@const glyph = rowGlyph(row)}
+              {@const RowIcon = actorIcon(row.actor)}
               <article
                 id={lineElementId(line)}
-                class={["log-line", tone, active && "active-row"]}
+                class={["log-line", tone, active && "active-row", revealedRowId === row.id && "revealed"]}
+                style:--hue={rowHue(row)}
               >
+                <!-- The protocol's own name for the event, so a reader learns the event types by
+                     reading the log; the same thing in a sentence is in the tip. -->
                 <TraceRow
                   {glyph}
                   glyphLabel={glyph && status ? status : undefined}
-                  prefix={row.label}
                   name={line.underStep ? undefined : rowName(row)}
                   mono
                   figure={rowFigure(row)}
                   note={rowNote(row, glyph, status)}
                   meta={offset}
-                  tip={[formatTimestamp(row.timestamp), row.sourceLabel].filter(Boolean).join(" · ")}
+                  tip={[formatTimestamp(row.timestamp), row.label, row.sourceLabel].filter(Boolean).join(" · ")}
                   depth={line.depth}
                   expandable={rowHasDetails(row) || row.citations.length > 0}
                   {expanded}
@@ -614,7 +775,30 @@
                     {@const fullDetail = fullLogDetail(row)}
                     {@const ids = rowIdentifiers(row)}
                     {@const images = toolImages(row.output, row.toolName)}
+                    {@const call = cachedLines(group).stepOf.get(row.id)}
                     <div class="line-details" id={`log-row-${row.id}-details`}>
+                      <!-- The rest of the call this event belongs to, so an event reads in its place
+                           without scrolling back up to the head. -->
+                      {#if call}
+                        <section class="call-events" aria-label={`${call.name} events`}>
+                          <span class="payload-label">
+                            {call.name}{#if call.durationMs}<span class="call-took"> · took {formatElapsedDuration(call.durationMs)}</span>{/if}
+                          </span>
+                          <ol>
+                            {#each eventRuns(call.rows) as run (run.row.id)}
+                              {@const Icon = actorIcon(run.row.actor)}
+                              {@const here = run.ids.includes(row.id)}
+                              <li>
+                                <button type="button" class:here aria-current={here ? "true" : undefined} onclick={() => revealRow(group, call, here ? row.id : run.row.id)}>
+                                  <span class="call-icon" style:color={trailHue(run.row)}><Icon size={12} aria-hidden="true" /></span>
+                                  <span class="call-type">{eventWords(run.row)}{#if run.count > 1}<span class="call-count">×{run.count}</span>{/if}</span>
+                                  <span class="call-at">+{formatDuration(run.row.timestamp - call.startedAt)}</span>
+                                </button>
+                              </li>
+                            {/each}
+                          </ol>
+                        </section>
+                      {/if}
                       <TraceImages {images} />
                       {#if primary}
                         <section class="primary-payload" aria-label={`${primary.label} preview`}>
@@ -655,6 +839,11 @@
                         </LongContent>
                       </section>
                     </div>
+                    {#snippet badge()}
+                      <Chip size="xs" tone={rowTone(row)} fill="quiet" toned dense class="event-type" label={eventWords(row)}>
+                        {#snippet lead()}<RowIcon size={13} />{/snippet}
+                      </Chip>
+                    {/snippet}
                 </TraceRow>
               </article>
               {/if}
@@ -762,11 +951,17 @@
     color: var(--text-3);
     font-size: var(--font-sm);
     font-weight: 500;
+    /* Held at the top while its turn's rows scroll under it, so a long turn never loses which
+       turn it is. Opaque, since the rows pass beneath. */
+    position: sticky;
+    top: calc(-1 * var(--pane-inset));
+    z-index: 1;
+    background: var(--surface-1);
   }
 
   /* The turn holding the cursor, by its header; the cursor's own row carries the same tint. */
   .turn-group.active-turn .turn-head {
-    background: var(--selected-bg);
+    background: linear-gradient(var(--selected-bg), var(--selected-bg)) var(--surface-1);
   }
 
   .turn-line {
@@ -841,11 +1036,51 @@
   .turn-figure.approval :global(svg) { color: var(--live); }
   .turn-figure.error { color: var(--error); }
 
-  /* Each line's offset into its turn, at the end of the row: one width for anything under a
-     minute, right-aligned so longer ones line up too, and never cut. */
+  /* Each line's offset into its turn leads the row, in a column as wide as the turn's longest
+     offset (--offset-ch), so a short row ends early instead of reaching for a time at the far
+     edge. Mono, so a character is the same width the column was counted in. */
   .log-line :global(.trace-meta) {
-    min-width: 5ch;
+    order: -1;
+    width: calc(var(--offset-ch, 4) * 1ch + var(--gap-md));
+    min-width: 0;
+    padding-inline-start: var(--gap-md);
+    font-family: var(--font-mono);
+    text-align: start;
     white-space: nowrap;
+  }
+
+  /* Then the event's bar, in who it is from: one hue per kind of event, down the whole row,
+     painted on the glyph's cell (a row's ::before is its tip). A nested event steps its bar in,
+     not the offset, so the column stays straight. */
+  .log-line :global(.trace-glyph),
+  .trail-glyph {
+    box-sizing: border-box;
+    align-self: stretch;
+    width: calc(15px + 11px);
+    height: auto;
+    margin-inline-start: calc(1px + var(--depth, 0) * 14px);
+    padding-inline-start: 11px;
+    background: linear-gradient(var(--hue, var(--text-4)), var(--hue, var(--text-4))) no-repeat 0 0 / 3px 100%;
+  }
+
+  .log-line :global(.trace-row.nested > .trace-line) {
+    width: 100%;
+    margin-inline-start: 0;
+  }
+
+  /* The type is what the row is for, so it keeps its width and the tool's name gives way. */
+  .log-line :global(.event-type) {
+    flex: none;
+    align-self: center;
+    height: 18px;
+    gap: 3px;
+    padding: 0 5px;
+    font-size: var(--font-xs);
+    letter-spacing: 0.03em;
+  }
+
+  .log-line.routine :global(.event-type) {
+    opacity: 0.72;
   }
 
   .log-lines {
@@ -869,11 +1104,15 @@
     background: var(--selected-bg);
   }
 
-  .log-line.signal :global(:is(.trace-prefix, strong)) {
+  .log-line.revealed :global(.trace-line) {
+    background: var(--control-hover);
+  }
+
+  .log-line.signal :global(strong) {
     color: var(--text-1);
   }
 
-  .log-line.routine :global(:is(.trace-prefix, strong)) {
+  .log-line.routine :global(strong) {
     color: var(--text-3);
   }
 
@@ -882,24 +1121,147 @@
   }
 
   /* The chat trace's row at the log's density: the whole row is the button, at the
-     LINE_HEIGHT WindowedRows estimates for it, with no rule between rows, and the event's
-     label reads as words, not as a muted prefix. The pane scroller clips, so the focus ring
-     goes inside the row. */
+     LINE_HEIGHT WindowedRows estimates for it, with no rule between rows and no padding above
+     or below, so one row's bar meets the next. The pane scroller clips, so the focus ring goes
+     inside the row. */
   .log-line :global(.trace-row) {
     gap: 0;
   }
 
   .log-line :global(.trace-line) {
+    grid-template-columns: auto auto minmax(0, 1fr);
     min-height: var(--control-height);
-    padding: var(--gap-xs) var(--gap-md);
+    padding: 0 var(--gap-md) 0 0;
+    border-radius: 0;
   }
 
   .log-line :global(.trace-line:focus-visible) {
     outline-offset: -2px;
   }
 
-  .log-line :global(.trace-prefix) {
-    color: var(--text-2);
+  /* A folded call's events, in order, under its name: one icon per event, a run of the same
+     event once with its count. Each opens that event. Laid out on the row's own columns, so the
+     call's bar runs straight on through it. */
+  .trail-line {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 8px;
+    padding-inline-end: var(--gap-md);
+  }
+
+  .trail-offset {
+    width: calc(var(--offset-ch, 4) * 1ch + var(--gap-md));
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+  }
+
+  .trail {
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 4px;
+    padding-block-end: 6px;
+  }
+
+  .trail-event {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .trail-event:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .trail-count {
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .trail-link {
+    width: 8px;
+    height: 1px;
+    background: var(--border-strong);
+  }
+
+  /* An open event's call: each of its events by the protocol's name, this one marked, and how
+     long after the call began. */
+  .call-events {
+    min-width: 0;
+    display: grid;
+    gap: 5px;
+  }
+
+  .call-took {
+    color: var(--text-3);
+    font-weight: 400;
+  }
+
+  .call-events ol {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .call-events button {
+    width: 100%;
+    min-height: 22px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 0 6px;
+    border: 0;
+    background: none;
+    color: var(--text-3);
+    font: var(--font-sm) var(--font-mono);
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .call-events button:hover {
+    background: var(--control-hover);
+  }
+
+  .call-events button.here {
+    background: var(--selected-bg);
+    color: var(--text-1);
+  }
+
+  .call-events button:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+
+  .call-icon {
+    display: inline-flex;
+  }
+
+  .call-type {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .call-count {
+    margin-inline-start: 6px;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .call-at {
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
   }
 
   /* At the turn header's inset whatever the row's depth (TraceRow steps in only its line), so a
