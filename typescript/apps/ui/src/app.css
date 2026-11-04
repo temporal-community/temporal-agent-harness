@@ -196,9 +196,7 @@
   /* How small and how low a thing starts before it settles into place. */
   --motion-scale: 0.97;
   --motion-rise: 4px;
-  /* A working agent: one sweep of the reply loader's pixel wave and of a shimmering label. */
-  --duration-pixel-cycle: 650ms;
-  --duration-pixel-step: 90ms;
+  /* A working agent: one sweep of a shimmering label. */
   --duration-shimmer: 1400ms;
   /* Work still open: Temporal Web UI's 3px-on, 3px-off dash scrolls one 6px period per
      cycle, on a timeline span and on a state-graph edge alike. */
@@ -834,7 +832,7 @@ pre[data-language]::before,
 
 /* The trace's glyph column: one cell for every state glyph and for the working loader, so
    they and the tree rule AgentChatPanel draws through them share one axis, 8.5px in. Odd,
-   so a 13px glyph and the 11px loader both center on whole pixels. */
+   so a 13px glyph and the 13px loader both center on whole pixels. */
 .trace-glyph {
   flex: none;
   width: 15px;

@@ -119,10 +119,12 @@ const HOVER_LAYOUT_PROPERTY = /\b(transform|(?:min-|max-)?height|padding(?:-[\w-
 
 /* Literal times in styles that are a loop's own cycle, not a UI moment's duration. */
 const DURATION_ALLOWED = [
-  { file: "lib/components/agent/TranscriptPanel.svelte", literal: "1800ms", why: "a revealed row's outline, held long enough to find once the scroll stops" },
   { file: "lib/components/chat/SessionControls.svelte", literal: "800ms", why: "the refresh button's spinner cycle" },
   { file: "lib/components/primitives/StateGlyph.svelte", literal: "1s", why: "the running glyph's spinner cycle" },
-  { file: "lib/components/primitives/StatusChip.svelte", literal: "900ms", why: "a live status icon's breathing cycle" }
+  { file: "lib/components/primitives/StatusChip.svelte", literal: "900ms", why: "a live status icon's breathing cycle" },
+  { file: "lib/components/primitives/ThinkingOrb.svelte", literal: "3429ms", why: "the working mark's turn, coprime with its trace and breathe" },
+  { file: "lib/components/primitives/ThinkingOrb.svelte", literal: "2810ms", why: "the working mark's light, once round its circuit" },
+  { file: "lib/components/primitives/ThinkingOrb.svelte", literal: "1207ms", why: "the working mark's breathe" }
 ];
 const TIME_LITERAL = /(?<![\w.-])(?:\d*\.)?\d+m?s\b/g;
 const DECLARATION = /(?:^|[;{\s])(--[\w-]+|[a-z-]+)\s*:\s*([^;{}]+)/g;
