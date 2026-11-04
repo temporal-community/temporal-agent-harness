@@ -149,6 +149,8 @@ class _CutOff:
 
     tool_id: str  # The id it shows under
     agent_id: str | None  # The agent that made it
+    name: str  # Its tool's name, as Claude calls it
+    key: str  # Its ``_key``
     child: str | None  # The subagent it started, which a repeat carries on
     end: Callable[[], None]  # Publishes its end, if no repeat takes it over
 
@@ -207,11 +209,13 @@ class _TurnCalls:
         while self.cut_off:
             self.cut_off.pop(next(iter(self.cut_off))).end()
 
-    def end_cut_off(self, runner: AgentWorkflowRunner, agent_id: str) -> None:
-        """End the subagent ``agent_id``'s cut-off calls no repeat took over, as it ends. One
-        still waiting for approval is denied, as a cancelled call's is in the other integrations."""
+    def end_cut_off(
+        self, runner: AgentWorkflowRunner, which: Callable[[_CutOff], bool]
+    ) -> None:
+        """End the cut-off calls ``which`` picks, which no repeat will take over. One still
+        waiting for approval is denied, as a cancelled call's is in the other integrations."""
         for gate, cut in list(self.cut_off.items()):
-            if cut.agent_id == agent_id and self.cut_off.pop(gate, None):
+            if which(cut) and self.cut_off.pop(gate, None):
                 self.ended.add(gate)
                 status = runner._status
                 if status.approval_entry(cut.tool_id) is not None and not (
@@ -231,6 +235,7 @@ class HarnessClaudeSession:
 
     ``options.mcp_servers`` must be a dict. The session sets ``permission_mode``,
     ``include_partial_messages``, and ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS``, which it relies on.
+    ``options.thinking`` defaults to adaptive thinking with summaries.
     """
 
     def __init__(
@@ -254,6 +259,8 @@ class HarnessClaudeSession:
             include_partial_messages=True,
             # Subagents and commands finish within the turn.
             env={**options.env, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"},
+            # Newer models omit thinking text unless asked for a summary.
+            thinking=options.thinking or {"type": "adaptive", "display": "summarized"},
         )
         if isinstance(tool_callables, Mapping):
             tool_callables = list(tool_callables.values())
@@ -428,6 +435,8 @@ class _ClaudeStreamObserver:
         self._replies: set[str] = set()
         # The replies whose text and thinking were streamed, so their whole blocks aren't again.
         self._streamed: set[str] = set()
+        # The keys of each agent's calls in its latest reply.
+        self._reply_keys: dict[str | None, set[str]] = {}
 
     def observe(self, message: Message) -> None:
         """Publish ``message``'s events."""
@@ -439,6 +448,7 @@ class _ClaudeStreamObserver:
                 if message.message_id is not None:
                     self._replies.add(message.message_id)
                 self._end_model_call(agent_id)
+                self._reply_keys[agent_id] = set()
                 self._models[agent_id] = message.model
                 self._start_model_call(agent_id)
                 self._open[agent_id] = ModelInteractionEnded(
@@ -448,6 +458,16 @@ class _ClaudeStreamObserver:
                 if isinstance(block, ToolUseBlock):
                     # A tool request is the end of Claude's reply.
                     self._end_model_call(agent_id)
+                    keys = self._reply_keys.setdefault(agent_id, set())
+                    keys.add(_key(block.name, block.input))
+                    # A cut-off call its agent now asks for with another input was replanned, so
+                    # no repeat will take it over.
+                    self._turn_calls.end_cut_off(
+                        self._runner,
+                        lambda cut: cut.agent_id == agent_id
+                        and cut.name == block.name
+                        and cut.key not in keys,
+                    )
                     if block.name.startswith(_HARNESS_TOOL_PREFIX):
                         self._harness_calls.append((block, agent_id))
                         self._harness_open[block.id] = agent_id
@@ -544,16 +564,19 @@ class _ClaudeStreamObserver:
         # Harness tool calls first, so a subagent that ends below ends its own.
         for task in self._harness_tasks:
             if not task.done():
-                tool_id, _, agent_id, _ = self._turn_calls.harness[task]
+                tool_id, name, agent_id, _ = self._turn_calls.harness[task]
+                claude_name = _HARNESS_TOOL_PREFIX + name
                 self._turn_calls.cut_off[task] = _CutOff(
                     tool_id,
                     agent_id,
+                    claude_name,
+                    _key(claude_name, self._turn_calls.inputs[task]),
                     None,
                     functools.partial(self._end_harness, task, reason),
                 )
         # The latest first, so a subagent's calls end before it does.
         for tool_id in reversed(list(self._tools)):
-            _, agent_id = self._tools[tool_id]
+            call, agent_id = self._tools[tool_id]
             gate = self._gates.get(tool_id)
             if gate is None:
                 self._end_tool(tool_id, reason)
@@ -561,6 +584,8 @@ class _ClaudeStreamObserver:
             self._turn_calls.cut_off[gate] = _CutOff(
                 self._took_over.get(tool_id, tool_id),
                 agent_id,
+                call.name,
+                _key(call.name, call.input),
                 self._subagents.get(tool_id),
                 functools.partial(self._end_tool, tool_id, reason),
             )
@@ -579,7 +604,7 @@ class _ClaudeStreamObserver:
         child = self._subagents.get(tool_id)
         shown = self._took_over.get(tool_id, tool_id)
         if child is not None:
-            self._turn_calls.end_cut_off(self._runner, child)
+            self._turn_calls.end_cut_off(self._runner, lambda cut: cut.agent_id == child)
             self._close_model_call(child)
             # Claude Code's structured result holds the subagent's own report; the block's text
             # wraps it in a preamble and the subagent's id and usage.

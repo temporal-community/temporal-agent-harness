@@ -157,9 +157,11 @@ describe.each([
     inline = await replay(run(true, options));
   });
 
-  it("draws the same graph as a child workflow", () => {
-    assert.deepEqual(nodes(inline.controller), nodes(real.controller));
-    assert.ok(nodes(inline.controller).some((node) => node.id === `${childKey}::agent-runtime`));
+  it("leaves the graph with its call, where a child workflow stays in the shared container", () => {
+    const ids = (c) => nodes(c).map((node) => node.id);
+    assert.ok(ids(real.controller).includes(`${childKey}::agent-runtime`));
+    assert.ok(!ids(inline.controller).some((id) => id.startsWith(`${childKey}::`)));
+    assert.ok(!ids(inline.controller).some((id) => id.endsWith("::tool-container")));
   });
 
   it("draws the same timeline and latency rows as a child workflow", () => {
@@ -199,6 +201,24 @@ describe("an inline subagent", () => {
     assert.equal(target.closed, true);
     const runtime = controller.graph.nodes.find((node) => node.id === `${childKey}::agent-runtime`);
     assert.notEqual(runtime.data.state, "stopped", "it is drawn running, as a running child is");
+  });
+
+  it("is drawn inside its call's own Subagent tool box while it runs", async () => {
+    const frames = run(true);
+    const running = frames.slice(0, frames.findIndex((f) => f.event === "tool_start" && f.data.tool_id === "toolu_glob") + 1);
+    const { controller } = await replay(running);
+    const byId = new Map(controller.graph.nodes.map((node) => [node.id, node]));
+    const host = byId.get(`${parentWorkflowId}::tool:${childKey}`);
+    assert.equal(host.data.title, "Subagent tool");
+    assert.equal(host.data.size, "container");
+    const runtime = byId.get(`${childKey}::agent-runtime`);
+    const inside = (outer, inner) =>
+      inner.position.x >= outer.position.x &&
+      inner.position.y >= outer.position.y &&
+      inner.position.x + inner.data.boundaryWidth <= outer.position.x + outer.data.nodeWidth &&
+      inner.position.y + inner.data.boundaryHeight <= outer.position.y + outer.data.nodeHeight;
+    assert.ok(inside(host, runtime), "the subagent's runtime sits inside its call's box");
+    assert.ok(![...byId.keys()].some((id) => id.endsWith("::tool-container")), "no shared container");
   });
 
   it("sends its approvals to the workflow it runs in", async () => {

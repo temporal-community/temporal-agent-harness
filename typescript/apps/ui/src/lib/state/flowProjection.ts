@@ -193,6 +193,8 @@ export interface AgentGraphSource {
   stopped?: boolean;
   /** Temporal's execution status for this workflow, once something has asked. */
   executionStatus?: string;
+  /** Runs inside its parent's workflow, as the tool call whose id is its workflowId. */
+  inline?: boolean;
 }
 
 /* Scalar fields only, here and in EvaluationRuntime: a checkpoint copies each record with a
@@ -248,6 +250,8 @@ interface AgentGraphOptions {
   outputPlacement?: "external" | "runtime";
   agentInterface?: AgentInterfaceFunction[];
   embeddedToolGraphs?: AgentGraph[];
+  /** Inline subagents' graphs, each drawn inside the tool call that runs it, by its tool id. */
+  hostedToolGraphs?: ReadonlyMap<string, AgentGraph>;
   /**
    * Draw the turn as it stands rather than as it happened: a settled tool leaves
    * the canvas. Off by default, so a caller that asks for nothing gets the
@@ -2022,7 +2026,17 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       }
     }
 
-    const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
+    /* An inline subagent is drawn as its call; one whose call the turn never showed goes in the
+       shared container, and one whose call settled off the canvas goes with it. */
+    const hostedLayouts = new Map<ToolId, EmbeddedToolLayout>();
+    const embeddedToolGraphs = [...(options.embeddedToolGraphs ?? [])];
+    for (const [toolId, graph] of options.hostedToolGraphs ?? []) {
+      if (!s.tools.has(toolId)) embeddedToolGraphs.push(graph);
+      else if (order.includes(toolRuntimeNodeId(toolId))) {
+        hostedLayouts.set(toolId, layoutEmbeddedToolGraphs([graph])!);
+      }
+    }
+    const embeddedToolLayout = layoutEmbeddedToolGraphs(embeddedToolGraphs);
     if (embeddedToolLayout && !order.includes("tool-container")) {
       order.push("tool-container");
     }
@@ -2111,7 +2125,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         sections.push(
           valueSection(
             "Delegated runtimes",
-            (options.embeddedToolGraphs ?? []).map((graph) => ({
+            embeddedToolGraphs.map((graph) => ({
               status: graph.status,
               activeTurn: graph.activeTurn,
               nodes: graph.nodes.length
@@ -2194,6 +2208,22 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
             : null;
         const toolStatus = runtime?.status ?? "idle";
         const retryCount = runtime?.retryCount ?? 1;
+        const hosted = runtime?.id ? hostedLayouts.get(runtime.id) : undefined;
+        if (hosted) {
+          return {
+            tone: runtime?.tone ?? "neutral",
+            title: "Subagent tool",
+            state: toolStatus,
+            statusTone: runtime?.statusTone,
+            subtitle: runtime?.name,
+            active: activeNodeId === id,
+            size: "container",
+            nodeWidth: hosted.dimensions.width,
+            nodeHeight: hosted.dimensions.height,
+            toolId: runtime?.id,
+            flowGroup: runtime?.flowGroup
+          };
+        }
         return {
           tone: runtime?.tone ?? "neutral",
           title: runtime?.name ?? "Tool",
@@ -2231,7 +2261,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       }
       if (id === "tool-container") {
         return {
-          ...delegatedState(options.embeddedToolGraphs ?? []),
+          ...delegatedState(embeddedToolGraphs),
           title: "Subagent activity",
           subtitle: "delegated runtimes",
           active: activeNodeId === id,
@@ -2458,19 +2488,22 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         })
       );
     }
-    const toolPosition = runtimeLayout.positions.get("tool-container");
-    if (toolPosition && embeddedToolLayout) {
-      for (const placement of embeddedToolLayout.placements) {
+    function placeEmbedded(containerId: RuntimeNodeId, layout: EmbeddedToolLayout | null): void {
+      const position = runtimeLayout.positions.get(containerId);
+      if (!position || !layout) return;
+      for (const placement of layout.placements) {
         const embeddedGraph = offsetGraph(
           placement.graph,
-          toolPosition.x + placement.x,
-          toolPosition.y + placement.y,
+          position.x + placement.x,
+          position.y + placement.y,
           nestedZIndexBoost
         );
         nodes.push(...embeddedGraph.nodes);
         edges.push(...embeddedGraph.edges);
       }
     }
+    placeEmbedded("tool-container", embeddedToolLayout);
+    for (const [toolId, layout] of hostedLayouts) placeEmbedded(toolRuntimeNodeId(toolId), layout);
     const reasoningAttachedToModel =
       order.includes("model") && order.includes("reasoning");
     const runtimeFlowOrder = reasoningAttachedToModel
@@ -2783,12 +2816,19 @@ function treeGraph(
     nextSeen.add(agent.workflowId);
     /* Only the children this turn involves: an earlier turn's subagent is not this turn's activity. */
     const turnChildren = folds.get(agent)!.turnChildren;
-    const childGraphs = (childrenByParent.get(agent.workflowId) ?? [])
-      .filter((child) => !nextSeen.has(child.workflowId) && turnChildren.has(child.workflowId))
-      .map((child) => buildNestedAgentGraph(child, nextSeen));
+    const children = (childrenByParent.get(agent.workflowId) ?? []).filter(
+      (child) => !nextSeen.has(child.workflowId) && turnChildren.has(child.workflowId)
+    );
     const graph = folds.get(agent)!.render({
       ...agentGraphOptions(agent, options),
-      embeddedToolGraphs: childGraphs
+      embeddedToolGraphs: children
+        .filter((child) => !child.inline)
+        .map((child) => buildNestedAgentGraph(child, nextSeen)),
+      hostedToolGraphs: new Map(
+        children
+          .filter((child) => child.inline)
+          .map((child) => [child.workflowId, buildNestedAgentGraph(child, nextSeen)])
+      )
     });
     const scoped = scopedGraph(agent, graph, 0, 0, delegations.get(agent.workflowId));
     builtGraphs.push(scoped);

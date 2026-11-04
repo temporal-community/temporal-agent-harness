@@ -763,7 +763,8 @@ export class AgentRunController {
           agentInterface:
             this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
           stopped: agent.stopped || this.#isWorkflowClosed(agent.workflowId),
-          executionStatus: this.executionStatuses[agent.workflowId]
+          executionStatus: this.executionStatuses[agent.workflowId],
+          inline: agent.inline
         }))
     ];
   }

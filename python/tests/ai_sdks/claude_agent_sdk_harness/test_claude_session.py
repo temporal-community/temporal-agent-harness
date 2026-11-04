@@ -46,7 +46,7 @@ from temporalio.claude_agent_sdk import (
     ConnectActivityInput,
     SubprocessConnector,
 )
-from temporalio.client import Client, WorkflowHandle
+from temporalio.client import Client, WorkflowHandle, WorkflowUpdateFailedError
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
@@ -498,6 +498,8 @@ async def test_claudes_thinking_and_text_stream_once(
     # Each delta as Claude streams it, and not the whole blocks again after.
     assert [s.delta for s in _of(events, E.THOUGHT_SUMMARY)] == [{"content": "Hmm."}]
     assert [d.text for d in _of(events, E.REPLY_DELTA)] == ["All ", "done."]
+    # Newer models omit thinking text unless the request asks for a summary.
+    assert api.requests[-1]["thinking"]["display"] == "summarized"
 
 
 async def test_a_subagents_calls_reach_the_turn_stream(
@@ -898,7 +900,7 @@ async def test_an_approval_claude_stops_asking_for_is_settled_when_the_turn_ends
     await _replay(handle)
 
 
-async def test_a_call_approved_after_claude_stops_asking_for_it_ends_when_the_turn_ends(
+async def test_a_call_claude_replans_after_a_restart_cant_be_approved_once_it_asks_again(
     api: ScriptedApi, env: WorkflowEnvironment
 ) -> None:
     commands = iter(["echo one", "echo two"])
@@ -918,16 +920,8 @@ async def test_a_call_approved_after_claude_stops_asking_for_it_ends_when_the_tu
                 await asyncio.sleep(0.1)
     [first] = pending
 
-    async def approve(tool_id: str) -> None:
-        await handle.execute_update(
-            TOOL_APPROVAL_UPDATE,
-            ToolApprovalDecision(tool_id=tool_id, approved=True),
-            result_type=ToolApprovalResult,
-        )
-
     async with _worker(env, task_queue):
-        # Claude makes a different call instead after the restart; the first call is approved
-        # once the new connection asks for its own, so no hook is left to start the first.
+        # Claude makes a different call instead after the restart.
         turn = asyncio.create_task(
             _turn_events((env.client, handle), reply.turn_number, unanswered={first.tool_id})
         )
@@ -938,17 +932,18 @@ async def test_a_call_approved_after_claude_stops_asking_for_it_ends_when_the_tu
                 event = item.data.event
                 if event.type == E.TOOL_APPROVAL_REQUESTED and event.tool_id != first.tool_id:
                     break
-        await approve(first.tool_id)
+        # The first call's approval was closed when Claude asked for the other, so the person
+        # isn't left approving a call nothing will run.
+        with pytest.raises(WorkflowUpdateFailedError):
+            await handle.execute_update(
+                TOOL_APPROVAL_UPDATE,
+                ToolApprovalDecision(tool_id=first.tool_id, approved=True),
+                result_type=ToolApprovalResult,
+            )
         events = await turn
         await handle.terminate()
 
-    # An approved call Claude Code never ran still ends, so its card doesn't stay open.
-    assert _tool_events(events, first.tool_id) == [
-        E.TOOL_REQUESTED,
-        E.TOOL_APPROVAL_REQUESTED,
-        E.TOOL_APPROVAL_RESOLVED,
-        E.TOOL_ERROR,
-    ]
+    _assert_abandoned(events, first.tool_id)
     await _replay(handle)
 
 
@@ -1209,7 +1204,8 @@ async def test_a_subagents_cut_off_call_it_doesnt_repeat_ends_with_the_subagent(
         left = (await status()).pending_approvals
         await handle.terminate()
 
-    # The first call's approval is denied before the subagent ends, and the call never started.
+    # The first call's approval is denied once Claude asks for the other call instead, so the
+    # person is never asked to approve both, and the call never started.
     _assert_abandoned(events, first.tool_id)
     assert not left
     [started] = _of(events, E.SUBAGENT_STARTED)
@@ -1218,8 +1214,13 @@ async def test_a_subagents_cut_off_call_it_doesnt_repeat_ends_with_the_subagent(
         for e in events
         if e.agent_id == started.subagent_id
     ]
+    [second] = [
+        e.tool_id
+        for e in _of(events, E.TOOL_APPROVAL_REQUESTED)
+        if e.tool_name == "Bash" and e.tool_id != first.tool_id
+    ]
     assert types.index((E.TOOL_APPROVAL_RESOLVED, first.tool_id)) < types.index(
-        (E.TURN_END, None)
+        (E.TOOL_APPROVAL_REQUESTED, second)
     )
     await _replay(handle)
 
@@ -1777,7 +1778,12 @@ async def test_parallel_subagents_of_one_type_keep_their_calls_across_a_restart(
     for tool_id, input in zip(["toolu_a", "toolu_b"], inputs):
         gate = calls.add("Agent", input, None, loop.create_future())  # type: ignore[arg-type]
         calls.cut_off[gate] = claude_agent_sdk_harness._CutOff(
-            tool_id, None, f"sub-{tool_id}", lambda: None
+            tool_id,
+            None,
+            "Agent",
+            claude_agent_sdk_harness._key("Agent", input),
+            f"sub-{tool_id}",
+            lambda: None,
         )
     observer = claude_agent_sdk_harness._ClaudeStreamObserver(
         _FakeRunner(),  # type: ignore[arg-type]
