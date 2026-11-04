@@ -153,4 +153,7 @@ The detailed sections now have their own guides. Existing README links remain av
 [a taste](python/README.md#a-taste) · <a id="running-a-worker--one-plugin"></a>
 [running a worker  one plugin](python/README.md#running-a-worker--one-plugin)
 
+<a id="closing-idle-agents"></a>
+[Closing idle agents](python/README.md#closing-idle-agents)
+
 </details>

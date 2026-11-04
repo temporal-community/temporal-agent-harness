@@ -431,7 +431,7 @@
     );
     if (action == null) return;
     event.preventDefault();
-    applyReplayAction(action, replaySurface);
+    applyReplayAction(action, replaySurface, event.repeat);
   }
 
   /* Which rail the keys act on, read off where the reader last put their hands
@@ -874,6 +874,11 @@
           ready={motionReady}
           onFocusChange={(next) => run.setGraphFocus(next)}
           onNodeSelect={selectNode}
+          runHasTurns={run.stepTimeline.turns.length > 0}
+          agentLabel={run.runInfo.agentLabel}
+          accepts={(run.session ? run.agentInterfaces[run.session.workflow_id] ?? [] : []).map(
+            (item) => item.name
+          )}
         />
       {:else if pane.kind === "chat" && run.sessionGone && run.frames.length === 0}
         <EmptyState title="This session's workflow no longer exists and nothing was cached" />
@@ -960,6 +965,7 @@
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}
+          runHasEvents={run.fullReplayLog.groups.length > 0}
           activeTurnNumber={run.currentLogRow?.turnNumber ?? null}
           activeRowId={run.currentLogRow?.id ?? null}
           activeOrdinal={run.currentLogRow?.ordinal ?? null}

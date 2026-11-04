@@ -11,7 +11,7 @@
 //                                                           dependency order
 //
 // Units:
-//   python  python/pyproject.toml; branch release/python-v<version>; tag <version> (bare, as the
+//   pypi    python/pyproject.toml; branch release/pypi-v<version>; tag <version> (bare, as the
 //           `pypi` GitHub environment's tag policy requires); publish.yml.
 //   npm     every typescript/packages/* manifest named @temporalio/agent-harness[-*], at one
 //           shared version (lockstep); branch release/npm-v<version>; tag npm-v<version>;
@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const units = ['python', 'npm'];
+const units = ['pypi', 'npm'];
 const bumps = ['patch', 'minor', 'major'];
 export const PACKAGES_DIR = 'typescript/packages';
 const WORKSPACE_DIRS = ['typescript/packages', 'typescript/apps', 'typescript/examples'];
@@ -51,7 +51,7 @@ export function bumpVersion(version, bump) {
 }
 
 export function validateInputs(unit, bump) {
-  assert(units.includes(unit), 'Select python or npm');
+  assert(units.includes(unit), 'Select pypi or npm');
   assert(bumps.includes(bump), 'Select patch, minor, or major');
 }
 
@@ -62,16 +62,16 @@ export function unitDetails(unit, version) {
     unit,
     version,
     branch: `release/${unit}-v${version}`,
-    tag: unit === 'python' ? version : `npm-v${version}`,
-    publishWorkflow: unit === 'python' ? 'publish.yml' : 'publish-npm.yml',
-    testTargets: unit === 'python'
+    tag: unit === 'pypi' ? version : `npm-v${version}`,
+    publishWorkflow: unit === 'pypi' ? 'publish.yml' : 'publish-npm.yml',
+    testTargets: unit === 'pypi'
       ? '//python/tests:test_packaged_distributions'
       : `//${PACKAGES_DIR}/...`,
   };
 }
 
 export function releaseDetails(branch) {
-  const match = /^release\/(python|npm)-v(.+)$/.exec(branch);
+  const match = /^release\/(pypi|npm)-v(.+)$/.exec(branch);
   assert(match && stableVersion.test(match[2]), `Invalid release branch ${branch}`);
   return unitDetails(match[1], match[2]);
 }
@@ -79,7 +79,7 @@ export function releaseDetails(branch) {
 export function tagDetails(tag) {
   const npm = /^npm-v(.+)$/.exec(tag);
   if (npm) return unitDetails('npm', npm[1]);
-  return unitDetails('python', tag);
+  return unitDetails('pypi', tag);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -122,7 +122,7 @@ export function updateDevelopmentPins(unit, previous, next, root = '.') {
   for (const directory of ['docs', 'python/temporal_agent_harness/skills', 'typescript/packages/core/skills']) walk(directory);
   for (const pkg of lockstepPackages(root)) paths.push(`${pkg.directory}/README.md`);
   const escaped = escapeRegExp(previous);
-  const pattern = unit === 'python'
+  const pattern = unit === 'pypi'
     ? new RegExp(`(temporal-agent-harness(?:\\[[^\\]]+\\])?==)${escaped}(?![\\d.])`, 'g')
     : new RegExp(`(@temporalio/agent-harness(?:-[a-z-]+)?@)${escaped}(?![\\d.])`, 'g');
   for (const relative of new Set(paths)) {
@@ -130,7 +130,7 @@ export function updateDevelopmentPins(unit, previous, next, root = '.') {
     if (!existsSync(path)) continue;
     const original = readFileSync(path, 'utf8');
     let text = original.replace(pattern, `$1${next}`);
-    if (unit === 'python' && ['python/README.md', 'docs/guides/examples.md'].includes(relative)) {
+    if (unit === 'pypi' && ['python/README.md', 'docs/guides/examples.md'].includes(relative)) {
       text = text.replace(new RegExp(`(--branch )${escaped}(?![\\d.])`, 'g'), `$1${next}`)
         .replace(new RegExp(`git diff \\S+ ${escaped}(?![\\d.])`, 'g'), `git diff ${previous} ${next}`);
     }
@@ -268,7 +268,7 @@ export function prepare(env = process.env, run = execute) {
   let previous;
   let version;
   const lines = [];
-  if (unit === 'python') {
+  if (unit === 'pypi') {
     const pyproject = readFileSync(PYPROJECT, 'utf8');
     previous = pythonVersion(pyproject);
     version = bumpVersion(previous, bump);
@@ -349,7 +349,7 @@ export function finish(event, repository, run = execute) {
   assert(/^[a-f0-9]{40}$/.test(pr.merge_commit_sha), 'Invalid merge commit');
   assert.equal(run('git', ['rev-parse', 'HEAD']), pr.merge_commit_sha,
     'Checkout must point to the merged release commit');
-  if (unit === 'python') {
+  if (unit === 'pypi') {
     assert.equal(pythonVersion(readFileSync(PYPROJECT, 'utf8')), version,
       'Release branch must match the pyproject.toml version');
   } else {

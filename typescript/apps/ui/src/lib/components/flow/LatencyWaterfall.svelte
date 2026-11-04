@@ -129,7 +129,7 @@
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import Reading from "$lib/components/primitives/Reading.svelte";
   import type { Metric } from "$lib/components/primitives/metrics";
-  import { ChevronDown, ChevronRight, Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Cpu, ShieldCheck, Timer, Wrench } from "@lucide/svelte";
   import { scrollFollower } from "$lib/state/followScroll";
   import type { ReplayMarker } from "$lib/state/replayLog";
   import { textWidth } from "$lib/state/textWidth";
@@ -684,13 +684,17 @@
 {/snippet}
 
 <section class="waterfall" aria-label="Latency waterfall">
-  <header class="waterfall-head">
-    <Reading label={headLabel} headline={rollup.slice(0, 1)} breakdown={rollup.slice(1)} />
-  </header>
+  <!-- A run with no turns gets its empty state and nothing else: "0 turns, 0s total" over
+       it reads as a measurement of nothing rather than as nothing yet. -->
+  {#if timeline.turns.length > 0}
+    <header class="waterfall-head">
+      <Reading label={headLabel} headline={rollup.slice(0, 1)} breakdown={rollup.slice(1)} />
+    </header>
+  {/if}
 
   <div class="turns" data-drawer-fit bind:this={turnsElement} onscroll={follower.handleScroll}>
     {#if timeline.turns.length === 0}
-      <EmptyState title="Step through the stream to chart per-step latency." />
+      <EmptyState title="Step through the stream to chart per-step latency." icon={Timer} />
     {:else}
       <!-- No shared ruler heads these rows, because each is scaled to its own turn
            and no single ruler would be true of all of them. Nor does a sentence

@@ -358,7 +358,7 @@ test("an exposed session is inspected as plain data from the global hook", async
     waitingApprovals: 1,
     waitingCallbacks: 0,
     agents: {
-      root: { agentId: "root", parentId: null, agentKey: null, workflowId: null, lifecycle: "running", unavailable: null, agentStatus: "idle", messages: 1, states: [] }
+      root: { agentId: "root", parentId: null, agentKey: null, workflowId: null, lifecycle: "running", unavailable: null, closeReason: null, agentStatus: "idle", messages: 1, states: [] }
     }
   });
   unexpose();

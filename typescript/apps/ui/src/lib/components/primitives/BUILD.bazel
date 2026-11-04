@@ -109,6 +109,12 @@ js_library(
 )
 
 js_library(
+    name = "ThinkingOrb",
+    srcs = ["ThinkingOrb.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "TipCard",
     srcs = ["TipCard.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],

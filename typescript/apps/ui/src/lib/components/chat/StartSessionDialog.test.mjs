@@ -121,7 +121,7 @@ describe("StartSessionDialog", () => {
     assert.deepEqual(names("agent39workflow"), ["Agent 39"]);
     assert.equal(names("").length, 40);
     assert.match(source, /filtered\.length < agents\.length \? `\$\{filtered\.length\} of \$\{agents\.length\}`/);
-    assert.match(source, /<EmptyState title="No agents match">/);
+    assert.match(source, /<EmptyState title="No agents match"[^>]*>/);
   });
 
   it("says a worker's state only when it is not ready, and never READY", () => {

@@ -253,6 +253,51 @@ class TravelAgent:
 ```
 
 
+### Closing idle agents
+
+An agent's workflow stays open between messages until something closes it. While it waits for
+the next message the agent is *idle*: no turn is running, and it consumes no compute. A Temporal
+workflow that is waiting is durable state on the server, not a process spinning on a worker.
+Staying open is what lets a conversation pick up where it left off, hours or days later.
+
+Some agents are of no use once their user stops interacting with them. Take the agent behind a
+chat box on a web page whose session is not kept: when the user leaves, nothing will ever send
+it another message. For an agent like that, give the runner an idle timeout, and it closes the
+agent once no one has talked to it for that long:
+
+```python
+self._runner = AgentWorkflowRunner(
+    config,
+    stream=WorkflowStream(),
+    approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
+    close_after_idle_default=timedelta(minutes=30),
+)
+```
+
+In TypeScript, it is `defineAgent({ closeAfterIdleDefault: "30 minutes", ... })`.
+
+Once the agent has been idle for that long, the runner closes it the same way a `close` signal
+does:
+
+- `@agent.teardown` runs;
+- the stream's last event is `agent_closed` with reason `idle_timeout_expired`, and
+  `agent_status` reports the same `close_reason`;
+- a message sent afterwards is refused with `AgentClosed`.
+
+Only idle time counts. A running turn is never idle, even one that waits hours on a tool call,
+a human approval, or a subagent; the clock starts again from zero each time a turn ends.
+
+A caller can override the agent's default when it starts a session, with
+`AgentConfig(close_after_idle=...)`; `timedelta(0)` means never close on idle. If the user
+comes back after their agent has closed, `AgentClient.start_and_submit_message` starts a new
+session under the same workflow id. It starts fresh, without the closed session's conversation.
+
+> **Subagents never close on idle.** This is deliberate: a parent owns the whole lifecycle of
+> its subagents. It may leave a subagent waiting between messages for as long as it likes, and
+> it alone decides when that subagent ends, with `stop_<key>`. So whenever a parent starts a
+> subagent, the harness turns the subagent's idle timeout off, overriding any default the
+> subagent's own agent sets.
+
 ## Running a worker — one plugin
 
 An agent is a Temporal workflow, so it runs on a Temporal worker. `AgentHarnessPlugin` is the

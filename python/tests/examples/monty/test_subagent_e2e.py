@@ -205,7 +205,7 @@ async def _merged_send(
 ) -> tuple[str, list[AgentEvent]]:
     """Drive the parent via ``AgentClient.send_message`` (the MERGED path) and collect every
     AgentEvent on the unified logical stream. ``stop`` controls whether the subagent is stopped
-    at the end of the turn (a stopped subagent becomes a completed workflow — see the xfail note)."""
+    at the end of the turn (a stopped subagent becomes a completed workflow)."""
     handle = await client.start_workflow(
         SubagentE2EParentWorkflow.run,
         AgentConfig(),
@@ -300,7 +300,7 @@ async def test_merged_send_message_nests_live_subagent_events_in_brackets(client
     # [subagent_message_sent … subagent_reply_received] bracket — though parent and child publish
     # to independent workflow streams. End-to-end exercise of W1 (the new subagent_reply_received
     # publish + AgentEvent.agent_id) + W3 (the merge engine) against real workflows. The subagent
-    # is left ALIVE (stop=False) so its stream is readable throughout (see the xfail twin below).
+    # is left ALIVE (stop=False) so its stream is readable throughout (the stopped twin is the attach test below).
     client, task_queue = client_and_queue
     _parent_id, merged = await _merged_send(
         client, task_queue, [_const_script(42), _const_script(99)], stop=False
@@ -409,22 +409,18 @@ async def test_human_can_message_a_live_subagent_directly(client_and_queue):
     assert (await child_client.get_status()).current_turn == 3
 
 
-async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queue):
-    # The REAL graceful-degradation path (distinct from the LIVE merge above, which reads the
-    # child's detail in real time BEFORE the end-of-turn stop completes the child): here we drive
-    # the subagent and STOP it, so by the time we REATTACH it is a COMPLETED workflow. workflow_streams
-    # cannot read a completed workflow's stream, so the merge cannot mount the stopped child on
-    # replay — it must DEGRADE rather than wedge: release the child's close gate so the parent renders
-    # to its turn_end, and surface a non-fatal subagent_stream_unavailable marker for the child.
-    # Once a completed workflow's stream can be read, the merge replays the child instead and this
-    # test fails on the missing marker: rewrite it to assert the child's turns merge inside the
-    # parent's brackets, and cover the marker with a child whose reads fail.
+async def test_attach_after_stopped_subagent_replays_its_turns_in_brackets(client_and_queue):
+    # Drive the subagent and STOP it, so by the time we REATTACH it is a COMPLETED workflow. A
+    # closed run's workflow stream stays readable, so the replay merge mounts the stopped child and
+    # nests its turns in the parent's brackets exactly as the live merge does, with no
+    # subagent_stream_unavailable marker. The marker for a child whose reads fail is covered in
+    # tests/harness/test_stream_merge.py.
     client, task_queue = client_and_queue
     parent_id, live = await _merged_send(
         client, task_queue, [_const_script(42), _const_script(99)], stop=True
     )
     # The parent's turn ends once it has asked the child to stop, not once the child's workflow has
-    # completed; until then its stream is still readable, so wait for the completion.
+    # completed, so wait for the completion before reattaching.
     (child_workflow_id,) = {
         e.event.workflow_id for e in live if e.event.type == AgentEventType.SUBAGENT_STARTED
     }
@@ -439,35 +435,9 @@ async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queu
         if isinstance(item, AgentEvent):
             attached.append(item)
 
-    # The subagent the parent drove (and stopped) — identified off the replayed subagent_started.
-    child_ids = {
-        e.event.subagent_id
-        for e in attached
-        if e.event.type == AgentEventType.SUBAGENT_STARTED
-    }
-    assert len(child_ids) == 1
-    child_id = next(iter(child_ids))
-
-    # The parent stream rendered FULLY despite the unreadable child — its turn_end is present (the
-    # dead child's never-coming turn_end did not strand the parent's tail behind the close gate).
-    parent_events = [e for e in attached if e.agent_id != child_id]
-    assert parent_events[-1].event.type == AgentEventType.TURN_END
-
-    # A non-fatal marker was surfaced for the stopped subagent (its own turn DETAIL is forgone), and
-    # no actual child turn detail leaked onto the merged stream.
-    markers = [
-        e
-        for e in attached
-        if e.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
-    ]
-    assert markers and all(m.event.subagent_id == child_id for m in markers)
-    child_detail = [
-        e
-        for e in attached
-        if e.agent_id == child_id
-        and e.event.type != AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
-    ]
-    assert not child_detail
+    _assert_subagent_turns_nested_in_brackets(attached, expected_child_turns=2)
+    assert not [e for e in attached if e.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]
+    assert attached[-1].event.type == AgentEventType.TURN_END
 
 
 async def test_gated_concurrent_dispatches_get_distinct_turn_numbers(client_and_queue):

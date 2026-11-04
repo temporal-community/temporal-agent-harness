@@ -207,6 +207,28 @@ describe("the Logs pane during a scrub", () => {
 
 /* The filter used to let the cursor's row through whatever it was, so Errors on a run with
    none read "1/215 events" over a lone "Turn ended". A filter shows what matches it. */
+/* Filter chips, a search field and "0 events" over a run with nothing in it are controls with
+   nothing to act on. They go only when the whole run is empty: at the cursor's first step of a
+   run that has events, they stay, or scrubbing to the start would drop them and bring them back. */
+describe("the Logs pane on an empty run", () => {
+  const draw = (props) =>
+    stripComments(
+      render(TranscriptPanel, {
+        props: { groups: [], activeTurnNumber: null, activeOrdinal: null, ...props }
+      }).body
+    );
+
+  it("shows only its empty state when the run has no events", () => {
+    const html = draw({ runHasEvents: false });
+    assert.doesNotMatch(html, /class="transcript-controls/);
+    assert.match(html, /Step through the stream to build the logs\./);
+  });
+
+  it("keeps the filters at the first step of a run that has events", () => {
+    assert.match(draw({ runHasEvents: true }), /class="transcript-controls/);
+  });
+});
+
 describe("the Logs pane's filter", () => {
   const draw = (groups, filter, row) =>
     stripComments(
@@ -245,11 +267,11 @@ describe("the Logs pane's filter", () => {
   });
 });
 
-/* The Logs rows wore their own chrome: the kind as a bordered chip and then as coloured caps, a
-   boxed status chip, a boxed actor icon and a boxed ">". They are the chat trace's TraceRow now,
-   one per event: a state glyph only where there is a state, the label in plain words, the tool in
-   mono, the clock at the end. The fixture has done, awaiting and failed rows, so every glyph is
-   drawn. */
+/* The Logs rows are the chat trace's TraceRow, one per event: a state glyph only where there is a
+   state, the tool in mono once on its head. The pane exists to show the protocol, so each event is
+   named by its protocol type in a quiet chip in its actor's hue, with a bar of that hue down the
+   row; the same thing as a sentence is in the tip. The fixture has done, awaiting and failed rows,
+   so every glyph is drawn. */
 describe("the Logs pane's rows", () => {
   const { groups } = buildReplayLog(scaleScenario("reply-failed").frames);
   const html = stripComments(
@@ -283,28 +305,43 @@ describe("the Logs pane's rows", () => {
     assert.ok(toggles > 0 && toggles < rows.length, `some rows open and some do not (${toggles}/${rows.length})`);
   });
 
-  it("boxes nothing and draws no icon but the state glyph and the disclosure chevron", () => {
+  const typeOf = (chunk) => chunk.match(/class="chip [^"]*event-type[^"]*"[\s\S]*?<span class="chip-label[^"]*">([^<]*)<\/span>/)?.[1] ?? null;
+  const rowOf = (type) => rows.find((row) => typeOf(row) === type) ?? "";
+
+  it("names every event by its protocol type, in one chip with one icon, and boxes nothing else", () => {
+    const { rows: events } = buildReplayLog(scaleScenario("reply-failed").frames);
+    const types = new Set(events.map((row) => row.event.replaceAll("_", " ")));
     for (const row of rows) {
-      assert.doesNotMatch(row, /class="chip\b|class="badge\b|kicker|line-kind|actor-icon/);
+      assert.equal(row.match(/class="chip /g)?.length ?? 0, 1, "one chip per event");
+      assert.ok(types.has(typeOf(row)), `the chip is a protocol event type, not "${typeOf(row)}"`);
+      assert.doesNotMatch(row, /class="badge\b|kicker|line-kind|actor-icon|trace-prefix/);
       const svgs = row.match(/<svg\b/g)?.length ?? 0;
-      const allowed = (row.match(/class="state-glyph/g)?.length ?? 0) + (row.match(/disclosure-chevron/g)?.length ?? 0);
-      assert.equal(svgs, allowed, "only StateGlyph and the chevron may draw an icon");
+      const allowed = 1 + (row.match(/class="state-glyph/g)?.length ?? 0) + (row.match(/disclosure-chevron/g)?.length ?? 0);
+      assert.equal(svgs, allowed, "only the type's icon, StateGlyph and the chevron may draw an icon");
     }
     const glyphs = rows.join("").match(/class="state-glyph/g)?.length ?? 0;
     assert.ok(glyphs > 0 && glyphs < rows.length, `the glyph marks some rows' state, not every row (${glyphs}/${rows.length})`);
   });
 
+  it("colors each event by who it is from, on its chip and its bar, and an error red", () => {
+    const hue = (chunk) => chunk.match(/^[^>]*style="--hue: ([^;"]+)/)?.[1] ?? "";
+    assert.equal(hue(rowOf("tool start")), "var(--tool)");
+    assert.equal(hue(rowOf("tool error")), "var(--error)");
+    assert.match(rowOf("tool error"), /class="chip [^"]*\berror\b/);
+    assert.match(rowOf("tool start"), /class="chip [^"]*\btool\b[^"]*\btoned\b/);
+    /* On the glyph's cell, not the row's ::before, which the row's tip already uses. */
+    assert.match(rule(".log-line :global(.trace-glyph),\n  .trail-glyph"), /background: linear-gradient\(var\(--hue, var\(--text-4\)\), var\(--hue, var\(--text-4\)\)\) no-repeat 0 0 \/ 3px 100%;/);
+  });
+
   /* The failed call is signal, so its step is open: the head names the tool once, in mono, and
-     the events under it are plain words. */
-  it("writes the label in plain words, the tool in mono once on its head, and the clock in the tip", () => {
-    const tool = rows.find((row) => />Tool started</.test(row)) ?? "";
-    assert.match(tool, /<span class="trace-prefix[^"]*" dir="auto">Tool started<\/span>/);
+     the events under it are their types. */
+  it("puts the tool in mono once on its head, and the clock and the sentence in the tip", () => {
+    const tool = rowOf("tool start");
     assert.doesNotMatch(tool, /<strong/, "an event under a head does not repeat the tool's name");
-    assert.match(tool, /<span class="trace-meta[^"]*" dir="auto">(\+[^<]+)?<\/span>/, "the end of the row is an offset, or nothing");
-    assert.match(tool, /data-tip="\d\d:\d\d:\d\d [AP]M/);
+    assert.match(tool, /<span class="trace-meta[^"]*" dir="auto">(\+[^<]+)?<\/span>/, "the row's offset, or nothing");
+    assert.match(tool, /data-tip="\d\d:\d\d:\d\d [AP]M · Tool started/);
     const head = heads.find((chunk) => /aria-expanded="true"/.test(chunk) && /class="mono/.test(chunk)) ?? "";
     assert.match(head, /<strong class="mono[^"]*" dir="auto">\w+_\w+<\/strong>/);
-    assert.match(rule(".log-line :global(.trace-prefix)"), /color: var\(--text-2\);/, "the label is words, not a muted prefix");
   });
 
   /* A row of any height but the one WindowedRows estimates makes the windowed list jump as it
@@ -319,15 +356,16 @@ describe("the Logs pane's rows", () => {
   });
 
   it("draws signal bright and routine dim", () => {
-    const failed = rows.find((row) => />Tool failed</.test(row)) ?? "";
-    const started = rows.find((row) => />Turn started</.test(row)) ?? "";
+    const failed = rowOf("tool error");
+    const started = rowOf("turn started");
     const classes = (chunk) => chunk.match(/^[^"]*" class="([^"]*)"/)?.[1] ?? "";
     assert.match(classes(failed), /\bsignal\b/, "an error is signal");
     assert.doesNotMatch(classes(failed), /\broutine\b/, "an error is never dimmed");
     assert.match(classes(started), /\broutine\b/, "a turn starting is routine");
     assert.doesNotMatch(classes(started), /\bsignal\b/);
-    assert.match(rule(".log-line.signal :global(:is(.trace-prefix, strong))"), /color: var\(--text-1\);/);
-    assert.match(rule(".log-line.routine :global(:is(.trace-prefix, strong))"), /color: var\(--text-3\);/);
+    assert.match(rule(".log-line.signal :global(strong)"), /color: var\(--text-1\);/);
+    assert.match(rule(".log-line.routine :global(strong)"), /color: var\(--text-3\);/);
+    assert.match(rule(".log-line.routine :global(.event-type)"), /opacity: 0\.72;/);
   });
 
   /* The lines of each turn in the order drawn, heads and rows alike. */
@@ -352,20 +390,33 @@ describe("the Logs pane's rows", () => {
     }
   });
 
-  it("keeps every line to one line: the parts fade, the offset column holds its width", () => {
-    assert.match(rule(".log-line :global(.trace-meta)"), /min-width: 5ch;\s*white-space: nowrap;/);
+  /* At the row's end, a time sat a pane's width from a short nested row's words. It leads the row
+     now, in a column as wide as the turn's longest offset, so every row in a turn lines up and a
+     short row simply ends. */
+  it("keeps every line to one line, its offset first in a column as wide as the turn's longest", () => {
+    const meta = rule(".log-line :global(.trace-meta)");
+    assert.match(meta, /order: -1;/);
+    assert.match(meta, /width: calc\(var\(--offset-ch, 4\) \* 1ch \+ var\(--gap-md\)\);/);
+    assert.match(meta, /font-family: var\(--font-mono\);/, "a ch is the width the column was counted in");
+    assert.match(meta, /white-space: nowrap;/);
+    for (const turn of html.split('<section class="turn-group').slice(1)) {
+      const longest = Math.max(4, ...[...turn.matchAll(/<span class="trace-meta[^"]*" dir="auto">([^<]*)<\/span>/g)].map(([, offset]) => offset.length));
+      assert.match(turn, new RegExp(`class="log-lines[^"]*"[^>]*style="--offset-ch: ${longest};`));
+    }
+    assert.match(rule(".log-line :global(.trace-row.nested > .trace-line)"), /margin-inline-start: 0;/, "a nested row keeps the offset column straight");
+    assert.match(rule(".log-line :global(.trace-glyph),\n  .trail-glyph"), /margin-inline-start: calc\(1px \+ var\(--depth, 0\) \* 14px\);/, "and steps in its bar instead");
     for (const line of turnLines.flat()) {
       assert.doesNotMatch(line, /class="trace-(prefix|note)(?![^"]*fade-end)[^"]*"/, "a part that can clip fades");
     }
   });
 
   it("draws the turn's lifecycle quiet and its calls at full weight", () => {
-    const classes = (label) => rows.find((row) => new RegExp(`>${label}<`).test(row))?.match(/^[^"]*" class="([^"]*)"/)?.[1] ?? "";
-    const lifecycle = ["User message received", "Turn started", "Handler started", "Reply streaming", "Handler reply", "Turn ended"]
-      .filter((label) => classes(label));
+    const classes = (type) => rowOf(type).match(/^[^"]*" class="([^"]*)"/)?.[1] ?? "";
+    const lifecycle = ["message accepted", "turn started", "message handler start", "reply delta", "message handler end", "turn end"]
+      .filter((type) => classes(type));
     assert.ok(lifecycle.length >= 2, `sanity: drew ${lifecycle.join(", ")}`);
-    for (const label of lifecycle) assert.match(classes(label), /\broutine\b/, label);
-    assert.doesNotMatch(classes("Tool started"), /\broutine\b/, "a tool's event is not lifecycle");
+    for (const type of lifecycle) assert.match(classes(type), /\broutine\b/, type);
+    assert.doesNotMatch(classes("tool start"), /\broutine\b/, "a tool's event is not lifecycle");
     const model = heads.find((chunk) => /<strong class="mono[^"]*" dir="auto">gemini/.test(chunk)) ?? "";
     assert.ok(model, "sanity: a model call is a head");
     assert.doesNotMatch(model.match(/^[^"]*" class="([^"]*)"/)?.[1] ?? "", /\broutine\b/);
@@ -380,6 +431,67 @@ describe("the Logs pane's rows", () => {
       if (/trace-figure[^"]*">[\d,]+ tok</.test(chunk) && /took /.test(chunk)) assert.match(chunk, /data-tip="[^"]*· took \d/);
     }
     assert.ok(models.some((chunk) => /data-tip="[^"]*· took \d/.test(chunk)), "some model call's duration is in its tip");
+  });
+});
+
+/* A folded call said only its name, so what happened inside it took a click to learn; and every
+   row a reader opened stayed open, so a few clicks stacked tall detail blocks down the pane. */
+describe("the Logs pane's calls", () => {
+  const { groups, rows: events } = buildReplayLog(scaleScenario("reply-failed").frames);
+  const html = stripComments(
+    render(TranscriptPanel, { props: { groups, activeTurnNumber: null, activeOrdinal: null } }).body
+  );
+  const heads = html.split('<article id="log-step-').slice(1).map((chunk) => chunk.slice(0, chunk.indexOf("</article>")));
+  const folded = heads.filter((chunk) => /aria-expanded="false"/.test(chunk));
+
+  it("draws a folded call's events as a trail of icons, each opening that event", () => {
+    assert.ok(folded.length > 0, "sanity: some call is folded");
+    for (const head of folded) {
+      const buttons = head.match(/<button type="button" class="trail-event[^"]*"[^>]*>/g) ?? [];
+      assert.ok(buttons.length > 0, "a folded call shows its events");
+      for (const button of buttons) {
+        assert.match(button, /aria-label="[^"]+"/, "each event is named for a screen reader");
+        assert.match(button, /data-tip="[a-z]+( [a-z]+)*"/, "and tipped with its protocol type");
+      }
+    }
+    for (const head of heads.filter((chunk) => /aria-expanded="true"/.test(chunk))) {
+      assert.doesNotMatch(head, /class="trail-event/, "an open call shows its rows instead");
+    }
+    assert.match(source, /onclick=\{\(\) => revealRow\(group, step, run\.row\.id\)\}/);
+  });
+
+  /* Unfolding a call changes every row height after it, so the windowed jump alone landed the
+     opened event 1,300px above the pane on the worst-case run: a click that showed nothing. */
+  it("brings a revealed event into view by measuring it once it is drawn", () => {
+    const reveal = source.match(/function revealRow\([\s\S]*?\n  \}/)?.[0] ?? "";
+    assert.match(reveal, /document\.getElementById\(`log-row-\$\{rowId\}`\)/, "it measures the drawn row");
+    assert.match(reveal, /box\.scrollTop \+=/, "and moves only the pane's own scroller");
+    assert.match(reveal, /requestAnimationFrame\(settle\)/, "over frames, until the row holds still in view");
+  });
+
+  /* A tool that streams progress sent thirty events in a row, and its trail was thirty wrenches. */
+  it("draws a run of the same event once, with how many", () => {
+    const { groups: turns } = buildReplayLog(realisticQaScenario.frames);
+    const turn = turns.find((group) => group.rows.some((row) => row.event === "tool_progress_delta"));
+    const progress = turn.rows.find((row) => row.event === "tool_progress_delta");
+    const rows = turn.rows.flatMap((row) => (row === progress ? [row, { ...row, id: `${row.id}-again`, ordinal: row.ordinal + 0.5 }] : [row]));
+    const drawn = stripComments(
+      render(TranscriptPanel, { props: { groups: [{ ...turn, rows }], activeTurnNumber: null, activeOrdinal: null } }).body
+    );
+    const call = drawn.split('<article id="log-step-').slice(1).find((chunk) => /class="trail-count/.test(chunk)) ?? "";
+    assert.match(call, /aria-label="Tool progress, 2 in a row"[^>]*>[\s\S]*?<span class="trail-count[^"]*">×2<\/span>/);
+    assert.equal(call.match(/data-tip="tool progress delta"/g)?.length, 1, "the run is one icon");
+  });
+
+  it("keeps one row open at a time", () => {
+    const toggle = source.match(/function toggleRow\(rowId: string\): void \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    assert.match(toggle, /expandedRows = isRowExpanded\(rowId\) \? \{\} : \{ \[rowId\]: true \};/);
+  });
+
+  it("lists an open event's call in its details, marking this event", () => {
+    assert.match(source, /\{@const call = cachedLines\(group\)\.stepOf\.get\(row\.id\)\}/);
+    assert.match(source, /<section class="call-events" aria-label=\{`\$\{call\.name\} events`\}>/);
+    assert.match(source, /aria-current=\{here \? "true" : undefined\}/);
   });
 });
 

@@ -48,3 +48,33 @@ describe("pane empty states", () => {
     }
   });
 });
+
+/* A box reads as "press me", and an empty state has nothing to press: it is text on the pane,
+   as the welcome is. */
+describe("an empty state's box", () => {
+  const style = readFileSync(new URL("lib/components/primitives/EmptyState.svelte", SRC), "utf8");
+  const rule = (selector) => new RegExp(`\\n {2}${selector} \\{([^}]*)\\}`).exec(style)?.[1];
+
+  it("has no fill and no border", () => {
+    assert.ok(rule("\\.empty-state"), "the .empty-state rule moved");
+    assert.doesNotMatch(rule("\\.empty-state"), /background|border/);
+  });
+
+  /* With the box gone, a framed snippet and a filled chip of a language tag were the
+     loudest things left, so the hint outranked the title above it. */
+  it("keeps its snippet a quiet hint: no frame, and a plain tag", () => {
+    assert.doesNotMatch(rule("pre"), /border/);
+    assert.match(rule("pre\\[data-language\\]::before"), /border: 0;[\s\S]*background: none;/);
+  });
+
+  it("marks each pane's empty state with an icon hidden from screen readers", () => {
+    const bodies = [
+      render(AgentStatePanel, { props: { states: [] } }).body,
+      render(FilesPanel, { props: { mounts: [], live: true, onViewFile: async () => ({}) } }).body,
+      render(ApprovalDecisionPanel, { props: { decisions: [], ahead: 0, onJumpToLive: () => {} } }).body
+    ];
+    for (const body of bodies) {
+      assert.match(body, /<span class="empty-icon[^"]*" aria-hidden="true">[\s\S]{0,40}?<svg/);
+    }
+  });
+});

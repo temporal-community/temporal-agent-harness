@@ -19,6 +19,8 @@
     running?: boolean;
     /** The state in words for screen readers, where the glyph is the only thing saying it. */
     glyphLabel?: string;
+    /** Drawn before the words: the Logs pane's event type. */
+    badge?: Snippet;
     /** Plain words before the name: "host", or a log event's label. */
     prefix?: string;
     name?: string;
@@ -50,6 +52,7 @@
     glyph = null,
     running = false,
     glyphLabel,
+    badge,
     prefix,
     name,
     mono = false,
@@ -76,6 +79,7 @@
     {#if expandable}<ChevronRight class="disclosure-chevron" size={13} aria-hidden="true" />{/if}
   </span>
   <span class="trace-copy">
+    {@render badge?.()}
     {#if prefix}<span class="trace-prefix fade-end" dir="auto">{prefix}</span>{/if}
     {#if name}<strong class={[{ mono }, "fade-end"]} dir="auto">{name}</strong>{/if}
     {#if status}<span class="trace-status">{status}</span>{/if}

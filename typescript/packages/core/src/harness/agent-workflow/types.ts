@@ -1,3 +1,4 @@
+import type { Duration } from "@temporalio/common";
 import type { z } from "zod";
 import type { AgentMessage, AutoApprovalCriteria, AutoModeEvaluator, MessageContext, MidTurn, Schema, ToolApprovalPolicy } from "../agent-protocol/index.ts";
 import type { StateDecl } from "../state/index.ts";
@@ -71,6 +72,8 @@ export interface RunnerOptions {
   approvalPolicyDefault: ToolApprovalPolicy;
   autoApprovalCriteriaDefault?: AutoApprovalCriteria | undefined;
   autoModeEvaluator?: AutoModeEvaluator | undefined;
+  /** Close the agent once it has been idle this long; omitted or 0 never closes on idle. */
+  closeAfterIdleDefault?: Duration | undefined;
   states?: Readonly<Record<string, AnyStateDecl>> | undefined;
   /** The agent's validated init data, handed to each state's `initial`. */
   data?: unknown;

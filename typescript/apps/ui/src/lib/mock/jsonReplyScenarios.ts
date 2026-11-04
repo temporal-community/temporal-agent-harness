@@ -485,3 +485,44 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
 
   return { demo, worst, empty, one, huge, markdown, longcontent, images, attachments, queue, script };
 }
+
+/* A Code Mode host whose script made 24 calls, named every awkward way a tool can be. The host
+   and its last call are still running, so the graph keeps streaming. */
+export function codeModeScenario(): MockScenario {
+  const hostileNames = [
+    `lookup ${"very long tool name ".repeat(15)}`,
+    `unbroken_${"x".repeat(2_000)}`,
+    "顧客データ取得ツール_検索と集計",
+    "חיפוש_לקוחות_לפי_אזור",
+    "البحث_عن_العملاء",
+    "👩‍👩‍👧‍👦_family_lookup_🏳️‍🌈",
+    "z̷̢͓a̵̛l̶̺g̸̙o̴_tool",
+    "zero\u200bwidth\u200bname",
+    "**bold** <script>alert(1)</script> # heading",
+    "line\nbreak\tand tab",
+    "   padded name   ",
+    ""
+  ];
+  const cm = (d = 0.2) => ({ ...meta(1, (clock += d)), message_id: "msg-codemode" });
+  const hostScript = Array.from({ length: 24 }, (_, i) => `r${i} = await tools.call_${i}()`).join("\n");
+  const children = Array.from({ length: 24 }, (_, i) => {
+    const id = `cm-child-${i}`;
+    const name = hostileNames[i % hostileNames.length]!;
+    const input = { index: i, query: name };
+    return [
+      frame("tool_requested", { type: "tool_requested", ...cm(), tool_id: id, tool_name: name, tool_input: input }),
+      frame("tool_start", { type: "tool_start", ...cm(), tool_id: id, tool_name: name, tool_input: input }),
+      ...(i < 23 ? [frame("tool_end", { type: "tool_end", ...cm(), tool_id: id, tool_name: name, tool_output: JSON.stringify({ ok: true, name, rows: i }) })] : [])
+    ];
+  }).flat();
+  const codemodeFrames = [
+    frame("message_accepted", { type: "message_accepted", ...cm(), handler: "ask", payload: { text: "Run the batch." }, disposition: "opened" }),
+    frame("turn_started", { type: "turn_started", ...cm() }),
+    frame("message_handler_start", { type: "message_handler_start", ...cm() }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...cm(), model: "gpt-5.4-mini" }),
+    frame("tool_requested", { type: "tool_requested", ...cm(), tool_id: "cm-host", tool_name: "run_temporal_code", tool_input: { script: hostScript } }),
+    frame("tool_start", { type: "tool_start", ...cm(), tool_id: "cm-host", tool_name: "run_temporal_code", tool_input: { script: hostScript } }),
+    ...children
+  ];
+  return { ...scenario("codemode", "Code Mode host", codemodeFrames), instantFrames: codemodeFrames.length - 6 };
+}
