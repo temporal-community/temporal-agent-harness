@@ -211,6 +211,16 @@ describe("the Logs pane during a scrub", () => {
     assert.match(windowed, /initialOffset: \(\) => scroller\?\.scrollTop \?\? 0,/);
   });
 
+  /* A turn scrolled back into view builds its rows anew. Estimating each from scratch, it moved
+     the scroller for every folded call (a name and a trail, taller than a line), which pushed
+     the turn back out of view, so wheeling up looped at a turn's edge and never got past it. */
+  it("seeds a remounted turn's rows with the heights it measured before", () => {
+    const windowed = readFileSync(new URL("../primitives/WindowedRows.svelte", import.meta.url), "utf8");
+    assert.match(windowed, /const measured = new WeakMap<HTMLElement, Map<string \| number, number>>\(\);/);
+    assert.match(windowed, /estimateSize: \(index\) => sizes\(\)\?\.get\(keyOf\(index\)\) \?\? estimateSize,/);
+    assert.match(windowed, /sizes\(\)\?\.set\(keyOf\(instance\.indexFromElement\(node\)\), size\);/);
+  });
+
   /* Windowing whole turns drew every row of one in view: 533k DOM nodes for a dense turn. */
   it("draws a screenful of a 100,000-row turn, not all of it", () => {
     const { groups } = buildReplayLog(scaleScenario("dense50k").frames);
