@@ -502,6 +502,9 @@ subagent_started: {
   subagent_id: string
   agent_key: string
   workflow_id: string
+  // Runs inside its parent's workflow, its events on the parent's stream: workflow_id is only
+  // a key, so there is nothing to query or message, and its approvals go to the parent.
+  inline: boolean
 }
 
 subagent_message_sent: {
@@ -511,6 +514,7 @@ subagent_message_sent: {
   handler: string
   subagent_turn: number
   from_offset: number
+  inline: boolean
 }
 
 subagent_reply_received: {
@@ -520,12 +524,14 @@ subagent_reply_received: {
   handler: string
   subagent_turn: number
   outcome: "ok" | "error"
+  inline: boolean
 }
 
 subagent_stopped: {
   subagent_id: string
   agent_key: string
   workflow_id: string
+  inline: boolean
 }
 
 subagent_stream_unavailable: {

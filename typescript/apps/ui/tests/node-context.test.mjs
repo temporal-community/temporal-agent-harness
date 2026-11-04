@@ -112,6 +112,7 @@ const fixtures = {
       frames: [
         frame("turn_started", { user_message: "delegate this", turn_number: 1 }),
         frame("model_interaction_started", { model: "gpt-5.1" }),
+        frame("subagent_started", { subagent_id: "s1", workflow_id: "child", agent_key: "researcher" }),
         frame("message_handler_end", { output: { text: "delegated" } })
       ]
     },

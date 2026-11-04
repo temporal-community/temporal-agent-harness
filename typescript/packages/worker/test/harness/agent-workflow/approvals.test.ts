@@ -194,6 +194,31 @@ describe("tool approvals", () => {
     assert.equal(replyText(events), "wf:Z");
   });
 
+  it("an inline subagent's tool call publishes as that subagent's, in its own turn", async () => {
+    const h = await env.start("ApprovalProbeAgent");
+    await send(h, "act", { text: "inline-subagent" });
+    const events = await collectDeciding(h, onRequest(h, "wf-1"));
+    const call = events.filter((e) => "tool_id" in e.event && e.event.tool_id === "wf-1");
+    assert.deepStrictEqual(
+      call.map((e) => [e.event.type, e.agent_id, e.message_id, e.turn_id, e.turn_number]),
+      GATED.map((type) => [type, "sub", "m-sub", "sub-turn-1", 1]),
+    );
+    assert.equal(replyText(events), "wf:Z");
+  });
+
+  it("a call abandoned while it waits for approval is denied, not left pending", async () => {
+    const h = await env.start("ApprovalProbeAgent");
+    await send(h, "act", { text: "abandoned" });
+    const events = await collect(env.client, h.workflowId);
+    const resolved = one(events, "tool_approval_resolved");
+    assert.deepStrictEqual(
+      [resolved.tool_id, resolved.approved, resolved.reason],
+      ["wf-1", false, "approval unresolved"],
+    );
+    assert.equal(replyText(events), "cancelled");
+    assert.deepStrictEqual(await pendingIds(h), []);
+  });
+
   it("a custom evaluator approves what the policy did not", async () => {
     const h = await env.start("EvaluatorProbeAgent");
     assert.equal((await status(h)).has_auto_approval_evaluator, true);
@@ -287,6 +312,23 @@ describe("tool approvals", () => {
       reason: "human got there first",
     });
     assert.equal(replyText(events), "act:S");
+  });
+
+  it("an abandoned call stops its evaluator and closes its bracket", async () => {
+    const h = await env.start("SlowEvaluatorProbeAgent");
+    await send(h, "act", { text: "abandoned" });
+    const events = await collect(env.client, h.workflowId);
+    assert.deepStrictEqual(typesFor(events, "wf-1"), [
+      "tool_approval_requested",
+      "auto_approval_evaluation_started",
+      "auto_approval_evaluation_superseded",
+      "tool_approval_resolved",
+    ]);
+    bracketPairs(events, "denyOnceReleased");
+    assert.equal(one(events, "tool_approval_resolved").approved, false);
+    assert.equal(await h.query<boolean>("evaluator_cancelled"), true);
+    assert.equal(replyText(events), "cancelled");
+    assert.deepStrictEqual(await pendingIds(h), []);
   });
 
   for (const [name, workflowType, message] of [

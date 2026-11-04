@@ -38,26 +38,28 @@ const sub = (child: string) => ({
   agent_key: "k",
   workflow_id: child,
 });
-const ms = (a: string, t: number, child: string, childTurn: number, fromOffset = 0) =>
+const ms = (a: string, t: number, child: string, childTurn: number, fromOffset = 0, inline = false) =>
   ev(a, t, {
     type: "subagent_message_sent",
     ...sub(child),
     handler: "f",
     subagent_turn: childTurn,
     from_offset: fromOffset,
+    inline,
   });
-const rr = (a: string, t: number, child: string, childTurn: number) =>
+const rr = (a: string, t: number, child: string, childTurn: number, inline = false) =>
   ev(a, t, {
     type: "subagent_reply_received",
     ...sub(child),
     handler: "f",
     subagent_turn: childTurn,
     outcome: "ok",
+    inline,
   });
 const started = (a: string, t: number, child: string) =>
-  ev(a, t, { type: "subagent_started", ...sub(child) });
+  ev(a, t, { type: "subagent_started", inline: false, ...sub(child) });
 const stopped = (a: string, t: number, child: string) =>
-  ev(a, t, { type: "subagent_stopped", ...sub(child) });
+  ev(a, t, { type: "subagent_stopped", inline: false, ...sub(child) });
 const snapshot = (a: string) =>
   ev(a, 0, { type: "state_snapshot", state_id: "plan", version: 0, value: { steps: [] } }, "");
 const tool = (a: string, t: number, id: string, start: boolean) =>
@@ -226,6 +228,12 @@ describe("Gates", () => {
     assert.ok("mount" in (gates.onEmit(false, "P", ms("P", 1, "C", 1)) ?? {}));
     assert.deepStrictEqual(gates.onEmit(false, "P", stopped("P", 1, "C")), { unmount: "C" });
   });
+
+  it("an inline subagent mounts nothing and never holds its reply_received", () => {
+    const gates = new Gates();
+    assert.equal(gates.onEmit(false, "P", ms("P", 1, "C", 1, 0, true)), null);
+    assert.equal(gates.ready(false, "P", rr("P", 1, "C", 1, true)), true);
+  });
 });
 
 describe("mergeStream", () => {
@@ -245,6 +253,20 @@ describe("mergeStream", () => {
       assertValidMerge(merged, streams);
       assert.equal(merged.length, 11);
       assert.ok(types(merged).includes("state_snapshot"));
+    });
+
+  for (const [policy, select] of bothPolicies)
+    it(`an inline subagent's events stream in the parent's order (${policy})`, async () => {
+      const streams = {
+        P: [
+          ts("P", 1),
+          ms("P", 1, "C", 1, 0, true),
+          ev("P-abc123", 1, { type: "tool_end", tool_id: "t", tool_name: "Glob", tool_output: "x" }),
+          rr("P", 1, "C", 1, true),
+          te("P", 1),
+        ],
+      };
+      assert.deepStrictEqual(await runMerge(streams, { select }), streams.P);
     });
 
   it("replay is deterministic and reads parent-before-child", async () => {

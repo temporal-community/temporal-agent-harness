@@ -417,6 +417,11 @@ _CURRENT_MESSAGE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar
     "agent_message_id", default=None
 )
 
+# The inline subagent whose tool call is running (set by ``run_tool``); ``None`` for this agent.
+_CURRENT_AGENT_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_inline_agent_id", default=None
+)
+
 
 class _Ambient:
     """Sentinel for ``_pub(message_id=...)`` meaning "read :data:`_CURRENT_MESSAGE_ID`".
@@ -579,6 +584,7 @@ async def _apply_approval_policy(
         ctx.turn_id,
         ctx.message_id,
         inherently_safe=inherently_safe,
+        agent_id=ctx.agent_id,
     )
     runner._pub(
         ctx.turn_id,
@@ -598,21 +604,28 @@ async def _apply_approval_policy(
         tool_description=tool_description,
         declared_criteria_set=auto_approval_criteria,
     )
-    decision = (
-        await runner._run_auto_mode_evaluator(auto_ctx, tool_id=tool_id, stream=ctx)
-        if auto_ctx is not None
-        else None
-    )
-    if decision is not None:
-        if decision.verdict is AutoApprovalVerdict.APPROVE:
-            runner._resolve_and_publish(tool_id, approved=True, reason=decision.reason)
-        elif decision.verdict is AutoApprovalVerdict.DENY:
-            runner._resolve_and_publish(tool_id, approved=False, reason=decision.reason)
-        # ESCALATE: leave it PENDING and fall through to the human gate below.
+    try:
+        decision = (
+            await runner._run_auto_mode_evaluator(auto_ctx, tool_id=tool_id, stream=ctx)
+            if auto_ctx is not None
+            else None
+        )
+        if decision is not None:
+            if decision.verdict is AutoApprovalVerdict.APPROVE:
+                runner._resolve_and_publish(tool_id, approved=True, reason=decision.reason)
+            elif decision.verdict is AutoApprovalVerdict.DENY:
+                runner._resolve_and_publish(tool_id, approved=False, reason=decision.reason)
+            # ESCALATE: leave it PENDING and fall through to the human gate below.
 
-    await workflow.wait_condition(
-        lambda: runner._status.is_approval_resolved(tool_id) or runner._closed
-    )
+        await workflow.wait_condition(
+            lambda: runner._status.is_approval_resolved(tool_id) or runner._closed
+        )
+    except asyncio.CancelledError:
+        # The caller abandoned the call: deny it, so it isn't left pending forever.
+        if not runner._status.is_approval_resolved(tool_id):
+            runner._status.finalize_approval(tool_id, closed=runner._closed)
+            runner._publish_approval_resolved(tool_id)
+        raise
 
     # CAUSAL ORDERING: the ToolApprovalResolved event is published at the RESOLUTION SITE
     # (the ``tool_approval`` handler, the policy-update cascade, and the auto-mode
@@ -1379,6 +1392,8 @@ class _ApprovalEntry:
     # Whether the resolving decision asked to be remembered (allow-list this tool). False
     # for one-off decisions and for calls auto-resolved by a policy change.
     remember: bool = False
+    # The agent that made the call, so an inline subagent's resolution is published as its own.
+    agent_id: str | None = None
 
 
 @dataclass
@@ -1430,6 +1445,8 @@ class _CallbackEntry:
     result: Any = None
     # The client-reported failure ('error'), or the timeout/close note ('timeout'); None on 'ok'.
     error: str | None = None
+    # The agent that made the call, so an inline subagent's resolution is published as its own.
+    agent_id: str | None = None
 
 
 @dataclass
@@ -1671,6 +1688,7 @@ class _WorkflowStatus:
         message_id: str | None,
         *,
         inherently_safe: bool,
+        agent_id: str | None = None,
     ) -> None:
         """Record a gated tool call as PENDING approval. Called by the gate when the
         active policy does not auto-approve the call."""
@@ -1683,6 +1701,7 @@ class _WorkflowStatus:
             turn_id=turn_id,
             message_id=message_id,
             inherently_safe=inherently_safe,
+            agent_id=agent_id,
         )
 
     def _fresh_approval_short_id(self) -> str:
@@ -1797,6 +1816,7 @@ class _WorkflowStatus:
         turn_id: str,
         message_id: str | None,
         output_adapter: TypeAdapter[Any],
+        agent_id: str | None = None,
     ) -> None:
         """Record a callback tool call as PENDING a client-supplied result. Called by the
         callback tool's body when it parks to await external fulfillment."""
@@ -1809,6 +1829,7 @@ class _WorkflowStatus:
             turn_id=turn_id,
             message_id=message_id,
             output_adapter=output_adapter,
+            agent_id=agent_id,
         )
 
     def callback_entry(self, tool_id: str) -> _CallbackEntry | None:
@@ -2047,6 +2068,9 @@ class AgentWorkflowRunner:
         # generates its own. workflow.uuid4 is deterministic in-workflow (offline unit tests patch
         # it). Distinct from the full workflow_id, which the model/UI never needs to reproduce.
         self._agent_id: str = config.agent_id or workflow.uuid4().hex[:AGENT_ID_LENGTH]
+        # Each inline subagent's own turn (turn_id, turn_number), by its agent_id: its events
+        # are published against it, as a child workflow's would be.
+        self._inline_turns: dict[str, tuple[str, int]] = {}
         # Retain the WorkflowStream itself (not just the topic handle) so the runner can read
         # the stream's current head offset in-workflow — see ``_handle_send_agent_message``,
         # which returns it as ``AgentMessageReply.accepted_offset`` for the client stream-merge.
@@ -2596,7 +2620,21 @@ class AgentWorkflowRunner:
         # someone else" an outcome the gate can reach at all.
         task = asyncio.ensure_future(evaluator_fn(ctx))
         settled = lambda: self._status.is_approval_resolved(tool_id) or self._closed  # noqa: E731
-        await workflow.wait_condition(lambda: task.done() or settled())
+        try:
+            await workflow.wait_condition(lambda: task.done() or settled())
+        except asyncio.CancelledError:
+            # The caller abandoned the call: stop the evaluator and close its bracket.
+            task.cancel()
+            close(
+                AutoApprovalEvaluationSuperseded(
+                    tool_id=tool_id,
+                    tool_name=ctx.tool_name,
+                    evaluation_id=evaluation_id,
+                    evaluator=evaluator,
+                    verdict=None,
+                )
+            )
+            raise
 
         if settled():
             # Someone else answered. Their decision stands whether or not the evaluator got
@@ -2730,6 +2768,7 @@ class AgentWorkflowRunner:
                 remember=entry.remember,
             ),
             message_id=entry.message_id,
+            agent_id=entry.agent_id,
         )
 
     # -- Callback tools -----------------------------------------------------
@@ -2820,6 +2859,7 @@ class AgentWorkflowRunner:
                 error=entry.error,
             ),
             message_id=entry.message_id,
+            agent_id=entry.agent_id,
         )
 
     async def await_callback_result(
@@ -2864,6 +2904,7 @@ class AgentWorkflowRunner:
             ctx.turn_id,
             ctx.message_id,
             output_adapter,
+            ctx.agent_id,
         )
         self._pub(
             ctx.turn_id,
@@ -2885,6 +2926,12 @@ class AgentWorkflowRunner:
             # ``workflow.wait_condition(timeout=...)`` raises asyncio.TimeoutError (== builtin
             # TimeoutError on 3.11+) when the deadline elapses with the condition still false.
             timed_out = True
+        except asyncio.CancelledError:
+            # The caller abandoned the call: fail it, so it isn't left pending forever.
+            if not self._status.is_callback_resolved(tool_id):
+                self._status.finalize_callback(tool_id, closed=self._closed)
+                self._publish_callback_resolved(tool_id)
+            raise
 
         # CAUSAL ORDERING (mirrors the approval gate): the ok/error CallbackResolved is published
         # at the resolution site (the update handler), in the order results arrive. The gate
@@ -2985,11 +3032,12 @@ class AgentWorkflowRunner:
             payload = AgentStatePatch(
                 state_id=event.state_id, version=event.version, ops=event.ops
             )
-        ctx = self.current_stream_context
+        ctx = self._status.current_stream_context
         if ctx is None:
             self._pub("", 0, payload)
         else:
-            self._pub(ctx.turn_id, ctx.turn_number, payload)
+            # The state is this agent's, even when an inline subagent's tool call changed it.
+            self._pub(ctx.turn_id, ctx.turn_number, payload, agent_id=self._agent_id)
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:
@@ -3008,7 +3056,16 @@ class AgentWorkflowRunner:
         ctx = self._status.current_stream_context
         if ctx is None:
             return None
-        return ctx.model_copy(update={"message_id": _CURRENT_MESSAGE_ID.get()})
+        agent_id = _CURRENT_AGENT_ID.get() or ctx.agent_id
+        turn_id, turn_number = self._inline_turns.get(agent_id, (ctx.turn_id, ctx.turn_number))
+        return ctx.model_copy(
+            update={
+                "message_id": _CURRENT_MESSAGE_ID.get(),
+                "agent_id": agent_id,
+                "turn_id": turn_id,
+                "turn_number": turn_number,
+            }
+        )
 
     def _handle_close(self) -> None:
         self._close(CloseReason.REQUESTED)
@@ -3235,7 +3292,7 @@ class AgentWorkflowRunner:
         it. ``workflow.uuid4`` is deterministic in-workflow (offline unit tests patch it)."""
         while True:
             candidate = f"{self._agent_id}-{workflow.uuid4().hex[:AGENT_ID_LENGTH]}"
-            if not self._status.has_subagent(candidate):
+            if not self._status.has_subagent(candidate) and candidate not in self._inline_turns:
                 return candidate
 
     async def start_subagent(
@@ -3562,6 +3619,8 @@ class AgentWorkflowRunner:
         /,
         *args: Any,
         injections: Mapping[str, Any] | None = None,
+        agent_id: str | None = None,
+        message_id: str | None = None,
         **kwargs: Any,
     ) -> Any:
         """Invoke one tool call, owning the per-call tool id for its lifecycle events.
@@ -3579,6 +3638,9 @@ class AgentWorkflowRunner:
         workflow, not the model, and are hidden from the model's tool schema; ``run_tool``
         parks them in the ambient ``_CURRENT_TOOL_INJECTIONS`` for the dispatch machinery
         to read (see :func:`_current_tool_injections`).
+
+        ``agent_id`` and ``message_id`` publish the call's events, its approval included, as an
+        inline subagent's (see :attr:`SubagentMessageSent.inline`).
 
         ``tool_callable`` is whatever executes the tool and is responsible for
         publishing its own ``tool_start``/``tool_end`` events:
@@ -3598,6 +3660,8 @@ class AgentWorkflowRunner:
         runner_token = _CURRENT_RUNNER.set(self)
         tool_id_token = _CURRENT_TOOL_ID.set(call_id)
         injections_token = _CURRENT_TOOL_INJECTIONS.set(injections)
+        agent_token = _CURRENT_AGENT_ID.set(agent_id or _CURRENT_AGENT_ID.get())
+        message_token = _CURRENT_MESSAGE_ID.set(message_id or _CURRENT_MESSAGE_ID.get())
         closing = False
         try:
             return await tool_callable(*args, **kwargs)
@@ -3610,6 +3674,8 @@ class AgentWorkflowRunner:
             raise
         finally:
             if not closing:
+                _CURRENT_MESSAGE_ID.reset(message_token)
+                _CURRENT_AGENT_ID.reset(agent_token)
                 _CURRENT_TOOL_INJECTIONS.reset(injections_token)
                 _CURRENT_TOOL_ID.reset(tool_id_token)
                 _CURRENT_RUNNER.reset(runner_token)
@@ -3623,6 +3689,7 @@ class AgentWorkflowRunner:
         event: AgentStreamItem,
         *,
         message_id: str | None | _Ambient = _AMBIENT,
+        agent_id: str | None = None,
     ) -> None:
         """Wrap ``event`` in an :class:`AgentEvent` envelope and publish it.
 
@@ -3633,14 +3700,19 @@ class AgentWorkflowRunner:
         (``turn_started`` / ``turn_end``, the entry-carried approval + callback resolutions),
         and an explicit id only where there is no ambient one to read: the admission prologue,
         which publishes ``message_accepted`` for a message that has not started running yet.
+
+        ``agent_id`` overrides this agent's own id, for an inline subagent's events (see
+        :attr:`SubagentMessageSent.inline`), which go against that subagent's own turn.
         """
+        agent_id = agent_id or _CURRENT_AGENT_ID.get() or self._agent_id
+        turn_id, turn_number = self._inline_turns.get(agent_id, (turn_id, turn_number))
         self._events.publish(
             AgentEvent(
                 event=event,
                 # This agent's own short id — so every event on the stream self-identifies its
                 # source agent for the client stream-merge (and a single-agent consumer can filter
                 # by it). For a subagent this is the handle its parent references it by.
-                agent_id=self._agent_id,
+                agent_id=agent_id,
                 turn_id=turn_id,
                 turn_number=turn_number,
                 message_id=(

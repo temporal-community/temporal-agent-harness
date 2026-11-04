@@ -48,7 +48,8 @@ export interface AgentNodeData {
   /** `detail` is a prose reply, drawn as markdown; decided by handlerReply's rule. */
   markdown?: boolean;
   active?: boolean;
-  size?: "default" | "large" | "container";
+  /** "slot" draws no card, only the edge ports: room for what is drawn over it. */
+  size?: "default" | "large" | "container" | "slot";
   runtimeRole?: "parent" | "subagent";
   statusTone?: AgentNodeTone;
   /** Lit ports by handle id, each in a CSS color; set by markEdgeCues. */
@@ -193,6 +194,8 @@ export interface AgentGraphSource {
   stopped?: boolean;
   /** Temporal's execution status for this workflow, once something has asked. */
   executionStatus?: string;
+  /** Runs inside its parent's workflow, as the tool call whose id is its workflowId. */
+  inline?: boolean;
 }
 
 /* Scalar fields only, here and in EvaluationRuntime: a checkpoint copies each record with a
@@ -248,6 +251,8 @@ interface AgentGraphOptions {
   outputPlacement?: "external" | "runtime";
   agentInterface?: AgentInterfaceFunction[];
   embeddedToolGraphs?: AgentGraph[];
+  /** Inline subagents' graphs, each drawn in place of the tool call that runs it, by its tool id. */
+  hostedToolGraphs?: ReadonlyMap<ToolId, AgentGraph>;
   /**
    * Draw the turn as it stands rather than as it happened: a settled tool leaves
    * the canvas. Off by default, so a caller that asks for nothing gets the
@@ -1308,6 +1313,9 @@ interface AgentGraphFold {
   add(frame: AgentSseFrame): void;
   /** The subagent lifecycle frames folded so far, in order, whether or not this graph draws them. */
   readonly delegations: readonly AgentSseFrame[];
+  /** The children this agent's current turn involves: those it delegated to in the turn, and
+      those still open (started or messaged, with no reply or stop yet) when it began. */
+  readonly turnChildren: ReadonlySet<string>;
   usage(): CostSummary;
   /** Saves where the fold is; calling what it returns puts the fold back there, any number of times. */
   checkpoint(): () => void;
@@ -1345,6 +1353,10 @@ interface AgentFoldState {
   subagentState: string;
   subagentSubtitle: string;
   subagentDetail: string;
+  /* Child workflow ids: those started or messaged with no reply or stop yet, and those the
+     current turn involves (see turnChildren). */
+  openChildren: Set<string>;
+  turnChildren: Set<string>;
   tools: Map<ToolId, ToolRuntime>;
   codeModeChildren: Map<ToolId, ToolId[]>;
   /* Keyed by evaluation_id, not tool_id: an agent may chain evaluators over one call. */
@@ -1405,6 +1417,8 @@ function initialState(): AgentFoldState {
     subagentState: "idle",
     subagentSubtitle: "",
     subagentDetail: "",
+    openChildren: new Set<string>(),
+    turnChildren: new Set<string>(),
     tools: new Map<ToolId, ToolRuntime>(),
     codeModeChildren: new Map<ToolId, ToolId[]>(),
     evaluations: new Map<string, EvaluationRuntime>(),
@@ -1592,6 +1606,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     }
     if (frame.event === "turn_started") {
       markInput();
+      s.turnChildren = new Set(s.openChildren);
       s.activeTurn = frame.data.turn_number;
       s.status = "running";
       s.failed = false;
@@ -1609,9 +1624,11 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       s.replyIsData = false;
       s.replyState = "waiting";
       resetTurnTools();
-      /* The last turn's reply was just cleared above; its card would sit empty ahead of
-         this turn's tools until a reply frame puts it back after them. */
-      if (s.runtimeNodes.delete("output")) s.runtimeNodeOrder.splice(s.runtimeNodeOrder.indexOf("output"), 1);
+      /* The last turn's thought and reply were just cleared above; their cards would sit
+         empty ahead of this turn's tools until a frame puts them back after them. */
+      for (const id of ["reasoning", "output"] as const) {
+        if (s.runtimeNodes.delete(id)) s.runtimeNodeOrder.splice(s.runtimeNodeOrder.indexOf(id), 1);
+      }
       s.runtimeHeaderPrefix = undefined;
       if (s.queued > 0) s.queued -= 1;
     } else if (frame.event === "model_interaction_started") {
@@ -1888,6 +1905,12 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       frame.event === "subagent_stream_unavailable"
     ) {
       delegations.push(frame);
+      s.turnChildren.add(frame.data.workflow_id);
+      if (frame.event === "subagent_started" || frame.event === "subagent_message_sent") {
+        s.openChildren.add(frame.data.workflow_id);
+      } else if (frame.event === "subagent_reply_received" || frame.event === "subagent_stopped") {
+        s.openChildren.delete(frame.data.workflow_id);
+      }
       if (!showSubagentDispatch) return;
       markRuntimeNode("subagent");
       s.subagentSubtitle =
@@ -1914,6 +1937,8 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     return {
       ...from,
       queuedByTurn: new Map(from.queuedByTurn),
+      openChildren: new Set(from.openChildren),
+      turnChildren: new Set(from.turnChildren),
       tools: new Map([...from.tools].map(([id, tool]) => [id, { ...tool }])),
       codeModeChildren: new Map(from.codeModeChildren),
       evaluations: new Map([...from.evaluations].map(([id, evaluation]) => [id, { ...evaluation }])),
@@ -1949,6 +1974,9 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     add,
     get delegations() {
       return delegations;
+    },
+    get turnChildren() {
+      return s.turnChildren;
     },
     usage: () => ledger.summary(),
     checkpoint,
@@ -1999,7 +2027,22 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       }
     }
 
-    const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
+    /* An inline subagent's runtime is drawn in place of its call's card; one whose call the turn
+       never showed goes in the shared container, and one whose call settled off the canvas goes
+       with it. */
+    const hostedLayouts = new Map<ToolId, EmbeddedToolLayout>();
+    const embeddedToolGraphs = [...(options.embeddedToolGraphs ?? [])];
+    for (const [toolId, graph] of options.hostedToolGraphs ?? []) {
+      if (!s.tools.has(toolId)) embeddedToolGraphs.push(graph);
+      else if (order.includes(toolRuntimeNodeId(toolId))) {
+        const bounds = graphBounds(graph);
+        hostedLayouts.set(toolId, {
+          dimensions: { width: bounds.width, height: bounds.height },
+          placements: [{ graph, x: -bounds.minX, y: -bounds.minY }]
+        });
+      }
+    }
+    const embeddedToolLayout = layoutEmbeddedToolGraphs(embeddedToolGraphs);
     if (embeddedToolLayout && !order.includes("tool-container")) {
       order.push("tool-container");
     }
@@ -2088,7 +2131,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         sections.push(
           valueSection(
             "Delegated runtimes",
-            (options.embeddedToolGraphs ?? []).map((graph) => ({
+            embeddedToolGraphs.map((graph) => ({
               status: graph.status,
               activeTurn: graph.activeTurn,
               nodes: graph.nodes.length
@@ -2171,6 +2214,20 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
             : null;
         const toolStatus = runtime?.status ?? "idle";
         const retryCount = runtime?.retryCount ?? 1;
+        const hosted = runtime?.id ? hostedLayouts.get(runtime.id) : undefined;
+        if (hosted) {
+          return {
+            tone: runtime?.tone ?? "neutral",
+            title: runtime?.name ?? "Tool",
+            state: toolStatus,
+            active: activeNodeId === id,
+            size: "slot",
+            nodeWidth: hosted.dimensions.width,
+            nodeHeight: hosted.dimensions.height,
+            toolId: runtime?.id,
+            flowGroup: runtime?.flowGroup
+          };
+        }
         return {
           tone: runtime?.tone ?? "neutral",
           title: runtime?.name ?? "Tool",
@@ -2208,7 +2265,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       }
       if (id === "tool-container") {
         return {
-          ...delegatedState(options.embeddedToolGraphs ?? []),
+          ...delegatedState(embeddedToolGraphs),
           title: "Subagent activity",
           subtitle: "delegated runtimes",
           active: activeNodeId === id,
@@ -2435,19 +2492,22 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         })
       );
     }
-    const toolPosition = runtimeLayout.positions.get("tool-container");
-    if (toolPosition && embeddedToolLayout) {
-      for (const placement of embeddedToolLayout.placements) {
+    function placeEmbedded(containerId: RuntimeNodeId, layout: EmbeddedToolLayout | null): void {
+      const position = runtimeLayout.positions.get(containerId);
+      if (!position || !layout) return;
+      for (const placement of layout.placements) {
         const embeddedGraph = offsetGraph(
           placement.graph,
-          toolPosition.x + placement.x,
-          toolPosition.y + placement.y,
+          position.x + placement.x,
+          position.y + placement.y,
           nestedZIndexBoost
         );
         nodes.push(...embeddedGraph.nodes);
         edges.push(...embeddedGraph.edges);
       }
     }
+    placeEmbedded("tool-container", embeddedToolLayout);
+    for (const [toolId, layout] of hostedLayouts) placeEmbedded(toolRuntimeNodeId(toolId), layout);
     const reasoningAttachedToModel =
       order.includes("model") && order.includes("reasoning");
     const runtimeFlowOrder = reasoningAttachedToModel
@@ -2758,12 +2818,21 @@ function treeGraph(
   ): AgentGraph {
     const nextSeen = new Set(seen);
     nextSeen.add(agent.workflowId);
-    const childGraphs = (childrenByParent.get(agent.workflowId) ?? [])
-      .filter((child) => !nextSeen.has(child.workflowId))
-      .map((child) => buildNestedAgentGraph(child, nextSeen));
+    /* Only the children this turn involves: an earlier turn's subagent is not this turn's activity. */
+    const turnChildren = folds.get(agent)!.turnChildren;
+    const children = (childrenByParent.get(agent.workflowId) ?? []).filter(
+      (child) => !nextSeen.has(child.workflowId) && turnChildren.has(child.workflowId)
+    );
     const graph = folds.get(agent)!.render({
       ...agentGraphOptions(agent, options),
-      embeddedToolGraphs: childGraphs
+      embeddedToolGraphs: children
+        .filter((child) => !child.inline)
+        .map((child) => buildNestedAgentGraph(child, nextSeen)),
+      hostedToolGraphs: new Map(
+        children
+          .filter((child) => child.inline)
+          .map((child) => [child.workflowId, buildNestedAgentGraph(child, nextSeen)])
+      )
     });
     const scoped = scopedGraph(agent, graph, 0, 0, delegations.get(agent.workflowId));
     builtGraphs.push(scoped);

@@ -8,6 +8,7 @@ export {
   CallbackToolError,
   type HandlerDecl,
   type HandlerImpl,
+  type RunToolOptions,
 } from "./harness/agent-workflow.ts";
 export { state, StateRef, HarnessStateError, type StateDecl } from "./harness/state/index.ts";
 export {

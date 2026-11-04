@@ -99,14 +99,15 @@ dependencies = [
     # Everything past the base install is an opt-in extra — combine as many as you need
     # in the one spec, e.g. [ui,code-mode,genai]:
     #
-    #   ui              the browser UI and the `temporal-agent-harness` CLI
-    #   code-mode       the sandbox a worker runs Code Mode scripts in
-    #   genai           the Google Gemini integration
-    #   openai-agents   the OpenAI Agents SDK integration
-    #   pydantic-ai     the Pydantic AI integration
-    #   typesafe        typed decisions and the Jev auto mode evaluator, via the canonical
-    #                   temporalio-typesafe plugin
-    #   s3              S3-backed offload for large payloads
+    #   ui                the browser UI and the `temporal-agent-harness` CLI
+    #   code-mode         the sandbox a worker runs Code Mode scripts in
+    #   genai             the Google Gemini integration
+    #   openai-agents     the OpenAI Agents SDK integration
+    #   pydantic-ai       the Pydantic AI integration
+    #   claude-agent-sdk  the Claude Agent SDK integration
+    #   typesafe          typed decisions and the Jev auto mode evaluator, via the canonical
+    #                     temporalio-typesafe plugin
+    #   s3                S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
     "temporal-agent-harness[ui]==0.8.0",
@@ -198,6 +199,7 @@ opt-in:
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
+| `claude-agent-sdk` | use the **Claude Agent SDK** integration (`ai_sdks.claude_agent_sdk_harness`). |
 | `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe_harness`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentHarnessPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
@@ -274,6 +276,7 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | [Google Gemini](python/temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [OpenAI Agents SDK](python/temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [Pydantic AI](python/temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [Claude Agent SDK](python/temporal_agent_harness/ai_sdks/claude_agent_sdk_harness.py) | ✅ Available now | Directly uses Temporal's [Claude Agent SDK plugin](https://docs.temporal.io/develop/python/integrations/claude-agent-sdk) |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
@@ -1050,7 +1053,8 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
+pydantic_ai_hello), `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory), and/or
+`ANTHROPIC_API_KEY` (claude_agent_sdk_hello).
 The default committed `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
@@ -1093,6 +1097,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Agent | Needs |
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| Claude Agent SDK Hello | `ANTHROPIC_API_KEY`; Claude Code explores the repo, with a file-finding subagent, and asks before each Bash call ([readme](python/examples/claude_agent_sdk_hello/README.md)); chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](python/examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI, or `just tictactoe-play` for its board |

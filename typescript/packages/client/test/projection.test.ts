@@ -168,7 +168,7 @@ test("every subagent in the merged stream gets its own view, linked from the par
   const subsub = { subagent_id: "root.s1.g1", agent_key: "fetcher", workflow_id: "wf-g1", handler: "fetch", subagent_turn: 1 };
   const p = project([
     f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, root),
-    f.make("subagent_started", { subagent_id: "root.s1", agent_key: "researcher", workflow_id: "wf-s1" }, root),
+    f.make("subagent_started", { inline: false, subagent_id: "root.s1", agent_key: "researcher", workflow_id: "wf-s1" }, root),
     f.make("subagent_message_sent", { ...sub, from_offset: 0 }, root),
     // The child's own turn, merged in after the parent asked for it.
     f.make("message_accepted", { handler: "ask", payload: { text: "look it up" }, disposition: "opened" }, child),
@@ -231,7 +231,7 @@ test("a stopped subagent, and one whose stream was lost, say so", () => {
 
   // The parent's own record still closes the turn.
   p.apply(f.make("subagent_reply_received", { ...sub, outcome: "ok" }, root));
-  p.apply(f.make("subagent_stopped", { subagent_id: "root.s1", agent_key: "helper", workflow_id: "wf-s1" }, root));
+  p.apply(f.make("subagent_stopped", { inline: false, subagent_id: "root.s1", agent_key: "helper", workflow_id: "wf-s1" }, root));
   const closed = p.root!.messages[0]!.parts[0];
   assert.equal(closed?.type === "subagent" ? closed.status : null, "ok");
   assert.equal(p.agents.get("root.s1")!.info.lifecycle, "stopped");

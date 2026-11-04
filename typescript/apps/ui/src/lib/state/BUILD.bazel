@@ -424,6 +424,15 @@ vitest_test(
 )
 
 vitest_test(
+    name = "inlineSubagent_test",
+    src = "inlineSubagent.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "approvalRouting_test",
     src = "approvalRouting.test.mjs",
     deps = [

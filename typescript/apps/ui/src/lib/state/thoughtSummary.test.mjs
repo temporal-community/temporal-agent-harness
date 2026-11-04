@@ -162,6 +162,19 @@ describe("a thought card", () => {
     );
   });
 
+  it("is the last turn's, so the next turn starts without it", () => {
+    const next = turn(SHAPES.openai);
+    next.push(
+      frame("turn_started", { user_message: "again", turn_number: 2 }),
+      frame("model_interaction_started", { model: "gpt-5.1" })
+    );
+    assert.equal(
+      buildAgentGraph(next).nodes.some((node) => node.id === "reasoning"),
+      false,
+      "an idle thought card from the last turn must not show in this one"
+    );
+  });
+
   it("says how long it thought", () => {
     /* Timestamps the stream already stamps: the model call opening, and the last fragment. */
     const timed = reasoningCard(turn(SHAPES.openai));

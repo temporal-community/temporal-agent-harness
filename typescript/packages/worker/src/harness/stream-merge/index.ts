@@ -206,7 +206,7 @@ export class Gates {
     )
       return false;
     const e = ev.event;
-    if (e.type === "subagent_reply_received") {
+    if (e.type === "subagent_reply_received" && !e.inline) {
       if (
         !this.childTurnEnded.has(Gates.key(e.workflow_id, e.subagent_turn)) &&
         !this.gone.has(e.workflow_id)
@@ -225,7 +225,8 @@ export class Gates {
     | { unmount: string }
     | null {
     const e = ev.event;
-    if (e.type === "subagent_message_sent") {
+    // An inline subagent's events are already on this stream: nothing to open or mount.
+    if (e.type === "subagent_message_sent" && !e.inline) {
       this.opened.add(Gates.key(e.workflow_id, e.subagent_turn));
       return {
         mount: { workflowId: e.workflow_id, fromOffset: e.from_offset, subagentId: e.subagent_id },

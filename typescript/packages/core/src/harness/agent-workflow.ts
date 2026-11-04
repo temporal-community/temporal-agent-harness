@@ -24,6 +24,7 @@ import {
   startChild,
   uuid4,
   ActivityFailure,
+  isCancellation,
 } from "@temporalio/workflow";
 import { msToNumber } from "@temporalio/common/lib/time.js";
 import { WorkflowStream, type WorkflowTopicHandle } from "@temporalio/workflow-streams/workflow";
@@ -128,6 +129,16 @@ export interface ToolCall {
   readonly runner: AgentWorkflowRunner;
   readonly toolId: string;
   readonly injections: Readonly<Record<string, unknown>>;
+  /** The inline subagent making the call; undefined for this agent. */
+  readonly agentId: string | undefined;
+}
+
+export interface RunToolOptions {
+  injections?: Record<string, unknown>;
+  /** Publish the call's events as this inline subagent's. */
+  agentId?: string;
+  /** The message the inline subagent's events belong to. */
+  messageId?: string;
 }
 
 export const messageIdStore = new AsyncLocalStorage<string>();
@@ -235,13 +246,24 @@ export class AgentWorkflowRunner {
   /** The live turn context, stamped with the ambient participant's message id; null when idle. */
   get currentStreamContext(): TurnStreamContext | null {
     if (this.#currentTurnId === null) return null;
+    const agentId = toolCallStore.getStore()?.agentId ?? this.agentId;
+    const [turnId, turnNumber] = this.inlineTurns.get(agentId) ?? [
+      this.#currentTurnId,
+      this.#currentTurn,
+    ];
     return {
-      turn_id: this.#currentTurnId,
-      turn_number: this.#currentTurn,
+      turn_id: turnId,
+      turn_number: turnNumber,
       message_id: messageIdStore.getStore() ?? null,
-      agent_id: this.agentId,
+      agent_id: agentId,
     };
   }
+
+  /**
+   * @internal Each inline subagent's own turn (turn id, turn number), by its agent id: its events
+   * are published against it, as a child workflow's would be.
+   */
+  readonly inlineTurns = new Map<string, [string, number]>();
 
   get approvalPolicy(): ToolApprovalPolicy {
     return this.#policy;
@@ -329,28 +351,35 @@ export class AgentWorkflowRunner {
   /**
    * Run one tool call with its id and injections in scope; every harness tool needs this. A tool
    * picked by a model at run time takes its (unvalidated) JSON arguments; the tool validates them.
+   * `agentId` and `messageId` publish the call's events, its approval included, as an inline
+   * subagent's (see `SubagentMessageSent.inline`).
    */
   runTool<I, O>(
     callId: string,
     tool: { name?: string; invoke(input: I): Promise<O> },
     input: I,
-    options?: { injections?: Record<string, unknown> },
+    options?: RunToolOptions,
   ): Promise<O>;
   runTool<O>(
     callId: string,
     tool: { name?: string; invoke(input: never): Promise<O> },
     input: unknown,
-    options?: { injections?: Record<string, unknown> },
+    options?: RunToolOptions,
   ): Promise<O>;
   runTool(
     callId: string,
     tool: { name?: string; invoke(input: unknown): Promise<unknown> },
     input: unknown,
-    { injections = {} }: { injections?: Record<string, unknown> } = {},
+    { injections = {}, agentId, messageId }: RunToolOptions = {},
   ): Promise<unknown> {
-    return toolCallStore.run({ runner: this, toolId: callId, injections }, () =>
-      tool.invoke(input),
-    );
+    const call = {
+      runner: this,
+      toolId: callId,
+      injections,
+      agentId: agentId ?? toolCallStore.getStore()?.agentId,
+    };
+    const run = () => toolCallStore.run(call, () => tool.invoke(input));
+    return messageId === undefined ? run() : messageIdStore.run(messageId, run);
   }
 
 
@@ -643,6 +672,7 @@ export class AgentWorkflowRunner {
       turn_number: ctx.turn_number,
       turn_id: ctx.turn_id,
       message_id: ctx.message_id,
+      agent_id: ctx.agent_id,
       short_id: shortId,
       inherently_safe: opts.inherentlySafe,
       status: "pending",
@@ -657,22 +687,29 @@ export class AgentWorkflowRunner {
     });
 
     const entry = this.#approvals.get(toolId)!;
-    const autoCtx = this.#autoModeContext(toolName, toolInput, opts);
-    const decision =
-      autoCtx === null ? null : await this.#runAutoModeEvaluator(autoCtx, toolId, ctx);
-    if (decision?.verdict === ApprovalVerdict.APPROVED)
-      this.#resolveAndPublish(toolId, true, decision.reason ?? null);
-    else if (decision?.verdict === ApprovalVerdict.DENIED)
-      this.#resolveAndPublish(toolId, false, decision.reason ?? null);
-
-    await condition(() => this.#isApprovalResolved(toolId) || this.#closed);
     // Resolutions publish at their resolution site, in causal order. Only a close that wakes a
-    // still-pending gate is finalized (as an auto-deny) here.
-    if (entry.status === "pending") {
+    // still-pending gate, or the caller abandoning the call, finalizes it (as a deny) here.
+    const finalize = () => {
+      if (entry.status !== "pending") return;
       entry.status = "denied";
       entry.reason = this.#closed ? "agent closed before approval" : "approval unresolved";
       this.#publishApprovalResolved(entry);
+    };
+    try {
+      const autoCtx = this.#autoModeContext(toolName, toolInput, opts);
+      const decision =
+        autoCtx === null ? null : await this.#runAutoModeEvaluator(autoCtx, toolId, ctx);
+      if (decision?.verdict === ApprovalVerdict.APPROVED)
+        this.#resolveAndPublish(toolId, true, decision.reason ?? null);
+      else if (decision?.verdict === ApprovalVerdict.DENIED)
+        this.#resolveAndPublish(toolId, false, decision.reason ?? null);
+
+      await condition(() => this.#isApprovalResolved(toolId) || this.#closed);
+    } catch (e) {
+      if (isCancellation(e)) finalize();
+      throw e;
     }
+    finalize();
     if (entry.status !== "approved") throw new ToolApprovalDenied(toolName, entry.reason);
   }
 
@@ -748,7 +785,16 @@ export class AgentWorkflowRunner {
         (err: unknown) => (outcome = { err }),
       );
     const settled = () => this.#isApprovalResolved(toolId) || this.#closed;
-    await condition(() => outcome !== undefined || settled());
+    try {
+      await condition(() => outcome !== undefined || settled());
+    } catch (e) {
+      if (isCancellation(e)) {
+        // The caller abandoned the call: stop the evaluator and close its bracket.
+        scope.cancel();
+        close({ type: "auto_approval_evaluation_superseded", ...ids, verdict: null });
+      }
+      throw e;
+    }
     if (settled()) {
       const reached =
         outcome !== undefined && "ok" in outcome
@@ -856,6 +902,7 @@ export class AgentWorkflowRunner {
         remember: entry.remember,
       },
       entry.message_id,
+      entry.agent_id,
     );
   }
 
@@ -884,6 +931,7 @@ export class AgentWorkflowRunner {
       turn_number: ctx.turn_number,
       turn_id: ctx.turn_id,
       message_id: ctx.message_id,
+      agent_id: ctx.agent_id,
       status: "pending",
       outcome: "ok",
       result: null,
@@ -898,9 +946,8 @@ export class AgentWorkflowRunner {
       output_schema: args.outputSchema,
     });
     const done = () => entry.status === "resolved" || this.#closed;
-    const inTime =
-      args.timeout === undefined ? (await condition(done), true) : await condition(done, args.timeout);
-    if (entry.status === "pending") {
+    const finalize = (inTime: boolean) => {
+      if (entry.status !== "pending") return;
       entry.status = "resolved";
       entry.outcome = "timeout";
       entry.error = !inTime
@@ -909,7 +956,17 @@ export class AgentWorkflowRunner {
           ? "agent closed before the callback result arrived"
           : "callback unresolved";
       this.#publishCallbackResolved(entry);
+    };
+    let inTime: boolean;
+    try {
+      inTime =
+        args.timeout === undefined ? (await condition(done), true) : await condition(done, args.timeout);
+    } catch (e) {
+      // The caller abandoned the call: fail it, so it isn't left pending forever.
+      if (isCancellation(e)) finalize(true);
+      throw e;
     }
+    finalize(inTime);
     if (entry.outcome === "ok") return entry.result;
     throw new CallbackToolError(args.toolName, entry.error);
   }
@@ -973,6 +1030,7 @@ export class AgentWorkflowRunner {
         error: entry.error,
       },
       entry.message_id,
+      entry.agent_id,
     );
   }
 
@@ -1015,6 +1073,7 @@ export class AgentWorkflowRunner {
       subagent_id: handle,
       agent_key: agentKey,
       workflow_id: workflowId,
+      inline: false,
     });
     return handle;
   }
@@ -1027,6 +1086,7 @@ export class AgentWorkflowRunner {
       subagent_id: inst.handle,
       agent_key: inst.agent_key,
       workflow_id: inst.workflow_id,
+      inline: false,
     });
     this.#subagents.delete(handle);
   }
@@ -1113,6 +1173,7 @@ export class AgentWorkflowRunner {
       subagent_id: inst.handle,
       agent_key: inst.agent_key,
       workflow_id: inst.workflow_id,
+      inline: false,
     });
   }
 
@@ -1130,6 +1191,7 @@ export class AgentWorkflowRunner {
       handler,
       subagent_turn: subagentTurn,
       outcome,
+      inline: false,
     });
   }
 
@@ -1161,22 +1223,35 @@ export class AgentWorkflowRunner {
   }
 
   #publishStateEvent(event: StateEvent): void {
-    const ctx = this.currentStreamContext;
-    this.pub(ctx?.turn_id ?? "", ctx?.turn_number ?? 0, event);
+    // The state is this agent's, even when an inline subagent's tool call changed it.
+    const inTurn = this.#currentTurnId !== null;
+    this.pub(
+      this.#currentTurnId ?? "",
+      inTurn ? this.#currentTurn : 0,
+      event,
+      AMBIENT,
+      this.agentId,
+    );
   }
 
-  /** @internal Stamp the envelope and publish. `messageId` defaults to the ambient participant. */
-
+  /**
+   * @internal Stamp the envelope and publish. `messageId` defaults to the ambient participant;
+   * `agentId` to the ambient inline subagent, else this agent. An inline subagent's events go
+   * against its own turn.
+   */
   pub(
     turnId: string,
     turnNumber: number,
     event: AgentStreamItem,
     messageId: string | null | typeof AMBIENT = AMBIENT,
+    agentId?: string,
   ): void {
+    const agent = agentId ?? toolCallStore.getStore()?.agentId ?? this.agentId;
+    const [turn, number] = this.inlineTurns.get(agent) ?? [turnId, turnNumber];
     this.#events.publish({
-      agent_id: this.agentId,
-      turn_id: turnId,
-      turn_number: turnNumber,
+      agent_id: agent,
+      turn_id: turn,
+      turn_number: number,
       message_id: messageId === AMBIENT ? (messageIdStore.getStore() ?? null) : messageId,
       timestamp: Date.now() / 1000,
       event,

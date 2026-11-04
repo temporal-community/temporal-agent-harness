@@ -13,6 +13,9 @@
 #             before publishing ``subagent_reply_received(C, T)``, so everything the parent emits
 #             at/after that marker happens-after C's whole turn T.
 # Everything NOT related by a bracket may interleave freely; we deliberately keep no global order.
+#
+# An INLINE subagent (``inline=True`` on both markers) runs inside its parent: its events are
+# already on the parent's stream, in order, so neither gate applies and nothing is mounted.
 
 from __future__ import annotations
 
@@ -127,7 +130,7 @@ class Gates:
         # EXCEPTION: if the engine has marked that child ``gone`` (its stream is unreachable), the
         # turn_end will never come, so we release the gate — the parent's reply (and everything
         # after it) must not be stranded behind detail we can no longer fetch.
-        if isinstance(ev.event, SubagentReplyReceived):
+        if isinstance(ev.event, SubagentReplyReceived) and not ev.event.inline:
             key = (ev.event.workflow_id, ev.event.subagent_turn)
             if key not in self.child_turn_ended and ev.event.workflow_id not in self.gone:
                 return False
@@ -140,13 +143,14 @@ class Gates:
 
         Updates the gate sets so subsequently-held events become ready:
           * a ``subagent_message_sent`` opens its child turn's gate AND returns a
-            :class:`MountChild` so the engine mounts (idempotently) the child's stream;
+            :class:`MountChild` so the engine mounts (idempotently) the child's stream, unless it
+            is inline;
           * a child ``turn_end`` satisfies the close gate for the parent's matching reply_received;
           * a ``subagent_stopped`` returns an :class:`UnmountChild` so the engine closes that child's
             cursor and releases its in-flight poll update (the child is drained + idle by then).
         Returns ``None`` when no (un)mount is needed.
         """
-        if isinstance(ev.event, SubagentMessageSent):
+        if isinstance(ev.event, SubagentMessageSent) and not ev.event.inline:
             self.opened.add((ev.event.workflow_id, ev.event.subagent_turn))
             return MountChild(
                 workflow_id=ev.event.workflow_id,

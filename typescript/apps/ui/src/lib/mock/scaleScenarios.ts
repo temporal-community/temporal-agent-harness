@@ -1282,7 +1282,7 @@ function timelineWorst(): MockScenario {
       const here = (dt: number) => inChild(id, dt);
       const lookup = tool(`n-${depth}`, `lookup_level_${depth + 3}`);
       out.push(
-        frame("subagent_started", { type: "subagent_started", ...inChild(parent, t), subagent_id: id, agent_key, workflow_id: `wf-nested-${depth}` }),
+        frame("subagent_started", { type: "subagent_started", inline: false, ...inChild(parent, t), subagent_id: id, agent_key, workflow_id: `wf-nested-${depth}` }),
         frame("turn_started", { type: "turn_started", ...here(t + 0.01) }),
         ...(depth === keys.length - 1
           ? [frame("callback_requested", { type: "callback_requested", ...here(t + 0.015), ...lookup, output_schema: {} })]
@@ -1301,7 +1301,7 @@ function timelineWorst(): MockScenario {
     keys.toReversed().forEach((agent_key, reversed) => {
       const depth = keys.length - 1 - reversed;
       const parent = depth === 0 ? root : ids[depth - 1]!;
-      out.push(frame("subagent_stopped", { type: "subagent_stopped", ...inChild(parent, t0 + 0.8 + reversed * 0.02), subagent_id: ids[depth]!, agent_key, workflow_id: `wf-nested-${depth}` }));
+      out.push(frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...inChild(parent, t0 + 0.8 + reversed * 0.02), subagent_id: ids[depth]!, agent_key, workflow_id: `wf-nested-${depth}` }));
     });
     return out;
   };
@@ -1341,19 +1341,19 @@ function timelineWorst(): MockScenario {
     frames.push(...span(tool(`t-worst-${i}`, name), 1_400 + i * 4, 1_402 + i * 4));
   });
   frames.push(
-    frame("subagent_started", { type: "subagent_started", ...at(1_430), subagent_id: child, agent_key: "research", workflow_id: "wf-research" }),
+    frame("subagent_started", { type: "subagent_started", inline: false, ...at(1_430), subagent_id: child, agent_key: "research", workflow_id: "wf-research" }),
     frame("message_accepted", { type: "message_accepted", ...inChild(child, 1_430.1), handler: "ask", payload: { text: "find fares" }, disposition: "opened" }),
     frame("turn_started", { type: "turn_started", ...inChild(child, 1_430.1) }),
     ...span(tool("c-1", "search_flights"), 1_431, 1_436, (dt) => inChild(child, dt)),
-    frame("subagent_started", { type: "subagent_started", ...inChild(child, 1_437), subagent_id: grandchild, agent_key: "fare_checker", workflow_id: "wf-fare" }),
+    frame("subagent_started", { type: "subagent_started", inline: false, ...inChild(child, 1_437), subagent_id: grandchild, agent_key: "fare_checker", workflow_id: "wf-fare" }),
     frame("message_accepted", { type: "message_accepted", ...inChild(grandchild, 1_437.1), handler: "ask", payload: { text: "check" }, disposition: "opened" }),
     frame("turn_started", { type: "turn_started", ...inChild(grandchild, 1_437.1) }),
     ...span(tool("g-1", "approval check · jev_evaluator"), 1_438, 1_438, (dt) => inChild(grandchild, dt)),
     ...nestedSubagents(grandchild, 1_438.1),
     frame("turn_end", { type: "turn_end", ...inChild(grandchild, 1_439) }),
-    frame("subagent_stopped", { type: "subagent_stopped", ...inChild(child, 1_440), subagent_id: grandchild, agent_key: "fare_checker", workflow_id: "wf-fare" }),
+    frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...inChild(child, 1_440), subagent_id: grandchild, agent_key: "fare_checker", workflow_id: "wf-fare" }),
     frame("turn_end", { type: "turn_end", ...inChild(child, 1_441) }),
-    frame("subagent_stopped", { type: "subagent_stopped", ...at(1_442), subagent_id: child, agent_key: "research", workflow_id: "wf-research" }),
+    frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...at(1_442), subagent_id: child, agent_key: "research", workflow_id: "wf-research" }),
     frame("tool_start", { type: "tool_start", ...at(1_450), ...tool("t-hours", "nightly_reconcile_ledger") }),
     ...span(tool("t-open", "stream_ledger_export"), 1_450 + 3 * 3_600 - 30, null),
     frame("tool_end", { type: "tool_end", ...at(1_450 + 3 * 3_600), ...tool("t-hours", "nightly_reconcile_ledger"), tool_output: "ok" })
@@ -1387,7 +1387,7 @@ function timelineGap(): MockScenario {
     ...call(t0 + 4, 4.1),
     ...tool(script, t0 + 9, 4.7),
     frame("tool_approval_requested", { type: "tool_approval_requested", ...at(t0 + 14), ...late }),
-    frame("subagent_started", { type: "subagent_started", ...at(t0 + 15), subagent_id: "watch-1", agent_key: "fare_watcher", workflow_id: "wf-fare-watch" }),
+    frame("subagent_started", { type: "subagent_started", inline: false, ...at(t0 + 15), subagent_id: "watch-1", agent_key: "fare_watcher", workflow_id: "wf-fare-watch" }),
     ...call(t0 + 16, 6.9),
     frame("tool_approval_resolved", { type: "tool_approval_resolved", ...at(t1), tool_id: late.tool_id, tool_name: late.tool_name, approved: true, reason: null, remember: false }),
     ...call(t1 + 1, 9.2),
@@ -1490,8 +1490,8 @@ function logsWorst(): MockScenario {
     const ids = { subagent_id: id, agent_key: `nested_${d}`, workflow_id: `agent-session-lw-depth-${d}-${longToken.slice(0, 160)}` };
     const scope = { agent_id: id, turn_id: `${id}-turn-001`, message_id: `${id}-msg-1` };
     frames.push(
-      frame("subagent_started", { type: "subagent_started", ...at(1), ...by, ...ids }),
-      frame("subagent_message_sent", { type: "subagent_message_sent", ...at(1), ...by, ...ids, handler: "research", subagent_turn: 1, from_offset: 0 }),
+      frame("subagent_started", { type: "subagent_started", inline: false, ...at(1), ...by, ...ids }),
+      frame("subagent_message_sent", { type: "subagent_message_sent", ...at(1), ...by, ...ids, handler: "research", subagent_turn: 1, from_offset: 0, inline: false }),
       frame("message_accepted", { type: "message_accepted", ...at(1), ...scope, handler: "research", payload: { text: `Level ${d}` }, disposition: "opened" }),
       frame("turn_started", { type: "turn_started", ...at(1), ...scope })
     );
@@ -1585,9 +1585,9 @@ function subagentScenario(data: string): MockScenario {
     const workflow_id = `agent-session-subagent-${data}-${seq}`;
     const by = parentId === rootId ? {} : { agent_id: parentId, turn_id: `${parentId}-turn-001`, message_id: `${parentId}-msg-1` };
     const ids = { subagent_id: id, agent_key: spec.key, workflow_id };
-    frames.push(frame("subagent_started", { type: "subagent_started", ...parent(), ...by, ...ids }));
+    frames.push(frame("subagent_started", { type: "subagent_started", inline: false, ...parent(), ...by, ...ids }));
     if (spec.fate === "never-started") return;
-    frames.push(frame("subagent_message_sent", { type: "subagent_message_sent", ...parent(), ...by, ...ids, handler: "research", subagent_turn: 1, from_offset: 0 }));
+    frames.push(frame("subagent_message_sent", { type: "subagent_message_sent", ...parent(), ...by, ...ids, handler: "research", subagent_turn: 1, from_offset: 0, inline: false }));
     const unavailable = spec.fate.startsWith("unavailable") || spec.fate === "late";
     if (!unavailable) {
       const turn = childTurn(id, spec.key, spec.fate);
@@ -1603,8 +1603,8 @@ function subagentScenario(data: string): MockScenario {
     }
     if (spec.fate === "running" || spec.fate === "unavailable-running") return;
     const outcome = spec.fate === "failed" || spec.fate === "unavailable-error" ? "error" : "ok";
-    frames.push(frame("subagent_reply_received", { type: "subagent_reply_received", ...parent(), ...by, ...ids, handler: "research", subagent_turn: 1, outcome }));
-    if (spec.fate !== "late") frames.push(frame("subagent_stopped", { type: "subagent_stopped", ...parent(), ...by, ...ids }));
+    frames.push(frame("subagent_reply_received", { type: "subagent_reply_received", ...parent(), ...by, ...ids, handler: "research", subagent_turn: 1, outcome, inline: false }));
+    if (spec.fate !== "late") frames.push(frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...parent(), ...by, ...ids }));
   }
 
   const fates: SubagentFate[] = ["done", "running", "failed", "unavailable-ok", "unavailable-error", "unavailable-running", "never-started"];
@@ -1646,6 +1646,90 @@ function subagentScenario(data: string): MockScenario {
   frames.push(...tail);
   const sessions = [{ ...sessionList(1)[0]!, workflow_id: `agent-session-scale-subagents-${data}`, agent_workflow_type: "QaAgent", label: `Subagents ${data}`, execution_status: "RUNNING", closed: false }];
   return { agents, sessions, frames, instantFrames: frames.length - tail.length };
+}
+
+/* `?mock=subagents&data=claude|claudecut`: a Claude Code subagent, which runs inline in its
+   parent (`inline: true`) and publishes a child workflow's lifecycle on the parent's stream. Its
+   parent's Agent call wraps it, as a subagent toolset's send tool wraps a child workflow's turn.
+   `claudecut` loses the connection mid-call, so the subagent ends as a failed child turn. */
+function claudeSubagentScenario(cut: boolean): MockScenario {
+  const rootId = "de539b";
+  const child = `${rootId}-093b70`;
+  const workflow_id = `toolu_agent_${cut ? "cut" : "ok"}`;
+  let clock = 0;
+  const parent = (turn: number, dt = 0.4) => meta(turn, (clock += dt));
+  const inChild = (dt = 0.4) => ({ ...meta(1, (clock += dt)), agent_id: child, turn_id: `${child}-turn-1`, message_id: workflow_id });
+  const ids = { subagent_id: child, agent_key: "file-finder", workflow_id, inline: true };
+  const bracket = { ...ids, handler: "Agent", subagent_turn: 1 };
+  const agentCall = { tool_id: workflow_id, tool_name: "Agent", tool_input: { description: "Find approval files", prompt: "Find the files that define tool approvals.", subagent_type: "file-finder" } };
+  const glob = { tool_id: "toolu_glob", tool_name: "Glob", tool_input: { pattern: "**/*approval*" } };
+  const grep = { tool_id: "toolu_grep", tool_name: "Grep", tool_input: { pattern: "ToolApprovalPolicy", path: "python" } };
+  const model = "claude-opus-5-5";
+  const frames: AgentSseFrame[] = [
+    frame("message_accepted", { type: "message_accepted", ...parent(1), handler: "ask", payload: { text: "What time is it?" }, disposition: "opened" }),
+    frame("turn_started", { type: "turn_started", ...parent(1) }),
+    frame("message_handler_start", { type: "message_handler_start", ...parent(1) }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...parent(1), model }),
+    frame("reply_delta", { type: "reply_delta", ...parent(1, 1.2), text: "It's 22:15 UTC." }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...parent(1), model, usage: usage(10_078, 40, 0, 9_000) }),
+    frame("message_handler_end", { type: "message_handler_end", ...parent(1), output: { text: "It's 22:15 UTC." } }),
+    frame("turn_end", { type: "turn_end", ...parent(1) }),
+    frame("message_accepted", { type: "message_accepted", ...parent(2, 5), handler: "ask", payload: { text: "Use the file-finder subagent to find the files that define tool approvals." }, disposition: "opened" }),
+    frame("turn_started", { type: "turn_started", ...parent(2) }),
+    frame("message_handler_start", { type: "message_handler_start", ...parent(2) }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...parent(2), model }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...parent(2, 1.5), model, usage: usage(12_400, 0, 0, 10_000) }),
+    frame("tool_requested", { type: "tool_requested", ...parent(2), ...agentCall }),
+    frame("tool_start", { type: "tool_start", ...parent(2), ...agentCall }),
+    frame("subagent_started", { type: "subagent_started", ...parent(2, 0.05), ...ids }),
+    frame("subagent_message_sent", { type: "subagent_message_sent", ...parent(2, 0.05), ...bracket, from_offset: 0 }),
+    frame("message_accepted", { type: "message_accepted", ...inChild(0.05), handler: "Agent", payload: { prompt: agentCall.tool_input.prompt }, disposition: "opened" }),
+    frame("turn_started", { type: "turn_started", ...inChild(0.05) }),
+    frame("message_handler_start", { type: "message_handler_start", ...inChild(0.05) }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...inChild(0.05), model }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...inChild(1.3), model, usage: usage(7_584, 0, 0, 6_000) }),
+    frame("tool_requested", { type: "tool_requested", ...inChild(0.05), ...glob }),
+    frame("tool_start", { type: "tool_start", ...inChild(0.05), ...glob }),
+    frame("tool_end", { type: "tool_end", ...inChild(0.06), ...glob, tool_output: "python/temporal_agent_harness/harness/approvals.py" }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...inChild(0.05), model }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...inChild(1.1), model, usage: usage(7_900, 0, 0, 7_500) }),
+    frame("tool_requested", { type: "tool_requested", ...inChild(0.05), ...grep }),
+    frame("tool_start", { type: "tool_start", ...inChild(0.05), ...grep })
+  ];
+  const report = "approvals.py defines ToolApprovalPolicy; agent_workflow.py runs the gate.";
+  if (cut) {
+    const lost = "Claude Code's connection was lost";
+    frames.push(
+      frame("tool_error", { type: "tool_error", ...inChild(3), ...grep, message: lost }),
+      frame("message_handler_error", { type: "message_handler_error", ...inChild(0.01), message: lost }),
+      frame("turn_end", { type: "turn_end", ...inChild(0.01) }),
+      frame("subagent_reply_received", { type: "subagent_reply_received", ...parent(2, 0.01), ...bracket, outcome: "error" }),
+      frame("subagent_stopped", { type: "subagent_stopped", ...parent(2, 0.01), ...ids }),
+      frame("tool_error", { type: "tool_error", ...parent(2, 0.01), ...agentCall, message: lost })
+    );
+  } else {
+    frames.push(
+      frame("tool_end", { type: "tool_end", ...inChild(0.08), ...grep, tool_output: "python/temporal_agent_harness/harness/agent_workflow.py:582" }),
+      frame("model_interaction_started", { type: "model_interaction_started", ...inChild(0.05), model }),
+      frame("reply_delta", { type: "reply_delta", ...inChild(1.4), text: report }),
+      frame("model_interaction_ended", { type: "model_interaction_ended", ...inChild(0.05), model, usage: usage(8_300, 0, 0, 7_900) }),
+      frame("message_handler_end", { type: "message_handler_end", ...inChild(0.01), output: { text: report } }),
+      frame("turn_end", { type: "turn_end", ...inChild(0.01) }),
+      frame("subagent_reply_received", { type: "subagent_reply_received", ...parent(2, 0.01), ...bracket, outcome: "ok" }),
+      frame("subagent_stopped", { type: "subagent_stopped", ...parent(2, 0.01), ...ids }),
+      frame("tool_end", { type: "tool_end", ...parent(2, 0.01), ...agentCall, tool_output: report })
+    );
+  }
+  const answer = cut ? "The file-finder was cut off; approvals live in approvals.py." : `The file-finder reports: ${report}`;
+  frames.push(
+    frame("model_interaction_started", { type: "model_interaction_started", ...parent(2, 0.05), model }),
+    frame("reply_delta", { type: "reply_delta", ...parent(2, 1.6), text: answer }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...parent(2, 0.05), model, usage: usage(14_000, 210, 0, 12_000) }),
+    frame("message_handler_end", { type: "message_handler_end", ...parent(2, 0.01), output: { text: answer } }),
+    frame("turn_end", { type: "turn_end", ...parent(2, 0.01) })
+  );
+  const sessions = [{ ...sessionList(1)[0]!, workflow_id: `agent-session-scale-claude-subagent-${cut ? "cut" : "ok"}`, agent_workflow_type: "QaAgent", label: `Claude subagent${cut ? " (cut off)" : ""}`, execution_status: "RUNNING", closed: false }];
+  return { agents, sessions, frames, instantFrames: frames.length };
 }
 
 /* ~100,000 frames in one open run of 540 turns: each turn is 30 rounds of one model call and two
@@ -1697,18 +1781,18 @@ function run100k(settled = false): MockScenario {
       const grandchild = `${child}-fare`;
       const scope = (id: string) => ({ agent_id: id, turn_id: `${id}-turn-001`, message_id: `${id}-msg-1` });
       const ids = (id: string, agent_key: string) => ({ subagent_id: id, agent_key, workflow_id: `wf-${id}` });
-      frames.push(frame("subagent_started", { type: "subagent_started", ...at(), ...ids(child, "research") }));
-      frames.push(frame("subagent_message_sent", { type: "subagent_message_sent", ...at(), ...ids(child, "research"), handler: "research", subagent_turn: 1, from_offset: 0 }));
+      frames.push(frame("subagent_started", { type: "subagent_started", inline: false, ...at(), ...ids(child, "research") }));
+      frames.push(frame("subagent_message_sent", { type: "subagent_message_sent", ...at(), ...ids(child, "research"), handler: "research", subagent_turn: 1, from_offset: 0, inline: false }));
       frames.push(frame("turn_started", { type: "turn_started", ...at(), ...scope(child) }));
       rounds(n, 4, scope(child));
-      frames.push(frame("subagent_started", { type: "subagent_started", ...at(), ...scope(child), ...ids(grandchild, "fare_checker") }));
+      frames.push(frame("subagent_started", { type: "subagent_started", inline: false, ...at(), ...scope(child), ...ids(grandchild, "fare_checker") }));
       frames.push(frame("turn_started", { type: "turn_started", ...at(), ...scope(grandchild) }));
       rounds(n, 3, scope(grandchild));
       frames.push(frame("turn_end", { type: "turn_end", ...at(), ...scope(grandchild) }));
-      frames.push(frame("subagent_stopped", { type: "subagent_stopped", ...at(), ...scope(child), ...ids(grandchild, "fare_checker") }));
+      frames.push(frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...at(), ...scope(child), ...ids(grandchild, "fare_checker") }));
       frames.push(frame("turn_end", { type: "turn_end", ...at(), ...scope(child) }));
-      frames.push(frame("subagent_reply_received", { type: "subagent_reply_received", ...at(), ...ids(child, "research"), handler: "research", subagent_turn: 1, outcome: "ok" }));
-      frames.push(frame("subagent_stopped", { type: "subagent_stopped", ...at(), ...ids(child, "research") }));
+      frames.push(frame("subagent_reply_received", { type: "subagent_reply_received", ...at(), ...ids(child, "research"), handler: "research", subagent_turn: 1, outcome: "ok", inline: false }));
+      frames.push(frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...at(), ...ids(child, "research") }));
     }
     rounds(n, 30);
     if (n === turns) break;
@@ -1806,8 +1890,10 @@ export function scaleScenario(name: string): MockScenario | undefined {
     case "agents":
     case "agents300":
       return agentsScenario(name === "agents300");
-    case "subagents":
-      return subagentScenario(new URLSearchParams(globalThis.location?.search).get("data") ?? "demo");
+    case "subagents": {
+      const data = new URLSearchParams(globalThis.location?.search).get("data") ?? "demo";
+      return data.startsWith("claude") ? claudeSubagentScenario(data === "claudecut") : subagentScenario(data);
+    }
     case "codemode":
       return codeModeScenario();
     default: {

@@ -27,6 +27,9 @@ child:        ⌊ turn_started(T) … message_handler_end(T) … turn_end(T) ⌋
 Everything not related by a bracket may interleave in any order. Within a single stream, offset
 order is inviolable; only *cross-stream* interleaving may differ between a live view and a replay.
 
+An **inline** subagent (`inline: true` on both markers) runs inside its parent, so its events are
+already on the parent's stream. Neither gate applies and nothing is mounted.
+
 Correctness depends on the per-subagent **FIFO ticket gate** in `run_subagent_turn`: it serializes a
 parent's turns to one subagent, so brackets to a given subagent never overlap. Don't break that
 without revisiting this.

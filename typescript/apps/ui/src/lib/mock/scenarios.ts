@@ -785,6 +785,7 @@ const frames: AgentSseFrame[] = [
   }),
   frame("subagent_started", {
     type: "subagent_started",
+    inline: false,
     ...meta(7, 138.1),
     subagent_id: searchSubagentId,
     agent_key: "research",
@@ -798,7 +799,8 @@ const frames: AgentSseFrame[] = [
     workflow_id: searchSubagentWorkflowId,
     handler: "summarize_budget_examples",
     subagent_turn: 1,
-    from_offset: 0
+    from_offset: 0,
+    inline: false
   }),
   frame("message_accepted", {
     type: "message_accepted",
@@ -854,10 +856,12 @@ const frames: AgentSseFrame[] = [
     workflow_id: searchSubagentWorkflowId,
     handler: "summarize_budget_examples",
     subagent_turn: 1,
-    outcome: "ok"
+    outcome: "ok",
+    inline: false
   }),
   frame("subagent_stopped", {
     type: "subagent_stopped",
+    inline: false,
     ...meta(7, 138.95),
     subagent_id: searchSubagentId,
     agent_key: "research",

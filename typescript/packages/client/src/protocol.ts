@@ -492,6 +492,10 @@ export interface SubagentMessageSent {
    * The offset in the SUBAGENT's OWN stream at which this turn's events begin (the child stream position the parent resumes consumption from for this turn). A client merging the parent + subagent streams positions the child cursor here the first time it mounts the child — so a merge that starts mid-session (resuming at a parent turn that is not the child's first) skips the child's pre-resume history, whose own message_sent markers are not on the merged stream and could otherwise never be ordered. Unrelated address space from the parent stream's offsets.
    */
   from_offset: number;
+  /**
+   * True if the subagent runs inside this agent rather than as its own workflow: its events are on THIS stream, between this marker and its SubagentReplyReceived, with `subagent_id` as their `agent_id`. `workflow_id` is then only a key; there is no stream to mount and no workflow to query or message.
+   */
+  inline: boolean;
 }
 /**
  * This agent received a subagent's reply for one turn it dispatched.
@@ -532,6 +536,10 @@ export interface SubagentReplyReceived {
    * 'ok' if the child turn produced a reply; 'error' if it was accepted but then errored / produced no reply (it still emitted its own turn_end, so the bracket closes either way). Never published for a pre-acceptance rejection.
    */
   outcome: "ok" | "error";
+  /**
+   * True if the subagent runs inside this agent rather than as its own workflow (matches the opening SubagentMessageSent): its events are on THIS stream, between that marker and this one, so there is no subagent stream to wait for.
+   */
+  inline: boolean;
 }
 /**
  * This agent started a subagent (a child agent it drives).
@@ -550,6 +558,10 @@ export interface SubagentStarted {
    * The subagent's real child workflow id — what a consumer uses to dynamically mount the subagent's OWN event stream for a consolidated view (subagent streams are never mirrored onto this one).
    */
   workflow_id: string;
+  /**
+   * True if the subagent runs inside this agent rather than as its own workflow (see SubagentMessageSent.inline): there is no stream to mount and no workflow to query or message.
+   */
+  inline: boolean;
 }
 /**
  * This agent stopped a subagent it was driving (signalled `close` + dropped it), or
@@ -569,6 +581,10 @@ export interface SubagentStopped {
    * The stopped subagent's real child workflow id — what a consumer uses to unmount the subagent's event stream (matches the prior SubagentStarted).
    */
   workflow_id: string;
+  /**
+   * True if the subagent ran inside this agent (matches the prior SubagentStarted): it has no stream to unmount.
+   */
+  inline: boolean;
 }
 /**
  * The stream merge gave up obtaining a subagent's events; its DETAIL is degraded (non-fatal).
