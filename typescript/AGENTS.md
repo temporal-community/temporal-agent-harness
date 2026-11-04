@@ -62,8 +62,8 @@ Worked references:
   `bazel run //python/examples/tictactoe/ui:play` serves that one on port 5173.
 
 The console is not a template for an app: it replays runs through its own controller
-(`apps/ui/src/lib/state/agentRun.svelte.ts`) and uses the client for types and helpers, not for
-its sessions.
+(`apps/ui/src/lib/state/agentRun.svelte.ts`) and imports `@temporalio/agent-harness-svelte`
+for types and helpers, not for its sessions.
 
 ## Change the SDK
 

@@ -44,7 +44,7 @@ js_library(
     deps = [
         ":MarkdownMessage",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
-        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-svelte",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Select",
     ],
@@ -127,7 +127,7 @@ vitest_test(
         ":MarkdownMessage",
         ":SchemaForm",
         ":StartSessionDialog",
-        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-svelte",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui:node_modules/vite",
         "//typescript/apps/ui/src/lib/components/agent:CallInput",
@@ -151,7 +151,7 @@ vitest_test(
     deps = [
         ":SchemaForm",
         ":schemaForm",
-        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/@temporalio/agent-harness-svelte",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],

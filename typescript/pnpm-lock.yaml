@@ -216,9 +216,9 @@ importers:
       '@tanstack/svelte-virtual':
         specifier: 3.13.47
         version: 3.13.47(svelte@5.57.2)
-      '@temporalio/agent-harness-client':
+      '@temporalio/agent-harness-svelte':
         specifier: workspace:^
-        version: link:../../packages/client
+        version: link:../../packages/svelte
       '@xyflow/svelte':
         specifier: ^1.6.0
         version: 1.6.0(svelte@5.57.2)

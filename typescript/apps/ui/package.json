@@ -5,11 +5,17 @@
   "type": "module",
   "author": "Alex Tideman",
   "scripts": {
+    "build:sdk": "pnpm --dir ../../packages/client run build && pnpm --dir ../../packages/svelte run build",
+    "predev": "pnpm run build:sdk",
+    "prebuild": "pnpm run build:sdk",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "precheck": "pnpm run build:sdk",
     "check": "svelte-check --tsconfig ./tsconfig.json && vitest run",
+    "pretest": "pnpm run build:sdk",
     "test": "vitest run",
+    "pretest:watch": "pnpm run build:sdk",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -19,7 +25,7 @@
     "@tanstack/markdown": "1.0.0",
     "@tanstack/pacer": "0.23.1",
     "@tanstack/svelte-virtual": "3.13.47",
-    "@temporalio/agent-harness-client": "workspace:^",
+    "@temporalio/agent-harness-svelte": "workspace:^",
     "@xyflow/svelte": "^1.6.0",
     "d3-force": "^3.0.0",
     "remend": "^1.4.0",

@@ -1,4 +1,4 @@
-import type * as Protocol from "../../../../../packages/client/src/protocol";
+import type { Protocol } from "@temporalio/agent-harness-svelte";
 
 export type UnixEpochSeconds = number;
 export type ResumeOffset = number;

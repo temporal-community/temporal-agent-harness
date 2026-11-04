@@ -7,7 +7,7 @@ import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
 import AgentChatPanel from "./AgentChatPanel.svelte";
-import { resultForm } from "@temporalio/agent-harness-client";
+import { resultForm } from "@temporalio/agent-harness-svelte";
 import { buildReplayLog } from "$lib/state/replayLog.ts";
 
 const meta = (seconds) => ({

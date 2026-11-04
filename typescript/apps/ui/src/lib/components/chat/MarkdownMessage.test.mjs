@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { render } from "svelte/server";
 import { beforeAll, describe, it } from "vitest";
 
-import { emptyValues, resultForm } from "@temporalio/agent-harness-client";
+import { emptyValues, resultForm } from "@temporalio/agent-harness-svelte";
 import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
 import CallInput from "../agent/CallInput.svelte";
 import MarkdownMessage, { citationAriaLabel, citationLinks, markdownBlocks, markdownToText, renderBlock } from "./MarkdownMessage.svelte";

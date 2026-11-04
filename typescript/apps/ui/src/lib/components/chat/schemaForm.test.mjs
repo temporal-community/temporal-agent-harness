@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
-import { describeSchema, emptyValues, resultForm, validate } from "@temporalio/agent-harness-client";
+import { describeSchema, emptyValues, resultForm, validate } from "@temporalio/agent-harness-svelte";
 import SchemaForm from "./SchemaForm.svelte";
 import { focusFirstProblem, problemSummary } from "./schemaForm.ts";
 import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
