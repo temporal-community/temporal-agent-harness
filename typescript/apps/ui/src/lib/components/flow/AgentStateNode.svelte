@@ -231,69 +231,71 @@
       position={Position.Right}
     />
   {/if}
-  <div class="head">
-    <!-- The tip sits on the wrapper because the title clips its own overflow,
-         and a tip is drawn with the element's pseudo-elements. -->
-    <span class="title-wrap" data-tip={titleTip} data-tip-below>
-      <StateGlyph kind={statusKind} {running} />
-      <span class="title" dir="auto">{data.title}</span>
-    </span>
-    <StatusChip label={data.state} kind={statusKind} plain />
-  </div>
-  <div class="body">
-    {#if data.subtitle}
-      <span class="kind" dir="auto">{data.subtitle}</span>
-    {/if}
-    {#if hasResult}
-      <div
-        class={[
-          "result",
-          { code: detailScript != null, "clipped-top": clippedTop, "clipped-bottom": clippedBottom }
-        ]}
-      >
-        {#if detailScript}
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scroller a keyboard must reach -->
-          <pre
-            class="result-body code"
-            data-language="python"
-            tabindex="0"
-            bind:this={resultBody}
-            onscroll={handleScroll}
-          ><code>{detailScript}</code></pre>
-        {:else if data.detail}
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scroller a keyboard must reach -->
-          <div
-            class={["result-body", { markdown: data.markdown }]}
-            dir="auto"
-            tabindex="0"
-            role="group"
-            aria-label={`${data.title} result`}
-            bind:this={resultBody}
-            onscroll={handleScroll}
-          >{#if data.markdown}<MarkdownMessage text={drawnDetail} streaming={running} />{:else}{drawnDetail}{/if}</div>
-        {:else}
-          <p class="result-empty">{running ? "Waiting for output…" : "No result yet"}</p>
-        {/if}
+  {#if data.size !== "slot"}
+    <div class="head">
+      <!-- The tip sits on the wrapper because the title clips its own overflow,
+           and a tip is drawn with the element's pseudo-elements. -->
+      <span class="title-wrap" data-tip={titleTip} data-tip-below>
+        <StateGlyph kind={statusKind} {running} />
+        <span class="title" dir="auto">{data.title}</span>
+      </span>
+      <StatusChip label={data.state} kind={statusKind} plain />
+    </div>
+    <div class="body">
+      {#if data.subtitle}
+        <span class="kind" dir="auto">{data.subtitle}</span>
+      {/if}
+      {#if hasResult}
+        <div
+          class={[
+            "result",
+            { code: detailScript != null, "clipped-top": clippedTop, "clipped-bottom": clippedBottom }
+          ]}
+        >
+          {#if detailScript}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scroller a keyboard must reach -->
+            <pre
+              class="result-body code"
+              data-language="python"
+              tabindex="0"
+              bind:this={resultBody}
+              onscroll={handleScroll}
+            ><code>{detailScript}</code></pre>
+          {:else if data.detail}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scroller a keyboard must reach -->
+            <div
+              class={["result-body", { markdown: data.markdown }]}
+              dir="auto"
+              tabindex="0"
+              role="group"
+              aria-label={`${data.title} result`}
+              bind:this={resultBody}
+              onscroll={handleScroll}
+            >{#if data.markdown}<MarkdownMessage text={drawnDetail} streaming={running} />{:else}{drawnDetail}{/if}</div>
+          {:else}
+            <p class="result-empty">{running ? "Waiting for output…" : "No result yet"}</p>
+          {/if}
+        </div>
+      {/if}
+      {#if data.metrics?.length}
+        <MetricStrip metrics={data.metrics} dense bare />
+      {/if}
+    </div>
+    {#if openNode}
+      <div class="actions">
+        <IconButton
+          class="nodrag nopan"
+          label={`Open ${data.title} details`}
+          tip="Open details"
+          onclick={(event) => {
+            event.stopPropagation();
+            openNode(id);
+          }}
+        >
+          <Maximize2 size={14} />
+        </IconButton>
       </div>
     {/if}
-    {#if data.metrics?.length}
-      <MetricStrip metrics={data.metrics} dense bare />
-    {/if}
-  </div>
-  {#if openNode}
-    <div class="actions">
-      <IconButton
-        class="nodrag nopan"
-        label={`Open ${data.title} details`}
-        tip="Open details"
-        onclick={(event) => {
-          event.stopPropagation();
-          openNode(id);
-        }}
-      >
-        <Maximize2 size={14} />
-      </IconButton>
-    </div>
   {/if}
   <Handle {...port("source-right")} type="source" position={Position.Right} />
   <Handle {...port("source-top")} type="source" position={Position.Top} />
@@ -372,6 +374,13 @@
 
   /* Same cues the transcript spends on the playhead row: the hairline
      brightens and the band takes a fuller wash. */
+  .state-node.slot {
+    border: none;
+    background: none;
+    box-shadow: none;
+    pointer-events: none;
+  }
+
   .state-node.active {
     border-color: color-mix(in srgb, var(--status-color) 55%, var(--border-strong));
   }

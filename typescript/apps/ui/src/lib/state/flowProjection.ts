@@ -48,7 +48,8 @@ export interface AgentNodeData {
   /** `detail` is a prose reply, drawn as markdown; decided by handlerReply's rule. */
   markdown?: boolean;
   active?: boolean;
-  size?: "default" | "large" | "container";
+  /** "slot" draws no card, only the edge ports: room for what is drawn over it. */
+  size?: "default" | "large" | "container" | "slot";
   runtimeRole?: "parent" | "subagent";
   statusTone?: AgentNodeTone;
   /** Lit ports by handle id, each in a CSS color; set by markEdgeCues. */
@@ -2026,14 +2027,19 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       }
     }
 
-    /* An inline subagent is drawn as its call; one whose call the turn never showed goes in the
-       shared container, and one whose call settled off the canvas goes with it. */
+    /* An inline subagent's runtime is drawn in place of its call's card; one whose call the turn
+       never showed goes in the shared container, and one whose call settled off the canvas goes
+       with it. */
     const hostedLayouts = new Map<ToolId, EmbeddedToolLayout>();
     const embeddedToolGraphs = [...(options.embeddedToolGraphs ?? [])];
     for (const [toolId, graph] of options.hostedToolGraphs ?? []) {
       if (!s.tools.has(toolId)) embeddedToolGraphs.push(graph);
       else if (order.includes(toolRuntimeNodeId(toolId))) {
-        hostedLayouts.set(toolId, layoutEmbeddedToolGraphs([graph])!);
+        const bounds = graphBounds(graph);
+        hostedLayouts.set(toolId, {
+          dimensions: { width: bounds.width, height: bounds.height },
+          placements: [{ graph, x: -bounds.minX, y: -bounds.minY }]
+        });
       }
     }
     const embeddedToolLayout = layoutEmbeddedToolGraphs(embeddedToolGraphs);
@@ -2212,12 +2218,10 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         if (hosted) {
           return {
             tone: runtime?.tone ?? "neutral",
-            title: "Subagent tool",
+            title: runtime?.name ?? "Tool",
             state: toolStatus,
-            statusTone: runtime?.statusTone,
-            subtitle: runtime?.name,
             active: activeNodeId === id,
-            size: "container",
+            size: "slot",
             nodeWidth: hosted.dimensions.width,
             nodeHeight: hosted.dimensions.height,
             toolId: runtime?.id,

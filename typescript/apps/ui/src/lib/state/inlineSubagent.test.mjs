@@ -203,22 +203,39 @@ describe("an inline subagent", () => {
     assert.notEqual(runtime.data.state, "stopped", "it is drawn running, as a running child is");
   });
 
-  it("is drawn inside its call's own Subagent tool box while it runs", async () => {
+  it("is drawn in place of its call's card while it runs", async () => {
     const frames = run(true);
     const running = frames.slice(0, frames.findIndex((f) => f.event === "tool_start" && f.data.tool_id === "toolu_glob") + 1);
     const { controller } = await replay(running);
     const byId = new Map(controller.graph.nodes.map((node) => [node.id, node]));
-    const host = byId.get(`${parentWorkflowId}::tool:${childKey}`);
-    assert.equal(host.data.title, "Subagent tool");
-    assert.equal(host.data.size, "container");
+    const slot = byId.get(`${parentWorkflowId}::tool:${childKey}`);
+    assert.equal(slot.data.size, "slot", "the call draws no card of its own");
     const runtime = byId.get(`${childKey}::agent-runtime`);
-    const inside = (outer, inner) =>
-      inner.position.x >= outer.position.x &&
-      inner.position.y >= outer.position.y &&
-      inner.position.x + inner.data.boundaryWidth <= outer.position.x + outer.data.nodeWidth &&
-      inner.position.y + inner.data.boundaryHeight <= outer.position.y + outer.data.nodeHeight;
-    assert.ok(inside(host, runtime), "the subagent's runtime sits inside its call's box");
+    assert.deepEqual(runtime.position, slot.position, "the runtime takes the call's place");
+    assert.equal(runtime.data.boundaryWidth, slot.data.nodeWidth);
     assert.ok(![...byId.keys()].some((id) => id.endsWith("::tool-container")), "no shared container");
+  });
+
+  it("shows its call as a tool card, approval and all, until the subagent starts", async () => {
+    const frames = run(true);
+    const requested = frames.findIndex((f) => f.event === "tool_requested" && f.data.tool_id === childKey);
+    const call = frames[requested].data;
+    const gate = (type, extra = {}) => ({ event: type, data: { ...call, type, timestamp: call.timestamp, ...extra } });
+    const gated = [
+      ...frames.slice(0, requested + 1),
+      gate("tool_approval_requested"),
+      gate("tool_approval_resolved", { approved: true, reason: "", remember: false }),
+      ...frames.slice(requested + 1)
+    ];
+    const card = async (cursor) => {
+      const { controller } = await replay(gated.slice(0, cursor));
+      return controller.graph.nodes.find((node) => node.id === `${parentWorkflowId}::tool:${childKey}`);
+    };
+    const waiting = await card(requested + 2);
+    assert.equal(waiting.data.size, undefined, "a plain tool card while it waits");
+    assert.equal(waiting.data.state, "awaiting");
+    const started = gated.findIndex((f) => f.event === "subagent_started");
+    assert.equal((await card(started + 1)).data.size, "slot", "the runtime replaces it once the subagent starts");
   });
 
   it("sends its approvals to the workflow it runs in", async () => {
