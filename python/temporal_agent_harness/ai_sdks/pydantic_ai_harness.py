@@ -356,7 +356,7 @@ async def harness_event_stream_handler(
             await obs.on_event(event)
         # Final usage is known only once the stream is exhausted.
         try:
-            obs.set_usage(stream.usage())
+            obs.set_usage(stream.usage)
         except Exception:  # noqa: BLE001 - usage is best-effort; never fail the model activity
             pass
 
