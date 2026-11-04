@@ -53,6 +53,11 @@
     filter?: TranscriptFilter;
     onFilterChange?: (filter: TranscriptFilter) => void;
     /**
+     * A row to bring to the reader: a State flow card's "view in logs". The nonce makes
+     * asking for the same row twice a second request rather than no change.
+     */
+    reveal?: { rowId: string; nonce: number } | null;
+    /**
      * Whether the whole run has any event, not just the run as of the cursor. `groups` is
      * the run as of the cursor, so gating the filters on it would drop them every time the
      * reader scrubbed back to the first step.
@@ -67,6 +72,7 @@
     activeOrdinal,
     filter = "all",
     onFilterChange,
+    reveal = null,
     runHasEvents = true
   }: Props = $props();
   let expandedRows = $state<Record<string, boolean>>({});
@@ -365,7 +371,7 @@
   });
 
   /* Each drawn turn's rows, by turn number, to reveal a row the turn has not drawn. */
-  const rowLists: Record<number, { scrollToIndex(index: number): void; measure(): void } | null> = {};
+  const rowLists: Record<number, { scrollToIndex(index: number, align?: "auto" | "start"): void; measure(): void } | null> = {};
 
   function remeasureLogRow(turnNumber: number): void {
     rowLists[turnNumber]?.measure();
@@ -405,6 +411,45 @@
     follower.to(target, revealActiveTurn);
   });
 
+  /**
+   * A State flow card's "view in logs". Unlike following the cursor it was asked for, so it
+   * clears a filter or search that would hide the row, brings its turn into the drawn window,
+   * and then reveals it the way a call's trail does: open, marked, and scrolled to even if the
+   * reader had scrolled away. It never moves the replay cursor.
+   */
+  async function revealLogRow(rowId: string): Promise<void> {
+    const row = groups.flatMap((group) => group.rows).find((item) => item.id === rowId);
+    if (!row) return;
+    if (!matchesFilter(row, filter)) onFilterChange?.("all");
+    const needle = query.trim().toLowerCase();
+    if (needle && !matchesQuery(row, needle)) query = "";
+    await tick();
+    const index = visibleGroups.findIndex((group) => group.rows.some((item) => item.id === rowId));
+    if (index < 0) return;
+    const group = visibleGroups[index];
+    /* Only a drawn turn has rows to scroll to; revealRow settles the rest. */
+    if (!rowLists[group.turnNumber]) turnList().scrollToIndex(index, { align: "start" });
+    /* Every call that folds the row away, outermost first: a subagent's events sit inside the
+       parent's call to it, and its own model call folds them again. */
+    let call: TraceStep | null = null;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const folded = linesFor(group).find(
+        (line) => line.kind === "step" && line.collapsed && line.rowIds.has(rowId)
+      );
+      if (folded?.kind !== "step") break;
+      call = folded.step;
+      collapsedSteps = { ...collapsedSteps, [folded.step.id]: false };
+      await tick();
+    }
+    revealRow(group, call, rowId);
+  }
+
+  $effect(() => {
+    const target = reveal;
+    if (!target) return;
+    untrack(() => void revealLogRow(target.rowId));
+  });
+
   function isRowExpanded(rowId: string): boolean {
     return expandedRows[rowId] ?? false;
   }
@@ -424,9 +469,9 @@
   let revealedRowId = $state<string | null>(null);
 
   /** Unfold a call, open one of its events and bring that row into view: a folded call's trail
-      icon, or an event in an open row's call. */
-  function revealRow(group: TurnLogGroup, step: TraceStep, rowId: string): void {
-    collapsedSteps = { ...collapsedSteps, [step.id]: false };
+      icon, an event in an open row's call, or a State flow card's row (which may be in no call). */
+  function revealRow(group: TurnLogGroup, step: TraceStep | null, rowId: string): void {
+    if (step) collapsedSteps = { ...collapsedSteps, [step.id]: false };
     revealedRowId = rowId;
     if (!isRowExpanded(rowId)) toggleRow(rowId);
     /* The windowed rows place it from estimates, and unfolding the call just changed every

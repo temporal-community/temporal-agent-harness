@@ -212,6 +212,16 @@ js_library(
 )
 
 js_library(
+    name = "nodeLogRows",
+    srcs = ["nodeLogRows.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":replayLog",
+        "//typescript/apps/ui/src/lib/api:types",
+    ],
+)
+
+js_library(
     name = "nodeTween",
     srcs = ["nodeTween.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -993,5 +1003,39 @@ vitest_test(
     deps = [
         ":replayLog",
         ":workflowTimelineScale",
+    ],
+)
+
+vitest_test(
+    name = "inputTone_test",
+    src = "inputTone.test.mjs",
+    deps = [
+        ":flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "nodeLogRows_test",
+    src = "nodeLogRows.test.mjs",
+    deps = [
+        ":flowProjection",
+        ":nodeLogRows",
+        ":replayLog",
+    ],
+)
+
+vitest_test(
+    name = "outputEdges_test",
+    src = "outputEdges.test.mjs",
+    deps = [
+        ":flowProjection",
+    ],
+)
+
+vitest_test(
+    name = "outputTone_test",
+    src = "outputTone.test.mjs",
+    deps = [
+        ":flowProjection",
     ],
 )
