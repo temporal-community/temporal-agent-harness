@@ -1,11 +1,12 @@
-# ABOUTME: The harness's Claude parts end to end: the claude-agent-sdk wheel's bundled Claude Code,
-# driven from a harness agent through the upstream plugin's transport, against a scripted Anthropic
-# API on localhost. Asserts each tool call's harness events under Claude's own tool_use id, that the
-# harness approval gate decides every call, even one Claude Code would run unasked, that a
-# subagent's calls, Claude's thinking, and harness tools (a callback tool included) reach the turn
-# stream, that the next turn resumes the session, that a turn finishes after a Worker restart or
-# Claude Code dying without asking again, with a cut-off subagent carrying on as itself, that a custom connector and the transport's options are used, and that each
-# history replays.
+# ABOUTME: HarnessClaudeSession end to end: the claude-agent-sdk wheel's bundled Claude Code, run
+# from a harness agent through the upstream plugin, against a scripted Anthropic API on localhost.
+# The tests check that:
+#   - each tool call's events use Claude's tool_use id, and the approval policy decides every call;
+#   - subagent calls, thinking, and harness tools, callback tools included, reach the turn stream;
+#   - the next turn resumes the session;
+#   - a turn finishes after a Worker restart or a Claude Code crash, without asking again;
+#   - a custom connector and the transport's options are used;
+#   - each history replays.
 #
 # No API key is needed: Claude Code talks to the scripted API, with a config dir and working
 # directory under tmp_path.
@@ -328,13 +329,8 @@ async def _turn_events(
                 a.tool_id == event.event.tool_id
                 for a in (await AgentClient(client, handle.id).get_status()).pending_approvals
             ):
-                await handle.execute_update(
-                    TOOL_APPROVAL_UPDATE,
-                    ToolApprovalDecision(
-                        tool_id=event.event.tool_id,
-                        approved=approve and event.event.tool_id not in denied,
-                    ),
-                    result_type=ToolApprovalResult,
+                await _decide(
+                    handle, event.event.tool_id, approve and event.event.tool_id not in denied
                 )
             elif event.event.type == E.CALLBACK_REQUESTED:
                 await AgentClient(client, handle.id).provide_callback_result(
@@ -351,6 +347,32 @@ def _tool_events(events: list[AgentEvent], tool_id: str) -> list[AgentEventType]
 
 def _of(events: list[AgentEvent], type: AgentEventType) -> list[Any]:
     return [e.event for e in events if e.event.type == type]
+
+
+async def _decide(handle: WorkflowHandle[Any, Any], tool_id: str, approved: bool) -> None:
+    await handle.execute_update(
+        TOOL_APPROVAL_UPDATE,
+        ToolApprovalDecision(tool_id=tool_id, approved=approved),
+        result_type=ToolApprovalResult,
+    )
+
+
+async def _pending_approval(
+    env: WorkflowEnvironment, handle: WorkflowHandle[Any, Any], tool_name: str | None = None
+) -> Any:
+    """The one waiting approval of a ``tool_name`` call, any call by default, once it waits.
+    Approves each Agent call before it."""
+    status = AgentClient(env.client, handle.id).get_status
+    async with asyncio.timeout(60):
+        while True:
+            approvals = (await status()).pending_approvals
+            if pending := [a for a in approvals if tool_name in (None, a.tool_name)]:
+                [approval] = pending
+                return approval
+            for approval in approvals:
+                if approval.tool_name == "Agent":
+                    await _decide(handle, approval.tool_id, True)
+            await asyncio.sleep(0.1)
 
 
 async def test_an_approved_call_runs_and_the_next_turn_resumes_the_session(
@@ -840,10 +862,7 @@ async def test_an_approval_left_pending_by_a_worker_restart_is_answered_once(
         status = AgentClient(env.client, handle.id).get_status
         reply = await _send(handle, "act now")
         # The Worker goes away while the first call waits for its approval.
-        async with asyncio.timeout(60):
-            while not (pending := (await status()).pending_approvals):
-                await asyncio.sleep(0.1)
-    [first] = pending
+        first = await _pending_approval(env, handle)
 
     async with _worker(env, task_queue):
         # Approves the waiting approval, after the restart.
@@ -864,42 +883,6 @@ async def test_an_approval_left_pending_by_a_worker_restart_is_answered_once(
     await _replay(handle)
 
 
-async def test_an_approval_claude_stops_asking_for_is_settled_when_the_turn_ends(
-    api: ScriptedApi, env: WorkflowEnvironment
-) -> None:
-    commands = iter(["echo one", "echo two"])
-    api.answers = {
-        "tool_result:": "Done.",
-        "act now": lambda body: _tool_use(
-            f"toolu_{uuid.uuid4().hex}", "Bash", command=next(commands)
-        ),
-    }
-    task_queue = f"claude-session-{uuid.uuid4()}"
-    async with _worker(env, task_queue):
-        handle = await _start(env, task_queue)
-        status = AgentClient(env.client, handle.id).get_status
-        reply = await _send(handle, "act now")
-        async with asyncio.timeout(60):
-            while not (pending := (await status()).pending_approvals):
-                await asyncio.sleep(0.1)
-    [first] = pending
-
-    async with _worker(env, task_queue):
-        # After the restart Claude makes a different call instead.
-        events = await _turn_events(
-            (env.client, handle), reply.turn_number, unanswered={first.tool_id}
-        )
-        left = (await status()).pending_approvals
-        await handle.terminate()
-
-    # The first call's approval is denied when the turn ends, as a cancelled call's is in the
-    # other integrations: it never started, so it gets no tool_start or tool_error.
-    _assert_abandoned(events, first.tool_id)
-    assert not left
-    assert len(_of(events, E.TOOL_END)) == 1
-    await _replay(handle)
-
-
 async def test_a_call_claude_replans_after_a_restart_cant_be_approved_once_it_asks_again(
     api: ScriptedApi, env: WorkflowEnvironment
 ) -> None:
@@ -913,12 +896,8 @@ async def test_a_call_claude_replans_after_a_restart_cant_be_approved_once_it_as
     task_queue = f"claude-session-{uuid.uuid4()}"
     async with _worker(env, task_queue):
         handle = await _start(env, task_queue)
-        status = AgentClient(env.client, handle.id).get_status
         reply = await _send(handle, "act now")
-        async with asyncio.timeout(60):
-            while not (pending := (await status()).pending_approvals):
-                await asyncio.sleep(0.1)
-    [first] = pending
+        first = await _pending_approval(env, handle)
 
     async with _worker(env, task_queue):
         # Claude makes a different call instead after the restart.
@@ -935,15 +914,14 @@ async def test_a_call_claude_replans_after_a_restart_cant_be_approved_once_it_as
         # The first call's approval was closed when Claude asked for the other, so the person
         # isn't left approving a call nothing will run.
         with pytest.raises(WorkflowUpdateFailedError):
-            await handle.execute_update(
-                TOOL_APPROVAL_UPDATE,
-                ToolApprovalDecision(tool_id=first.tool_id, approved=True),
-                result_type=ToolApprovalResult,
-            )
+            await _decide(handle, first.tool_id, True)
         events = await turn
+        left = (await AgentClient(env.client, handle.id).get_status()).pending_approvals
         await handle.terminate()
 
     _assert_abandoned(events, first.tool_id)
+    assert not left
+    assert len(_of(events, E.TOOL_END)) == 1
     await _replay(handle)
 
 
@@ -966,11 +944,7 @@ async def test_a_callback_left_pending_by_a_worker_restart_is_answered_once(
         async with asyncio.timeout(60):
             while not (pending := (await status()).pending_callbacks):
                 for approval in (await status()).pending_approvals:
-                    await handle.execute_update(
-                        TOOL_APPROVAL_UPDATE,
-                        ToolApprovalDecision(tool_id=approval.tool_id, approved=True),
-                        result_type=ToolApprovalResult,
-                    )
+                    await _decide(handle, approval.tool_id, True)
                 await asyncio.sleep(0.1)
     [first] = pending
 
@@ -1167,7 +1141,9 @@ async def test_a_subagents_cut_off_call_it_doesnt_repeat_ends_with_the_subagent(
     agents = iter(["toolu_agent", "toolu_agent2"])
     commands = iter(["echo one", "echo two"])
     api.answers = {
-        "tool_result:toolu_agent": "Done.",
+        "tool_result:toolu_main": "Done.",
+        # Once the subagent ends, this agent makes the call the subagent abandoned.
+        "tool_result:toolu_agent": _tool_use("toolu_main", "Bash", command="echo one"),
         "tool_result:": "Ran it.",
         "run it": lambda body: _tool_use(
             next(agents), "Agent", description="Run", prompt="run a command", subagent_type="writer"
@@ -1182,19 +1158,7 @@ async def test_a_subagents_cut_off_call_it_doesnt_repeat_ends_with_the_subagent(
         status = AgentClient(env.client, handle.id).get_status
         reply = await _send(handle, "run it")
         # The Worker goes away while the subagent's call waits for its approval.
-        async with asyncio.timeout(60):
-            while not (
-                pending := [a for a in (await status()).pending_approvals if a.tool_name == "Bash"]
-            ):
-                for approval in (await status()).pending_approvals:
-                    if approval.tool_name == "Agent":
-                        await handle.execute_update(
-                            TOOL_APPROVAL_UPDATE,
-                            ToolApprovalDecision(tool_id=approval.tool_id, approved=True),
-                            result_type=ToolApprovalResult,
-                        )
-                await asyncio.sleep(0.1)
-    [first] = pending
+        first = await _pending_approval(env, handle, "Bash")
 
     async with _worker(env, task_queue):
         # After the restart the subagent makes a different call instead.
@@ -1215,13 +1179,22 @@ async def test_a_subagents_cut_off_call_it_doesnt_repeat_ends_with_the_subagent(
         if e.agent_id == started.subagent_id
     ]
     [second] = [
-        e.tool_id
-        for e in _of(events, E.TOOL_APPROVAL_REQUESTED)
-        if e.tool_name == "Bash" and e.tool_id != first.tool_id
+        tool_id
+        for type, tool_id in types
+        if type == E.TOOL_APPROVAL_REQUESTED and tool_id != first.tool_id
     ]
     assert types.index((E.TOOL_APPROVAL_RESOLVED, first.tool_id)) < types.index(
         (E.TOOL_APPROVAL_REQUESTED, second)
     )
+    # This agent's identical call is asked about and runs, instead of getting the denial forced
+    # on the abandoned call.
+    assert _tool_events(events, "toolu_main") == [
+        E.TOOL_REQUESTED,
+        E.TOOL_APPROVAL_REQUESTED,
+        E.TOOL_APPROVAL_RESOLVED,
+        E.TOOL_START,
+        E.TOOL_END,
+    ]
     await _replay(handle)
 
 
@@ -1237,61 +1210,6 @@ def _assert_abandoned(events: list[AgentEvent], tool_id: str) -> None:
         e for e in _of(events, E.TOOL_APPROVAL_RESOLVED) if e.tool_id == tool_id
     ]
     assert (resolved.approved, resolved.reason) == (False, "approval unresolved")
-
-
-async def test_a_denial_forced_on_a_dead_subagents_call_is_not_reused_by_another_call(
-    api: ScriptedApi, env: WorkflowEnvironment
-) -> None:
-    agents = iter(["toolu_agent", "toolu_agent2"])
-    commands = iter(["echo one", "echo two"])
-    api.answers = {
-        "tool_result:toolu_main": "Done.",
-        # Once the subagent ends, this agent makes the call the subagent abandoned.
-        "tool_result:toolu_agent": _tool_use("toolu_main", "Bash", command="echo one"),
-        "tool_result:": "Ran it.",
-        "run it": lambda body: _tool_use(
-            next(agents), "Agent", description="Run", prompt="run a command", subagent_type="writer"
-        ),
-        "run a command": lambda body: _tool_use(
-            f"toolu_{uuid.uuid4().hex}", "Bash", command=next(commands)
-        ),
-    }
-    task_queue = f"claude-session-{uuid.uuid4()}"
-    async with _worker(env, task_queue):
-        handle = await _start(env, task_queue)
-        status = AgentClient(env.client, handle.id).get_status
-        reply = await _send(handle, "run it")
-        # The Worker goes away while the subagent's call waits for its approval.
-        async with asyncio.timeout(60):
-            while not (
-                pending := [a for a in (await status()).pending_approvals if a.tool_name == "Bash"]
-            ):
-                for approval in (await status()).pending_approvals:
-                    if approval.tool_name == "Agent":
-                        await handle.execute_update(
-                            TOOL_APPROVAL_UPDATE,
-                            ToolApprovalDecision(tool_id=approval.tool_id, approved=True),
-                            result_type=ToolApprovalResult,
-                        )
-                await asyncio.sleep(0.1)
-    [first] = pending
-
-    async with _worker(env, task_queue):
-        events = await _turn_events(
-            (env.client, handle), reply.turn_number, unanswered={first.tool_id}
-        )
-        await handle.terminate()
-
-    # This agent's identical call is asked about and runs, instead of getting the denial the
-    # subagent's end forced on the abandoned call.
-    assert _tool_events(events, "toolu_main") == [
-        E.TOOL_REQUESTED,
-        E.TOOL_APPROVAL_REQUESTED,
-        E.TOOL_APPROVAL_RESOLVED,
-        E.TOOL_START,
-        E.TOOL_END,
-    ]
-    await _replay(handle)
 
 
 @pytest.mark.parametrize(
@@ -1382,19 +1300,7 @@ async def test_a_subagents_cut_off_harness_call_it_doesnt_repeat_ends_with_the_s
         status = AgentClient(env.client, handle.id).get_status
         reply = await _send(handle, "run it")
         # The Worker goes away while the subagent's harness call waits for its approval.
-        async with asyncio.timeout(60):
-            while not (
-                pending := [a for a in (await status()).pending_approvals if a.tool_name == "shout"]
-            ):
-                for approval in (await status()).pending_approvals:
-                    if approval.tool_name == "Agent":
-                        await handle.execute_update(
-                            TOOL_APPROVAL_UPDATE,
-                            ToolApprovalDecision(tool_id=approval.tool_id, approved=True),
-                            result_type=ToolApprovalResult,
-                        )
-                await asyncio.sleep(0.1)
-    [first] = pending
+        first = await _pending_approval(env, handle, "shout")
 
     async with _worker(env, task_queue):
         # After the restart the subagent makes a different call instead.
@@ -1451,35 +1357,6 @@ async def test_the_transport_gets_the_sessions_activity_options_and_stream(
     assert text == "Hello there."
 
 
-class _RecordingConnector:
-    """Starts Claude Code in a subprocess, as the default connector does, and records each start."""
-
-    def __init__(self) -> None:
-        self.requests: list[ConnectActivityInput] = []
-
-    async def connect(self, request: ConnectActivityInput) -> ClaudeCodeProcess:
-        self.requests.append(request)
-        return await SubprocessConnector().connect(request)
-
-
-async def test_a_custom_connector_starts_claude_code(
-    api: ScriptedApi, env: WorkflowEnvironment
-) -> None:
-    api.answers = {"hi": "Hello there."}
-    connector = _RecordingConnector()
-    task_queue = f"claude-session-{uuid.uuid4()}"
-
-    async with _worker(env, task_queue, connector):
-        handle = await _start(env, task_queue)
-        events = await _turn((env.client, handle), "hi")
-        await handle.terminate()
-
-    [end] = _of(events, E.MESSAGE_HANDLER_END)
-    assert end.output == {"text": "Hello there."}
-    assert len(connector.requests) == 1
-    await _replay(handle)
-
-
 class _KeepingConnector:
     """Starts Claude Code as the default connector does, and keeps each process."""
 
@@ -1491,6 +1368,23 @@ class _KeepingConnector:
         self.processes.append(process)
         return process
 
+
+async def test_a_custom_connector_starts_claude_code(
+    api: ScriptedApi, env: WorkflowEnvironment
+) -> None:
+    api.answers = {"hi": "Hello there."}
+    connector = _KeepingConnector()
+    task_queue = f"claude-session-{uuid.uuid4()}"
+
+    async with _worker(env, task_queue, connector):
+        handle = await _start(env, task_queue)
+        events = await _turn((env.client, handle), "hi")
+        await handle.terminate()
+
+    [end] = _of(events, E.MESSAGE_HANDLER_END)
+    assert end.output == {"text": "Hello there."}
+    assert len(connector.processes) == 1
+    await _replay(handle)
 
 async def test_a_turn_carries_on_after_claude_code_dies(
     api: ScriptedApi, env: WorkflowEnvironment
@@ -1504,11 +1398,8 @@ async def test_a_turn_carries_on_after_claude_code_dies(
     task_queue = f"claude-session-{uuid.uuid4()}"
     async with _worker(env, task_queue, connector):
         handle = await _start(env, task_queue)
-        status = AgentClient(env.client, handle.id).get_status
         reply = await _send(handle, "act now")
-        async with asyncio.timeout(60):
-            while not (await status()).pending_approvals:
-                await asyncio.sleep(0.1)
+        await _pending_approval(env, handle)
         # Claude Code dies while the call waits for its approval; the Worker stays.
         connector.processes[0]._process.kill()
         events = await _turn_events((env.client, handle), reply.turn_number)
@@ -1647,36 +1538,21 @@ def _reply(uuid: str, *content: Any) -> AssistantMessage:
     return AssistantMessage(content=list(content), model="claude", uuid=uuid)
 
 
-async def test_a_lost_connection_resumes_at_the_reply_before_the_turn_and_resends_the_prompt(
-    connections: list[dict[str, Any]],
-) -> None:
-    connections += [
-        {"script": [_INIT, _reply("r1", TextBlock("Hi.")), _result()]},
-        # The prompt was saved, then the connection was lost.
-        {"script": [_INIT, UserMessage(content="next", uuid="p2"), CLIConnectionError("lost")]},
-        {"script": [_INIT, _reply("r2", TextBlock("Done.")), _result()]},
-    ]
-    _, session = _session()
-
-    await session.run("first")
-    await session.run("next")
-
-    # No "continue" message for the model to misread: it sees the prompt once, as sent.
-    retry = connections[2]
-    assert (retry["options"].resume, retry["options"].resume_session_at) == ("s1", "r1")
-    assert retry["sent"] == ["next"]
-
-
 @pytest.mark.parametrize(
     "ending",
-    [[ProcessError("Command failed with exit code -9", exit_code=-9)], []],
-    ids=["killed", "exited"],
+    [
+        [CLIConnectionError("lost")],
+        [ProcessError("Command failed with exit code -9", exit_code=-9)],
+        [],
+    ],
+    ids=["lost", "killed", "exited"],
 )
-async def test_claude_code_ending_mid_turn_resumes_as_a_lost_connection_does(
+async def test_a_turn_cut_off_mid_turn_resumes_at_the_reply_before_it_and_resends_the_prompt(
     connections: list[dict[str, Any]], ending: list[Any]
 ) -> None:
     connections += [
         {"script": [_INIT, _reply("r1", TextBlock("Hi.")), _result()]},
+        # The prompt was saved, then the connection ended.
         {"script": [_INIT, UserMessage(content="next", uuid="p2"), *ending]},
         {"script": [_INIT, _reply("r2", TextBlock("Done.")), _result()]},
     ]
@@ -1685,6 +1561,7 @@ async def test_claude_code_ending_mid_turn_resumes_as_a_lost_connection_does(
     await session.run("first")
     result = await session.run("next")
 
+    # No "continue" message for the model to misread: it sees the prompt once, as sent.
     retry = connections[2]
     assert (retry["options"].resume, retry["options"].resume_session_at) == ("s1", "r1")
     assert retry["sent"] == ["next"]

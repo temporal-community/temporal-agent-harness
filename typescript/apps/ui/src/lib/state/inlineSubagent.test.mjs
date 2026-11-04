@@ -19,10 +19,10 @@ const childAgentId = "de539b-093b70";
    here so the two runs' projections compare directly. */
 const childKey = "toolu_agent";
 
-/* A Claude-style run: the parent's Agent call starts a subagent, which runs one turn. */
-function run(inline, { cutOff = false } = {}) {
+/* Builds frames for an agent's turn, each at the next timestamp and resume offset. */
+function framer() {
   let offset = 0;
-  const at = (agentId, turn, data) => ({
+  return (agentId, turn, data) => ({
     event: data.type,
     data: {
       agent_id: agentId,
@@ -35,6 +35,11 @@ function run(inline, { cutOff = false } = {}) {
       ...data
     }
   });
+}
+
+/* A Claude-style run: the parent's Agent call starts a subagent, which runs one turn. */
+function run(inline, { cutOff = false } = {}) {
+  const at = framer();
   const parentTurn = { id: "t1", number: 1, message: "m1" };
   const childTurn = { id: `${childAgentId}-turn-1`, number: 1, message: childKey };
   const parent = (data) => at(rootAgentId, parentTurn, data);
@@ -193,10 +198,14 @@ describe.each([
 });
 
 describe("an inline subagent", () => {
-  it("is closed to messages while it runs, unlike a running child workflow", async () => {
+  /* The inline run, up to its child's Glob starting. */
+  const running = () => {
     const frames = run(true);
-    const running = frames.slice(0, frames.findIndex((f) => f.event === "tool_start" && f.data.tool_id === "toolu_glob") + 1);
-    const { controller } = await replay(running);
+    return frames.slice(0, frames.findIndex((f) => f.event === "tool_start" && f.data.tool_id === "toolu_glob") + 1);
+  };
+
+  it("is closed to messages while it runs, unlike a running child workflow", async () => {
+    const { controller } = await replay(running());
     const target = controller.messageTargets.find((t) => t.workflowId === childKey);
     assert.equal(target.closed, true);
     const runtime = controller.graph.nodes.find((node) => node.id === `${childKey}::agent-runtime`);
@@ -204,9 +213,7 @@ describe("an inline subagent", () => {
   });
 
   it("is drawn in place of its call's card while it runs", async () => {
-    const frames = run(true);
-    const running = frames.slice(0, frames.findIndex((f) => f.event === "tool_start" && f.data.tool_id === "toolu_glob") + 1);
-    const { controller } = await replay(running);
+    const { controller } = await replay(running());
     const byId = new Map(controller.graph.nodes.map((node) => [node.id, node]));
     const slot = byId.get(`${parentWorkflowId}::tool:${childKey}`);
     assert.equal(slot.data.size, "slot", "the call draws no card of its own");
@@ -301,20 +308,7 @@ describe("an inline subagent", () => {
 /* A four-turn run like the reported session: turn 2 delegates to one subagent, turn 3 to none,
    turn 4 to another. Each turn's graph shows only the subagents that turn involves. */
 function turns(inline, script) {
-  let offset = 0;
-  const at = (agentId, turn, data) => ({
-    event: data.type,
-    data: {
-      agent_id: agentId,
-      turn_id: turn.id,
-      turn_number: turn.number,
-      message_id: turn.message,
-      timestamp: (offset += 1),
-      resume_offset: offset,
-      replay: true,
-      ...data
-    }
-  });
+  const at = framer();
   const frames = [];
   const childTurns = new Map();
   script.forEach((steps, index) => {

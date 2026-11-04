@@ -1137,8 +1137,7 @@ async def test_attach_does_not_stop_at_an_inline_subagents_turn_end():
                     root_agent_id="P",
                 )
             ]
-    assert [(e.agent_id, e.event.type) for e in items][-1] == ("P", AgentEventType.TURN_END)
-    assert len(items) == 3
+    assert items == streams["P"]
     assert queries == [1]
 
 

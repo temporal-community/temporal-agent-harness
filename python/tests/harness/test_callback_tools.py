@@ -112,6 +112,17 @@ class CallbackProbeAgent:
     @agent.accepts
     async def act(self, message: TextMessage) -> TextReply:
         """Run the callback scenario selected by the message text."""
+        if message.text == "abandoned":
+            # The caller gives up on a call while it waits for the client's result.
+            call = asyncio.create_task(self._runner.run_tool("cb-echo", echo_tool, "hi"))
+            await workflow.wait_condition(lambda: bool(self._runner._status.pending_callbacks()))
+            call.cancel()
+            try:
+                await call
+            except asyncio.CancelledError:
+                pass
+            self._last_reply = "cancelled"
+            return TextReply(text=self._last_reply)
         call_id, tool, arg = _SCENARIOS[message.text]
         # Mirror a real agent loop: a failed callback (client error / timeout / close) surfaces
         # as a result rather than failing the turn.
@@ -435,6 +446,24 @@ async def test_unfulfilled_callback_times_out(env_and_client):
 # ---------------------------------------------------------------------------
 # Discovery, idempotency, close
 # ---------------------------------------------------------------------------
+
+
+async def test_an_abandoned_callback_fails_not_left_pending(env_and_client):
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "abandoned")
+
+    events = await _drain_to_turn_end(client, handle.id)
+    resolved = next(
+        e.event for e in events if e.event.type == AgentEventType.CALLBACK_RESOLVED
+    )
+    assert (resolved.tool_id, resolved.outcome, resolved.error) == (
+        "cb-echo",
+        "timeout",
+        "callback unresolved",
+    )
+    assert _reply_text(events) == "cancelled"
+    assert await AgentClient(client, handle.id).get_pending_callbacks() == []
 
 
 async def test_pending_callback_visible_in_status(env_and_client):

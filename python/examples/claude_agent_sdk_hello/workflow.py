@@ -1,14 +1,7 @@
-"""A hello-world Claude Agent SDK agent on the harness, with a Claude Code subagent.
+"""A hello-world Claude Agent SDK agent on the harness.
 
-Claude Code keeps its own tools and agent loop. The agent runs each turn with
-``HarnessClaudeSession``, which decides each call with the agent's approval policy, so each Bash
-call waits for you to approve or deny. The session shows each tool call live, with the subagent
-nested, and gives Claude Code a harness tool, ``current_time``.
-
-Claude Code works in the Worker's directory, the repository root under ``just worker``. It reads
-files there and hands searches to its ``file-finder`` subagent.
-
-Run it on the shared example stack. See ``README.md``.
+Claude Code chats about the files in the Worker's directory and hands searches to its
+``file-finder`` subagent. Each Bash call waits for your approval. See ``README.md``.
 """
 
 from __future__ import annotations

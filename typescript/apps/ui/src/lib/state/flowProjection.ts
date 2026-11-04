@@ -251,8 +251,8 @@ interface AgentGraphOptions {
   outputPlacement?: "external" | "runtime";
   agentInterface?: AgentInterfaceFunction[];
   embeddedToolGraphs?: AgentGraph[];
-  /** Inline subagents' graphs, each drawn inside the tool call that runs it, by its tool id. */
-  hostedToolGraphs?: ReadonlyMap<string, AgentGraph>;
+  /** Inline subagents' graphs, each drawn in place of the tool call that runs it, by its tool id. */
+  hostedToolGraphs?: ReadonlyMap<ToolId, AgentGraph>;
   /**
    * Draw the turn as it stands rather than as it happened: a settled tool leaves
    * the canvas. Off by default, so a caller that asks for nothing gets the

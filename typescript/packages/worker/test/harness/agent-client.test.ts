@@ -160,7 +160,7 @@ describe("attach", () => {
       ended = true;
     })();
     await sleep(300);
-    assert.equal(items.length, events.length);
+    assert.deepStrictEqual(items, events);
     assert.equal(ended, false, "attach ended on the inline subagent's turn_end");
   });
 });

@@ -6,7 +6,7 @@ subagent (`file-finder`) and call a custom tool (`current_time`). It asks before
 
 The agent uses Temporal's
 [Claude Agent SDK plugin](https://docs.temporal.io/develop/python/integrations/claude-agent-sdk)
-as is. Claude Code keeps its own agent loop.
+as is.
 
 ## What it shows
 
@@ -16,11 +16,10 @@ as is. Claude Code keeps its own agent loop.
 - Your own tools work too. `current_time` is a harness tool that Claude Code can call, and it
   follows the same approval policy.
 - Claude doesn't forget. The conversation carries on across messages.
-- A message survives a Worker or Claude Code crash. When either comes back, the turn starts again
-  from your message, and a subagent carries on as the same subagent. An approval you were asked for is still the one to answer, and a call you already
-  approved isn't asked again. Claude Code's tools may run again, though: a command cut off by the
-  crash, or finished before it, can run a second time. A harness tool like `current_time` runs
-  once when Claude repeats the same call.
+- A message survives a Worker or Claude Code crash. The turn starts again from your message, and a
+  subagent carries on as the same subagent. You aren't asked twice about the same call, and
+  `current_time` runs once. Claude Code's own tools may run again, though: a command the crash cut
+  off, or one that finished just before it, can run a second time.
 
 ## Layout
 
@@ -36,7 +35,8 @@ session-manager worker, the API server, and the web UI.
 ## Run it
 
 Prereq: from the repo root, `cp .env.example .env.local` and set `ANTHROPIC_API_KEY`. The
-claude-agent-sdk package bundles Claude Code, so there is nothing else to install. Then run these from this directory, each in its own terminal:
+claude-agent-sdk package bundles Claude Code, so there is nothing else to install. Then run these
+from this directory, each in its own terminal:
 
 ```sh
 just temporal          # 1. local Temporal dev server (or bring your own)

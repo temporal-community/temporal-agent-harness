@@ -102,6 +102,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     ToolApprovalDenied,
     _apply_approval_policy,
     _ApprovalStatus,
+    _CallbackStatus,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
@@ -159,9 +160,9 @@ class _TurnCalls:
     """A turn's gated calls, kept across its connections, so Claude's repeat of a call after a
     lost connection gets the first call's decision, or harness tool result, instead of a new one.
 
-    Each call's task outlives the hook or handler that started it: it is a durable wait in the
-    workflow, which the repeat awaits. Tasks still running when the turn ends are cancelled, which
-    settles their approvals and callbacks.
+    Each call runs as its own task, so it outlives the connection that started it and the repeat
+    can await it. The turn's end cancels any still running, which settles their approvals and
+    callbacks.
     """
 
     def __init__(self) -> None:
@@ -213,14 +214,13 @@ class _TurnCalls:
         self, runner: AgentWorkflowRunner, which: Callable[[_CutOff], bool]
     ) -> None:
         """End the cut-off calls ``which`` picks, which no repeat will take over. One still
-        waiting for approval is denied, as a cancelled call's is in the other integrations."""
+        waiting for approval is denied, as a cancelled call is in the other integrations."""
         for gate, cut in list(self.cut_off.items()):
             if which(cut) and self.cut_off.pop(gate, None):
                 self.ended.add(gate)
                 status = runner._status
-                if status.approval_entry(cut.tool_id) is not None and not (
-                    status.is_approval_resolved(cut.tool_id)
-                ):
+                entry = status.approval_entry(cut.tool_id)
+                if entry is not None and entry.status is _ApprovalStatus.PENDING:
                     status.finalize_approval(cut.tool_id, closed=runner._closed)
                     runner._publish_approval_resolved(cut.tool_id)
                 cut.end()
@@ -403,9 +403,7 @@ class _ClaudeStreamObserver:
     turn, inline on this agent's stream.
     """
 
-    def __init__(
-        self, runner: AgentWorkflowRunner, calls: _TurnCalls
-    ) -> None:
+    def __init__(self, runner: AgentWorkflowRunner, calls: _TurnCalls) -> None:
         self._runner = runner
         self._turn_calls = calls
         # The earlier connections' calls, each taken once, by a repeat of the same call.
@@ -597,7 +595,7 @@ class _ClaudeStreamObserver:
         tool_id: str,
         error: str | None,
         output: JsonValue = None,
-        result: Any = None,
+        result: dict[str, Any] | None = None,
     ) -> None:
         """Publish the end of a call, and of the subagent it started; ``error`` if it failed."""
         call, agent_id = self._tools.pop(tool_id)
@@ -827,14 +825,10 @@ class _ClaudeStreamObserver:
 
         # The handler can run before the observer sees Claude's request.
         await workflow.wait_condition(lambda: pending() is not None)
-        _, agent_id = self._harness_calls.pop(cast(int, pending()))
-        key = _key(claude_name, args)
+        block, agent_id = self._harness_calls.pop(cast(int, pending()))
         calls = self._turn_calls
-        task = next(
-            (t for t in self._earlier.get(key, []) if calls.claimable(t, agent_id)), None
-        )
+        task = self._claim(block, agent_id)
         if task is not None:
-            self._earlier[key].remove(task)
             calls.cut_off.pop(task, None)
         else:
             # claude_agent_sdk passes a custom tool only its arguments, not Claude's tool_use id.
@@ -883,9 +877,8 @@ class _ClaudeStreamObserver:
             return  # It ended itself.
         tool_id, name, _, scope = self._turn_calls.harness[task]
         status = self._runner._status
-        if status.callback_entry(tool_id) is not None and not status.is_callback_resolved(
-            tool_id
-        ):
+        entry = status.callback_entry(tool_id)
+        if entry is not None and entry.status is _CallbackStatus.PENDING:
             status.finalize_callback(tool_id, closed=self._runner._closed)
             self._runner._publish_callback_resolved(tool_id)
         if not self._denied(tool_id):
@@ -911,14 +904,11 @@ class _ClaudeStreamObserver:
         self, event: AgentStreamItem, agent_id: str | None, /, **scope: str | None
     ) -> None:
         """Publish ``event`` as ``agent_id``'s; ``scope`` overrides its ``_pub`` keywords."""
-        ctx = self._turn()
+        # Always set: the observer runs inside the turn's handler.
+        ctx = cast(TurnStreamContext, self._runner.current_stream_context)
         self._runner._pub(
             ctx.turn_id, ctx.turn_number, event, **{**self._scope(agent_id), **scope}
         )
-
-    def _turn(self) -> TurnStreamContext:
-        # Always set: the observer runs inside the turn's handler.
-        return cast(TurnStreamContext, self._runner.current_stream_context)
 
 
 def _as_claude_tool(
