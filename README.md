@@ -25,7 +25,7 @@ human interaction so you can focus on the agent's behavior.
 | Start here | What you'll build |
 | --- | --- |
 | [Python quickstart](python/README.md) | A Python agent and worker, with the shared console |
-| [TypeScript quickstart](typescript/packages/core/README.md) | A TypeScript agent and worker, with the same console |
+| [TypeScript quickstart](typescript/packages/core/README.md#quickstart) | A TypeScript agent and worker, with the same console |
 | [Example agents](docs/guides/examples.md) | Run existing agents from a release checkout |
 | [Build with a coding agent](#coding-agent-setup) | Install the SDK's versioned skill and starter |
 
@@ -42,14 +42,18 @@ extras, a complete agent, worker registration, and startup commands. No reposito
 
 ### Build with it — install from npm
 
-In your own Node.js project:
+For a new project, follow the [four-step TypeScript quickstart](typescript/packages/core/README.md#quickstart):
+create the project, install its skill, start the services, and verify a session. The starter
+commands arrive with the next npm release.
+
+To add the SDK to an existing Node.js project:
 
 ```bash
 npm install --save-exact @temporalio/agent-harness@0.2.0 @temporalio/agent-harness-worker@0.2.0
 ```
 
-Follow the [TypeScript guide](typescript/packages/core/README.md#build-with-it--install-from-npm)
-for the complete compatible dependency set, TypeScript configuration, and first working session.
+The [manual setup reference](typescript/packages/core/README.md#build-with-it--install-from-npm)
+covers the complete compatible dependency set and worker configuration.
 
 ### How the pieces run
 

@@ -1,6 +1,6 @@
 # Temporal Agent Harness for TypeScript
 
-[Build an agent with npm](packages/core/README.md) · [Worker reference](packages/worker/README.md)
+[Four-step TypeScript quickstart](packages/core/README.md#quickstart) · [Worker reference](packages/worker/README.md)
 · [Harness API](../docs/api/README.md) · [Coding-agent setup](../docs/agent-development.md)
 
 Application clients: [plain TypeScript](packages/client/README.md), [React](packages/react/README.md),

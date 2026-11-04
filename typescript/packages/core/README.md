@@ -13,32 +13,136 @@ products over their live state with the React and Svelte clients.
 · [Examples](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples)
 · [Releases](https://github.com/temporal-community/temporal-agent-harness/releases)
 
-## Coding-agent setup and starter
+<a id="coding-agent-setup-and-starter"></a>
 
-The next npm release adds these commands through `@temporalio/agent-harness-worker`
-(they are not in the published 0.2.0 package):
+## Quickstart
+
+Create an agent, install its coding-agent skill, and open a working session in four steps.
+No repository checkout or Bazel installation is needed.
+
+> **Available with the next npm release.** The starter and skill commands are not in the
+> published 0.2.0 package. Once the new release is published, the `@latest` command below selects
+> it. Until then, use the [manual setup](#build-with-it--install-from-npm) with published packages.
+
+You need **Node.js 22.18+**, npm, [uv](https://docs.astral.sh/uv/getting-started/installation/),
+the [Temporal CLI](https://docs.temporal.io/cli), and an OpenAI API key for the starter.
+`uvx` can provision Python for the shared server, which requires Python 3.11+.
+
+### 1. Create the project
+
+Run this from the directory where you want the new project:
 
 ```bash
-npx agent-harness init ./my-agent
-npx agent-harness skills install
-npx agent-harness doctor --schema agent.schema.json
+npm exec --yes \
+  --package=@temporalio/agent-harness-worker@latest \
+  -- agent-harness init my-agent
+cd my-agent
+npm install
 ```
 
-`init` copies a complete OpenAI starter pinned to your installed SDK version. Follow its README
-to install dependencies and start the services. `skills install` activates this SDK's bundled
-skill in `.agents/skills/temporal-harness-typescript`; rerun after upgrades to update unchanged
-files without overwriting local edits. `skills path` prints its bundled location.
-See [coding-agent development](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/agent-development.md) for discovery, diagnostics,
-and the package-only workflow. The manual quickstart below works with the published packages.
+`npm exec` supplies the CLI before you have a project. `init` creates a new directory containing
+`agents.ts`, `worker.ts`, `agents.toml`, TypeScript configuration, and a README. It pins the
+installed harness version and compatible Temporal/model dependencies in `package.json` and
+refuses to overwrite existing files. The starter's weather tool returns sample data.
 
-## Installation
+### 2. Configure it and install the skill
 
-Two ways in, matching the Python SDK:
+```bash
+cp env.example .env.local
+# Set OPENAI_API_KEY in .env.local; never commit the key.
+npm run schema
+npm run skill
+```
+
+`schema` compiles the agent and writes `agent.schema.json`. `skill` copies this SDK release's
+skill into `.agents/skills/temporal-harness-typescript/`, with authoring, API, advanced-feature,
+and verification references. Installing the npm package bundles the skill; this explicit step
+makes it discoverable in your project.
+
+Open the project in your coding agent. Reload its session if it was already running, then ask:
+
+> Use $temporal-harness-typescript to help me build this agent. Explain the starter, then verify
+> it with ping before making model calls.
+
+For tools that use a different skill directory, run `npx agent-harness skills path` to locate
+the bundled resources, or use `npx agent-harness skills install --dest <directory>`.
+
+### 3. Start the four services
+
+Run each command in its own terminal, all from this project directory:
+
+**Terminal 1 — Temporal service** (skip if your configured Temporal service is already running):
+
+```bash
+temporal server start-dev
+```
+
+**Terminal 2 — shared session-manager worker:**
+
+```bash
+uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness session-manager
+```
+
+**Terminal 3 — shared API and harness console:**
+
+```bash
+uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness serve agents.toml
+```
+
+**Terminal 4 — your TypeScript agent worker:**
+
+```bash
+npm start
+```
+
+**The API, console, and session manager come from the Python package.** `uvx` runs those services
+without a Python project of your own; your agent worker runs in Node. The console is prebuilt,
+so no frontend build is needed.
+
+Defaults are `localhost:7233` and namespace `default`. For another Temporal service, export the
+same `TEMPORAL_*` connection settings in each service terminal. `.env.local` loads only into the
+Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all four processes running.
+
+### 4. Verify and develop
+
+1. Open the **harness console at <http://localhost:8000>**. Create a session for
+   **OpenAI Hello (TypeScript)**.
+2. Send `ping` a text message. Expect the same text back without a model request.
+3. Send `ask` **“What's the weather in Paris?”**. Expect a streamed reply and a completed
+   `get_weather` tool trace with sample weather data. This step calls OpenAI and needs a valid key.
+4. Reload the page and confirm the session reconnects.
+5. Check startup and worker availability:
+
+   ```bash
+   npm run doctor
+   ```
+
+Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the harness console.
+The worker checks for an API-key environment value at startup, including when testing `ping`.
+
+Edit `agents.ts` to change your agent and `worker.ts` for worker configuration. After changes,
+stop the worker, run `npm run schema`, and restart `npm start`. Use a new session for changed
+workflow behavior. Commit `agent.schema.json` and `package-lock.json`.
+
+After upgrading the SDK, rerun `npm run skill` to update unchanged skill files. Local edits
+produce a conflict and are preserved. Application-client guidance is in the installed skill's
+`references/api.md`.
+
+See [coding-agent development](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/agent-development.md)
+for skill discovery and updates, and [troubleshooting](#troubleshooting) if a service fails.
+
+<a id="installation"></a>
+
+## Installation and manual reference
+
+For a new application, start with the [four-step quickstart](#quickstart) above.
+The reference below covers existing projects, manual setup, and repository examples.
 
 | I want to… | Do this |
 | --- | --- |
 | **See it work** — chat with a TypeScript agent in a browser | [Try the example agent](#try-the-example-agent) from a release checkout |
-| **Build my own agent** in my own project | [Install from npm](#build-with-it--install-from-npm); no checkout or Bazel required |
+| **Create a new agent project** with a coding-agent skill | [Four-step quickstart](#quickstart) |
+| **Add the SDK to an existing project** or assemble it manually | [Install from npm](#build-with-it--install-from-npm) |
 
 Your agent and worker are TypeScript. The shared console and session manager currently come
 from the Python package, which `uvx` runs without a Python project of your own. Both SDKs use
@@ -420,7 +524,7 @@ workflow module, add a matching registry entry, and generate its schema using th
 
 Pin the harness packages to the same exact harness release, and pin the underlying Temporal SDK
 packages to the version required by your model integration. The Python services have a separate
-release version. This walkthrough pairs npm **0.2.0** with Python **0.8.0**; do not assume those
+release version. The manual walkthrough pairs npm **0.2.0** with Python **0.8.0**; do not assume those
 version numbers should match.
 
 Examples are not included in the npm packages: use the corresponding `npm-v<version>` repository

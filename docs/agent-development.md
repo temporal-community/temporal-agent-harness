@@ -34,6 +34,9 @@ provider and framework and to inspect public types and generated schemas first.
 
 ## Start an application
 
+Starting without an installed SDK? Follow the [four-step TypeScript quickstart](../typescript/packages/core/README.md#quickstart),
+which bootstraps the CLI with `npm exec` before creating the project.
+
 ```bash
 # Choose one, from a project where the SDK is installed:
 uv run temporal-agent-harness init ./my-agent
