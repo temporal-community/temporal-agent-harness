@@ -116,7 +116,9 @@ The canonical skills live in the packages:
 - [Python](../python/temporal_agent_harness/skills/temporal-harness-python/SKILL.md)
 - [TypeScript](../typescript/packages/core/skills/temporal-harness-typescript/SKILL.md)
 
-Repository `.agents/skills/` links point to these canonical directories for project discovery.
+Repository `.agents/skills/` links point to these canonical directories for project discovery,
+beside `temporal-harness-repo`, a repository-only skill for contributors working in the checkout
+(Bazel targets, `just` recipes, generated registries). It is not packaged.
 The Python wheel/sdist and core npm tarball include the complete resource trees. The worker
 npm package provides `agent-harness`. The shared API reference is authored in
 [docs/api/README.md](api/README.md); run `python3 scripts/sync-agent-resources.py` after editing it.

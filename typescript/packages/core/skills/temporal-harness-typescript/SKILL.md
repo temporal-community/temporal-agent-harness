@@ -22,6 +22,9 @@ example, not a requirement to replace an existing integration.
 - State, Code Mode, callback tools, or subagents: read [advanced features](references/advanced.md).
 - Validate behavior or troubleshoot startup: read [verification](references/verification.md).
 
+Inside the harness repository checkout itself, use the `temporal-harness-repo` skill in its
+`.agents/skills/` instead: there, Bazel and `just` replace these commands and registries are generated.
+
 Load only the references relevant to the task. Use schemas and public types to discover the
 agent's interface before searching implementation files. The project may also have its own
 instructions; these resources describe SDK usage, not permission to change deployment settings.

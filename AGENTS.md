@@ -7,8 +7,12 @@ Run commands below from the repository root unless stated otherwise.
 For building applications with installed packages, use the packaged
 [Python skill](python/temporal_agent_harness/skills/temporal-harness-python/SKILL.md) or
 [TypeScript skill](typescript/packages/core/skills/temporal-harness-typescript/SKILL.md).
-Project discovery links are in `.agents/skills/`; [agent development](docs/agent-development.md)
-explains installation and updates.
+For agents working in this checkout, `.agents/skills/temporal-harness-repo/` explains how
+examples are wired, run, and tested here; the packaged skills' commands do not apply in the repo.
+Codex discovers it in place; for Claude Code, link it with
+`mkdir -p .claude/skills && ln -s ../../.agents/skills/temporal-harness-repo .claude/skills/`
+(`.claude/` is gitignored). [Agent development](docs/agent-development.md) covers installation
+and updates of the packaged skills.
 
 ## Find the right code
 
