@@ -372,8 +372,6 @@
     white-space: nowrap;
   }
 
-  /* Same cues the transcript spends on the playhead row: the hairline
-     brightens and the band takes a fuller wash. */
   .state-node.slot {
     border: none;
     background: none;
@@ -381,6 +379,8 @@
     pointer-events: none;
   }
 
+  /* Same cues the transcript spends on the playhead row: the hairline
+     brightens and the band takes a fuller wash. */
   .state-node.active {
     border-color: color-mix(in srgb, var(--status-color) 55%, var(--border-strong));
   }

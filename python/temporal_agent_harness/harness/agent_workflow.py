@@ -3292,7 +3292,7 @@ class AgentWorkflowRunner:
         it. ``workflow.uuid4`` is deterministic in-workflow (offline unit tests patch it)."""
         while True:
             candidate = f"{self._agent_id}-{workflow.uuid4().hex[:AGENT_ID_LENGTH]}"
-            if not self._status.has_subagent(candidate):
+            if not self._status.has_subagent(candidate) and candidate not in self._inline_turns:
                 return candidate
 
     async def start_subagent(

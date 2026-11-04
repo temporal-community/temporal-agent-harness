@@ -883,6 +883,47 @@ async def test_an_approval_left_pending_by_a_worker_restart_is_answered_once(
     await _replay(handle)
 
 
+async def test_parallel_calls_left_pending_by_a_worker_restart_are_answered_once(
+    api: ScriptedApi, env: WorkflowEnvironment
+) -> None:
+    ids = iter([("toolu_1", "toolu_2"), ("toolu_3", "toolu_4")])
+
+    def both(body: dict[str, Any]) -> list[dict[str, Any]]:
+        a, b = next(ids)
+        return [_tool_use(a, "Bash", command="echo a"), _tool_use(b, "Bash", command="echo b")]
+
+    api.answers = {"tool_result:": "Done.", "run both": both}
+    task_queue = f"claude-session-{uuid.uuid4()}"
+    async with _worker(env, task_queue):
+        handle = await _start(env, task_queue)
+        status = AgentClient(env.client, handle.id).get_status
+        reply = await _send(handle, "run both")
+        # The Worker goes away while both calls wait for their approvals.
+        async with asyncio.timeout(60):
+            while len((await status()).pending_approvals) < 2:
+                await asyncio.sleep(0.1)
+
+    async with _worker(env, task_queue):
+        # Approves the waiting approvals, after the restart.
+        events = await _turn_events((env.client, handle), reply.turn_number)
+        left = (await status()).pending_approvals
+        await handle.terminate()
+
+    # Claude Code repeats both calls, and each carries on as its first call: one card and one
+    # approval each, and neither repeat ends the other's first call.
+    for tool_id in ("toolu_1", "toolu_2"):
+        assert _tool_events(events, tool_id) == [
+            E.TOOL_REQUESTED,
+            E.TOOL_APPROVAL_REQUESTED,
+            E.TOOL_APPROVAL_RESOLVED,
+            E.TOOL_START,
+            E.TOOL_END,
+        ]
+    assert len(_of(events, E.TOOL_REQUESTED)) == 2
+    assert not left
+    await _replay(handle)
+
+
 async def test_a_call_claude_replans_after_a_restart_cant_be_approved_once_it_asks_again(
     api: ScriptedApi, env: WorkflowEnvironment
 ) -> None:
@@ -1749,3 +1790,4 @@ async def test_a_harness_call_claude_code_answers_itself_is_not_left_for_a_handl
     assert not session._observer._harness_calls
     started = [e for e in runner.events if e.type == E.MODEL_INTERACTION_STARTED]
     assert len(started) == 2
+

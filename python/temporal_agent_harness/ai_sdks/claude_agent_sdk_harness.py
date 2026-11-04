@@ -172,11 +172,8 @@ class _TurnCalls:
         self.cut_off: dict[asyncio.Task[Any], _CutOff] = {}
         # The calls whose start was published, so a repeat doesn't publish it again.
         self.started: set[str] = set()
-        # Each harness tool call's task: its tool id, name, the subagent that made it, and the
-        # ``_pub`` keywords of its events.
-        self.harness: dict[
-            asyncio.Task[Any], tuple[str, str, str | None, dict[str, str]]
-        ] = {}
+        # Each harness tool call's task: its tool id, name, and the ``_pub`` keywords of its events.
+        self.harness: dict[asyncio.Task[Any], tuple[str, str, dict[str, str]]] = {}
         # The cut-off calls ended as their subagent ended, which no later call takes over.
         self.ended: set[asyncio.Task[Any]] = set()
         # Each call's full input, and the agent that made it, by its task.
@@ -452,20 +449,31 @@ class _ClaudeStreamObserver:
                 self._open[agent_id] = ModelInteractionEnded(
                     model=message.model, usage=_usage(message.usage)
                 )
+            # All of the message's calls first, so a parallel repeat in it counts.
+            keys = self._reply_keys.setdefault(agent_id, set())
+            keys.update(
+                _key(block.name, block.input)
+                for block in message.content
+                if isinstance(block, ToolUseBlock)
+            )
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
                     # A tool request is the end of Claude's reply.
                     self._end_model_call(agent_id)
-                    keys = self._reply_keys.setdefault(agent_id, set())
-                    keys.add(_key(block.name, block.input))
                     # A cut-off call its agent now asks for with another input was replanned, so
-                    # no repeat will take it over.
-                    self._turn_calls.end_cut_off(
-                        self._runner,
-                        lambda cut: cut.agent_id == agent_id
-                        and cut.name == block.name
-                        and cut.key not in keys,
-                    )
+                    # no repeat will take it over. A repeat ends none, as the reply's other
+                    # repeats may still follow it.
+                    key = _key(block.name, block.input)
+                    if not any(
+                        cut.agent_id == agent_id and cut.key == key
+                        for cut in self._turn_calls.cut_off.values()
+                    ):
+                        self._turn_calls.end_cut_off(
+                            self._runner,
+                            lambda cut: cut.agent_id == agent_id
+                            and cut.name == block.name
+                            and cut.key not in keys,
+                        )
                     if block.name.startswith(_HARNESS_TOOL_PREFIX):
                         self._harness_calls.append((block, agent_id))
                         self._harness_open[block.id] = agent_id
@@ -562,11 +570,11 @@ class _ClaudeStreamObserver:
         # Harness tool calls first, so a subagent that ends below ends its own.
         for task in self._harness_tasks:
             if not task.done():
-                tool_id, name, agent_id, _ = self._turn_calls.harness[task]
+                tool_id, name, _ = self._turn_calls.harness[task]
                 claude_name = _HARNESS_TOOL_PREFIX + name
                 self._turn_calls.cut_off[task] = _CutOff(
                     tool_id,
-                    agent_id,
+                    self._turn_calls.agents[task],
                     claude_name,
                     _key(claude_name, self._turn_calls.inputs[task]),
                     None,
@@ -844,7 +852,7 @@ class _ClaudeStreamObserver:
                 agent_id,
                 asyncio.create_task(self._run_harness(tool_id, name, scope, run)),
             )
-            calls.harness[task] = (tool_id, name, agent_id, scope)
+            calls.harness[task] = (tool_id, name, scope)
         self._harness_tasks.append(task)
         return await asyncio.shield(task)
 
@@ -875,7 +883,7 @@ class _ClaudeStreamObserver:
         callback if it waits for one, publish its error unless it never started, and cancel it."""
         if task.done():
             return  # It ended itself.
-        tool_id, name, _, scope = self._turn_calls.harness[task]
+        tool_id, name, scope = self._turn_calls.harness[task]
         status = self._runner._status
         entry = status.callback_entry(tool_id)
         if entry is not None and entry.status is _CallbackStatus.PENDING:
