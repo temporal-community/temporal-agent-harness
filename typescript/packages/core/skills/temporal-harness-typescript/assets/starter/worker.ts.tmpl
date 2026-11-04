@@ -4,7 +4,9 @@ import { NativeConnection, Worker } from "@temporalio/worker";
 import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
 import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
 
-if (!process.env.OPENAI_API_KEY) throw new Error("Set OPENAI_API_KEY in .env.local");
+// `ping` needs no model, so the worker starts without a key; only `ask` fails without one.
+if (!process.env.OPENAI_API_KEY)
+  console.warn("OPENAI_API_KEY is not set: `ping` works, `ask` will fail until it is (see env.example)");
 
 const { connectionOptions, namespace } = loadClientConnectConfig();
 const connection = await NativeConnection.connect(connectionOptions);

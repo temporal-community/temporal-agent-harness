@@ -20,54 +20,50 @@ products over their live state with the React and Svelte clients.
 Create an agent, install its coding-agent skill, and open a working session in four steps.
 No repository checkout or Bazel installation is needed.
 
-> **Available with the next npm release.** The starter and skill commands are not in the
-> published 0.2.0 package. Once the new release is published, the `@latest` command below selects
-> it. Until then, use the [manual setup](#build-with-it--install-from-npm) with published packages.
+> **Available with the next npm release.** The `agent-harness` command is not in the published
+> 0.2.0 package, and the starter's `services` script needs the Python release that adds
+> `temporal-agent-harness dev`. Once both are published, the `@latest` command below selects
+> them. Until then, use the [manual setup](#build-with-it--install-from-npm) with published packages.
 
 You need **Node.js 22.18+**, npm, [uv](https://docs.astral.sh/uv/getting-started/installation/),
-the [Temporal CLI](https://docs.temporal.io/cli), and an OpenAI API key for the starter.
-`uvx` can provision Python for the shared server, which requires Python 3.11+.
+the [Temporal CLI](https://docs.temporal.io/cli), and an OpenAI API key for the starter's `ask`
+handler. `uvx` can provision Python for the shared server, which requires Python 3.11+.
 
 ### 1. Create the project
 
 Run this from the directory where you want the new project:
 
 ```bash
-npm exec --yes \
-  --package=@temporalio/agent-harness-worker@latest \
-  -- agent-harness init my-agent
+npx -y -p @temporalio/agent-harness-worker@latest agent-harness init my-agent
 cd my-agent
 npm install
 ```
 
-`npm exec` supplies the CLI before you have a project. `init` creates a new directory containing
-`agents.ts`, `worker.ts`, `agents.toml`, TypeScript configuration, and a README. It pins the
-installed harness version and compatible Temporal/model dependencies in `package.json` and
-refuses to overwrite existing files. The starter's weather tool returns sample data.
+`npx` supplies the CLI before you have a project; the first run downloads the worker package and
+the Temporal SDK's native bridge once. `init` creates a new directory containing `agents.ts`,
+`worker.ts`, `agents.toml`, TypeScript configuration, a `package.json` named after the
+directory, and a README. It pins the installed harness version, compatible Temporal/model
+dependencies, and the Python package that provides the shared services, and refuses to overwrite
+existing files. The starter's weather tool returns sample data.
 
 ### 2. Configure it and install the skill
 
 ```bash
 cp env.example .env.local
-# Set OPENAI_API_KEY in .env.local; never commit the key.
 npm run schema
-npm run skill
+npm run skill                                  # Codex reads .agents/skills
+npx agent-harness skills install --for claude  # Claude Code reads .claude/skills
 ```
 
-`schema` compiles the agent and writes `agent.schema.json`. `skill` copies this SDK release's
-skill into `.agents/skills/temporal-harness-typescript/`, with authoring, API, advanced-feature,
-and verification references. Installing the npm package bundles the skill; this explicit step
-makes it discoverable in your project.
+`.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `schema`
+compiles the agent and writes `agent.schema.json`. `skill` copies this SDK release's skill, with
+authoring, API, advanced-feature, and verification references, into the directory your coding
+agent reads; run it for each tool you use. Installing the npm package bundles the skill; this
+explicit step makes it discoverable in your project. For a tool with another skill directory,
+run `npx agent-harness skills path` to locate the bundled resources, or use
+`npx agent-harness skills install --dest <directory>`.
 
-Open the project in your coding agent. Reload its session if it was already running, then ask:
-
-> Use $temporal-harness-typescript to help me build this agent. Explain the starter, then verify
-> it with ping before making model calls.
-
-For tools that use a different skill directory, run `npx agent-harness skills path` to locate
-the bundled resources, or use `npx agent-harness skills install --dest <directory>`.
-
-### 3. Start the four services
+### 3. Start the three services
 
 Run each command in its own terminal, all from this project directory:
 
@@ -77,39 +73,35 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session-manager worker:**
+**Terminal 2 — shared session manager, API, and harness console:**
 
 ```bash
-uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness session-manager
+npm run services
 ```
 
-**Terminal 3 — shared API and harness console:**
-
-```bash
-uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness serve agents.toml
-```
-
-**Terminal 4 — your TypeScript agent worker:**
+**Terminal 3 — your TypeScript agent worker:**
 
 ```bash
 npm start
 ```
 
-**The API, console, and session manager come from the Python package.** `uvx` runs those services
-without a Python project of your own; your agent worker runs in Node. The console is prebuilt,
-so no frontend build is needed.
+**The API, console, and session manager come from the Python package.** `services` runs
+`temporal-agent-harness dev` through `uvx`, in one process and without a Python project of your
+own; the Python version is pinned in `package.json`. Your agent worker runs in Node. The console
+is prebuilt, so no frontend build is needed.
 
 Defaults are `localhost:7233` and namespace `default`. For another Temporal service, export the
 same `TEMPORAL_*` connection settings in each service terminal. `.env.local` loads only into the
-Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all four processes running.
+Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all three processes running.
 
-### 4. Verify and develop
+### 4. Verify, then develop with your coding agent
 
 1. Open the **harness console at <http://localhost:8000>**. Create a session for
    **OpenAI Hello (TypeScript)**.
-2. Send `ping` a text message. Expect the same text back without a model request.
-3. Send `ask` **“What's the weather in Paris?”**. Expect a streamed reply and a completed
-   `get_weather` tool trace with sample weather data. This step calls OpenAI and needs a valid key.
+2. Send `ping` a text message. Expect the same text back without a model request or an API key.
+3. Set `OPENAI_API_KEY` in `.env.local`, restart the worker, then send `ask`
+   **“What's the weather in Paris?”**. Expect a streamed reply and a completed `get_weather`
+   tool trace with sample weather data. This step calls OpenAI.
 4. Reload the page and confirm the session reconnects.
 5. Check startup and worker availability:
 
@@ -118,15 +110,22 @@ Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all four pro
    ```
 
 Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the harness console.
-The worker checks for an API-key environment value at startup, including when testing `ping`.
+
+With the services running, open the project in your coding agent. Reload its session if it was
+already running, then ask it to use the skill:
+
+| Tool | Prompt |
+| --- | --- |
+| Codex | `Use $temporal-harness-typescript to help me build this agent. Explain the starter, then verify it with ping before making model calls.` |
+| Claude Code | `/temporal-harness-typescript Explain the starter, then verify it with ping before making model calls.` |
 
 Edit `agents.ts` to change your agent and `worker.ts` for worker configuration. After changes,
 stop the worker, run `npm run schema`, and restart `npm start`. Use a new session for changed
 workflow behavior. Commit `agent.schema.json` and `package-lock.json`.
 
-After upgrading the SDK, rerun `npm run skill` to update unchanged skill files. Local edits
-produce a conflict and are preserved. Application-client guidance is in the installed skill's
-`references/api.md`.
+After upgrading the SDK, rerun the `skills install` commands to update unchanged skill files.
+Local edits produce a conflict and are preserved. Application-client guidance is in the installed
+skill's `references/api.md`.
 
 See [coding-agent development](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/agent-development.md)
 for skill discovery and updates, and [troubleshooting](#troubleshooting) if a service fails.
@@ -347,7 +346,9 @@ import { NativeConnection, Worker } from "@temporalio/worker";
 import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
 import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
 
-if (!process.env.OPENAI_API_KEY) throw new Error("Set OPENAI_API_KEY in .env.local");
+// `ping` needs no model, so the worker starts without a key; only `ask` fails without one.
+if (!process.env.OPENAI_API_KEY)
+  console.warn("OPENAI_API_KEY is not set: `ping` works, `ask` will fail until it is (see env.example)");
 
 const { connectionOptions, namespace } = loadClientConnectConfig();
 const connection = await NativeConnection.connect(connectionOptions);
@@ -413,6 +414,8 @@ npm start
 
 The console is prebuilt in the Python package. No frontend build is needed. The console and
 session-manager worker are shared infrastructure; your agent code runs on your TypeScript worker.
+From the next Python release, `temporal-agent-harness dev ./agents.toml` runs steps 2 and 3 in
+one process, as the quickstart's `npm run services` does.
 Leave all four processes running while using the console. After editing TypeScript, stop your
 worker, rerun `npm run schema`, and start it again. Start a new session when changing agent behavior.
 
@@ -490,7 +493,7 @@ workflow module, add a matching registry entry, and generate its schema using th
 
 | Symptom | Check |
 | --- | --- |
-| `OPENAI_API_KEY` is missing, or the model reports an authentication error | Put a valid key in `.env.local` and use `npm start` from the project root. Restart the worker after changing it. |
+| The worker warns that `OPENAI_API_KEY` is not set, or the model reports an authentication error | `ping` works without a key; for `ask`, put a valid key in `.env.local` and use `npm start` from the project root. Restart the worker after changing it. |
 | Cannot connect to Temporal | Start the dev server, or check `TEMPORAL_CONFIG_FILE`, `TEMPORAL_PROFILE`, and `TEMPORAL_*` overrides in every terminal. |
 | Console loads but agent discovery or session creation stalls | Start the session-manager worker and confirm it uses the same Temporal address and namespace as the console. |
 | A session starts but messages never progress | Start the TypeScript worker. Its task queue must match `agents.toml`, and its address and namespace must match the other services. |

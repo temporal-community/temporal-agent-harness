@@ -1,15 +1,15 @@
 # @temporalio/agent-harness-worker
 
 The worker side of the Temporal agent harness: `AgentHarnessPlugin` and the harness's activities,
-the agent client, Code Mode's Monty activities, and the
-`agent-harness-schema` command. Agents themselves are written against
+the agent client, Code Mode's Monty activities, and the `agent-harness` command
+(`init`, `schema`, `skills`, `doctor`; `agent-harness-schema` is the same `schema` command). Agents themselves are written against
 [`@temporalio/agent-harness`](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/packages/core/README.md), which runs in the workflow.
 
 ## Getting started
 
 Follow the [TypeScript quickstart](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/core#readme)
 for a complete npm install, agent, worker, registry, and first console session. It includes the
-pinned Temporal and OpenAI dependencies and explains the four startup processes.
+pinned Temporal and OpenAI dependencies and explains the startup processes.
 
 The harness has one server, session manager, and console for both SDKs. They come from the
 `temporal-agent-harness` Python package; `uvx` runs them without a Python project of your own.
@@ -96,7 +96,7 @@ starting a session; the server never imports your code. Write it, and again when
 init data changes:
 
 ```bash
-npx agent-harness-schema ./dist/agents.js#BriefedAgent -o BriefedAgent.schema.json
+npx agent-harness schema ./dist/agents.js#BriefedAgent -o BriefedAgent.schema.json
 ```
 
 It takes `<module>#<export>`: a module path relative to the current directory, TypeScript

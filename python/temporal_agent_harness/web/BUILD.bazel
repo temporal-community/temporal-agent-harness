@@ -53,6 +53,7 @@ harness_module_binary(
     deps = [
         ":app",
         ":client",
+        ":dev",
         ":doctor",
         ":registry",
         ":serve",
@@ -167,5 +168,20 @@ py_library(
         "//python/temporal_agent_harness:development",
         "//python/temporal_agent_harness/utils:task_queue",
         "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "dev",
+    srcs = ["dev.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":client",
+        ":serve",
+        ":session_manager",
+        ":session_manager_worker",
+        "//python/temporal_agent_harness/utils:task_queue",
+        "@pypi//uvicorn",
     ],
 )

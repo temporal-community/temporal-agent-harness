@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 from datetime import timedelta
 
 from temporalio.client import Client
@@ -31,10 +30,11 @@ async def main() -> None:
         force=True,
     )
 
-    task_queue = os.environ.get("OPENAI_HELLO_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
+    task_queue = task_queue_name(TASK_QUEUE)
 
+    # `ping` needs no model, so the worker starts without a key; only `ask` fails without one.
     if not os.environ.get("OPENAI_API_KEY"):
-        sys.exit("error: OPENAI_API_KEY env var not set")
+        logging.warning("OPENAI_API_KEY is not set: `ping` works, `ask` will fail until it is (see env.example)")
 
     plugin = OpenAIAgentsPlugin(
         model_params=ModelActivityParameters(

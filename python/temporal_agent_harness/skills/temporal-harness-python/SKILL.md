@@ -12,8 +12,11 @@ example, not a requirement to replace an existing integration.
 
 ## Choose the task
 
-- New agent or worker: read [authoring](references/authoring.md). The bundled
-  `assets/starter/` contains a runnable starter; use the package's `init` command to materialize it.
+- New agent or worker: read [authoring](references/authoring.md), then the bundled starter,
+  which is installed next to this file and is the complete worked example for this release:
+  [assets/starter/my_agent/workflow.py.tmpl](assets/starter/my_agent/workflow.py.tmpl) (agent, handlers, tool) and
+  [assets/starter/my_agent/worker.py.tmpl](assets/starter/my_agent/worker.py.tmpl) (worker and plugins). Adapt it rather
+  than re-deriving the wiring. The package's `init` command materializes it as a new project.
 - Connect an application, stream replies, handle approvals, or generate client types: read
   [the shared API guide](references/api.md).
 - State, Code Mode, callback tools, or subagents: read [advanced features](references/advanced.md).
@@ -32,4 +35,5 @@ agent worker. Model integration plugins precede `AgentHarnessPlugin`.
 
 Keep external I/O out of workflow code. Register activity tool bodies on the worker, regenerate
 schemas after changing declarations, and verify a complete session using installed packages.
+Verify with the starter's `ping` handler first: it needs no model call or provider key.
 Do not import from repository-only `examples` or tests in an application.

@@ -13,12 +13,38 @@ import {
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const NAME = "temporal-harness-typescript";
 const MANIFEST = ".harness-skill.json";
+// Where each coding agent discovers project skills; `skills install --for <tool>` targets one.
+export const SKILL_DIRECTORIES = {
+  codex: ".agents/skills",
+  claude: ".claude/skills",
+};
+const DEFAULT_SKILL_DIRECTORY = SKILL_DIRECTORIES.codex;
+// How each tool invokes the installed skill from a prompt.
+const SKILL_PROMPTS = { Codex: `$${NAME}`, "Claude Code": `/${NAME}` };
+export function skillDestinations(tools = [], dest) {
+  const unknown = tools.filter((tool) => !(tool in SKILL_DIRECTORIES));
+  if (unknown.length)
+    throw new Error(
+      `Unknown coding agent ${unknown.join(", ")}; choose from ${Object.keys(SKILL_DIRECTORIES).join(", ")}`,
+    );
+  const destinations = tools.map((tool) => SKILL_DIRECTORIES[tool]);
+  if (dest !== undefined) destinations.push(dest);
+  return [...new Set(destinations.length ? destinations : [DEFAULT_SKILL_DIRECTORY])];
+}
+/** A package-manager-safe name derived from the starter directory, e.g. `My Agent` -> `my-agent`. */
+export function projectName(destination) {
+  const slug = basename(resolve(destination))
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "my-agent";
+}
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const present = (path) => {
   try {
@@ -105,14 +131,20 @@ export function installSkill(source, destination, version) {
     throw new Error(
       `Local skill edits preserved; resolve conflicts or choose --dest: ${conflicts.sort().join(", ")}`,
     );
-  for (const [name, data] of files) {
+  const stale = [...files].filter(([name, data]) => {
+    const stat = present(target(root, name));
+    return !stat?.isFile() || !readFileSync(target(root, name)).equals(data);
+  });
+  const obsolete = Object.keys(previous).filter(
+    (name) => !files.has(name) && existsSync(target(root, name)),
+  );
+  for (const [name, data] of stale) {
     const path = target(root, name);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, data);
   }
-  for (const name of Object.keys(previous))
-    if (!files.has(name) && existsSync(target(root, name)))
-      unlinkSync(target(root, name));
+  for (const name of obsolete) unlinkSync(target(root, name));
+  mkdirSync(root, { recursive: true });
   writeFileSync(
     marker,
     JSON.stringify(
@@ -127,15 +159,19 @@ export function installSkill(source, destination, version) {
       2,
     ) + "\n",
   );
-  return root;
+  return { root, changed: stale.length > 0 || obsolete.length > 0 };
 }
 export function createStarter(source, destination, version) {
   const root = resolve(destination);
+  const project = projectName(root);
   const files = [...resourceFiles(source)]
     .filter(([name]) => name.endsWith(".tmpl"))
     .map(([name, data]) => [
       name === "gitignore.tmpl" ? ".gitignore" : name.slice(0, -5),
-      data.toString().replaceAll("__HARNESS_VERSION__", version),
+      data
+        .toString()
+        .replaceAll("__HARNESS_VERSION__", version)
+        .replaceAll("__PROJECT_NAME__", project),
     ]);
   if (!files.length)
     throw new Error("The installed package is missing its starter");
@@ -221,18 +257,30 @@ export async function diagnose({
   };
 }
 const USAGE = `usage: agent-harness init <directory>
+       agent-harness schema ./dist/agents.js#Export [-o Agent.schema.json]
        agent-harness skills path
-       agent-harness skills install [--dest .agents/skills]
+       agent-harness skills install [--for codex|claude]... [--dest <directory>]
        agent-harness doctor [--schema Agent.schema.json] [--api-url http://localhost:8000] [--timeout 5] [--json]
 
-Uses this installed SDK release's resources. Skill updates preserve local edits.
+Uses this installed SDK release's resources. \`schema\` is \`agent-harness-schema\`.
+\`skills install\` copies the skill where your coding agent discovers it: Codex reads
+.agents/skills (the default), Claude Code reads .claude/skills. Reruns preserve local edits.
 Doctor checks the schema and shared API/worker availability without creating sessions.
 Use the Python CLI's doctor --registry for direct Temporal and TOML checks.`;
 export async function main(args = process.argv.slice(2)) {
+  if (args[0] === "schema") {
+    // One CLI for the starter: delegate to the schema command this package already ships.
+    const { main: schemaMain } = await import(
+      new URL("../dist/src/harness/agent-schema.js", import.meta.url)
+    );
+    await schemaMain(args.slice(1));
+    return;
+  }
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
     options: {
+      for: { type: "string", multiple: true },
       dest: { type: "string" },
       schema: { type: "string" },
       "api-url": { type: "string" },
@@ -259,15 +307,25 @@ export async function main(args = process.argv.slice(2)) {
   const { version } = JSON.parse(
     readFileSync(join(source, "../../package.json"), "utf8"),
   );
-  if (command === "skills")
+  if (command === "skills" && action === "path") console.log(source);
+  else if (command === "skills") {
+    for (const destination of skillDestinations(values.for, values.dest)) {
+      const { root, changed } = installSkill(source, destination, version);
+      console.log(
+        `${changed ? "Installed" : "Already up to date:"} ${NAME} ${version} in ${root}`,
+      );
+    }
+    const prompts = Object.entries(SKILL_PROMPTS)
+      .map(([tool, prompt]) => `\`${prompt}\` in ${tool}`)
+      .join(", ");
+    console.log(`Next: ask your coding agent to use the skill (${prompts}).`);
+  } else if (command === "init") {
+    const root = createStarter(join(source, "assets/starter"), action, version);
+    console.log(`Created ${root}`);
     console.log(
-      action === "path"
-        ? source
-        : installSkill(source, values.dest ?? ".agents/skills", version),
+      "Next: follow its README.md to install dependencies, add credentials, and start the services.",
     );
-  else if (command === "init")
-    console.log(createStarter(join(source, "assets/starter"), action, version));
-  else {
+  } else {
     const report = await diagnose({
       apiUrl: values["api-url"],
       schema: values.schema,

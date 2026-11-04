@@ -11,12 +11,13 @@ Build durable agents using Python, Temporal, and your preferred AI SDK.
 Create an agent, install its coding-agent skill, and open a working session in four steps.
 No repository checkout or Bazel installation is needed.
 
-> **Available with the next Python release.** The starter and skill commands are not in the
-> published 0.8.0 package. Once the new release is published, the `@latest` command below selects
-> it. Until then, use the [manual setup](#build-with-it--install-from-pypi) with published packages.
+> **Available with the next Python release.** The `init`, `skills`, `dev`, and `doctor` commands
+> are not in the published 0.8.0 package. Once the new release is published, the `@latest`
+> command below selects it. Until then, use the [manual setup](#build-with-it--install-from-pypi)
+> with published packages.
 
 You need **Python 3.11+**, [uv](https://docs.astral.sh/uv/getting-started/installation/), the
-[Temporal CLI](https://docs.temporal.io/cli), and an OpenAI API key for the starter.
+[Temporal CLI](https://docs.temporal.io/cli), and an OpenAI API key for the starter's `ask` handler.
 
 ### 1. Create the project
 
@@ -29,34 +30,29 @@ uv sync
 ```
 
 `uvx` supplies the CLI before you have a project. `init` creates `my_agent/workflow.py`,
-`my_agent/worker.py`, `agents.toml`, a dependency manifest, and a README. It pins the installed
-harness version with the `ui` and `openai-agents` extras and refuses to overwrite existing files.
-`uv sync` installs the project and its dependencies. The starter's weather tool returns sample data.
+`my_agent/worker.py`, `agents.toml`, a `pyproject.toml` named after the directory, and a README.
+It pins the installed harness version with the `ui` and `openai-agents` extras and refuses to
+overwrite existing files. `uv sync` installs the project and its dependencies. The starter's
+weather tool returns sample data.
 
 ### 2. Configure it and install the skill
 
 ```bash
 cp env.example .env.local
-# Set OPENAI_API_KEY in .env.local; never commit the key.
 uv run temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
-uv run temporal-agent-harness skills install
+uv run temporal-agent-harness skills install              # Codex reads .agents/skills
+uv run temporal-agent-harness skills install --for claude # Claude Code reads .claude/skills
 ```
 
-`schema` exports your agent's handlers and types to `agent.schema.json`. `skills install` copies
-this SDK release's skill into `.agents/skills/temporal-harness-python/`, with authoring, API,
-advanced-feature, and verification references. Installing the Python package bundles the skill;
-this explicit step makes it discoverable in your project.
+`.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `schema` exports
+your agent's handlers and types to `agent.schema.json`. `skills install` copies this SDK release's
+skill, with authoring, API, advanced-feature, and verification references, into the directory
+your coding agent reads; run it for each tool you use. Installing the Python package bundles the
+skill; this explicit step makes it discoverable in your project. For a tool with another skill
+directory, run `uv run temporal-agent-harness skills path` to locate the bundled resources, or
+use `skills install --dest <directory>`.
 
-Open the project in your coding agent. Reload its session if it was already running, then ask:
-
-> Use $temporal-harness-python to help me build this agent. Explain the starter, then verify
-> it with ping before making model calls.
-
-For tools that use a different skill directory, run `uv run temporal-agent-harness skills path`
-to locate the bundled resources, or use
-`uv run temporal-agent-harness skills install --dest <directory>`.
-
-### 3. Start the four services
+### 3. Start the three services
 
 Run each command in its own terminal, all from this project directory:
 
@@ -66,37 +62,33 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session-manager worker:**
+**Terminal 2 — shared session manager, API, and harness console:**
 
 ```bash
-uv run temporal-agent-harness session-manager
+uv run temporal-agent-harness dev agents.toml
 ```
 
-**Terminal 3 — shared API and harness console:**
-
-```bash
-uv run temporal-agent-harness serve agents.toml
-```
-
-**Terminal 4 — your Python agent worker:**
+**Terminal 3 — your Python agent worker:**
 
 ```bash
 uv run --env-file .env.local python -m my_agent.worker
 ```
 
-The console is prebuilt in the Python package; no Node.js or frontend build is needed.
-Defaults are `localhost:7233` and namespace `default`. For another Temporal service, export the
-same `TEMPORAL_*` connection settings in each service terminal. `.env.local` above loads only
-into the agent worker. Keep `TASK_QUEUE_PREFIX` consistent across services. Keep all four
-processes running.
+The console is prebuilt in the Python package; no Node.js or frontend build is needed. `dev` runs
+the session-manager worker and the API/console server in one process; `session-manager` and
+`serve` remain available as separate commands for deployments. Defaults are `localhost:7233` and
+namespace `default`. For another Temporal service, export the same `TEMPORAL_*` connection
+settings in each service terminal. `.env.local` above loads only into the agent worker. Keep
+`TASK_QUEUE_PREFIX` consistent across services. Keep all three processes running.
 
-### 4. Verify and develop
+### 4. Verify, then develop with your coding agent
 
 1. Open the **harness console at <http://localhost:8000>**. Create a session for
    **OpenAI Hello (Python)**.
-2. Send `ping` a text message. Expect the same text back without a model request.
-3. Send `ask` **“What's the weather in Paris?”**. Expect a streamed reply and a completed
-   `get_weather` tool trace with sample weather data. This step calls OpenAI and needs a valid key.
+2. Send `ping` a text message. Expect the same text back without a model request or an API key.
+3. Set `OPENAI_API_KEY` in `.env.local`, restart the worker, then send `ask`
+   **“What's the weather in Paris?”**. Expect a streamed reply and a completed `get_weather`
+   tool trace with sample weather data. This step calls OpenAI.
 4. Reload the page and confirm the session reconnects.
 5. Check configuration and service availability:
 
@@ -107,20 +99,28 @@ processes running.
 Add `--json` for a machine-readable report. The doctor checks the registry and schemas, Temporal
 connectivity, task queue pollers, and the API without creating or resetting sessions. A failed
 check exits 1. Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the
-harness console. The worker checks for an API-key environment value at startup, including for `ping`.
+harness console.
+
+With the services running, open the project in your coding agent. Reload its session if it was
+already running, then ask it to use the skill:
+
+| Tool | Prompt |
+| --- | --- |
+| Codex | `Use $temporal-harness-python to help me build this agent. Explain the starter, then verify it with ping before making model calls.` |
+| Claude Code | `/temporal-harness-python Explain the starter, then verify it with ping before making model calls.` |
 
 Edit `my_agent/workflow.py` to change your agent and `my_agent/worker.py` for worker configuration.
 After changes, stop the worker, regenerate the schema with the command in step 2, and restart
 it with the command in step 3. Use a new session for changed workflow behavior.
 Commit `agent.schema.json` and `uv.lock`.
 
-After upgrading the SDK, rerun `uv run temporal-agent-harness skills install` to update unchanged
-skill files. Local edits produce a conflict and are preserved. Application-client guidance is in
-`.agents/skills/temporal-harness-python/references/api.md`.
+After upgrading the SDK, rerun the `skills install` commands to update unchanged skill files.
+Local edits produce a conflict and are preserved. Application-client guidance is in the installed
+skill's `references/api.md`.
 
 See [coding-agent development](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/agent-development.md)
 for skill discovery and updates. The `init`, `skills`, and `doctor` commands ship with the base
-package; serving the API/UI and exporting OpenAPI require the `ui` extra.
+package; `dev`, `serve`, and OpenAPI export require the `ui` extra.
 
 <a id="installation"></a>
 
@@ -219,7 +219,8 @@ uv run python -m my_app.worker
 
 Open <http://localhost:8000> and create a session. `serve` accepts several registries and merges
 them (`serve one/agents.toml two/agents.toml`), so a single UI can list agents from more than one
-project.
+project. From the next release, `temporal-agent-harness dev ./agents.toml` runs steps 2 and 3 in
+one process, as the quickstart does.
 
 That registry is what lists the launchable agents:
 

@@ -246,6 +246,7 @@ def test_built_distributions_include_development_resources(built_distributions):
     wheel_path, sdist_path = built_distributions
     required = {
         "temporal_agent_harness/development.py",
+        "temporal_agent_harness/web/dev.py",
         "temporal_agent_harness/web/doctor.py",
         *{
             f"temporal_agent_harness/skills/temporal-harness-python/{path}"

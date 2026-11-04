@@ -17,6 +17,8 @@ import {
   createStarter,
   installSkill,
   diagnose,
+  projectName,
+  skillDestinations,
 } from "../bin/agent-harness.mjs";
 
 function fixture(t) {
@@ -31,7 +33,9 @@ function fixture(t) {
 test("updates owned files while preserving local edits and unrelated files", (t) => {
   const { dir, source } = fixture(t);
   const dest = join(dir, "skills");
-  const root = installSkill(source, dest, "1");
+  const { root, changed } = installSkill(source, dest, "1");
+  assert.equal(changed, true);
+  assert.equal(installSkill(source, dest, "1").changed, false);
   writeFileSync(join(root, "old.md"), "my edit");
   writeFileSync(join(source, "SKILL.md"), "second");
   assert.throws(
@@ -42,7 +46,7 @@ test("updates owned files while preserving local edits and unrelated files", (t)
   writeFileSync(join(root, "old.md"), "owned");
   unlinkSync(join(source, "old.md"));
   writeFileSync(join(root, "custom.md"), "mine");
-  installSkill(source, dest, "2");
+  assert.equal(installSkill(source, dest, "2").changed, true);
   assert.equal(readFileSync(join(root, "SKILL.md"), "utf8"), "second");
   assert.equal(existsSync(join(root, "old.md")), false);
   assert.equal(readFileSync(join(root, "custom.md"), "utf8"), "mine");
@@ -50,7 +54,7 @@ test("updates owned files while preserving local edits and unrelated files", (t)
 test("refuses symlinks and path traversal in ownership manifests", (t) => {
   const { dir, source } = fixture(t);
   const dest = join(dir, "skills");
-  const root = installSkill(source, dest, "1");
+  const { root } = installSkill(source, dest, "1");
   const outside = join(dir, "outside");
   writeFileSync(outside, "mine");
   unlinkSync(join(root, "old.md"));
@@ -67,18 +71,33 @@ test("refuses symlinks and path traversal in ownership manifests", (t) => {
   );
   assert.throws(() => installSkill(source, dest, "2"), /Invalid resource path/);
 });
+test("skill destinations map tools to their directories", () => {
+  assert.deepEqual(skillDestinations(), [".agents/skills"]);
+  assert.deepEqual(skillDestinations(["claude", "codex", "claude"]), [
+    ".claude/skills",
+    ".agents/skills",
+  ]);
+  assert.deepEqual(skillDestinations(["claude"], "tools/skills"), [
+    ".claude/skills",
+    "tools/skills",
+  ]);
+  assert.throws(() => skillDestinations(["cursor"]), /Unknown coding agent cursor/);
+});
+test("project name comes from the directory", () => {
+  assert.equal(projectName("/tmp/My Agent.Project"), "my-agent-project");
+  assert.equal(projectName("/tmp/---"), "my-agent");
+});
 test("starter pins installed SDK version and refuses existing files", (t) => {
   const { dir, source } = fixture(t);
   writeFileSync(
     join(source, "package.json.tmpl"),
-    '{"version":"__HARNESS_VERSION__"}',
+    '{"name":"__PROJECT_NAME__","version":"__HARNESS_VERSION__"}',
   );
   writeFileSync(join(source, "gitignore.tmpl"), ".env.local\n");
-  const root = createStarter(source, join(dir, "app"), "0.9.0");
-  assert.equal(
-    JSON.parse(readFileSync(join(root, "package.json"))).version,
-    "0.9.0",
-  );
+  const root = createStarter(source, join(dir, "My App"), "0.9.0");
+  const manifest = JSON.parse(readFileSync(join(root, "package.json")));
+  assert.equal(manifest.version, "0.9.0");
+  assert.equal(manifest.name, "my-app");
   assert.ok(existsSync(join(root, ".gitignore")));
   assert.throws(() => createStarter(source, root, "1.0.0"), /overwrite/);
 });

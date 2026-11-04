@@ -3,21 +3,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 SKILL_NAME = "temporal-harness-python"
 MANIFEST = ".harness-skill.json"
+# Where each coding agent discovers project skills; `skills install --for <tool>` targets one.
+SKILL_DIRECTORIES = {"codex": ".agents/skills", "claude": ".claude/skills"}
+DEFAULT_SKILL_DIRECTORY = SKILL_DIRECTORIES["codex"]
+# How each tool invokes the installed skill from a prompt.
+SKILL_PROMPTS = {"Codex": f"${SKILL_NAME}", "Claude Code": f"/{SKILL_NAME}"}
+
+
+class InstalledSkill(NamedTuple):
+    root: Path
+    changed: bool
 
 
 def package_version() -> str:
     try:
         return version("temporal-agent-harness")
     except PackageNotFoundError:
-        raise ValueError("Install temporal-agent-harness before creating a starter.") from None
+        raise ValueError("Install temporal-agent-harness before using its development commands.") from None
 
 
 def skill_path() -> Path:
@@ -51,8 +62,23 @@ def resource_files(source: Path) -> dict[str, bytes]:
     }
 
 
-def install_skill(destination: Path, *, source: Path | None = None, sdk_version: str | None = None) -> Path:
-    """Update only unchanged, owned files; preflight every conflict before changing anything."""
+def skill_destinations(tools: list[str] | None, dest: str | None) -> list[Path]:
+    """The parent directories `skills install` writes to: one per `--for` tool, plus `--dest`."""
+    unknown = sorted(set(tools or []) - SKILL_DIRECTORIES.keys())
+    if unknown:
+        raise ValueError(f"Unknown coding agent {', '.join(unknown)}; choose from {', '.join(SKILL_DIRECTORIES)}")
+    destinations = [SKILL_DIRECTORIES[tool] for tool in tools or []]
+    if dest is not None:
+        destinations.append(dest)
+    return [Path(d) for d in dict.fromkeys(destinations or [DEFAULT_SKILL_DIRECTORY])]
+
+
+def install_skill(destination: Path, *, source: Path | None = None, sdk_version: str | None = None) -> InstalledSkill:
+    """Update only unchanged, owned files; preflight every conflict before changing anything.
+
+    ``changed`` is False when every bundled file was already in place, so a rerun after an
+    unchanged install (or an SDK upgrade that left the skill alone) can say so.
+    """
     root = destination / SKILL_NAME
     files = resource_files(source or skill_path())
     if "SKILL.md" not in files:
@@ -79,22 +105,31 @@ def install_skill(destination: Path, *, source: Path | None = None, sdk_version:
     if conflicts:
         raise ValueError("Local skill edits preserved; resolve conflicts or choose --dest: " + ", ".join(sorted(conflicts)))
     sdk_version = sdk_version or package_version()
-    for name, data in files.items():
+    stale = {name for name, data in files.items()
+             if not _target(root, name).is_file() or _target(root, name).read_bytes() != data}
+    obsolete = {name for name in previous.keys() - files.keys() if _target(root, name).exists()}
+    for name in stale:
         path = _target(root, name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    for name in previous.keys() - files.keys():
-        path = _target(root, name)
-        if path.exists():
-            path.unlink()
+        path.write_bytes(files[name])
+    for name in obsolete:
+        _target(root, name).unlink()
+    marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({"name": SKILL_NAME, "version": sdk_version,
                                   "files": {n: _digest(b) for n, b in files.items()}}, indent=2) + "\n")
-    return root
+    return InstalledSkill(root, bool(stale or obsolete))
+
+
+def project_name(destination: Path) -> str:
+    """A package-manager-safe name derived from the starter directory, e.g. `My Agent` -> `my-agent`."""
+    slug = re.sub(r"[^a-z0-9]+", "-", destination.resolve().name.lower()).strip("-")
+    return slug or "my-agent"
 
 
 def create_starter(destination: Path, *, source: Path | None = None, sdk_version: str | None = None) -> Path:
     source = source or skill_path() / "assets" / "starter"
     sdk_version = sdk_version or package_version()
+    name_bytes = project_name(destination).encode()
     files = {}
     for name, data in resource_files(source).items():
         if not name.endswith(".tmpl"):
@@ -102,7 +137,8 @@ def create_starter(destination: Path, *, source: Path | None = None, sdk_version
         name = name.removesuffix(".tmpl")
         if name == "gitignore":
             name = ".gitignore"
-        files[name] = data.replace(b"__HARNESS_VERSION__", sdk_version.encode())
+        files[name] = (data.replace(b"__HARNESS_VERSION__", sdk_version.encode())
+                       .replace(b"__PROJECT_NAME__", name_bytes))
     if not files:
         raise ValueError("The installed package is missing its starter")
     for name in files:

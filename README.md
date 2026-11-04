@@ -29,35 +29,23 @@ human interaction so you can focus on the agent's behavior.
 | [Example agents](docs/guides/examples.md) | Run existing agents from a release checkout |
 | [Build with a coding agent](#coding-agent-setup) | Install the SDK's versioned skill and starter |
 
-### Build with it — install from PyPI
+> The quickstarts' `init`, `skills`, `dev`, and `doctor` commands ship with the next Python and
+> npm releases; they are not in Python 0.8.0 / npm 0.2.0. The manual setup below works today.
 
-For a new project, follow the [four-step Python quickstart](python/README.md#quickstart):
-create the project, install its skill, start the services, and verify a session. The starter
-commands arrive with the next Python release.
-
-To add the SDK to an existing Python project:
+To add the SDK to an existing project:
 
 ```bash
+# Python
 uv add 'temporal-agent-harness[ui]==0.8.0'
-```
 
-The [manual setup reference](python/README.md#build-with-it--install-from-pypi) covers model
-integration extras and worker configuration. No repository checkout is required.
-
-### Build with it — install from npm
-
-For a new project, follow the [four-step TypeScript quickstart](typescript/packages/core/README.md#quickstart):
-create the project, install its skill, start the services, and verify a session. The starter
-commands arrive with the next npm release.
-
-To add the SDK to an existing Node.js project:
-
-```bash
+# TypeScript
 npm install --save-exact @temporalio/agent-harness@0.2.0 @temporalio/agent-harness-worker@0.2.0
 ```
 
-The [manual setup reference](typescript/packages/core/README.md#build-with-it--install-from-npm)
-covers the complete compatible dependency set and worker configuration.
+The [Python manual setup](python/README.md#build-with-it--install-from-pypi) covers model
+integration extras and worker configuration; the
+[TypeScript manual setup](typescript/packages/core/README.md#build-with-it--install-from-npm)
+covers the complete compatible dependency set. No repository checkout is required for either.
 
 ### How the pieces run
 
@@ -70,7 +58,9 @@ flowchart LR
 ```
 
 **The shared API, UI server, and session manager currently come from the Python package.**
-TypeScript users can run them with `uvx` without creating a Python project. The npm SDK runs
+`temporal-agent-harness dev agents.toml` runs the API server and the session manager in one
+process, so local development is three processes: Temporal, `dev`, and your agent worker.
+TypeScript users run `dev` with `uvx` without creating a Python project. The npm SDK runs
 TypeScript agents; it does not yet include a Node.js harness server.
 
 The harness console is at **localhost:8000**. Temporal's own workflow UI is at **localhost:8233**
@@ -78,22 +68,23 @@ when using the local dev server. Both quickstarts explain which processes to sta
 
 ## Coding-agent setup
 
-These commands ship with the next SDK releases; they are not in Python 0.8.0 / npm 0.2.0.
-
 Each SDK ships a skill, focused references, and an OpenAI starter matching that SDK release.
-After installing the SDK, explicitly install its skill in your application project:
+After installing the SDK, install its skill where your coding agent discovers project skills:
 
 ```bash
 # Python
-uv run temporal-agent-harness skills install
+uv run temporal-agent-harness skills install              # Codex: .agents/skills
+uv run temporal-agent-harness skills install --for claude # Claude Code: .claude/skills
 
 # TypeScript
 npx agent-harness skills install
+npx agent-harness skills install --for claude
 ```
 
-Then ask your coding agent to use `temporal-harness-python` or `temporal-harness-typescript`.
-The skills live in `.agents/skills/`; other tools can install from the directory printed by
-`skills path`. Package installation alone does not activate a skill.
+Then ask the agent to use it: `$temporal-harness-python` or `$temporal-harness-typescript` in
+Codex, `/temporal-harness-python` or `/temporal-harness-typescript` in Claude Code. Other tools
+can install from the directory printed by `skills path`, or with `skills install --dest`.
+Package installation alone does not activate a skill.
 
 Use `temporal-agent-harness init ./my-agent` or `npx agent-harness init ./my-agent` to copy a
 starter. The commands create files without overwriting existing ones. Follow the generated
@@ -124,44 +115,26 @@ quickstart. Commit your dependency lockfile. Examples live in release checkouts,
 packages; the small `init` starters are bundled separately.
 
 Use the [release notes](https://github.com/temporal-community/temporal-agent-harness/releases)
-when upgrading. The new skill and starter commands described here will be available with the
-next package releases; existing published versions do not gain commands from a README update.
+when upgrading.
 
 <details>
 <summary>Links to moved sections</summary>
 
-The detailed sections now have their own guides. Existing README links remain available below.
+<a id="what-you-get"></a><a id="-durable-execution--the-foundation"></a><a id="-standardized-agents-fully-observable"></a><a id="-your-own-ui-typed-end-to-end--react-and-svelte"></a><a id="-human-in-the-loop-solved"></a><a id="-bring-your-own-ai-sdk"></a><a id="-durable-and-inline-tools"></a><a id="-callback-tools--let-the-client-run-the-tool"></a><a id="-agents-that-are-more-than-chatbots"></a><a id="-composable-by-construction"></a><a id="-code-mode--give-the-model-code-not-just-a-call-menu"></a><a id="auto-mode--letting-code-or-a-model-decide"></a><a id="code-mode"></a><a id="okf-bundles"></a><a id="accepted-messages"></a><a id="discovery"></a><a id="build-a-ui-in-react-or-svelte"></a><a id="requirements"></a><a id="run-the-examples"></a><a id="one-example-standalone"></a><a id="all-examples-behind-one-ui"></a><a id="self-hosting-the-web-app"></a><a id="try-the-example-agents"></a><a id="run-the-web-ui--no-checkout-no-node"></a><a id="extras"></a><a id="a-taste"></a><a id="running-a-worker--one-plugin"></a><a id="closing-idle-agents"></a>
 
-<a id="what-you-get"></a>
-[what you get](docs/guides/capabilities.md#what-you-get) · <a id="-durable-execution--the-foundation"></a>
-[durable execution  the foundation](docs/guides/capabilities.md#-durable-execution--the-foundation) · <a id="-standardized-agents-fully-observable"></a>
-[standardized agents fully observable](docs/guides/capabilities.md#-standardized-agents-fully-observable) · <a id="-your-own-ui-typed-end-to-end--react-and-svelte"></a>
-[your own ui typed end to end  react and svelte](docs/guides/capabilities.md#-your-own-ui-typed-end-to-end--react-and-svelte) · <a id="-human-in-the-loop-solved"></a>
-[human in the loop solved](docs/guides/capabilities.md#-human-in-the-loop-solved) · <a id="-bring-your-own-ai-sdk"></a>
-[bring your own ai sdk](docs/guides/capabilities.md#-bring-your-own-ai-sdk) · <a id="-durable-and-inline-tools"></a>
-[durable and inline tools](docs/guides/capabilities.md#-durable-and-inline-tools) · <a id="-callback-tools--let-the-client-run-the-tool"></a>
-[callback tools  let the client run the tool](docs/guides/capabilities.md#-callback-tools--let-the-client-run-the-tool) · <a id="-agents-that-are-more-than-chatbots"></a>
-[agents that are more than chatbots](docs/guides/capabilities.md#-agents-that-are-more-than-chatbots) · <a id="-composable-by-construction"></a>
-[composable by construction](docs/guides/capabilities.md#-composable-by-construction) · <a id="-code-mode--give-the-model-code-not-just-a-call-menu"></a>
-[code mode  give the model code not just a call menu](docs/guides/capabilities.md#-code-mode--give-the-model-code-not-just-a-call-menu) · <a id="auto-mode--letting-code-or-a-model-decide"></a>
-[auto mode  letting code or a model decide](docs/guides/approvals.md#auto-mode--letting-code-or-a-model-decide) · <a id="code-mode"></a>
-[code mode](docs/guides/code-mode.md#code-mode) · <a id="okf-bundles"></a>
-[okf bundles](docs/guides/code-mode.md#okf-bundles) · <a id="accepted-messages"></a>
-[accepted messages](docs/guides/messages.md#accepted-messages) · <a id="discovery"></a>
-[discovery](docs/guides/messages.md#discovery) · <a id="build-a-ui-in-react-or-svelte"></a>
-[build a ui in react or svelte](docs/guides/client-ui.md#build-a-ui-in-react-or-svelte) · <a id="requirements"></a>
-[requirements](docs/guides/examples.md#requirements) · <a id="run-the-examples"></a>
-[run the examples](docs/guides/examples.md#run-the-examples) · <a id="one-example-standalone"></a>
-[one example standalone](docs/guides/examples.md#one-example-standalone) · <a id="all-examples-behind-one-ui"></a>
-[all examples behind one ui](docs/guides/examples.md#all-examples-behind-one-ui) · <a id="self-hosting-the-web-app"></a>
-[self hosting the web app](docs/api/hosting.md#self-hosting-the-web-app) · <a id="try-the-example-agents"></a>
-[try the example agents](python/README.md#try-the-example-agents) · <a id="run-the-web-ui--no-checkout-no-node"></a>
-[run the web ui  no checkout no node](python/README.md#run-the-web-ui--no-checkout-no-node) · <a id="extras"></a>
-[extras](python/README.md#extras) · <a id="a-taste"></a>
-[a taste](python/README.md#a-taste) · <a id="running-a-worker--one-plugin"></a>
-[running a worker  one plugin](python/README.md#running-a-worker--one-plugin)
+Former README sections now live in these guides:
 
-<a id="closing-idle-agents"></a>
-[Closing idle agents](python/README.md#closing-idle-agents)
+- [Capabilities](docs/guides/capabilities.md): what you get, durable execution, standardized
+  agents, your own UI, human in the loop, bring your own AI SDK, durable and inline tools,
+  callback tools, agents beyond chatbots, composition, and Code Mode.
+- [Approvals](docs/guides/approvals.md): auto mode.
+- [Code Mode](docs/guides/code-mode.md): Code Mode and OKF bundles.
+- [Messages](docs/guides/messages.md): accepted messages and discovery.
+- [React / Svelte](docs/guides/client-ui.md): build a UI in React or Svelte.
+- [Examples](docs/guides/examples.md): requirements and running the examples, standalone or
+  behind one UI.
+- [Self-hosting](docs/api/hosting.md): self-hosting the web app.
+- [Python guide](python/README.md): the example agents, running the web UI, extras, a taste,
+  running a worker, and closing idle agents.
 
 </details>

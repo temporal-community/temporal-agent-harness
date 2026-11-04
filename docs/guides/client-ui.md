@@ -85,7 +85,7 @@ npm release), then generate from either SDK's schema:
 ```bash
 npm install --save-dev --save-exact @temporalio/agent-harness-codegen@0.2.0
 uv run temporal-agent-harness schema my_agent.workflow:TicTacToeAgentWorkflow -o agent.schema.json
-# For TypeScript, use agent-harness-schema on your compiled agent instead.
+# For TypeScript, use `agent-harness schema` on your compiled agent instead.
 npx harness-codegen agent.schema.json -o TicTacToeAgent.ts
 ```
 

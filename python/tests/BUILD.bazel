@@ -39,6 +39,7 @@ harness_pytest_test(
         ":conftest",
         "//python/temporal_agent_harness:development",
         "//python/temporal_agent_harness/web:cli",
+        "//python/temporal_agent_harness/web:dev",
         "//python/temporal_agent_harness/web:doctor",
         "@pypi//pytest",
     ],

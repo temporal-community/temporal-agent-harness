@@ -4,39 +4,48 @@ The Python and TypeScript SDKs each bundle a language-specific skill, focused AP
 and an OpenAI starter. These resources travel with the package version so an agent can work in
 your application without cloning or reading the harness implementation.
 
-The commands on this page are new for the next package releases. They are not present in the
-previously published Python 0.8.0 and npm 0.2.0 packages.
+> The commands on this page ship with the next package releases. They are not present in the
+> previously published Python 0.8.0 and npm 0.2.0 packages.
 
 ## Install and discover the skill
 
-Run from your application root after installing the SDK:
+Run from your application root after installing the SDK. Each coding agent discovers project
+skills in its own directory, so install for each tool you use:
+
+| Tool | Skill directory | Command | Invoke it with |
+| --- | --- | --- | --- |
+| Codex | `.agents/skills` (default) | `skills install` | `$temporal-harness-python` / `$temporal-harness-typescript` |
+| Claude Code | `.claude/skills` | `skills install --for claude` | `/temporal-harness-python` / `/temporal-harness-typescript` |
+| Another tool | its own | `skills install --dest <directory>` | per that tool |
 
 ```bash
 # Python
 uv run temporal-agent-harness skills path
 uv run temporal-agent-harness skills install
+uv run temporal-agent-harness skills install --for claude
 
 # TypeScript: the command comes from @temporalio/agent-harness-worker
 npx agent-harness skills path
 npx agent-harness skills install
+npx agent-harness skills install --for claude
 ```
 
 `skills path` prints the bundled directory. `skills install` copies it into
-`.agents/skills/temporal-harness-python` or `.agents/skills/temporal-harness-typescript`.
-Codex discovers project skills in `.agents/skills`; reload your agent session if it was already
-running. For another agent tool, use its skill installation mechanism with the printed directory,
-or choose its supported parent directory with `skills install --dest <directory>`.
-Installing an SDK does not automatically activate a skill or write into your project.
+`<skill directory>/temporal-harness-python` or `<skill directory>/temporal-harness-typescript`
+and reports whether anything changed. `--for` is repeatable. Reload your agent session if it was
+already running. Installing an SDK does not automatically activate a skill or write into your project.
 
 Ask the agent to use the language's skill. Its short `SKILL.md` routes to authoring, API,
-advanced-feature, and verification references. It tells the agent to preserve your existing
-provider and framework and to inspect public types and generated schemas first.
+advanced-feature, and verification references and to the bundled starter, which is installed
+beside it as the complete worked example. It tells the agent to preserve your existing provider
+and framework, to inspect public types and generated schemas first, and to verify with the
+model-free `ping` handler before spending model tokens.
 
 ## Start an application
 
 For a new project, follow the [Python quickstart](../python/README.md#quickstart) or
 [TypeScript quickstart](../typescript/packages/core/README.md#quickstart). They bootstrap the CLI
-with `uvx` or `npm exec`, then create the project, install its skill, and start the services.
+with `uvx` or `npx`, then create the project, install its skill, and start the services.
 
 ```bash
 # Choose one, from a project where the SDK is installed:
@@ -45,21 +54,24 @@ npx agent-harness init ./my-agent
 ```
 
 Follow the generated README. Each starter contains an agent, worker, registry, dependency
-manifest, environment template, and schema-generation command. `init` pins the installed
-harness version and refuses to overwrite existing files. It does not install dependencies,
-start services, or configure credentials for you.
+manifest named after the directory, environment template, and schema-generation command. `init`
+pins the installed harness version and refuses to overwrite existing files. It does not install
+dependencies, start services, or configure credentials for you.
 
 The `ask` handler demonstrates a streaming model call and a safe weather tool with sample data.
-The `ping` handler echoes a message without a model request, so an agent can first verify
-connectivity without spending model tokens. Both starters use the same architecture:
+The `ping` handler echoes a message without a model request, and the worker starts without a
+provider key, so an agent can verify connectivity before spending model tokens. Both starters
+use the same three-process architecture:
 
 1. Temporal service.
-2. Python session-manager worker.
-3. Python API and console server.
-4. Your Python or TypeScript agent worker.
+2. `temporal-agent-harness dev agents.toml`: the Python session-manager worker and the API and
+   console server in one process. `session-manager` and `serve` remain available separately.
+3. Your Python or TypeScript agent worker.
 
-For TypeScript applications, `uvx` runs the shared Python services; no Python project is needed.
-There is currently no Node.js implementation of the shared server.
+For TypeScript applications, the starter's `npm run services` runs `dev` through `uvx`; no
+Python project is needed. There is currently no Node.js implementation of the shared server.
+The TypeScript CLI is one command: `agent-harness init|schema|skills|doctor`, where `schema` is
+the existing `agent-harness-schema` binary.
 
 ## Diagnose and verify
 
@@ -110,3 +122,6 @@ npm package provides `agent-harness`. The shared API reference is authored in
 [docs/api/README.md](api/README.md); run `python3 scripts/sync-agent-resources.py` after editing it.
 CI checks the copies with `--check`. Package installation tests generate and compile starters,
 install skills, export schemas, and run a model-free handler with the installed artifacts.
+The TypeScript starter pins the Python package that provides the shared services in its
+`package.json` `services` script; the release script updates that pin with the other
+documentation pins.

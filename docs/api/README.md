@@ -87,8 +87,8 @@ Generate an agent's schema from its declaration:
 ```bash
 # Python
 temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
-# TypeScript: compile first
-agent-harness-schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
+# TypeScript: compile first (agent-harness-schema is the same command)
+agent-harness schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
 # Either schema can generate a typed application client
 harness-codegen agent.schema.json -o Agent.ts
 ```

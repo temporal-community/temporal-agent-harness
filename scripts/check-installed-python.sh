@@ -31,6 +31,7 @@ echo "The CLI runs"
 "$venv/temporal-agent-harness" --help >/dev/null
 "$venv/temporal-agent-harness" serve --help >/dev/null
 "$venv/temporal-agent-harness" session-manager --help >/dev/null
+"$venv/temporal-agent-harness" dev --help >/dev/null
 
 echo "Every integration imports from the install"
 (cd / && "$venv/python" - <<'PY'
@@ -74,7 +75,8 @@ async def check():
         dev_server_existing_path=os.environ.get("TEMPORAL_CLI_PATH")
     ) as env:
         child_env = dict(os.environ, TEMPORAL_ADDRESS=env.client.service_client.config.target_host,
-                         TEMPORAL_NAMESPACE="default", OPENAI_API_KEY="unused-ping-test")
+                         TEMPORAL_NAMESPACE="default")
+        child_env.pop("OPENAI_API_KEY", None)  # ping must not need a provider key
         child_env.pop("TASK_QUEUE_PREFIX", None)
         child_env.pop("TEMPORAL_CONFIG_FILE", None)
         child_env.pop("TEMPORAL_PROFILE", None)

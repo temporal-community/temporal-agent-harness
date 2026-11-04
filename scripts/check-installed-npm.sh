@@ -137,7 +137,8 @@ const env = await TestWorkflowEnvironment.createLocal({
 });
 let logs = '';
 const childEnv = { ...process.env, TEMPORAL_ADDRESS: env.address,
-  TEMPORAL_NAMESPACE: 'default', OPENAI_API_KEY: 'unused-ping-test' };
+  TEMPORAL_NAMESPACE: 'default' };
+delete childEnv.OPENAI_API_KEY; // ping must not need a provider key
 delete childEnv.TEMPORAL_CONFIG_FILE;
 delete childEnv.TEMPORAL_PROFILE;
 delete childEnv.TASK_QUEUE_PREFIX;
