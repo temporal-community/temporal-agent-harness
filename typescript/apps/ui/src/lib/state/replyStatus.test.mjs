@@ -94,12 +94,12 @@ describe("how long the turn has run", () => {
 });
 
 describe("reduced motion", () => {
-  it("stops the shimmer and the pixel wave", () => {
+  it("stops the shimmer and the turning mark", () => {
     /* Everything after the file's reduced-motion query opens. */
     const reduced = (path) =>
       readFileSync(new URL(path, import.meta.url), "utf8").split("@media (prefers-reduced-motion: reduce)").slice(1).join("");
     assert.match(reduced("../../app.css"), /\.reply-shimmer \{\s*animation: none;/);
-    assert.match(reduced("../components/agent/ReplyStatus.svelte"), /\.pixels > span \{\s*animation: none;/);
+    assert.match(reduced("../components/primitives/ThinkingOrb.svelte"), /\.thinking-orb \{\s*animation: none;/);
   });
 });
 
