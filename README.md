@@ -24,21 +24,25 @@ human interaction so you can focus on the agent's behavior.
 
 | Start here | What you'll build |
 | --- | --- |
-| [Python quickstart](python/README.md) | A Python agent and worker, with the shared console |
+| [Python quickstart](python/README.md#quickstart) | A Python agent and worker, with the shared console |
 | [TypeScript quickstart](typescript/packages/core/README.md#quickstart) | A TypeScript agent and worker, with the same console |
 | [Example agents](docs/guides/examples.md) | Run existing agents from a release checkout |
 | [Build with a coding agent](#coding-agent-setup) | Install the SDK's versioned skill and starter |
 
 ### Build with it — install from PyPI
 
-In your own Python project:
+For a new project, follow the [four-step Python quickstart](python/README.md#quickstart):
+create the project, install its skill, start the services, and verify a session. The starter
+commands arrive with the next Python release.
+
+To add the SDK to an existing Python project:
 
 ```bash
 uv add 'temporal-agent-harness[ui]==0.8.0'
 ```
 
-Follow the [Python guide](python/README.md#build-with-it--install-from-pypi) for model integration
-extras, a complete agent, worker registration, and startup commands. No repository checkout is required.
+The [manual setup reference](python/README.md#build-with-it--install-from-pypi) covers model
+integration extras and worker configuration. No repository checkout is required.
 
 ### Build with it — install from npm
 

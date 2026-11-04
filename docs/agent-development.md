@@ -34,8 +34,9 @@ provider and framework and to inspect public types and generated schemas first.
 
 ## Start an application
 
-Starting without an installed SDK? Follow the [four-step TypeScript quickstart](../typescript/packages/core/README.md#quickstart),
-which bootstraps the CLI with `npm exec` before creating the project.
+For a new project, follow the [Python quickstart](../python/README.md#quickstart) or
+[TypeScript quickstart](../typescript/packages/core/README.md#quickstart). They bootstrap the CLI
+with `uvx` or `npm exec`, then create the project, install its skill, and start the services.
 
 ```bash
 # Choose one, from a project where the SDK is installed:

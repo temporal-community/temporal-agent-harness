@@ -9,7 +9,7 @@ products over their live state with the React and Svelte clients.
 
 > **Experimental.** APIs change between releases. Pin versions and upgrade deliberately.
 
-[Python getting started](https://github.com/temporal-community/temporal-agent-harness#installation)
+[Python quickstart](https://github.com/temporal-community/temporal-agent-harness/blob/main/python/README.md#quickstart)
 · [Examples](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples)
 · [Releases](https://github.com/temporal-community/temporal-agent-harness/releases)
 
