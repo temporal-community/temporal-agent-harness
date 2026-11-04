@@ -109,6 +109,25 @@ describe("the Logs pane during a scrub", () => {
     );
   });
 
+  /* revealLogRow opens a row, so it must never be reachable from the cursor: the only thing that
+     may call it is the effect reading the `reveal` prop, which changes only on "view in logs". */
+  it("reveals a row only when asked to, never because the cursor moved", () => {
+    const calls = [...nodes(ast.instance)].filter(
+      (node) => node.type === "CallExpression" && text(node.callee) === "revealLogRow"
+    );
+    assert.equal(calls.length, 1, "revealLogRow should have exactly one caller");
+    const effect = [...nodes(ast.instance)].find(
+      (node) =>
+        node.type === "CallExpression" &&
+        text(node.callee) === "$effect" &&
+        node.start < calls[0].start &&
+        node.end > calls[0].end
+    );
+    assert.ok(effect, "revealLogRow should be called from an $effect");
+    assert.match(text(effect), /\breveal\b/, "that effect should be the one reading `reveal`");
+    assert.doesNotMatch(text(effect), /activeRowId|activeOrdinal/, "the reveal effect must not read the cursor");
+  });
+
   /* --- the rows are keyed --------------------------------------------------- */
   it("keys the turn groups and the log rows", () => {
     const keyed = new Map(
