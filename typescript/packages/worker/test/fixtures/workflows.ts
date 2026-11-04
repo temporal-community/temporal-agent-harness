@@ -50,6 +50,15 @@ function denied(e: unknown): string {
   throw e;
 }
 
+/** Start `call`, abandon it a moment later, as a caller that cancels its scope does. */
+async function abandoned(call: () => Promise<unknown>): Promise<string> {
+  const scope = new CancellationScope();
+  const running = scope.run(call);
+  await sleep(1);
+  scope.cancel();
+  return running.then(String, (e) => (isCancellation(e) ? "cancelled" : denied(e)));
+}
+
 // -- approvals ----------------------------------------------------------------------------------
 
 export const gatedActivityTool = activityTool({
@@ -104,6 +113,14 @@ function approvalProbe(runner: AgentWorkflowRunner) {
         lastReply = await call("g1", gatedActivityTool, text.slice("arg:".length));
       else if (text === "workflow-tool")
         lastReply = await runner.runTool("wf-1", gatedWorkflowTool, { text: "Z" }).catch(denied);
+      else if (text === "abandoned")
+        lastReply = await abandoned(() => runner.runTool("wf-1", gatedWorkflowTool, { text: "Z" }));
+      else if (text === "inline-subagent") {
+        runner.inlineTurns.set("sub", ["sub-turn-1", 1]);
+        lastReply = await runner
+          .runTool("wf-1", gatedWorkflowTool, { text: "Z" }, { agentId: "sub", messageId: "m-sub" })
+          .catch(denied);
+      }
       else lastReply = await call("g1", gatedActivityTool, "S");
       return { text: lastReply };
     },
@@ -355,6 +372,7 @@ export const CallbackProbeAgent = defineAgent({
           echo: () => run("cb-echo", echoTool, "hi"),
           note: () => run("cb-note", noteTool, "buy milk"),
           timeout: () => run("cb-timeout", slowTool, "x"),
+          abandoned: () => abandoned(() => run("cb-echo", echoTool, "hi")),
         };
         lastReply = await scenario[text as keyof typeof scenario]().catch(denied);
         return { text: lastReply };

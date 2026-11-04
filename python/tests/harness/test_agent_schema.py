@@ -35,6 +35,7 @@ EXAMPLE_AGENTS = [
     "examples.auto_mode.workflow:AutoModeTravelAgentWorkflow",
     "examples.callback_tools.coding_agent.workflow:CodingAgentWorkflow",
     "examples.callback_tools.wiki_agent.workflow:WikiAgentWorkflow",
+    "examples.claude_agent_sdk_hello.workflow:ClaudeAgentSDKHelloAgentWorkflow",
     "examples.monty.conversational_subagent_workflow:MontyChatSubagentWorkflow",
     "examples.monty.conversational_workflow:MontyChatAgentWorkflow",
     "examples.monty.workflow:MontyDynamicAgentWorkflow",

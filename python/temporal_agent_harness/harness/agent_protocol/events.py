@@ -833,6 +833,12 @@ class SubagentStarted(StreamEvent[Literal[AgentEventType.SUBAGENT_STARTED]]):
         "dynamically mount the subagent's OWN event stream for a consolidated view (subagent "
         "streams are never mirrored onto this one)."
     )
+    inline: bool = Field(
+        default=False,
+        description="True if the subagent runs inside this agent rather than as its own workflow "
+        "(see SubagentMessageSent.inline): there is no stream to mount and no workflow to query "
+        "or message.",
+    )
 
 
 class SubagentStopped(StreamEvent[Literal[AgentEventType.SUBAGENT_STOPPED]]):
@@ -848,6 +854,11 @@ class SubagentStopped(StreamEvent[Literal[AgentEventType.SUBAGENT_STOPPED]]):
     workflow_id: str = Field(
         description="The stopped subagent's real child workflow id — what a consumer uses to "
         "unmount the subagent's event stream (matches the prior SubagentStarted)."
+    )
+    inline: bool = Field(
+        default=False,
+        description="True if the subagent ran inside this agent (matches the prior "
+        "SubagentStarted): it has no stream to unmount.",
     )
 
 
@@ -888,6 +899,13 @@ class SubagentMessageSent(StreamEvent[Literal[AgentEventType.SUBAGENT_MESSAGE_SE
         "not the child's first) skips the child's pre-resume history, whose own message_sent "
         "markers are not on the merged stream and could otherwise never be ordered. Unrelated "
         "address space from the parent stream's offsets.",
+    )
+    inline: bool = Field(
+        default=False,
+        description="True if the subagent runs inside this agent rather than as its own workflow: "
+        "its events are on THIS stream, between this marker and its SubagentReplyReceived, with "
+        "``subagent_id`` as their ``agent_id``. ``workflow_id`` is then only a key; there is no "
+        "stream to mount and no workflow to query or message.",
     )
 
 
@@ -932,6 +950,12 @@ class SubagentReplyReceived(
         description="'ok' if the child turn produced a reply; 'error' if it was accepted but then "
         "errored / produced no reply (it still emitted its own turn_end, so the bracket closes "
         "either way). Never published for a pre-acceptance rejection."
+    )
+    inline: bool = Field(
+        default=False,
+        description="True if the subagent runs inside this agent rather than as its own workflow "
+        "(matches the opening SubagentMessageSent): its events are on THIS stream, between that "
+        "marker and this one, so there is no subagent stream to wait for.",
     )
 
 

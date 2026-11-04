@@ -23,6 +23,7 @@ manifest:
     cffi: cffi
     cfnlint: cfn_lint
     charset_normalizer: charset_normalizer
+    claude_agent_sdk: claude_agent_sdk
     click: click
     colorama: colorama
     cpuinfo: py_cpuinfo2
@@ -145,6 +146,7 @@ manifest:
     temporalio.activity: temporalio
     temporalio.api: temporalio
     temporalio.bridge: temporalio
+    temporalio.claude_agent_sdk: temporalio_claude_agent_sdk
     temporalio.client: temporalio
     temporalio.common: temporalio
     temporalio.contrib: temporalio

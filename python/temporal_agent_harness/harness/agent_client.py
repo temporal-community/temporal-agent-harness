@@ -618,6 +618,7 @@ class AgentClient:
             from_offset=from_offset,
             stop_at_root_offset=head,
             stall_grace_seconds=subagent_stall_grace_seconds,
+            root_agent_id=status.agent_id,
         )
 
     async def _empty(self) -> AsyncIterator[T]:
@@ -632,6 +633,7 @@ class AgentClient:
         from_offset: int,
         stop_at_root_offset: int,
         stall_grace_seconds: float,
+        root_agent_id: str,
     ) -> AsyncIterator[T]:
         """Phase 2 of :meth:`attach`: drive the merge from ``from_offset`` to the next idle point.
 
@@ -665,7 +667,10 @@ class AgentClient:
             registration_snapshot = (
                 ev.event.type == AgentEventType.STATE_SNAPSHOT and ev.turn_number == 0
             )
-            if ev.event.type != AgentEventType.TURN_END and not registration_snapshot:
+            # An inline subagent's turn_end is on the root stream too, under its own agent_id.
+            if (
+                ev.event.type != AgentEventType.TURN_END or ev.agent_id != root_agent_id
+            ) and not registration_snapshot:
                 return False
             highest_completed_turn = max(highest_completed_turn, ev.turn_number)
             if cursor.head_offset + 1 < stop_at_root_offset:

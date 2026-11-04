@@ -972,6 +972,12 @@
           "description": "The offset in the SUBAGENT's OWN stream at which this turn's events begin (the child stream position the parent resumes consumption from for this turn). A client merging the parent + subagent streams positions the child cursor here the first time it mounts the child — so a merge that starts mid-session (resuming at a parent turn that is not the child's first) skips the child's pre-resume history, whose own message_sent markers are not on the merged stream and could otherwise never be ordered. Unrelated address space from the parent stream's offsets.",
           "title": "From Offset",
           "type": "integer"
+        },
+        "inline": {
+          "default": false,
+          "description": "True if the subagent runs inside this agent rather than as its own workflow: its events are on THIS stream, between this marker and its SubagentReplyReceived, with ``subagent_id`` as their ``agent_id``. ``workflow_id`` is then only a key; there is no stream to mount and no workflow to query or message.",
+          "title": "Inline",
+          "type": "boolean"
         }
       },
       "required": [
@@ -981,7 +987,8 @@
         "workflow_id",
         "handler",
         "subagent_turn",
-        "from_offset"
+        "from_offset",
+        "inline"
       ],
       "title": "SubagentMessageSent",
       "type": "object"
@@ -1028,6 +1035,12 @@
           ],
           "title": "Outcome",
           "type": "string"
+        },
+        "inline": {
+          "default": false,
+          "description": "True if the subagent runs inside this agent rather than as its own workflow (matches the opening SubagentMessageSent): its events are on THIS stream, between that marker and this one, so there is no subagent stream to wait for.",
+          "title": "Inline",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1037,7 +1050,8 @@
         "workflow_id",
         "handler",
         "subagent_turn",
-        "outcome"
+        "outcome",
+        "inline"
       ],
       "title": "SubagentReplyReceived",
       "type": "object"
@@ -1065,13 +1079,20 @@
           "description": "The subagent's real child workflow id — what a consumer uses to dynamically mount the subagent's OWN event stream for a consolidated view (subagent streams are never mirrored onto this one).",
           "title": "Workflow Id",
           "type": "string"
+        },
+        "inline": {
+          "default": false,
+          "description": "True if the subagent runs inside this agent rather than as its own workflow (see SubagentMessageSent.inline): there is no stream to mount and no workflow to query or message.",
+          "title": "Inline",
+          "type": "boolean"
         }
       },
       "required": [
         "type",
         "subagent_id",
         "agent_key",
-        "workflow_id"
+        "workflow_id",
+        "inline"
       ],
       "title": "SubagentStarted",
       "type": "object"
@@ -1099,13 +1120,20 @@
           "description": "The stopped subagent's real child workflow id — what a consumer uses to unmount the subagent's event stream (matches the prior SubagentStarted).",
           "title": "Workflow Id",
           "type": "string"
+        },
+        "inline": {
+          "default": false,
+          "description": "True if the subagent ran inside this agent (matches the prior SubagentStarted): it has no stream to unmount.",
+          "title": "Inline",
+          "type": "boolean"
         }
       },
       "required": [
         "type",
         "subagent_id",
         "agent_key",
-        "workflow_id"
+        "workflow_id",
+        "inline"
       ],
       "title": "SubagentStopped",
       "type": "object"

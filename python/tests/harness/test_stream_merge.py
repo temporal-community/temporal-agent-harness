@@ -28,6 +28,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessageReply,
     AgentStateSnapshot,
+    AgentStatus,
     MessageDisposition,
     MessageHandlerEnd,
     SubagentMessageSent,
@@ -75,7 +76,9 @@ def _te(agent_id: str, turn: int) -> AgentEvent:
     return _ev(agent_id, turn, TurnEnded())
 
 
-def _ms(agent_id: str, parent_turn: int, *, child: str, child_turn: int, from_offset: int = 0) -> AgentEvent:
+def _ms(
+    agent_id: str, parent_turn: int, *, child: str, child_turn: int, from_offset: int = 0, inline: bool = False
+) -> AgentEvent:
     return _ev(
         agent_id,
         parent_turn,
@@ -86,11 +89,14 @@ def _ms(agent_id: str, parent_turn: int, *, child: str, child_turn: int, from_of
             handler="f",
             subagent_turn=child_turn,
             from_offset=from_offset,
+            inline=inline,
         ),
     )
 
 
-def _rr(agent_id: str, parent_turn: int, *, child: str, child_turn: int, outcome: str = "ok") -> AgentEvent:
+def _rr(
+    agent_id: str, parent_turn: int, *, child: str, child_turn: int, outcome: str = "ok", inline: bool = False
+) -> AgentEvent:
     return _ev(
         agent_id,
         parent_turn,
@@ -101,6 +107,7 @@ def _rr(agent_id: str, parent_turn: int, *, child: str, child_turn: int, outcome
             handler="f",
             subagent_turn=child_turn,
             outcome=outcome,  # type: ignore[arg-type]
+            inline=inline,
         ),
     )
 
@@ -404,6 +411,14 @@ def test_on_emit_returns_mount_only_for_message_sent():
     assert isinstance(mount, MountChild)
 
 
+def test_inline_subagent_mounts_nothing_and_never_holds_its_reply_received():
+    gates = Gates()
+    sent = _ms("P", 1, child="C", child_turn=1, inline=True)
+    assert gates.on_emit(is_child=False, source_workflow_id="P", ev=sent) is None
+    received = _rr("P", 1, child="C", child_turn=1, inline=True)
+    assert gates.ready(is_child=False, source_workflow_id="P", ev=received)
+
+
 # ---------------------------------------------------------------------------
 # Engine tests (merge.py) over scripted streams
 # ---------------------------------------------------------------------------
@@ -436,6 +451,21 @@ async def test_single_subagent_turn_is_nested_in_its_bracket(select):
     assert_valid_merge(merged, streams)
     # All input events present.
     assert len(merged) == len(streams["P"]) + len(streams["C"])
+
+
+@pytest.mark.parametrize("select", [select_replay, select_live])
+async def test_inline_subagent_streams_in_the_parents_order(select):
+    streams = {
+        "P": [
+            _ts("P", 1),
+            _ms("P", 1, child="C", child_turn=1, inline=True),
+            _tool("P-abc123", 1, "c1", start=True),
+            _tool("P-abc123", 1, "c1", start=False),
+            _rr("P", 1, child="C", child_turn=1, inline=True),
+            _te("P", 1),
+        ],
+    }
+    assert await _run_merge(streams, root="P", select=select) == streams["P"]
 
 
 @pytest.mark.parametrize("select", [select_replay, select_live])
@@ -1074,9 +1104,42 @@ async def test_closing_attach_stream_early_closes_the_merge():
             from_offset=0,
             stop_at_root_offset=2,
             stall_grace_seconds=5.0,
+            root_agent_id="P",
         )
         await _first_then_close(stream)
         assert closes == ["P"]
+
+
+async def test_attach_does_not_stop_at_an_inline_subagents_turn_end():
+    # An inline subagent's turn_end is on the root stream, under its own agent_id. At the head it
+    # must not count as the root's turn ending.
+    streams = {"P": [_ts("P", 1), _te("P-sub", 1), _te("P", 1)]}
+    fake = _FakeStreams(streams, live_tail_workflows={"P"})
+    client = AgentClient(None, "P")  # type: ignore[arg-type]
+    queries: list[int] = []
+
+    async def idle_status() -> AgentStatus:
+        queries.append(1)
+        return AgentStatus(agent_id="P", current_turn=1)
+
+    with (
+        patch.object(cursor_mod, "WorkflowStreamClient", fake),
+        patch.object(client, "get_status", idle_status),
+    ):
+        async with asyncio.timeout(10):
+            items = [
+                item
+                async for item in client._merged_attach(
+                    on_item=lambda item, _offset: item,
+                    from_offset=0,
+                    stop_at_root_offset=2,
+                    stall_grace_seconds=5.0,
+                    root_agent_id="P",
+                )
+            ]
+    assert [(e.agent_id, e.event.type) for e in items][-1] == ("P", AgentEventType.TURN_END)
+    assert len(items) == 3
+    assert queries == [1]
 
 
 async def test_send_message_timeout_closes_the_merge_and_yields_the_timeout():

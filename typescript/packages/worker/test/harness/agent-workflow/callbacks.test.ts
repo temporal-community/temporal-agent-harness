@@ -160,6 +160,19 @@ describe("callback tools", () => {
     assert.deepStrictEqual((await status(h)).pending_callbacks, []);
   });
 
+  it("a callback abandoned while it waits fails, not left pending", async () => {
+    const h = await env.start("CallbackProbeAgent");
+    await send(h, "act", { text: "abandoned" });
+    const events = await collect(env.client, h.workflowId);
+    const resolved = one(events, "callback_resolved");
+    assert.deepStrictEqual(
+      [resolved.tool_id, resolved.outcome, resolved.error],
+      ["cb-echo", "timeout", "callback unresolved"],
+    );
+    assert.equal(replyText(events), "cancelled");
+    assert.deepStrictEqual((await status(h)).pending_callbacks, []);
+  });
+
   it("close while pending fails the callback", async () => {
     const h = await env.start("CallbackProbeAgent");
     await send(h, "act", { text: "echo" });

@@ -341,7 +341,8 @@ export class AgentClient<A = unknown> {
       select: selectReplay,
       ...(stallGraceSeconds === undefined ? {} : { stallGraceSeconds }),
       shouldStop: async (cursor, ev) => {
-        if (cursor.isChild) return false;
+        // An inline subagent's events are on the root's stream, but its turns are not the root's.
+        if (cursor.isChild || ev.agent_id !== status.agent_id) return false;
         const registrationSnapshot = ev.event.type === "state_snapshot" && ev.turn_number === 0;
         if (ev.event.type !== "turn_end" && !registrationSnapshot) return false;
         highestCompletedTurn = Math.max(highestCompletedTurn, ev.turn_number);

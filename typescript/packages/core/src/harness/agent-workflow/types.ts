@@ -36,6 +36,7 @@ export interface ApprovalEntry {
   turn_number: number;
   turn_id: string;
   message_id: string | null;
+  agent_id: string;
   short_id: string;
   inherently_safe: boolean;
   status: "pending" | "approved" | "denied";
@@ -52,6 +53,7 @@ export interface CallbackEntry {
   turn_number: number;
   turn_id: string;
   message_id: string | null;
+  agent_id: string;
   status: "pending" | "resolved";
   outcome: "ok" | "error" | "timeout";
   result: unknown;

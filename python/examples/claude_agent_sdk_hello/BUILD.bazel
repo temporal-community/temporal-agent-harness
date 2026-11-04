@@ -1,0 +1,58 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/utils:task_queue",
+        "@pypi//temporalio",
+        "@pypi//temporalio_claude_agent_sdk",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks:claude_agent_sdk_harness",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//claude_agent_sdk",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "ClaudeAgentSDKHelloAgent",
+    agent = "examples.claude_agent_sdk_hello.workflow:ClaudeAgentSDKHelloAgentWorkflow",
+    description = """
+A hello-world Claude Agent SDK agent. Chat in plain text about the files in its working
+directory; Claude Code answers with its own tools and can delegate a search to its file-finder
+subagent. Exists to show the Claude Agent SDK integration end to end — each tool call, the
+subagent's included, on the live turn stream, and each Bash call waiting for your approval.""",
+    key = "claude-agent-sdk-hello",
+    label = "Claude Agent SDK Hello",
+    task_queue = "claude-agent-sdk-hello",
+    deps = [":workflow"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/claude_agent_sdk_hello:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "ClaudeAgentSDKHelloAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":ClaudeAgentSDKHelloAgent"],
+    visibility = ["//python/tests/web:__pkg__"],
+)

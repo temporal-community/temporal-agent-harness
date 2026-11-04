@@ -88,6 +88,7 @@ export async function runSubagentTurn(req: RunSubagentTurnInput): Promise<Subage
       handler: req.type,
       subagent_turn: progress.turn_number,
       from_offset: req.from_offset,
+      inline: false,
     });
   }
   ctx.heartbeat(progress);

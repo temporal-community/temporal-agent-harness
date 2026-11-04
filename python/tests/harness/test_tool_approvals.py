@@ -150,6 +150,17 @@ class _BaseProbe:
             self._last_reply = "|".join(results)
             return self._last_reply
 
+        if text == "abandon":
+            # The caller gives up on a call while its approval is still being decided.
+            call = asyncio.create_task(self._runner.run_tool("g1", gated_activity_tool, "S"))
+            await workflow.wait_condition(lambda: bool(self._runner._status.pending_approvals()))
+            call.cancel()
+            try:
+                await call
+            except asyncio.CancelledError:
+                pass
+            return "abandoned"
+
         if text == "safe":
             call_id, tool, arg = "s1", safe_activity_tool, "S"
         elif text.startswith("arg:"):
@@ -894,6 +905,29 @@ async def test_a_human_who_decides_first_cancels_the_evaluator(env_and_client):
     resolved = _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
     assert (resolved.approved, resolved.reason) == (True, "human got there first")
     assert _reply_text(events) == "act:S"
+
+
+async def test_an_abandoned_call_stops_its_evaluator_and_closes_its_bracket(env_and_client):
+    """A caller that cancels a call mid-evaluation stops the evaluator, closes its bracket
+    on ``superseded``, and denies the approval, so nothing is left open."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=SlowEvaluatorProbeAgent)
+    await _send(handle, "abandon")
+
+    events = await _drain_to_turn_end(client, handle.id)
+
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+    ]
+    _assert_bracket_pairs(
+        events, evaluator="SlowEvaluatorProbeAgent._deny_once_released"
+    )
+    assert _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED).approved is False
+    assert await handle.query(SlowEvaluatorProbeAgent.evaluator_cancelled) is True
+    assert not (await AgentClient(client, handle.id).get_status()).pending_approvals
 
 
 async def test_an_evaluator_returning_the_wrong_type_also_fails_safe(env_and_client):

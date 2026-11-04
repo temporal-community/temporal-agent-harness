@@ -35,7 +35,7 @@ mount(App, { target, props: { api } });
 
 /* Dev-only `?mock=subagents|sessionsbreak&data=` toggles, in place of the fixture bar below. */
 const dataToggles: Record<string, Record<string, string>> = {
-  subagents: { demo: "Demo", worst: "Worst case", empty: "Empty", one: "One", many: "Many (60)" },
+  subagents: { demo: "Demo", worst: "Worst case", empty: "Empty", one: "One", many: "Many (60)", claude: "Claude Code", claudecut: "Claude Code (cut off)" },
   sessionsbreak: { demo: "Demo", worst: "Worst case", empty: "Empty", allarchived: "All archived", single: "Single", one: "One each", many: "200", huge: "10,000" }
 };
 const toggle = import.meta.env.DEV ? dataToggles[new URLSearchParams(location.search).get("mock") ?? ""] : undefined;

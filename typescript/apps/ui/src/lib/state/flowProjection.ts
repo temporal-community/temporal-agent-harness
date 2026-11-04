@@ -1308,6 +1308,9 @@ interface AgentGraphFold {
   add(frame: AgentSseFrame): void;
   /** The subagent lifecycle frames folded so far, in order, whether or not this graph draws them. */
   readonly delegations: readonly AgentSseFrame[];
+  /** The children this agent's current turn involves: those it delegated to in the turn, and
+      those still open (started or messaged, with no reply or stop yet) when it began. */
+  readonly turnChildren: ReadonlySet<string>;
   usage(): CostSummary;
   /** Saves where the fold is; calling what it returns puts the fold back there, any number of times. */
   checkpoint(): () => void;
@@ -1345,6 +1348,10 @@ interface AgentFoldState {
   subagentState: string;
   subagentSubtitle: string;
   subagentDetail: string;
+  /* Child workflow ids: those started or messaged with no reply or stop yet, and those the
+     current turn involves (see turnChildren). */
+  openChildren: Set<string>;
+  turnChildren: Set<string>;
   tools: Map<ToolId, ToolRuntime>;
   codeModeChildren: Map<ToolId, ToolId[]>;
   /* Keyed by evaluation_id, not tool_id: an agent may chain evaluators over one call. */
@@ -1405,6 +1412,8 @@ function initialState(): AgentFoldState {
     subagentState: "idle",
     subagentSubtitle: "",
     subagentDetail: "",
+    openChildren: new Set<string>(),
+    turnChildren: new Set<string>(),
     tools: new Map<ToolId, ToolRuntime>(),
     codeModeChildren: new Map<ToolId, ToolId[]>(),
     evaluations: new Map<string, EvaluationRuntime>(),
@@ -1592,6 +1601,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     }
     if (frame.event === "turn_started") {
       markInput();
+      s.turnChildren = new Set(s.openChildren);
       s.activeTurn = frame.data.turn_number;
       s.status = "running";
       s.failed = false;
@@ -1609,9 +1619,11 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       s.replyIsData = false;
       s.replyState = "waiting";
       resetTurnTools();
-      /* The last turn's reply was just cleared above; its card would sit empty ahead of
-         this turn's tools until a reply frame puts it back after them. */
-      if (s.runtimeNodes.delete("output")) s.runtimeNodeOrder.splice(s.runtimeNodeOrder.indexOf("output"), 1);
+      /* The last turn's thought and reply were just cleared above; their cards would sit
+         empty ahead of this turn's tools until a frame puts them back after them. */
+      for (const id of ["reasoning", "output"] as const) {
+        if (s.runtimeNodes.delete(id)) s.runtimeNodeOrder.splice(s.runtimeNodeOrder.indexOf(id), 1);
+      }
       s.runtimeHeaderPrefix = undefined;
       if (s.queued > 0) s.queued -= 1;
     } else if (frame.event === "model_interaction_started") {
@@ -1888,6 +1900,12 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       frame.event === "subagent_stream_unavailable"
     ) {
       delegations.push(frame);
+      s.turnChildren.add(frame.data.workflow_id);
+      if (frame.event === "subagent_started" || frame.event === "subagent_message_sent") {
+        s.openChildren.add(frame.data.workflow_id);
+      } else if (frame.event === "subagent_reply_received" || frame.event === "subagent_stopped") {
+        s.openChildren.delete(frame.data.workflow_id);
+      }
       if (!showSubagentDispatch) return;
       markRuntimeNode("subagent");
       s.subagentSubtitle =
@@ -1914,6 +1932,8 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     return {
       ...from,
       queuedByTurn: new Map(from.queuedByTurn),
+      openChildren: new Set(from.openChildren),
+      turnChildren: new Set(from.turnChildren),
       tools: new Map([...from.tools].map(([id, tool]) => [id, { ...tool }])),
       codeModeChildren: new Map(from.codeModeChildren),
       evaluations: new Map([...from.evaluations].map(([id, evaluation]) => [id, { ...evaluation }])),
@@ -1949,6 +1969,9 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     add,
     get delegations() {
       return delegations;
+    },
+    get turnChildren() {
+      return s.turnChildren;
     },
     usage: () => ledger.summary(),
     checkpoint,
@@ -2758,8 +2781,10 @@ function treeGraph(
   ): AgentGraph {
     const nextSeen = new Set(seen);
     nextSeen.add(agent.workflowId);
+    /* Only the children this turn involves: an earlier turn's subagent is not this turn's activity. */
+    const turnChildren = folds.get(agent)!.turnChildren;
     const childGraphs = (childrenByParent.get(agent.workflowId) ?? [])
-      .filter((child) => !nextSeen.has(child.workflowId))
+      .filter((child) => !nextSeen.has(child.workflowId) && turnChildren.has(child.workflowId))
       .map((child) => buildNestedAgentGraph(child, nextSeen));
     const graph = folds.get(agent)!.render({
       ...agentGraphOptions(agent, options),

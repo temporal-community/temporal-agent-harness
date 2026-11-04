@@ -235,15 +235,15 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     return [
       frame("message_accepted", { type: "message_accepted", ...parent(0.5), handler: "clean", payload: { text: "Ask the cleaner subagent." }, disposition: "opened" }),
       frame("turn_started", { type: "turn_started", ...parent(0.1) }),
-      frame("subagent_started", { type: "subagent_started", ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf }),
-      frame("subagent_message_sent", { type: "subagent_message_sent", ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf, handler: "clean", subagent_turn: 1, from_offset: 0 }),
+      frame("subagent_started", { type: "subagent_started", inline: false, ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf }),
+      frame("subagent_message_sent", { type: "subagent_message_sent", ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf, handler: "clean", subagent_turn: 1, from_offset: 0, inline: false }),
       frame("message_accepted", { type: "message_accepted", ...child(), handler: "clean", payload: { text: "Clean these rows." }, disposition: "opened" }),
       frame("turn_started", { type: "turn_started", ...child() }),
       frame("reply_delta", { type: "reply_delta", ...child(), text: pretty(result) }),
       frame("message_handler_end", { type: "message_handler_end", ...child(), output: result }),
       frame("turn_end", { type: "turn_end", ...child() }),
-      frame("subagent_reply_received", { type: "subagent_reply_received", ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf, handler: "clean", subagent_turn: 1, outcome: "ok" }),
-      frame("subagent_stopped", { type: "subagent_stopped", ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf }),
+      frame("subagent_reply_received", { type: "subagent_reply_received", ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf, handler: "clean", subagent_turn: 1, outcome: "ok", inline: false }),
+      frame("subagent_stopped", { type: "subagent_stopped", inline: false, ...parent(0.1), subagent_id: subagentId, agent_key: "cleaner", workflow_id: subagentWf }),
       frame("message_handler_end", { type: "message_handler_end", ...parent(0.1), output: result }),
       frame("turn_end", { type: "turn_end", ...parent(0.1) })
     ];

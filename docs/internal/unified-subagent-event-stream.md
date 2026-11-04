@@ -8,8 +8,7 @@ is LIVE — `workflow_streams` cannot yet subscribe to a *completed* (e.g. `stop
 stream. This is **handled by graceful degradation, not a failure**: when the merge can't read a
 stopped/completed child (most visibly on an `attach` after the child was stopped) it releases the
 child's close gate so the parent renders fully and surfaces a non-fatal `subagent_stream_unavailable`
-marker for the child's forgone detail (covered end-to-end by
-`test_attach_after_stopped_subagent_degrades_gracefully`). An upstream `workflow_streams` fix that
+marker for the child's forgone detail. An upstream `workflow_streams` fix that
 makes a completed stream readable is in flight; until then the child's own turn detail is forgone on a
 post-stop replay. This fulfills the
 explicitly-deferred client work committed in [`agents-as-subagents.md`](agents-as-subagents.md)
@@ -350,6 +349,10 @@ Both gates compose, which is what makes recursion work: an *intermediate* agent'
 a mounted child (open-gated by its own parent's `message_sent`) **and** emits its own
 `reply_received` for its grandchildren (close-gated on the grandchild's `turn_end`). A single event
 may be subject to both gates.
+
+An **inline** subagent (`inline: true` on both markers, such as a Claude Code subagent) runs inside
+its parent, so its events are already on the parent's stream with its own `agent_id`. Neither gate
+applies to its markers, and its `message_sent` mounts nothing.
 
 ### Emitting a head updates the gate-enabling sets
 

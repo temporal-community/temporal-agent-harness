@@ -23,7 +23,7 @@ uv venv --quiet --python "${PYTHON_VERSION:-3.13}" "$work/venv"
 (cd python && uv export --frozen --no-hashes --no-emit-project --all-extras --quiet \
   | grep -v '^-e ' > "$work/constraints.txt")
 uv pip install --quiet --python "$work/venv" --constraint "$work/constraints.txt" \
-  "temporal-agent-harness[ui,genai,openai-agents,pydantic-ai,code-mode] @ file://$wheel" \
+  "temporal-agent-harness[ui,genai,openai-agents,pydantic-ai,claude-agent-sdk,code-mode] @ file://$wheel" \
   pytest pytest-asyncio jsonschema
 venv="$work/venv/bin"
 
@@ -41,6 +41,7 @@ for name in [
     "temporal_agent_harness.ai_sdks.google_genai_plugin",
     "temporal_agent_harness.ai_sdks.openai_agents_harness",
     "temporal_agent_harness.ai_sdks.pydantic_ai_harness",
+    "temporal_agent_harness.ai_sdks.claude_agent_sdk_harness",
     "temporal_agent_harness.web.serve",
     "temporal_agent_harness.web.session_manager_worker",
 ]:

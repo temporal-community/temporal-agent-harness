@@ -8,6 +8,23 @@ py_library(
 )
 
 py_library(
+    name = "claude_agent_sdk_harness",
+    srcs = ["claude_agent_sdk_harness.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//claude_agent_sdk",
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+        "@pypi//temporalio_claude_agent_sdk",
+    ],
+)
+
+py_library(
     name = "openai_agents_harness",
     srcs = ["openai_agents_harness.py"],
     imports = ["../.."],

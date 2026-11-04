@@ -129,6 +129,8 @@ export interface ObservedSubagent {
   agentInterface?: AgentInterfaceFunction[];
   targetTurn: number | null;
   stopped: boolean;
+  /** Runs inside its parent, with no workflow of its own to query or message. */
+  inline: boolean;
 }
 
 /**
@@ -929,7 +931,8 @@ export class AgentRunController {
         agentInterface:
           this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
         interfaceStatus: this.#interfaceStatus(agent.workflowId, agent.agentInterface),
-        closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
+        /* An inline subagent has no workflow to message, so it reads as a stopped one does. */
+        closed: agent.inline || agent.stopped || this.#isWorkflowClosed(agent.workflowId)
       }))
     ];
   }
@@ -955,6 +958,7 @@ export class AgentRunController {
     agent_key?: string;
     targetTurn?: number;
     stopped?: boolean;
+    inline?: boolean;
   }, parentWorkflowId = this.session?.workflow_id): void {
     if (!parentWorkflowId) return;
     const existing = this.observedSubagents.find(
@@ -975,7 +979,8 @@ export class AgentRunController {
         data.targetTurn == null
           ? existing?.targetTurn ?? null
           : Math.max(existing?.targetTurn ?? 0, data.targetTurn),
-      stopped: data.stopped ?? existing?.stopped ?? false
+      stopped: data.stopped ?? existing?.stopped ?? false,
+      inline: data.inline ?? existing?.inline ?? false
     };
     this.observedSubagents = [
       ...this.observedSubagents.filter((agent) => agent.workflowId !== data.workflow_id),
@@ -992,6 +997,7 @@ export class AgentRunController {
     if (this.agentInterfaces[workflowId] || this.#interfaceRequests.has(workflowId)) {
       return;
     }
+    if (this.observedSubagents.find((agent) => agent.workflowId === workflowId)?.inline) return;
     if (!retry && this.failedInterfaceIds.includes(workflowId)) return;
     this.#interfaceRequests.add(workflowId);
     try {
@@ -1947,7 +1953,7 @@ export class AgentRunController {
     }
 
     await this.#api.approve({
-      session_id: workflowId,
+      session_id: this.#hostWorkflowId(workflowId),
       tool_id: toolId,
       approved,
       reason: approved ? null : reason?.trim() || "Rejected in chat.",
@@ -1967,7 +1973,17 @@ export class AgentRunController {
     if (!this.#isKnownWorkflowId(workflowId)) {
       throw new Error("Cannot answer a callback for an unknown agent workflow.");
     }
-    await this.#api.provideCallbackResult({ session_id: workflowId, tool_id: toolId, ...outcome });
+    await this.#api.provideCallbackResult({
+      session_id: this.#hostWorkflowId(workflowId),
+      tool_id: toolId,
+      ...outcome
+    });
+  }
+
+  /** The workflow that runs `workflowId`: an inline subagent runs inside its parent's. */
+  #hostWorkflowId(workflowId: string): string {
+    const agent = this.observedSubagents.find((candidate) => candidate.workflowId === workflowId);
+    return agent?.inline ? this.#hostWorkflowId(agent.parentWorkflowId) : workflowId;
   }
 
   retryClientTool(toolId: string): void {
@@ -2256,6 +2272,10 @@ export class AgentRunController {
     const publisherWorkflowId =
       this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
     const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
+    /* An inline subagent's events are on the root's own stream, so they move its cursor too. */
+    const onRootStream =
+      publisherWorkflowId != null &&
+      this.#hostWorkflowId(publisherWorkflowId) === this.session?.workflow_id;
 
     this.#frameBuffer.push(frame);
 
@@ -2264,7 +2284,7 @@ export class AgentRunController {
       typeof frame.data.resume_offset === "number"
     ) {
       const resumeOffsetOwner =
-        options.sourceWorkflowId ?? (isRootFrame ? publisherWorkflowId : undefined);
+        options.sourceWorkflowId ?? (onRootStream ? this.session?.workflow_id : undefined);
       if (resumeOffsetOwner) {
         this.#workflowResumeOffsets.set(
           resumeOffsetOwner,
@@ -2274,7 +2294,7 @@ export class AgentRunController {
           )
         );
       }
-      if (isRootFrame) {
+      if (onRootStream) {
         this.lastResumeOffset = Math.max(
           this.lastResumeOffset,
           frame.data.resume_offset

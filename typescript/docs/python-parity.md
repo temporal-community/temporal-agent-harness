@@ -38,6 +38,7 @@ Paths are under `python/temporal_agent_harness/`, `typescript/packages/core/src/
 | `ai_sdks/google_genai_plugin/` | core `ai-sdks/google-genai-plugin/` (the client, `InteractionConversation`, `functionParam`) and worker `ai-sdks/google-genai-plugin/` (`GoogleGenAIPlugin`, the Interactions activity, error mapping), module for module. Not ported yet: `models.generate_content` and its function calling, files, file search stores, Vertex AI options |
 | `ai_sdks/pydantic_ai_harness.py` | None: Pydantic AI is Python-only |
 | `ai_sdks/typesafe_harness.py` | Not ported yet |
+| `ai_sdks/claude_agent_sdk_harness.py` | Not ported yet. The TypeScript stream merge and console already handle the inline subagents it publishes (`inline: true` on the subagent markers), and `runTool`'s `agentId` and `messageId` publish a call as an inline subagent's, like `run_tool`'s, against the subagent's own turn in `inlineTurns` |
 | `nexus_agent_adapter/` | None: Nexus is not part of the TypeScript SDK |
 
 ## Differences

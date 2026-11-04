@@ -1,0 +1,44 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+)
+
+py_library(
+    name = "_claude_workflow",
+    srcs = ["_claude_workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks:claude_agent_sdk_harness",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//claude_agent_sdk",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_claude_session",
+    srcs = ["test_claude_session.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_claude_workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:claude_agent_sdk_harness",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//claude_agent_sdk",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+        "@pypi//temporalio_claude_agent_sdk",
+    ],
+)
