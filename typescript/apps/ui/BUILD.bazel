@@ -144,6 +144,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:metrics",
         "//typescript/apps/ui/src/lib/components/primitives:nest",
         "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
+        "//typescript/apps/ui/src/lib/components/primitives:scrollActivity",
         "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
         "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
         "//typescript/apps/ui/src/lib/cost:pricing",
