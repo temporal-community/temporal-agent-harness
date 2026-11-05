@@ -116,8 +116,8 @@ cd "$starter"
 starter_temporal="$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).dependencies["@temporalio/worker"]')"
 npm install --no-package-lock --no-audit --no-fund --loglevel=error \
   "$tarballs"/*.tgz "@temporalio/testing@$starter_temporal"
-npm run schema
-npm run harness:skill
+npm run harness:schema
+npm run harness:skill -- --for agents
 ./node_modules/.bin/harness-codegen agent.schema.json -o Agent.ts
 ./node_modules/.bin/tsc --ignoreConfig --noEmit --skipLibCheck --module nodenext --target es2022 Agent.ts
 node --input-type=module - <<'PROBE'

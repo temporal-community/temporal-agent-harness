@@ -1,5 +1,6 @@
 """Installed-resource updates must preserve user work and make conflicts actionable."""
 import asyncio
+import io
 import json
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 
 from temporal_agent_harness.development import (
     api_checks,
+    choose_skill_tools,
     create_starter,
     install_skill,
     project_name,
@@ -63,11 +65,34 @@ def test_skill_update_rejects_symlinks_and_manifest_traversal(tmp_path):
 
 
 def test_skill_destinations_map_tools_to_their_directories():
-    assert skill_destinations(None, None) == [Path(".agents/skills")]
-    assert skill_destinations(["claude", "codex", "claude"], None) == [Path(".claude/skills"), Path(".agents/skills")]
+    assert skill_destinations(["claude", "agents", "claude"], None) == [Path(".claude/skills"), Path(".agents/skills")]
     assert skill_destinations(["claude"], "tools/skills") == [Path(".claude/skills"), Path("tools/skills")]
     with pytest.raises(ValueError, match="Unknown coding agent cursor"):
         skill_destinations(["cursor"], None)
+    with pytest.raises(ValueError, match="--for {claude,agents} or --dest"):
+        skill_destinations(None, None)
+
+
+def test_choose_skill_tools_reasks_until_it_reads_valid_numbers():
+    answers = iter(["", "3", "2, 1 2"])
+    questions = []
+
+    def ask(question: str) -> str:
+        questions.append(question)
+        return next(answers)
+
+    assert choose_skill_tools(ask) == ["agents", "claude"]
+    assert len(questions) == 3
+    assert "1) Claude Code: .claude/skills" in questions[0]
+    assert "2) Codex and other agents that read the shared .agents/skills: .agents/skills" in questions[0]
+
+
+def test_choose_skill_tools_stops_at_end_of_input():
+    def ask(question: str) -> str:
+        raise EOFError
+
+    with pytest.raises(ValueError, match="No coding agent chosen"):
+        choose_skill_tools(ask)
 
 
 def test_skills_install_for_claude_reports_its_location(tmp_path, monkeypatch, capsys):
@@ -81,6 +106,25 @@ def test_skills_install_for_claude_reports_its_location(tmp_path, monkeypatch, c
     assert "/temporal-harness-python" in out
     main(["skills", "install", "--for", "claude"])
     assert capsys.readouterr().out.startswith("Already up to date: temporal-harness-python ")
+
+
+class Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_skills_install_without_a_target_asks_only_in_a_terminal(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("temporal_agent_harness.development.package_version", lambda: "9.9.9")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    with pytest.raises(SystemExit, match="--for {claude,agents} or --dest"):
+        main(["skills", "install"])
+    assert not (tmp_path / ".agents").exists()
+    monkeypatch.setattr(sys, "stdin", Terminal("2\n"))
+    main(["skills", "install"])
+    assert "Install the skill for which coding agents?" in capsys.readouterr().out
+    assert (tmp_path / ".agents/skills/temporal-harness-python/SKILL.md").is_file()
+    assert not (tmp_path / ".claude").exists()
 
 
 def test_project_name_comes_from_the_directory():

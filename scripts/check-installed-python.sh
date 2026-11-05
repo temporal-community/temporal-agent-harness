@@ -53,7 +53,7 @@ PY
 
 echo "The packaged starter generates schemas, installs its skill, and runs without a model"
 "$venv/temporal-agent-harness" init "$work/starter"
-(cd "$work/starter" && "$venv/temporal-agent-harness" skills install)
+(cd "$work/starter" && "$venv/temporal-agent-harness" skills install --for agents)
 (cd "$work/starter" && "$venv/temporal-agent-harness" schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json)
 (cd "$work/starter" && "$venv/python" - <<'PROBE'
 import asyncio

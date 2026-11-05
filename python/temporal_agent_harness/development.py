@@ -6,15 +6,17 @@ import json
 import re
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, NamedTuple
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 SKILL_NAME = "temporal-harness-python"
 MANIFEST = ".harness-skill.json"
-# Where each coding agent discovers project skills; `skills install --for <tool>` targets one.
-SKILL_DIRECTORIES = {"codex": ".agents/skills", "claude": ".claude/skills"}
-DEFAULT_SKILL_DIRECTORY = SKILL_DIRECTORIES["codex"]
+# Where coding agents discover project skills; `skills install --for <key>` targets one. Claude Code
+# reads only .claude/skills; .agents/skills is the shared directory Codex and other agents read.
+SKILL_DIRECTORIES = {"claude": ".claude/skills", "agents": ".agents/skills"}
+SKILL_TARGETS = {"claude": "Claude Code", "agents": "Codex and other agents that read the shared .agents/skills"}
 # How each tool invokes the installed skill from a prompt.
 SKILL_PROMPTS = {"Codex": f"${SKILL_NAME}", "Claude Code": f"/{SKILL_NAME}"}
 
@@ -70,7 +72,24 @@ def skill_destinations(tools: list[str] | None, dest: str | None) -> list[Path]:
     destinations = [SKILL_DIRECTORIES[tool] for tool in tools or []]
     if dest is not None:
         destinations.append(dest)
-    return [Path(d) for d in dict.fromkeys(destinations or [DEFAULT_SKILL_DIRECTORY])]
+    if not destinations:
+        raise ValueError(f"Choose where to install with --for {{{','.join(SKILL_DIRECTORIES)}}} or --dest <directory>")
+    return [Path(d) for d in dict.fromkeys(destinations)]
+
+
+def choose_skill_tools(ask: Callable[[str], str] = input) -> list[str]:
+    """Ask which coding agents to install for; `skills install` does this in a terminal without --for or --dest."""
+    keys = list(SKILL_DIRECTORIES)
+    menu = "\n".join(f"  {n}) {SKILL_TARGETS[key]}: {SKILL_DIRECTORIES[key]}" for n, key in enumerate(keys, 1))
+    numbers = [str(n) for n in range(1, len(keys) + 1)]
+    while True:
+        try:
+            answer = ask(f"Install the skill for which coding agents?\n{menu}\nEnter one or more numbers ({','.join(numbers)}): ")
+        except EOFError:
+            raise ValueError("No coding agent chosen") from None
+        picks = answer.replace(",", " ").split()
+        if picks and set(picks) <= set(numbers):
+            return [keys[int(n) - 1] for n in dict.fromkeys(picks)]
 
 
 def install_skill(destination: Path, *, source: Path | None = None, sdk_version: str | None = None) -> InstalledSkill:

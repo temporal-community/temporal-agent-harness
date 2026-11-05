@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "schema": "npm run build && agent-harness schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json",
+    "harness:schema": "npm run build && agent-harness schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json",
     "harness:dev": "uvx --from 'temporal-agent-harness[ui]==0.9.0' temporal-agent-harness dev agents.toml",
     "start": "node --env-file-if-exists=.env.local dist/worker.js",
     "harness:skill": "agent-harness skills install",

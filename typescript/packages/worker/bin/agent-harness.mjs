@@ -13,18 +13,23 @@ import {
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { createInterface } from "node:readline/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const NAME = "temporal-harness-typescript";
 const MANIFEST = ".harness-skill.json";
-// Where each coding agent discovers project skills; `skills install --for <tool>` targets one.
+// Where coding agents discover project skills; `skills install --for <key>` targets one. Claude Code
+// reads only .claude/skills; .agents/skills is the shared directory Codex and other agents read.
 export const SKILL_DIRECTORIES = {
-  codex: ".agents/skills",
   claude: ".claude/skills",
+  agents: ".agents/skills",
 };
-const DEFAULT_SKILL_DIRECTORY = SKILL_DIRECTORIES.codex;
+const SKILL_TARGETS = {
+  claude: "Claude Code",
+  agents: "Codex and other agents that read the shared .agents/skills",
+};
 // How each tool invokes the installed skill from a prompt.
 const SKILL_PROMPTS = { Codex: `$${NAME}`, "Claude Code": `/${NAME}` };
 export function skillDestinations(tools = [], dest) {
@@ -35,7 +40,39 @@ export function skillDestinations(tools = [], dest) {
     );
   const destinations = tools.map((tool) => SKILL_DIRECTORIES[tool]);
   if (dest !== undefined) destinations.push(dest);
-  return [...new Set(destinations.length ? destinations : [DEFAULT_SKILL_DIRECTORY])];
+  if (!destinations.length)
+    throw new Error(
+      `Choose where to install with --for {${Object.keys(SKILL_DIRECTORIES).join(",")}} or --dest <directory>`,
+    );
+  return [...new Set(destinations)];
+}
+/** Ask which coding agents to install for; `skills install` does this in a terminal without --for or --dest. */
+export async function chooseSkillTools(ask) {
+  const keys = Object.keys(SKILL_DIRECTORIES);
+  const menu = keys
+    .map((key, i) => `  ${i + 1}) ${SKILL_TARGETS[key]}: ${SKILL_DIRECTORIES[key]}`)
+    .join("\n");
+  const numbers = keys.map((_, i) => String(i + 1));
+  for (;;) {
+    const answer = await ask(
+      `Install the skill for which coding agents?\n${menu}\nEnter one or more numbers (${numbers.join(",")}): `,
+    );
+    const picks = answer.replaceAll(",", " ").split(/\s+/).filter(Boolean);
+    if (picks.length && picks.every((n) => numbers.includes(n)))
+      return [...new Set(picks)].map((n) => keys[Number(n) - 1]);
+  }
+}
+async function askInTerminal(choose) {
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  const closed = new Promise((_, reject) =>
+    terminal.once("close", () => reject(new Error("No coding agent chosen"))),
+  );
+  closed.catch(() => {});
+  try {
+    return await choose((question) => Promise.race([terminal.question(question), closed]));
+  } finally {
+    terminal.close();
+  }
 }
 /** A package-manager-safe name derived from the starter directory, e.g. `My Agent` -> `my-agent`. */
 export function projectName(destination) {
@@ -259,12 +296,13 @@ export async function diagnose({
 const USAGE = `usage: agent-harness init <directory>
        agent-harness schema ./dist/agents.js#Export [-o Agent.schema.json]
        agent-harness skills path
-       agent-harness skills install [--for codex|claude]... [--dest <directory>]
+       agent-harness skills install [--for claude|agents]... [--dest <directory>]
        agent-harness doctor [--schema Agent.schema.json] [--api-url http://localhost:8000] [--timeout 5] [--json]
 
 Uses this installed SDK release's resources. \`schema\` is \`agent-harness-schema\`.
-\`skills install\` copies the skill where your coding agent discovers it: Codex reads
-.agents/skills (the default), Claude Code reads .claude/skills. Reruns preserve local edits.
+\`skills install\` copies the skill where your coding agents discover it: Claude Code reads
+.claude/skills (--for claude); Codex and other agents read the shared .agents/skills
+(--for agents). Without --for or --dest it asks which to install for. Reruns preserve local edits.
 Doctor checks the schema and shared API/worker availability without creating sessions.
 Use the Python CLI's doctor --registry for direct Temporal and TOML checks.`;
 export async function main(args = process.argv.slice(2)) {
@@ -309,7 +347,10 @@ export async function main(args = process.argv.slice(2)) {
   );
   if (command === "skills" && action === "path") console.log(source);
   else if (command === "skills") {
-    for (const destination of skillDestinations(values.for, values.dest)) {
+    let tools = values.for;
+    if (!tools?.length && values.dest === undefined && process.stdin.isTTY)
+      tools = await askInTerminal(chooseSkillTools);
+    for (const destination of skillDestinations(tools, values.dest)) {
       const { root, changed } = installSkill(source, destination, version);
       console.log(
         `${changed ? "Installed" : "Already up to date:"} ${NAME} ${version} in ${root}`,
