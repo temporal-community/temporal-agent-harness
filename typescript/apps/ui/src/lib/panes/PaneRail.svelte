@@ -80,7 +80,7 @@
     restoreScroll = null;
   });
 
-  /* The rail's own width, for the first visit's fill and the widest a drag can
+  /* The rail's own width, which the state flow fills to and the widest a drag can
      go. The first observation is often 0, before layout; noteRailWidth ignores it. */
   $effect(() => {
     const rail = railElement;
@@ -582,9 +582,9 @@
     background: var(--surface-0);
   }
 
-  /* Every column is exactly its own width, never grown or shrunk to fit the rail, so
-     resizing one column, the window or the desk moves no other. Spare room sits empty
-     at the end of the rail, and a desk wider than the window scrolls. */
+  /* Every column is exactly the width the stack gives it. The state flow stretches
+     over spare room, so none sits empty after the last column, and a desk wider than
+     the window scrolls. */
   .rail-slot {
     position: relative;
     display: flex;

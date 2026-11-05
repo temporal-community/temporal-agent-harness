@@ -25,7 +25,7 @@ export interface PaneMeta {
    * their content in the rows mode that was removed.
    */
   content: "viewport" | "document";
-  /** The column a first visit widens to fill the rail; nothing resizes it after that. */
+  /** The column that stretches over spare room, so none sits empty after the last column. */
   flexible?: boolean;
   /**
    * What the title this kind is described by actually names.
