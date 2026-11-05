@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-harness-svelte",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "type": "module",
   "description": "Svelte 5 binding for @temporalio/agent-harness-client: a reactive AgentSession over a temporal-agent-harness agent's event stream.",
@@ -27,7 +27,7 @@
     "svelte": "^5.7.0"
   },
   "dependencies": {
-    "@temporalio/agent-harness-client": "^0.2.0"
+    "@temporalio/agent-harness-client": "^0.3.0"
   },
   "devDependencies": {
     "@sveltejs/package": "^3.0.1",

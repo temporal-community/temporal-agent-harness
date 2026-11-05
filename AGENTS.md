@@ -1,8 +1,18 @@
 # Working in this repository
 
-Temporal Agent Harness is a Python SDK (Typescript support coming soon) for building durable agents, with a development+observability web console and
+Temporal Agent Harness is a Python and TypeScript SDK for building durable agents, with a development+observability web console and
 TypeScript clients for building products over the agents. This file covers contributing; [README.md](README.md) covers usage.
 Run commands below from the repository root unless stated otherwise.
+
+For building applications with installed packages, use the packaged
+[Python skill](python/temporal_agent_harness/skills/temporal-harness-python/SKILL.md) or
+[TypeScript skill](typescript/packages/core/skills/temporal-harness-typescript/SKILL.md).
+For agents working in this checkout, `.agents/skills/temporal-harness-repo/` explains how
+examples are wired, run, and tested here; the packaged skills' commands do not apply in the repo.
+Codex discovers it in place; for Claude Code, link it with
+`mkdir -p .claude/skills && ln -s ../../.agents/skills/temporal-harness-repo .claude/skills/`
+(`.claude/` is gitignored). [Agent development](docs/agent-development.md) covers installation
+and updates of the packaged skills.
 
 ## Find the right code
 
@@ -59,6 +69,8 @@ Do not fix an out-of-date generated-file test by editing the generated file dire
 | Example client schema (where a client SDK is declared) | `bazel run //python/examples/<example>:client_sdk_update` |
 | Event protocol | `bazel run //contract:protocol_update` then `bazel run //typescript/packages/client/src:protocol_codegen_update` |
 | Registry format | `bazel run //contract:registry_update` |
+| Shared skill API, verification, or starter resources (`docs/`) | `bazel run //python/temporal_agent_harness:shared_skill_files_update` then `bazel run //typescript/packages/core:shared_skill_files_update` |
+| Root license (codegen package copy) | `bazel run //typescript/packages/codegen:license_update` |
 | Intentional conformance behavior | `bazel run //python/tests/conformance:goldens_update` |
 
 For example registries, edit the `harness_agent` declarations and agent classes.

@@ -1,0 +1,61 @@
+import { Agent, type AgentInputItem } from "@openai/agents-core";
+import { z } from "zod";
+import {
+  TextMessage,
+  TextReply,
+  ToolApprovalPolicy,
+  defineAgent,
+  handler,
+  tool,
+} from "@temporalio/agent-harness";
+import {
+  asOpenAIAgentTool,
+  runStreamed,
+} from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
+
+const getWeather = tool({
+  name: "get_weather",
+  description: "Return sample weather for a city.",
+  inputSchema: z.object({ city: z.string() }),
+  outputSchema: z.string(),
+  inherentlySafe: true,
+  execute: async ({ city }) => `It's 72°F and sunny in ${city}.`,
+});
+
+export const OpenAIHelloAgentTs = defineAgent({
+  name: "OpenAIHelloAgentTs",
+  approvalPolicyDefault: ToolApprovalPolicy.allowInherentlySafe(),
+  handlers: {
+    ping: handler({ description: "Check the worker without a model call.", input: TextMessage, output: TextReply }),
+    ask: handler({
+      description: "Chat with the assistant. Ask about the weather to try its tool.",
+      input: TextMessage,
+      output: TextReply,
+    }),
+  },
+  create: ({ runner }) => {
+    let conversation: AgentInputItem[] = [];
+    return {
+      async ping({ text }) { return { text }; },
+      async ask({ text }) {
+        const sdkAgent = new Agent({
+          name: "Hello",
+          instructions: "Answer briefly. For weather questions, call get_weather and explain that it returns sample data.",
+          model: "gpt-5.1",
+          tools: [asOpenAIAgentTool(runner, getWeather)],
+        });
+        const input: AgentInputItem[] = [...conversation, { role: "user", content: text }];
+        const result = await runStreamed(runner, sdkAgent, input, {
+          defaultModelParams: {
+            startToCloseTimeout: "2 minutes",
+            heartbeatTimeout: "30 seconds",
+          },
+        });
+        for await (const _event of result) void _event;
+        await result.completed;
+        conversation = result.history;
+        return { text: String(result.finalOutput) };
+      },
+    };
+  },
+});

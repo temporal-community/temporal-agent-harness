@@ -32,6 +32,7 @@ published_npm_package(
         "LICENSE",
         "README.md",
         "package.json",
+        ":development",
         "//typescript/packages/worker/src:index",
         "//typescript/packages/worker/src/ai-sdks:openai-agents-harness",
         "//typescript/packages/worker/src/ai-sdks/google-genai-plugin:index",
@@ -43,4 +44,10 @@ published_npm_package(
     ],
     replace_prefixes = {"src/": "dist/src/"},
     visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "development",
+    srcs = ["bin/agent-harness.mjs"],
+    visibility = ["//typescript/packages/worker:__subpackages__"],
 )
