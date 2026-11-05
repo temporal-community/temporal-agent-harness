@@ -116,7 +116,7 @@ To add the SDK to an existing project:
 
 ```bash
 # Python
-uv add 'temporal-agent-harness[ui]==0.8.0'
+uv add 'temporal-agent-harness[ui]==0.9.0'
 
 # TypeScript
 npm install --save-exact @temporalio/agent-harness@0.2.0 @temporalio/agent-harness-worker@0.2.0
