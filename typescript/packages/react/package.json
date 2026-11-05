@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-harness-react",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "type": "module",
   "description": "React binding for @temporalio/agent-harness-client: a useAgentSession hook over a temporal-agent-harness agent's event stream.",
@@ -26,7 +26,7 @@
     "react": "^18.2.0 || ^19.0.0"
   },
   "dependencies": {
-    "@temporalio/agent-harness-client": "^0.2.0"
+    "@temporalio/agent-harness-client": "^0.3.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

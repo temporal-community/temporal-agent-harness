@@ -168,7 +168,7 @@ as `bazel`, and the [Temporal CLI](https://docs.temporal.io/cli). Bazel supplies
 toolchains and dependencies. Examples live in the repository and are not shipped in npm packages.
 
 ```bash
-git clone --branch npm-v0.2.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch npm-v0.3.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
 [ -f .env.local ] || cp .env.example .env.local
 # Set OPENAI_API_KEY in .env.local.
@@ -219,7 +219,7 @@ Create `package.json`. The install commands below add its dependencies:
 Install the harness and the model integration:
 
 ```bash
-npm install --save-exact @temporalio/agent-harness@0.2.0 @temporalio/agent-harness-worker@0.2.0 @temporalio/agent-harness-client@0.2.0
+npm install --save-exact @temporalio/agent-harness@0.3.0 @temporalio/agent-harness-worker@0.3.0 @temporalio/agent-harness-client@0.3.0
 npm install --save-exact @temporalio/activity@1.24.0 @temporalio/client@1.24.0 @temporalio/common@1.24.0 @temporalio/envconfig@1.24.0 @temporalio/plugin@1.24.0 @temporalio/worker@1.24.0 @temporalio/workflow@1.24.0 @temporalio/workflow-streams@1.24.0 @temporalio/openai-agents@1.24.0
 npm install --save-exact @openai/agents-core@0.14.3 @openai/agents-openai@0.14.3 openai@6.46.0 zod@4.6.5
 npm install --save-dev --save-exact typescript@7.0.2 @types/node@22.20.4
