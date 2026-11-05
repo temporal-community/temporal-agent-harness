@@ -263,10 +263,10 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
       '@temporalio/agent-harness':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../../packages/core
       '@temporalio/agent-harness-worker':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../../packages/worker
       '@temporalio/envconfig':
         specifier: ^1.24.0
@@ -303,10 +303,10 @@ importers:
         specifier: ~0.14.3
         version: 0.14.3(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(supports-color@8.1.1)(ws@8.21.3)(zod@4.6.7)
       '@temporalio/agent-harness':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../../packages/core
       '@temporalio/agent-harness-worker':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../../packages/worker
       '@temporalio/envconfig':
         specifier: ^1.24.0
@@ -368,7 +368,7 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
       '@temporalio/agent-harness-client':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../client
       '@temporalio/common':
         specifier: ^1.24.0
@@ -405,7 +405,7 @@ importers:
   packages/react:
     dependencies:
       '@temporalio/agent-harness-client':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../client
     devDependencies:
       '@testing-library/react':
@@ -442,7 +442,7 @@ importers:
   packages/svelte:
     dependencies:
       '@temporalio/agent-harness-client':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../client
     devDependencies:
       '@sveltejs/package':
@@ -479,10 +479,10 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
       '@temporalio/agent-harness':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../core
       '@temporalio/agent-harness-client':
-        specifier: ^0.3.0
+        specifier: ^0.3.1
         version: link:../client
       '@temporalio/client':
         specifier: ^1.24.0
