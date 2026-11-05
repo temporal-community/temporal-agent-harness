@@ -102,6 +102,8 @@ const QUERY_BLEED = "b";
  * to be right by the time they let go and reach for it.
  */
 const URL_WRITE_MS = 250;
+/** How close to the rail's end a resized desk snaps flush. Under `RESIZE_STEP`, so a key step can leave the edge. */
+const EDGE_SNAP = 20;
 /** Marks the frontmost tab of a column in the pane list, e.g. `chat|*logs`. */
 const ACTIVE_MARK = "*";
 /** Joins panes sharing a column: tabbed, and stacked as a split. */
@@ -490,13 +492,18 @@ export class PaneStack {
         item.some((pane) => PANE_META[pane.kind].flexible)
     );
     if (!group) return;
-    const used = this.groups.reduce(
-      (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.sizeOfGroup(item)),
-      0
-    );
+    const used = this.#deskWidth();
     if (used !== this.#railWidth) {
       this.setGroupSize(group[0].id, this.sizeOfGroup(group) + this.#railWidth - used);
     }
+  }
+
+  /** Every column's drawn width, folded ones as spines. */
+  #deskWidth(): number {
+    return this.groups.reduce(
+      (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.sizeOfGroup(item)),
+      0
+    );
   }
 
   #deskFromStorage(sessionId: string): Pane[][] | null {
@@ -687,6 +694,10 @@ export class PaneStack {
    * kind's default. No wider than the rail measured now, since a column wider
    * than the window cannot be read whole; a narrower window later does not
    * shrink it, the rail scrolls instead.
+   *
+   * A width that leaves the desk within `EDGE_SNAP` of the rail's end lands
+   * flush with it, so aiming at the window edge neither leaves a sliver nor
+   * adds a scroll. Dragging further still scrolls.
    */
   setGroupSize(id: string, size: number | null): void {
     const loc = this.locate(id);
@@ -694,7 +705,11 @@ export class PaneStack {
     const group = this.groups[loc.group];
     const min = this.minOfGroup(group);
     const max = this.#railWidth > 0 ? Math.max(min, this.#railWidth) : Infinity;
-    const next = size == null ? null : Math.max(min, Math.min(max, Math.round(size)));
+    let next = size == null ? null : Math.max(min, Math.min(max, Math.round(size)));
+    if (next != null && this.#railWidth > 0) {
+      const flush = this.sizeOfGroup(group) + this.#railWidth - this.#deskWidth();
+      if (Math.abs(next - flush) <= EDGE_SNAP && flush >= min && flush <= max) next = flush;
+    }
     for (const pane of group) pane.size = next;
   }
 

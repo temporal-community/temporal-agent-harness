@@ -748,6 +748,7 @@ vitest_test(
     src = "paneWidth.test.mjs",
     deps = [
         ":paneStack.svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
         "//typescript/apps/ui/src/lib/panes:PaneRail",
         "//typescript/apps/ui/src/lib/panes:registry",
         "//typescript/apps/ui/tests/support:controllerHarness",

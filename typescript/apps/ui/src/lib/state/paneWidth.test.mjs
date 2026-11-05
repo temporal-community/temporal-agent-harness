@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, it } from "vitest";
 
+import { RESIZE_STEP } from "../components/primitives/resizeKeys.ts";
 import { PANE_META, SPINE_SIZE } from "../panes/registry.ts";
 import { installBrowserSurface } from "../../../tests/support/controllerHarness.mjs";
 import { createPaneStack, slotKey } from "./paneStack.svelte.ts";
@@ -51,6 +52,26 @@ describe("a column's width", () => {
     reloaded.noteRailWidth(3400);
     reloaded.enterSession(SESSION);
     assert.deepEqual(widths(reloaded), after, "a reload on a wider window restores every width");
+  });
+
+  it("snaps flush with the rail's end when resized near it, and scrolls when dragged past", () => {
+    installBrowserSurface();
+    const stack = createPaneStack();
+    stack.noteRailWidth(1920);
+    stack.enterSession(SESSION);
+    const flush = widths(stack).usage;
+
+    stack.setGroupSize("usage", flush - 100);
+    assert.equal(widths(stack).usage, flush - 100, "a column well short of the edge stays put");
+    stack.setGroupSize("usage", flush - 15);
+    assert.equal(widths(stack).usage, flush, "short of the edge");
+    stack.setGroupSize("usage", flush + 15);
+    assert.equal(widths(stack).usage, flush, "past the edge");
+    stack.setGroupSize("usage", flush + 40);
+    assert.equal(widths(stack).usage, flush + 40, "further past still scrolls");
+    stack.setGroupSize("usage", flush);
+    stack.setGroupSize("usage", flush + RESIZE_STEP);
+    assert.equal(widths(stack).usage, flush + RESIZE_STEP, "a key step can leave the edge");
   });
 
   it("fits the window once on a first visit, through the flexible column", () => {
