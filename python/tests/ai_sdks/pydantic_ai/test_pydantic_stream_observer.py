@@ -14,7 +14,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
-
 from pydantic_ai.messages import (
     PartDeltaEvent,
     PartEndEvent,
@@ -252,11 +251,13 @@ def test_as_pydantic_ai_tool_derives_schema_from_harness_tool():
     assert tool.takes_ctx is True
 
 
-def test_build_harness_toolset_returns_toolset_and_skip_config():
-    toolset, tool_config = h.build_harness_toolset([get_weather], id="hello-tools")
+def test_build_harness_toolset_marks_every_tool_to_run_in_workflow():
+    toolset = h.build_harness_toolset([get_weather], id="hello-tools")
     assert toolset.id == "hello-tools"
-    # The activity wrapper is disabled for every adapted tool so it runs in-workflow.
-    assert tool_config == {"hello-tools": {"get_weather": False}}
+    # `temporal: False` tells TemporalDurability not to wrap the tool's calls in an activity.
+    assert {name: tool.metadata for name, tool in toolset.tools.items()} == {
+        "get_weather": {"temporal": False}
+    }
 
 
 def test_as_pydantic_ai_tool_rejects_non_harness_tool():

@@ -5,20 +5,19 @@ Run from the repo root with:
 
 Hosts only the PydanticAIHelloAgent workflow. Its one tool (`get_weather`) is an inline workflow
 tool with no worker-side body, so there are no harness tool activities to register — the Pydantic AI
-`AgentPlugin` registers the agent's activities (model request/stream, event_stream_handler, and the
-toolset's call_tool) itself.
+`AgentPlugin` registers the agent's activities (model request/stream and event_stream_handler)
+itself.
 
 Three plugins — the upstream Pydantic AI Temporal setup plus the harness's own:
   * ``PydanticAIPlugin`` on the CLIENT — installs the Pydantic-compatible data converter and the
     workflow-sandbox passthroughs the SDK needs.
   * ``AgentHarnessPlugin`` on the CLIENT, after it — the harness's data-converter requirements
     and activities.
-  * ``AgentPlugin(temporal_agent)`` on the WORKER — registers the durable agent's activities.
+  * ``AgentPlugin(agent)`` on the WORKER — registers the durable agent's activities.
 
 The harness streaming path is wired on the agent itself (in workflow.py): its
-``event_stream_handler=harness_event_stream_handler`` runs inside the model activity and translates
-raw Pydantic AI events onto the harness turn stream. Drop that handler and the model still runs
-durably, just without live streaming.
+``TemporalAgentHarnessDurability`` capability runs inside the model activity and translates raw Pydantic
+AI events onto the harness turn stream.
 
 Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
@@ -39,14 +38,13 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.utils.task_queue import task_queue_name
-
 from examples.pydantic_ai_hello.workflow import (
+    _AGENT,
     TASK_QUEUE,
     PydanticAIHelloAgentWorkflow,
-    _TEMPORAL_AGENT,
 )
+from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 
 async def main() -> None:
@@ -75,7 +73,7 @@ async def main() -> None:
         workflows=[PydanticAIHelloAgentWorkflow],
         # No activities to declare: get_weather is an inline workflow tool, the durable agent's
         # activities come from AgentPlugin, and the harness's own come from AgentHarnessPlugin.
-        plugins=[AgentPlugin(_TEMPORAL_AGENT)],
+        plugins=[AgentPlugin(_AGENT)],
     )
     print(
         f"Pydantic AI hello agent worker ready: "
