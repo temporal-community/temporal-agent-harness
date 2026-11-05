@@ -11,6 +11,7 @@
     type PaneDropEdge
   } from "$lib/panes/paneDrop";
   import PaneShell from "$lib/panes/PaneShell.svelte";
+  import { AutoHide, railThumb, scrollForThumb } from "$lib/panes/railScrollbar.svelte";
   import { PANE_KINDS, PANE_META, SPINE_SIZE } from "$lib/panes/registry";
   import { keepScrollPositions } from "$lib/state/followScroll";
   import {
@@ -55,6 +56,77 @@
   const SETTLE_MS = 220;
 
   let railElement = $state<HTMLElement | null>(null);
+
+  /* The rail's own scrollbar took its height from every pane whenever the desk
+     overflowed, so the panes jumped as it came and went. This one is drawn over
+     the bottom edge instead and takes no layout. */
+  let railScroll = $state({ left: 0, client: 0, width: 0 });
+  const thumb = $derived(railThumb(railScroll.left, railScroll.client, railScroll.width));
+  const scrollbar = new AutoHide();
+  /* Measured from the press, as the column gutters are. */
+  let thumbGrab: { x: number; left: number } | null = null;
+  /* Close enough to the rail's bottom edge that the pointer is reaching for the bar. */
+  const SCROLLBAR_REACH = 24;
+
+  function measureRail(): void {
+    if (!railElement) return;
+    railScroll = {
+      left: railElement.scrollLeft,
+      client: railElement.clientWidth,
+      width: railElement.scrollWidth
+    };
+  }
+
+  $effect(() => () => scrollbar.dispose());
+
+  /* Column widths change the desk's width without a scroll or a resize of the rail. */
+  $effect(() => {
+    void stack.groups.map((group) => stack.sizeOfGroup(group));
+    requestAnimationFrame(measureRail);
+  });
+
+  function revealNearBottom(event: PointerEvent): void {
+    if (!thumb || !railElement) return;
+    if (railElement.getBoundingClientRect().bottom - event.clientY <= SCROLLBAR_REACH) scrollbar.poke();
+  }
+
+  function startThumbDrag(event: PointerEvent): void {
+    if (event.button !== 0 || !thumb) return;
+    event.preventDefault();
+    event.stopPropagation();
+    thumbGrab = { x: event.clientX, left: thumb.left };
+    scrollbar.hold(true);
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function moveThumbDrag(event: PointerEvent): void {
+    if (!thumbGrab || !thumb || !railElement) return;
+    railElement.scrollLeft = scrollForThumb(
+      thumbGrab.left + event.clientX - thumbGrab.x,
+      railScroll.client,
+      railScroll.width,
+      thumb.width
+    );
+  }
+
+  function stopThumbDrag(event: PointerEvent): void {
+    thumbGrab = null;
+    scrollbar.hold(false);
+    const handle = event.currentTarget as HTMLElement;
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  }
+
+  /* A press on the track brings the thumb's middle to the press. */
+  function jumpToTrack(event: PointerEvent): void {
+    if (event.button !== 0 || !thumb || !railElement) return;
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    railElement.scrollLeft = scrollForThumb(
+      event.clientX - box.left - thumb.width / 2,
+      railScroll.client,
+      railScroll.width,
+      thumb.width
+    );
+  }
   /* The column and the pane the pointer is over, plus where the drop would land.
      Null means this drop would do nothing, and nothing is drawn — the rail never
      shows a landing it will not honour. */
@@ -87,6 +159,7 @@
     if (!rail || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
       stack.noteRailWidth(entry?.contentRect.width ?? 0);
+      measureRail();
     });
     observer.observe(rail);
     return () => observer.disconnect();
@@ -381,6 +454,10 @@
   }
 </script>
 
+<!-- The frame holds the overlay scrollbar beside the scroller, not in it: anything in a
+     scroller counts toward its scroll width, and a bar kept in view there held the rail
+     open at its widest after the columns that filled it were closed. -->
+<div class="rail-frame">
 <div
   class="rail"
   class:settling
@@ -392,7 +469,12 @@
   ondragover={updateDrop}
   ondrop={handleDrop}
   ondragleave={handleDragLeave}
+  onscroll={() => {
+    measureRail();
+    scrollbar.poke();
+  }}
   onscrollend={focusSnappedColumn}
+  onpointermove={revealNearBottom}
 >
   {#if stack.groups.length === 0}
     <div class="rail-empty">
@@ -567,10 +649,44 @@
   {/if}
 </div>
 
+<!-- Pointer only: the rail itself scrolls by keyboard, and focus brings a pane into view. -->
+<div
+  class="rail-scrollbar"
+  class:shown={thumb && scrollbar.visible}
+  class:idle={!thumb}
+  aria-hidden="true"
+  onpointerenter={() => scrollbar.hold(true)}
+  onpointerleave={() => thumbGrab || scrollbar.hold(false)}
+  onpointerdown={jumpToTrack}
+>
+  {#if thumb}
+    <div
+      class="rail-thumb"
+      style:width="{thumb.width}px"
+      style:transform="translateX({thumb.left}px)"
+      onpointerdown={startThumbDrag}
+      onpointermove={moveThumbDrag}
+      onpointerup={stopThumbDrag}
+      onpointercancel={stopThumbDrag}
+    ></div>
+  {/if}
+</div>
+</div>
+
 <style>
   /* One direction, always. Columns were the only arrangement readers wanted, and
      keeping a second one meant every rule in this file had a mirror image that
      had to be kept true. */
+  /* Placed where the rail is placed (the app grid, the drawer), and lays the rail
+     over its whole box. */
+  .rail-frame {
+    position: relative;
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
+  }
+
   .rail {
     min-width: 0;
     min-height: 0;
@@ -580,6 +696,50 @@
     overflow-x: auto;
     overflow-y: hidden;
     background: var(--surface-0);
+    /* Its own bar is the overlay below; see .rail-scrollbar. */
+    scrollbar-width: none;
+  }
+
+  .rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Laid over the panes' bottom edge rather than under them, so it takes no
+     height and nothing moves when it appears. A sibling of the scroller, so it
+     stays in view without following the scroll and adds nothing to its width. */
+  .rail-scrollbar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 7;
+    height: var(--pane-inset);
+    opacity: 0;
+    transition: opacity var(--duration-pane) var(--ease-out);
+  }
+
+  .rail-scrollbar.shown {
+    opacity: 1;
+  }
+
+  /* Nothing to scroll: no bar, and the panes' bottom edge stays theirs to press. */
+  .rail-scrollbar.idle {
+    pointer-events: none;
+  }
+
+  .rail-thumb {
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    border-radius: var(--radius-xs);
+    background: var(--scrollbar-thumb);
+    cursor: default;
+    touch-action: none;
+  }
+
+  .rail-scrollbar:hover .rail-thumb {
+    background: color-mix(in srgb, var(--text-1) 24%, transparent);
   }
 
   /* Every column is exactly the width the stack gives it. The state flow stretches
@@ -729,6 +889,12 @@
     cursor: col-resize;
     touch-action: none;
     transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  /* As PaneShell's own gutter: on the last column there is no seam to straddle, and
+     the half hanging past it gave the rail a few pixels of scroll. */
+  .rail-slot:last-child .col-gutter {
+    right: 0;
   }
 
   .pane-slot.resizing .share-gutter,
@@ -942,7 +1108,8 @@
   @media (prefers-reduced-motion: reduce) {
     .tab,
     .share-gutter,
-    .col-gutter {
+    .col-gutter,
+    .rail-scrollbar {
       transition: none;
     }
   }

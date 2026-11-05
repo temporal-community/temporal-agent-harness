@@ -1088,7 +1088,7 @@
     grid-row: 2 / -1;
   }
 
-  .app.has-session-drawer > :global(.rail),
+  .app.has-session-drawer > :global(.rail-frame),
   .app.has-session-drawer > :global(.step-controller),
   .app.has-session-drawer > .drawer {
     grid-column: 2;
@@ -1117,7 +1117,7 @@
 
   /* Direct child, so this reaches the rail above and never the one inside the
      drawer, which is the thing being shown. */
-  .app.bleed-drawer > :global(.rail) {
+  .app.bleed-drawer > :global(.rail-frame) {
     display: none;
   }
 
@@ -1255,7 +1255,7 @@
 
      Keyed off shut rather than a height, because bleeding overrides the grid row and
      a threshold would have fought it. */
-  .app.drawer-shut .drawer :global(.rail) {
+  .app.drawer-shut .drawer :global(.rail-frame) {
     overflow: hidden;
   }
 

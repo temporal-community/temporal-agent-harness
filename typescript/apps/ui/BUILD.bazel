@@ -159,6 +159,7 @@ js_library(
         "//typescript/apps/ui/src/lib/panes:PaneShell",
         "//typescript/apps/ui/src/lib/panes:launcher",
         "//typescript/apps/ui/src/lib/panes:paneDrop",
+        "//typescript/apps/ui/src/lib/panes:railScrollbar.svelte",
         "//typescript/apps/ui/src/lib/panes:registry",
         "//typescript/apps/ui/src/lib/state:agentIdentity",
         "//typescript/apps/ui/src/lib/state:agentRun.svelte",
