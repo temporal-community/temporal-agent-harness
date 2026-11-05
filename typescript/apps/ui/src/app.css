@@ -128,6 +128,15 @@
   --radius-sm: 0;
   --radius-md: 0;
   --radius-lg: 0;
+  /* The one exception, and deliberately outside the scale above: the State flow's
+     cards and runtime frames round and lift, so the run's steps read as objects on
+     the canvas rather than as boxes ruled onto it. */
+  --radius-card: 10px;
+  --radius-card-inner: 9px;
+  --radius-pill: 999px;
+  --shadow-card-lift:
+    0 10px 24px -12px color-mix(in srgb, var(--surface-0) 92%, transparent),
+    0 2px 6px -2px color-mix(in srgb, var(--surface-0) 70%, transparent);
   /* Spacing. Five steps, taken from what the app already reaches for: 2 to
      separate two lines of the same thought, 4 inside a control, 6 between rows
      of a list, 8 between things in a box, 12 between boxes. An even 3/5/7/9/11
@@ -262,6 +271,7 @@ body {
   color: var(--text-1);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 ::-webkit-scrollbar {

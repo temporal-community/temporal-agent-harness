@@ -67,11 +67,13 @@ openai-agents = [
     "temporalio[opentelemetry]>=1.35.0",
 ]
 # The Pydantic AI integration: temporal_agent_harness.ai_sdks.pydantic_ai_harness. Unlike the
-# openai-agents/genai integrations, the upstream plugin (pydantic_ai.durable_exec.temporal, shipped
-# in pydantic-ai-slim[temporal]) is used UNMODIFIED — its first-class `event_stream_handler` hook is
-# the streaming seam the harness needs, so there is nothing to vendor and only a thin glue module.
+# openai-agents/genai integrations, the upstream TemporalDurability capability
+# (pydantic_ai.durable_exec.temporal, shipped in pydantic-ai-slim[temporal]) is used UNMODIFIED; the
+# harness subclasses it and wraps the model, so there is nothing to vendor. 2.53 is the first
+# release whose Temporal support imports against temporalio 1.35 (older ones can't build a schema
+# for temporalio's EventGroup).
 pydantic-ai = [
-    "pydantic-ai-slim[temporal]>=2.13",
+    "pydantic-ai-slim[temporal]>=2.53",
 ]
 # Packaged FastAPI server and browser UI assets.
 ui = [
@@ -117,7 +119,7 @@ examples = [
     "pydantic-monty==1.0.0",  # Monty sandbox; pinned like the code-mode extra
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
-    "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
+    "pydantic-ai-slim[temporal]>=2.53",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
     "typesafe-sdk>=0.6.0",
     "temporalio-typesafe>=0.0.1,<0.1",  # TypeSafePlugin for the auto_mode and typesafe_hello workers
@@ -144,7 +146,7 @@ dev = [
     "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.35.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
-    "pydantic-ai-slim[temporal]>=2.13",
+    "pydantic-ai-slim[temporal]>=2.53",
     # Nexus-brokered MCP server tests. No version marker: temporal-nexus-mcp runs on every
     # Python this project supports, so `uv run pytest` collects the same suite on all of them.
     "temporal-nexus-mcp",

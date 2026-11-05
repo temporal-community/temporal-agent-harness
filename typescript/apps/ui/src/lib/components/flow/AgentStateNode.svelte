@@ -7,6 +7,10 @@
   export const [getNodeOpener, setNodeOpener, hasNodeOpener] =
     createContext<(nodeId: string) => void>();
 
+  /** How a card asks for its latest row in the Logs pane; the host owns the pane. */
+  export const [getNodeLogViewer, setNodeLogViewer, hasNodeLogViewer] =
+    createContext<(nodeId: string) => void>();
+
   /**
    * Which chip a card wears, read off the words already on it.
    *
@@ -77,7 +81,7 @@
 </script>
 
 <script lang="ts">
-  import { Maximize2 } from "@lucide/svelte";
+  import { ListTree, Maximize2, MessageSquareText, TextQuote } from "@lucide/svelte";
   import { Handle, Position } from "@xyflow/svelte";
   import { drawnPart } from "$lib/components/chat/JsonReply.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
@@ -95,6 +99,7 @@
   let { id, data, selected = false }: Props = $props();
 
   const openNode = hasNodeOpener() ? getNodeOpener() : null;
+  const viewInLogs = hasNodeLogViewer() ? getNodeLogViewer() : null;
 
   let resultBody = $state<HTMLElement | null>(null);
   /**
@@ -180,6 +185,9 @@
   /* Same vocabulary kindFromState reads. Only the node the cursor is on tails
      its text, so a scrub never drags a card the reader is not looking at. */
   const running = $derived(/streaming|running/.test(data.state.toLowerCase()));
+  /* Input is the reader's own words rather than a step: it leads with a message mark,
+     not a status glyph, and its text is set to be read. */
+  const prompt = $derived(data.variant === "prompt");
   const streaming = $derived(data.active === true && running);
   /* A string, so an equal one stops here: a graph update that leaves this card's
      text alone never reaches MarkdownMessage's parse. */
@@ -208,7 +216,8 @@
     `status-${STATUS_TONES[statusKind]}`,
     data.size ?? "default",
     data.active && "active",
-    selected && "selected"
+    selected && "selected",
+    prompt && "prompt"
   ]}
   style={nodeStyle}
 >
@@ -235,14 +244,21 @@
     <!-- The tip sits on the wrapper because the title clips its own overflow,
          and a tip is drawn with the element's pseudo-elements. -->
     <span class="title-wrap" data-tip={titleTip} data-tip-below>
-      <StateGlyph kind={statusKind} {running} />
+      {#if prompt}
+        <MessageSquareText class="prompt-mark" size={13} aria-hidden="true" />
+      {:else}
+        <StateGlyph kind={statusKind} {running} />
+      {/if}
       <span class="title" dir="auto">{data.title}</span>
     </span>
     <StatusChip label={data.state} kind={statusKind} plain />
   </div>
   <div class="body">
     {#if data.subtitle}
-      <span class="kind" dir="auto">{data.subtitle}</span>
+      <span class="kind" dir="auto">
+        {#if prompt}<TextQuote size={11} aria-hidden="true" />{/if}
+        <span class="kind-text">{data.subtitle}</span>
+      </span>
     {/if}
     {#if hasResult}
       <div
@@ -280,19 +296,37 @@
       <MetricStrip metrics={data.metrics} dense bare />
     {/if}
   </div>
-  {#if openNode}
-    <div class="actions">
-      <IconButton
-        class="nodrag nopan"
-        label={`Open ${data.title} details`}
-        tip="Open details"
-        onclick={(event) => {
-          event.stopPropagation();
-          openNode(id);
-        }}
-      >
-        <Maximize2 size={14} />
-      </IconButton>
+  <!-- On hover and keyboard focus, over the foot of the body: a fade, so the text under it
+       gives way rather than being cut, and the two ways onward from a card. Not a click on
+       the card: that opens the inspector too, so each press stops here. -->
+  {#if openNode || viewInLogs}
+    <div class="actions nodrag nopan">
+      {#if openNode}
+        <IconButton
+          class="nodrag nopan"
+          label={`Open ${data.title} details`}
+          tip="Open details"
+          onclick={(event) => {
+            event.stopPropagation();
+            openNode(id);
+          }}
+        >
+          <Maximize2 size={14} />
+        </IconButton>
+      {/if}
+      {#if viewInLogs}
+        <IconButton
+          class="nodrag nopan"
+          label={`View ${data.title} in logs`}
+          tip="View in logs"
+          onclick={(event) => {
+            event.stopPropagation();
+            viewInLogs(id);
+          }}
+        >
+          <ListTree size={14} />
+        </IconButton>
+      {/if}
     </div>
   {/if}
   <Handle {...port("source-right")} type="source" position={Position.Right} />
@@ -307,17 +341,29 @@
      It fills the node box, because that box is where xyflow puts its ports. */
   .state-node {
     --status-color: var(--text-3);
-    --result-bg: var(--surface-1);
+    /* The card's own tone tints the whole tray, over IO's neutral surface, so the colour
+       is the card's and the material is the system's. The body is raised over it. */
+    --card-tint: color-mix(in srgb, var(--status-color) 12%, transparent);
+    --card-border: color-mix(in srgb, var(--status-color) 34%, var(--color-border-primary));
+    --result-bg: var(--color-surface-primary);
     position: relative;
     display: flex;
     flex-direction: column;
     width: 230px;
     min-height: 100%;
-    border: 1px solid color-mix(in srgb, var(--status-color) 30%, var(--border));
-    border-radius: var(--radius-md);
-    background: var(--surface-1);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-card);
+    background:
+      linear-gradient(var(--card-tint), var(--card-tint)),
+      var(--color-surface-secondary);
     color: var(--text-1);
-    box-shadow: var(--shadow-node);
+    box-shadow: var(--shadow-card-lift);
+  }
+
+  /* Nothing has happened to it yet: no hue to lend, so IO's own neutrals. */
+  .state-node.status-neutral {
+    --card-tint: transparent;
+    --card-border: var(--color-border-primary);
   }
 
   .status-neutral { --status-color: var(--text-3); }
@@ -339,10 +385,8 @@
     justify-content: space-between;
     gap: var(--gap-md);
     min-width: 0;
-    height: 36px;
-    padding: 0 10px;
-    border-bottom: 1px solid color-mix(in srgb, var(--status-color) 22%, var(--border));
-    background: color-mix(in srgb, var(--status-color) 12%, var(--surface-2));
+    height: 32px;
+    padding: 0 var(--gap-md) 0 var(--gap-lg);
   }
 
   /* A status is a closed vocabulary, and one clipped character makes it ambiguous:
@@ -364,8 +408,8 @@
   .title {
     min-width: 0;
     overflow: hidden;
-    font-size: var(--font-lg);
-    font-weight: 700;
+    font-size: var(--font-xl);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -373,11 +417,34 @@
   /* Same cues the transcript spends on the playhead row: the hairline
      brightens and the band takes a fuller wash. */
   .state-node.active {
-    border-color: color-mix(in srgb, var(--status-color) 55%, var(--border-strong));
+    --card-tint: color-mix(in srgb, var(--status-color) 22%, transparent);
+    --card-border: color-mix(in srgb, var(--status-color) 62%, var(--color-border-tertiary));
   }
 
-  .state-node.active .head {
-    background: color-mix(in srgb, var(--status-color) 24%, var(--surface-2));
+  .state-node.status-neutral.active {
+    --card-tint: transparent;
+    --card-border: var(--color-border-tertiary);
+  }
+
+  /* Input wears IO's own status overlays rather than the run's tones: accent while a
+     message waits (queue has no IO hue; accent is nearest), danger on error. */
+  .state-node.prompt.status-queue {
+    --card-tint: var(--color-surface-overlay-accent);
+    --card-border: var(--color-border-accent);
+  }
+
+  .state-node.prompt.status-error {
+    --card-tint: var(--color-surface-overlay-danger);
+    --card-border: var(--color-border-danger);
+  }
+
+  .head :global(.prompt-mark) {
+    flex: none;
+    color: var(--color-content-tertiary);
+  }
+
+  .state-node.prompt .title {
+    color: var(--color-content-secondary);
   }
 
   /* Chip's active recipe, not a bright outline: selection follows every click,
@@ -387,7 +454,7 @@
     border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
     box-shadow:
       0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
-      var(--shadow-node);
+      var(--shadow-card-lift);
   }
 
   .state-node.large {
@@ -397,11 +464,10 @@
   /* A container's own body has to fit above the children laid out inside it.
      A Code Mode host overrides --result-height inline with the height
      flowProjection reserved for its script. */
+  /* No lift under a box that size: it is a frame the cards inside it sit on. */
   .state-node.container {
     --result-height: 26px;
-    --result-bg: color-mix(in srgb, var(--status-color) 6%, var(--surface-1));
-    background: var(--result-bg);
-    box-shadow: var(--shadow-node-soft);
+    box-shadow: none;
   }
 
   .body {
@@ -409,8 +475,14 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--gap-sm);
-    padding: var(--gap-md) 10px 10px;
+    gap: var(--gap-md);
+    /* Raised over the tray, flush with its sides and foot, so its edge reads as the
+       tray's lower lip rather than a box inside a box. */
+    margin: 0 -1px -1px;
+    padding: var(--gap-lg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-card-inner);
+    background: var(--color-surface-primary);
   }
 
   /* A label, so no box, and not the uppercase label recipe: this is often a
@@ -418,12 +490,32 @@
      preview that could wrap would outgrow the height flowProjection reserved. */
   .kind {
     flex: 0 0 auto;
-    overflow: hidden;
-    color: var(--text-3);
-    font-family: var(--font-mono);
+    align-self: flex-start;
+    min-width: 0;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-xs);
+    padding: var(--gap-2xs) var(--gap-md);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-overlay-secondary);
+    color: var(--color-content-secondary);
     font-size: var(--font-sm);
-    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .kind-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The message is the point of the card, so it is set as text to be read. */
+  .state-node.prompt .result-body {
+    color: var(--color-content-primary);
+    font-size: var(--font-lg);
+    line-height: 1.45;
   }
 
   /* Zero-sized, min-size included: xyflow's 5px minimum centered the handle on
@@ -626,11 +718,28 @@
 
   /* Revealed where the reader is: on hover, or when the card or its button has
      keyboard focus. A touch screen has no hover to reveal it with. */
+  /* Over the body's foot rather than below it, so it costs the card no height and moves
+     nothing in the layout. Translucent all the way down: a short card is mostly footer,
+     and a solid foot buried the very text it was hovering over. */
   .actions {
     position: absolute;
-    right: var(--gap-md);
-    bottom: var(--gap-md);
+    right: 1px;
+    bottom: 1px;
+    left: 1px;
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--gap-xs);
+    /* The top padding is the fade's run-up: room for the gradient to go clear. */
+    padding: 28px var(--gap-md) var(--gap-md);
+    border-radius: 0 0 var(--radius-card-inner) var(--radius-card-inner);
+    background: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--color-surface-primary) 70%, transparent) 30%,
+      color-mix(in srgb, var(--color-surface-primary) 35%, transparent) 70%,
+      transparent
+    );
     opacity: 0;
+    pointer-events: none;
     transition: opacity var(--duration-fast) var(--ease-out);
   }
 
@@ -639,11 +748,13 @@
   :global(.svelte-flow__node:focus-visible) .actions,
   :global(.svelte-flow__node.selected) .actions {
     opacity: 1;
+    pointer-events: auto;
   }
 
   @media (hover: none) {
     .actions {
       opacity: 1;
+      pointer-events: auto;
     }
   }
 
