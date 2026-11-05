@@ -327,9 +327,8 @@ def test_schema_registry_prints_the_agents_toml_schema(capsys: pytest.CaptureFix
         ["schema"],
         ["schema", "--protocol", "examples.tictactoe.workflow:TicTacToeAgentWorkflow"],
         ["schema", "--protocol", "--registry"],
-        ["schema", "--openapi", "--registry"],
     ],
 )
 def test_schema_needs_exactly_one_of_an_agent_protocol_or_registry(argv: list[str]) -> None:
-    with pytest.raises(SystemExit, match="give one of an agent class, --protocol, --registry or --openapi"):
+    with pytest.raises(SystemExit, match="give one of an agent class, --protocol or --registry"):
         main(argv)

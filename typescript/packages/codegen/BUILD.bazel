@@ -1,6 +1,7 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
 load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:committed_files.bzl", "committed_files")
 load("//bazel:npm_package.bzl", "published_npm_package")
 
 npm_link_all_packages(name = "node_modules")
@@ -37,4 +38,10 @@ published_npm_package(
     ],
     replace_prefixes = {"src/": "dist/src/"},
     visibility = ["//visibility:public"],
+)
+
+committed_files(
+    name = "license",
+    srcs = ["LICENSE"],
+    generated = {"LICENSE": "//:LICENSE"},
 )

@@ -69,6 +69,8 @@ Do not fix an out-of-date generated-file test by editing the generated file dire
 | Example client schema (where a client SDK is declared) | `bazel run //python/examples/<example>:client_sdk_update` |
 | Event protocol | `bazel run //contract:protocol_update` then `bazel run //typescript/packages/client/src:protocol_codegen_update` |
 | Registry format | `bazel run //contract:registry_update` |
+| Shared skill API, verification, or starter resources (`docs/`) | `bazel run //python/temporal_agent_harness:shared_skill_files_update` then `bazel run //typescript/packages/core:shared_skill_files_update` |
+| Root license (codegen package copy) | `bazel run //typescript/packages/codegen:license_update` |
 | Intentional conformance behavior | `bazel run //python/tests/conformance:goldens_update` |
 
 For example registries, edit the `harness_agent` declarations and agent classes.

@@ -22,7 +22,7 @@ session creation have nothing to answer them, since both are workflow queries.
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
 ``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
-of an ``agents.toml`` registry. ``--openapi`` exports the HTTP contract with the ``ui`` extra.
+of an ``agents.toml`` registry. The running server exposes the HTTP contract at ``/openapi.json``.
 
 ``dev`` runs ``session-manager`` and ``serve`` together in one process for local development.
 ``init`` copies a bundled starter; ``skills`` locates or installs this release's agent skill.
@@ -109,17 +109,12 @@ def _schema(args: argparse.Namespace) -> None:
         load_agent_class,
     )
 
-    if [args.agent is not None, args.protocol, args.registry, args.openapi].count(True) != 1:
+    if [args.agent is not None, args.protocol, args.registry].count(True) != 1:
         raise SystemExit(
-            "temporal-agent-harness schema: give one of an agent class, --protocol, --registry or --openapi"
+            "temporal-agent-harness schema: give one of an agent class, --protocol or --registry"
         )
     try:
-        if args.openapi:
-            from temporal_agent_harness.web.app import create_agent_harness_app
-            from temporal_agent_harness.web.session_manager import AgentRegistry
-
-            text = json.dumps(create_agent_harness_app(registry=AgentRegistry(agents=[])).openapi(), indent=2) + "\n"
-        elif args.protocol:
+        if args.protocol:
             text = dump_protocol_schema()
         elif args.registry:
             from temporal_agent_harness.web.registry import dump_registry_schema
@@ -326,7 +321,6 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Print the schema of an agents.toml registry instead of one agent's schema.",
     )
-    schema.add_argument("--openapi", action="store_true", help="Generate the HTTP API schema (requires the ui extra; no running server needed).")
     schema.add_argument(
         "-o", "--output", default=None, help="Write to this file instead of stdout."
     )

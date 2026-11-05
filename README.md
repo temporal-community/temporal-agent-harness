@@ -20,6 +20,84 @@ human interaction so you can focus on the agent's behavior.
 - **Code Mode:** let the model orchestrate tools and subagents with sandboxed code.
 - **Product interfaces:** inspect runs in the console or build a typed React/Svelte application.
 
+## An agent in Python and TypeScript
+
+Both SDKs turn a typed message handler into a durable Temporal workflow. These agents use the
+OpenAI Agents SDK, stream replies, and keep conversation history across messages and worker
+restarts. The worker's harness and model plugins handle the Temporal integration.
+
+### Python
+
+```python
+from temporalio import workflow
+from temporalio.contrib.workflow_streams import WorkflowStream
+
+with workflow.unsafe.imports_passed_through():
+    from agents import Agent, Runner, TResponseInputItem
+    from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+    from temporal_agent_harness.harness.agent_protocol import AgentConfig, TextMessage, TextReply
+
+
+@agent.defn
+class ChatAgent:
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None:
+        self.runner = AgentWorkflowRunner(config, stream=WorkflowStream())
+        self.history: list[TResponseInputItem] = []
+
+    @agent.accepts
+    async def ask(self, message: TextMessage) -> TextReply:
+        """Chat with the assistant."""
+        result = Runner.run_streamed(
+            Agent(name="Assistant", instructions="Answer briefly.", model="gpt-5.1"),
+            input=[*self.history, {"role": "user", "content": message.text}],
+            context=self.runner,
+        )
+        async for _event in result.stream_events():
+            pass
+        self.history = result.to_input_list()
+        return TextReply(text=str(result.final_output))
+```
+
+### TypeScript
+
+```ts
+import { Agent, type AgentInputItem } from "@openai/agents-core";
+import { defineAgent, handler, TextMessage, TextReply } from "@temporalio/agent-harness";
+import { runStreamed } from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
+
+export const ChatAgent = defineAgent({
+  name: "ChatAgent",
+  handlers: {
+    ask: handler({ description: "Chat with the assistant.", input: TextMessage, output: TextReply }),
+  },
+  create: ({ runner }) => {
+    let history: AgentInputItem[] = [];
+    return {
+      async ask({ text }) {
+        const result = await runStreamed(
+          runner,
+          new Agent({ name: "Assistant", instructions: "Answer briefly.", model: "gpt-5.1" }),
+          [...history, { role: "user", content: text }],
+          { defaultModelParams: { startToCloseTimeout: "2 minutes", heartbeatTimeout: "30 seconds" } },
+        );
+        for await (const _event of result) void _event;
+        await result.completed;
+        history = result.history;
+        return { text: String(result.finalOutput) };
+      },
+    };
+  },
+});
+```
+
+The quickstarts below provide complete projects with workers, registry configuration, and a
+sample weather tool. Add [tools, approvals, and observable state](docs/guides/capabilities.md),
+or define your own typed operations beyond chat. See the
+[Python](python/README.md#running-a-worker--one-plugin) and
+[TypeScript](typescript/packages/core/README.md#running-a-worker--one-harness-plugin) worker setup
+to run a custom agent definition.
+
 ## Installation
 
 | Start here | What you'll build |

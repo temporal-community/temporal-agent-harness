@@ -21,7 +21,7 @@ Create an agent, install its coding-agent skill, and open a working session in f
 No repository checkout or Bazel installation is needed.
 
 > **Available with the next npm release.** The `agent-harness` command is not in the published
-> 0.2.0 package, and the starter's `services` script needs the Python release that adds
+> 0.2.0 package, and the starter's `harness:dev` script needs the Python release that adds
 > `temporal-agent-harness dev`. Once both are published, the `@latest` command below selects
 > them. Until then, use the [manual setup](#build-with-it--install-from-npm) with published packages.
 
@@ -51,12 +51,12 @@ existing files. The starter's weather tool returns sample data.
 ```bash
 cp env.example .env.local
 npm run schema
-npm run skill                                  # Codex reads .agents/skills
+npm run harness:skill                          # Codex reads .agents/skills
 npx agent-harness skills install --for claude  # Claude Code reads .claude/skills
 ```
 
 `.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `schema`
-compiles the agent and writes `agent.schema.json`. `skill` copies this SDK release's skill, with
+compiles the agent and writes `agent.schema.json`. `harness:skill` copies this SDK release's skill, with
 authoring, API, advanced-feature, and verification references, into the directory your coding
 agent reads; run it for each tool you use. Installing the npm package bundles the skill; this
 explicit step makes it discoverable in your project. For a tool with another skill directory,
@@ -76,7 +76,7 @@ temporal server start-dev
 **Terminal 2 — shared session manager, API, and harness console:**
 
 ```bash
-npm run services
+npm run harness:dev
 ```
 
 **Terminal 3 — your TypeScript agent worker:**
@@ -85,7 +85,7 @@ npm run services
 npm start
 ```
 
-**The API, console, and session manager come from the Python package.** `services` runs
+**The API, console, and session manager come from the Python package.** `harness:dev` runs
 `temporal-agent-harness dev` through `uvx`, in one process and without a Python project of your
 own; the Python version is pinned in `package.json`. Your agent worker runs in Node. The console
 is prebuilt, so no frontend build is needed.
@@ -106,7 +106,7 @@ Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all three pr
 5. Check startup and worker availability:
 
    ```bash
-   npm run doctor
+   npm run harness:doctor
    ```
 
 Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the harness console.
@@ -415,7 +415,7 @@ npm start
 The console is prebuilt in the Python package. No frontend build is needed. The console and
 session-manager worker are shared infrastructure; your agent code runs on your TypeScript worker.
 From the next Python release, `temporal-agent-harness dev ./agents.toml` runs steps 2 and 3 in
-one process, as the quickstart's `npm run services` does.
+one process, as the quickstart's `npm run harness:dev` does.
 Leave all four processes running while using the console. After editing TypeScript, stop your
 worker, rerun `npm run schema`, and start it again. Start a new session when changing agent behavior.
 

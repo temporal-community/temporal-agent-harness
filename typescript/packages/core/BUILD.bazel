@@ -1,6 +1,7 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
 load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:committed_files.bzl", "committed_files")
 load("//bazel:npm_package.bzl", "published_npm_package")
 
 npm_link_all_packages(name = "node_modules")
@@ -52,4 +53,20 @@ filegroup(
         exclude = ["skills/**/BUILD.bazel"],
     ),
     visibility = ["//visibility:public"],
+)
+
+committed_files(
+    name = "shared_skill_files",
+    srcs = [
+        "skills/temporal-harness-typescript/assets/starter/env.example.tmpl",
+        "skills/temporal-harness-typescript/assets/starter/gitignore.tmpl",
+        "skills/temporal-harness-typescript/references/api.md",
+        "skills/temporal-harness-typescript/references/verification.md",
+    ],
+    generated = {
+        "skills/temporal-harness-typescript/assets/starter/env.example.tmpl": "//docs:agent-resources/env.example.tmpl",
+        "skills/temporal-harness-typescript/assets/starter/gitignore.tmpl": "//docs:agent-resources/gitignore.tmpl",
+        "skills/temporal-harness-typescript/references/api.md": "//docs:api/README.md",
+        "skills/temporal-harness-typescript/references/verification.md": "//docs:agent-resources/verification.md",
+    },
 )

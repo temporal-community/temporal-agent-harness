@@ -55,7 +55,6 @@ echo "The packaged starter generates schemas, installs its skill, and runs witho
 "$venv/temporal-agent-harness" init "$work/starter"
 (cd "$work/starter" && "$venv/temporal-agent-harness" skills install)
 (cd "$work/starter" && "$venv/temporal-agent-harness" schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json)
-"$venv/temporal-agent-harness" schema --openapi -o "$work/openapi.json"
 (cd "$work/starter" && "$venv/python" - <<'PROBE'
 import asyncio
 import json

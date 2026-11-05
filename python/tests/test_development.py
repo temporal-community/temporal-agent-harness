@@ -109,11 +109,11 @@ def test_api_diagnostics_fail_closed_without_leaking_response(capsys):
     assert "secret" not in json.dumps(report)
 
 
-def test_openapi_generation_needs_no_running_services(capsys):
-    main(["schema", "--openapi"])
-    schema = json.loads(capsys.readouterr().out)
-    assert "/api/messages" in schema["paths"]
-    assert "/api/attach" in schema["paths"]
+def test_schema_rejects_offline_openapi_export(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        main(["schema", "--openapi"])
+    assert stopped.value.code == 2
+    assert "unrecognized arguments: --openapi" in capsys.readouterr().err
 
 
 def test_doctor_reports_invalid_registry_and_unavailable_services(tmp_path, monkeypatch, capsys):

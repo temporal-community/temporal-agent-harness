@@ -58,7 +58,7 @@ binary is the same command). The registry's `workflow_type`
 must match `defineAgent`'s `name`, and its queue must match the worker. The schema CLI does not
 start Temporal. The shared Python server reads the schema without importing TypeScript code.
 
-The shared services come from the Python package: the starter's `npm run services` runs
+The shared services come from the Python package: the starter's `npm run harness:dev` runs
 `temporal-agent-harness dev agents.toml` through `uvx`, beside Temporal and the Node worker.
 `npx agent-harness doctor --schema Agent.schema.json` checks the installed package, schema, API,
 and agent worker availability. For direct Temporal connection and local TOML validation, use the

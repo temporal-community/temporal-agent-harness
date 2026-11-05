@@ -76,10 +76,10 @@ other errors may contain `error`/`message` or FastAPI's `detail`. Do not retry a
 unchanged. On a transport failure, retry a submission using its original request ID.
 
 The running server exposes `/openapi.json` and `/docs`, generated from its route declarations.
-For offline tooling with the `ui` extra installed:
+To save the HTTP contract while the server is running:
 
 ```bash
-temporal-agent-harness schema --openapi -o openapi.json
+curl --fail-with-body http://localhost:8000/openapi.json -o openapi.json
 ```
 
 Generate an agent's schema from its declaration:

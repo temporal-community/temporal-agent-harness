@@ -68,7 +68,7 @@ use the same three-process architecture:
    console server in one process. `session-manager` and `serve` remain available separately.
 3. Your Python or TypeScript agent worker.
 
-For TypeScript applications, the starter's `npm run services` runs `dev` through `uvx`; no
+For TypeScript applications, the starter's `npm run harness:dev` runs `dev` through `uvx`; no
 Python project is needed. There is currently no Node.js implementation of the shared server.
 The TypeScript CLI is one command: `agent-harness init|schema|skills|doctor`, where `schema` is
 the existing `agent-harness-schema` binary.
@@ -94,7 +94,8 @@ registered the correct workflow type or that the provider credentials work.
 After startup, verify `ping`, then a streamed `ask` reply and its tool trace. Reload the console
 to test reconnect. When adding approvals or callbacks, test their waiting and resumed states.
 Use the [API guide](api/README.md) for session creation, message acceptance, stream cursors,
-and generated client types. `schema --openapi` exports the HTTP contract without running a server.
+and generated client types. The running server exposes the HTTP contract at `/openapi.json`
+and interactive docs at `/docs`.
 
 ## Update without losing project changes
 
@@ -120,10 +121,20 @@ Repository `.agents/skills/` links point to these canonical directories for proj
 beside `temporal-harness-repo`, a repository-only skill for contributors working in the checkout
 (Bazel targets, `just` recipes, generated registries). It is not packaged.
 The Python wheel/sdist and core npm tarball include the complete resource trees. The worker
-npm package provides `agent-harness`. The shared API reference is authored in
-[docs/api/README.md](api/README.md); run `python3 scripts/sync-agent-resources.py` after editing it.
-CI checks the copies with `--check`. Package installation tests generate and compile starters,
+npm package provides `agent-harness`. Author the shared API reference in
+[docs/api/README.md](api/README.md) and shared verification and starter files in
+[docs/agent-resources/](agent-resources/). Update both packaged copies with:
+
+```bash
+bazel run //python/temporal_agent_harness:shared_skill_files_update
+bazel run //typescript/packages/core:shared_skill_files_update
+```
+
+Bazel tests check that the committed copies match their sources. The codegen package's license
+comes from the root `LICENSE`; refresh it with
+`bazel run //typescript/packages/codegen:license_update`.
+Package installation tests generate and compile starters,
 install skills, export schemas, and run a model-free handler with the installed artifacts.
 The TypeScript starter pins the Python package that provides the shared services in its
-`package.json` `services` script; the release script updates that pin with the other
+`package.json` `harness:dev` script; the release script updates that pin with the other
 documentation pins.

@@ -1,4 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:committed_files.bzl", "committed_files")
 
 py_library(
     name = "__init__",
@@ -61,4 +62,20 @@ py_library(
     data = [":development_resources"],  # keep
     imports = [".."],
     visibility = ["//python:__subpackages__"],
+)
+
+committed_files(
+    name = "shared_skill_files",
+    srcs = [
+        "skills/temporal-harness-python/assets/starter/env.example.tmpl",
+        "skills/temporal-harness-python/assets/starter/gitignore.tmpl",
+        "skills/temporal-harness-python/references/api.md",
+        "skills/temporal-harness-python/references/verification.md",
+    ],
+    generated = {
+        "skills/temporal-harness-python/assets/starter/env.example.tmpl": "//docs:agent-resources/env.example.tmpl",
+        "skills/temporal-harness-python/assets/starter/gitignore.tmpl": "//docs:agent-resources/gitignore.tmpl",
+        "skills/temporal-harness-python/references/api.md": "//docs:api/README.md",
+        "skills/temporal-harness-python/references/verification.md": "//docs:agent-resources/verification.md",
+    },
 )

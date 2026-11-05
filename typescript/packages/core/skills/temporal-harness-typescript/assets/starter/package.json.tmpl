@@ -5,10 +5,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "schema": "npm run build && agent-harness schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json",
-    "services": "uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness dev agents.toml",
+    "harness:dev": "uvx --from 'temporal-agent-harness[ui]==0.8.0' temporal-agent-harness dev agents.toml",
     "start": "node --env-file-if-exists=.env.local dist/worker.js",
-    "skill": "agent-harness skills install",
-    "doctor": "agent-harness doctor --schema agent.schema.json"
+    "harness:skill": "agent-harness skills install",
+    "harness:doctor": "agent-harness doctor --schema agent.schema.json"
   },
   "dependencies": {
     "@temporalio/agent-harness": "__HARNESS_VERSION__",

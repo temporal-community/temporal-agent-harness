@@ -51,7 +51,6 @@ harness_module_binary(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        ":app",
         ":client",
         ":dev",
         ":doctor",
