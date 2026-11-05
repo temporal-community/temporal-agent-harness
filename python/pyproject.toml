@@ -176,6 +176,7 @@ build-backend = "setuptools.build_meta"
 include = ["temporal_agent_harness*"]
 
 [tool.setuptools.package-data]
+"temporal_agent_harness" = ["skills/**/*.md", "skills/**/*.yaml", "skills/**/*.tmpl"]
 "temporal_agent_harness.ui" = [
     "dist/*",
     "dist/assets/*",

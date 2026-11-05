@@ -240,3 +240,24 @@ def _assert_ui_assets_present(names: set[str]) -> None:
         name.startswith(f"{WHEEL_UI_PREFIX}assets/") and name.endswith(".css")
         for name in names
     )
+
+
+def test_built_distributions_include_development_resources(built_distributions):
+    wheel_path, sdist_path = built_distributions
+    required = {
+        "temporal_agent_harness/development.py",
+        "temporal_agent_harness/web/dev.py",
+        "temporal_agent_harness/web/doctor.py",
+        *{
+            f"temporal_agent_harness/skills/temporal-harness-python/{path}"
+            for path in ("SKILL.md", "agents/openai.yaml", "references/api.md",
+                         "references/authoring.md", "references/verification.md", "references/advanced.md",
+                         "assets/starter/README.md.tmpl", "assets/starter/pyproject.toml.tmpl",
+                         "assets/starter/agents.toml.tmpl", "assets/starter/my_agent/workflow.py.tmpl",
+                         "assets/starter/my_agent/worker.py.tmpl")
+        },
+    }
+    with zipfile.ZipFile(wheel_path) as wheel:
+        assert required <= set(wheel.namelist())
+    with tarfile.open(sdist_path) as sdist:
+        assert required <= {name.split("/", 1)[-1] for name in sdist.getnames()}

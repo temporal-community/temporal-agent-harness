@@ -52,10 +52,13 @@ harness_module_binary(
     visibility = ["//:__subpackages__"],
     deps = [
         ":client",
+        ":dev",
+        ":doctor",
         ":registry",
         ":serve",
         ":session_manager",
         ":session_manager_worker",
+        "//python/temporal_agent_harness:development",
         "//python/temporal_agent_harness/harness:agent_schema",
         "//python/temporal_agent_harness/utils:task_queue",
     ],
@@ -151,4 +154,33 @@ py_library(
     srcs = ["temporal_ui.py"],
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
+)
+
+py_library(
+    name = "doctor",
+    srcs = ["doctor.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":registry",
+        ":task_queue_status",
+        "//python/temporal_agent_harness:development",
+        "//python/temporal_agent_harness/utils:task_queue",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "dev",
+    srcs = ["dev.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":client",
+        ":serve",
+        ":session_manager",
+        ":session_manager_worker",
+        "//python/temporal_agent_harness/utils:task_queue",
+        "@pypi//uvicorn",
+    ],
 )

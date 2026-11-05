@@ -64,9 +64,9 @@ exports_files([
 python_dists(
     name = "dists",
     srcs = [
+        "README.md",
         "pyproject.toml",
         "//:LICENSE",
-        "//:README.md",
     ],
     package = "temporal_agent_harness",
     visibility = ["//python/tests:__pkg__"],

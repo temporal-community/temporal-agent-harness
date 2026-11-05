@@ -31,6 +31,7 @@ echo "The CLI runs"
 "$venv/temporal-agent-harness" --help >/dev/null
 "$venv/temporal-agent-harness" serve --help >/dev/null
 "$venv/temporal-agent-harness" session-manager --help >/dev/null
+"$venv/temporal-agent-harness" dev --help >/dev/null
 
 echo "Every integration imports from the install"
 (cd / && "$venv/python" - <<'PY'
@@ -48,6 +49,65 @@ for name in [
 from temporal_agent_harness.ui import packaged_ui_dist
 assert packaged_ui_dist() is not None, "the install has no console"
 PY
+)
+
+echo "The packaged starter generates schemas, installs its skill, and runs without a model"
+"$venv/temporal-agent-harness" init "$work/starter"
+(cd "$work/starter" && "$venv/temporal-agent-harness" skills install)
+(cd "$work/starter" && "$venv/temporal-agent-harness" schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json)
+(cd "$work/starter" && "$venv/python" - <<'PROBE'
+import asyncio
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+from temporalio.testing import WorkflowEnvironment
+from temporal_agent_harness.harness.agent_client import AgentClient
+from temporal_agent_harness.harness.agent_protocol import AgentConfig
+
+assert json.loads(Path("agent.schema.json").read_text())["agent"] == "OpenAIHelloAgent"
+assert Path(".agents/skills/temporal-harness-python/references/api.md").is_file()
+
+async def check():
+    async with await WorkflowEnvironment.start_local(
+        dev_server_existing_path=os.environ.get("TEMPORAL_CLI_PATH")
+    ) as env:
+        child_env = dict(os.environ, TEMPORAL_ADDRESS=env.client.service_client.config.target_host,
+                         TEMPORAL_NAMESPACE="default")
+        child_env.pop("OPENAI_API_KEY", None)  # ping must not need a provider key
+        child_env.pop("TASK_QUEUE_PREFIX", None)
+        child_env.pop("TEMPORAL_CONFIG_FILE", None)
+        child_env.pop("TEMPORAL_PROFILE", None)
+        with Path("worker.log").open("w+") as log:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "my_agent.worker", env=child_env, stdout=log, stderr=log)
+            try:
+                await env.client.start_workflow("OpenAIHelloAgent", AgentConfig(),
+                                                id="installed-starter", task_queue="openai-hello")
+                agent = AgentClient(env.client, "installed-starter")
+                async def ping():
+                    stream = await agent.send_message("ping", {"text": "installed starter works"},
+                                                       on_item=lambda event, offset: event)
+                    events = [event async for event in stream]
+                    assert any(getattr(getattr(event, "event", None), "type", None) == "message_handler_end"
+                               and "installed starter works" in str(event) for event in events), events
+                await asyncio.wait_for(ping(), 60)
+                await env.client.get_workflow_handle("installed-starter").terminate()
+            except BaseException:
+                log.seek(0)
+                print(log.read(), file=sys.stderr)
+                raise
+            finally:
+                if process.returncode is None:
+                    process.send_signal(signal.SIGINT)
+                try:
+                    await asyncio.wait_for(process.wait(), 10)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
+asyncio.run(check())
+PROBE
 )
 
 # The conformance tests, from a copy of python/tests so that python/ (and the source tree's

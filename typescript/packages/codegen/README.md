@@ -1,12 +1,19 @@
-# @temporal-agent-harness/codegen
+# @temporalio/agent-harness-codegen
 
-Generates TypeScript types for one harness agent from the JSON Schema document the Python
-package prints for it (from `python/`):
+Generate TypeScript application types from a Python or TypeScript harness agent's JSON Schema.
+The generator is a public npm package starting with the next npm release; it was previously
+repository-only tooling. No checkout or Bazel installation is needed to use the package.
 
-```sh
-uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
-  | harness-codegen - -o TicTacToeAgent.ts
+```bash
+npm install --save-dev --save-exact @temporalio/agent-harness-codegen@0.2.0
+# Export the schema using the SDK that defines your agent:
+uv run temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
+# or: npx agent-harness-schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
+npx harness-codegen agent.schema.json -o Agent.ts
 ```
+
+The version above tracks this development branch and becomes installable when released.
+Use the same release version as your other npm harness packages.
 
 The output has an interface per model the agent exposes (its `@agent.accepts` input and output
 models and its `agent.state(...)` types) and one mapping type naming them:

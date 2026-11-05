@@ -349,16 +349,22 @@ class ModelActivity:
         Left ``None``, streaming falls back to publishing raw events to a
         ``WorkflowStream`` topic named by the token (today's behavior).
         """
-        self._model_provider = model_provider or OpenAIProvider(
-            openai_client=AsyncOpenAI(max_retries=0)
-        )
+        self._model_provider = model_provider
         self._observer_factory = observer_factory
+
+    def _get_model_provider(self) -> ModelProvider:
+        # The default provider is built on first use, so a worker starts without
+        # OPENAI_API_KEY (as the TypeScript plugin does) and model-free handlers such as a
+        # starter's `ping` work; a model call then fails with OpenAI's own credentials error.
+        if self._model_provider is None:
+            self._model_provider = OpenAIProvider(openai_client=AsyncOpenAI(max_retries=0))
+        return self._model_provider
 
     @activity.defn
     @auto_heartbeater
     async def invoke_model_activity(self, input: ActivityModelInput) -> ModelResponse:
         """Activity that invokes a model with the given input."""
-        model = self._model_provider.get_model(input.get("model_name"))
+        model = self._get_model_provider().get_model(input.get("model_name"))
         tools, handoffs = _build_tools_and_handoffs(input)
 
         try:
@@ -408,7 +414,7 @@ class ModelActivity:
         long initial-token latency or long pauses between chunks do not
         trip ``heartbeat_timeout``.
         """
-        model = self._model_provider.get_model(input.get("model_name"))
+        model = self._get_model_provider().get_model(input.get("model_name"))
         tools, handoffs = _build_tools_and_handoffs(input)
 
         batch_interval = input.get(
