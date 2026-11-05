@@ -646,6 +646,19 @@
         {/if}
       </div>
     {/each}
+
+    <!-- Every column folded leaves the desk to the spines, and nothing stretches over the
+         rest. The panes are still here, so this is a note beside them rather than the
+         empty desk's open space: each spine already opens its own pane. -->
+    {#if stack.allFolded}
+      <div class="rail-folded">
+        <p class="folded-note">
+          <span class="kicker">All folded</span>
+          Press a spine to open its pane.
+        </p>
+        <Chip label="Unfold all" size="xs" fill="quiet" onclick={() => stack.foldAll(false)} />
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -1068,6 +1081,28 @@
     flex: 1;
     padding: 32px;
     text-align: center;
+  }
+
+  /* Beside the spines and aligned to them, in whatever width they leave, so a narrow
+     window never scrolls for it: an annotation of the folded desk, not a page. */
+  .rail-folded {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: var(--gap-sm);
+    min-width: 0;
+    padding: 0 var(--gap-lg);
+  }
+
+  .folded-note {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    color: var(--text-3);
+    font-size: var(--font-sm);
   }
 
   .empty-title {
