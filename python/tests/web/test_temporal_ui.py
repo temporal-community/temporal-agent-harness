@@ -10,6 +10,7 @@ from temporal_agent_harness.web.temporal_ui import temporal_workflows_url
 @pytest.fixture(autouse=True)
 def _no_configured_ui(monkeypatch) -> None:
     monkeypatch.delenv("TEMPORAL_UI_URL", raising=False)
+    monkeypatch.delenv("TEMPORAL_UI_NAMESPACE", raising=False)
 
 
 @pytest.mark.parametrize(
@@ -40,4 +41,13 @@ def test_a_configured_ui_wins_for_any_connection(monkeypatch) -> None:
     assert (
         temporal_workflows_url("temporal.internal:7233", "default")
         == "https://temporal-ui.example.com/namespaces/default/workflows"
+    )
+
+
+def test_a_configured_namespace_wins_over_the_connections(monkeypatch) -> None:
+    monkeypatch.setenv("TEMPORAL_UI_URL", "https://ws.example/_temporal/")
+    monkeypatch.setenv("TEMPORAL_UI_NAMESPACE", "demo")
+    assert (
+        temporal_workflows_url("dev-server.internal:7233", "default")
+        == "https://ws.example/_temporal/namespaces/demo/workflows"
     )
