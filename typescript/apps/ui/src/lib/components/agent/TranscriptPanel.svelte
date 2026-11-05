@@ -31,15 +31,16 @@
     type TurnLogGroup,
     type TurnLogSummary
   } from "$lib/state/replayLog";
-  import { rowHasDetails, type TraceStep } from "$lib/state/replyStatus";
+  import type { TraceStep } from "$lib/state/replyStatus";
   import { STEP_GLYPHS, logLines, type LogLine } from "$lib/state/logTree";
   import { formatTokens } from "$lib/cost/pricing";
-  import { BrainCircuit, MessageSquare, Radio } from "@lucide/svelte";
+  import { BrainCircuit, CheckCircle2, MessageSquare, Radio, ShieldAlert } from "@lucide/svelte";
 
-  export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
+  /** What went wrong, then what kind of event. None pressed shows every event. */
+  export type TranscriptFacet = "error" | "wait" | "model" | "tool" | "client" | "state" | "message";
 
-  /* A folded line: --control-height, with no rule under it. */
-  const LINE_HEIGHT = 28;
+  /* A folded line: --control-height-xs, with no rule under it. */
+  const LINE_HEIGHT = 22;
 
   const SHORT_TIME: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
   const FULL_TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "medium" };
@@ -50,8 +51,13 @@
     activeTurnNumber: number | null;
     activeRowId?: string | null;
     activeOrdinal: number | null;
-    filter?: TranscriptFilter;
-    onFilterChange?: (filter: TranscriptFilter) => void;
+    filter?: TranscriptFacet[];
+    onFilterChange?: (filter: TranscriptFacet[]) => void;
+    /**
+     * A row to bring to the reader: a State flow card's "view in logs". The nonce makes
+     * asking for the same row twice a second request rather than no change.
+     */
+    reveal?: { rowId: string; nonce: number } | null;
     /**
      * Whether the whole run has any event, not just the run as of the cursor. `groups` is
      * the run as of the cursor, so gating the filters on it would drop them every time the
@@ -65,8 +71,9 @@
     activeTurnNumber,
     activeRowId = null,
     activeOrdinal,
-    filter = "all",
+    filter = [],
     onFilterChange,
+    reveal = null,
     runHasEvents = true
   }: Props = $props();
   let expandedRows = $state<Record<string, boolean>>({});
@@ -86,22 +93,56 @@
     clearSearch();
   }
 
-  const filters: Array<{ key: TranscriptFilter; label: string }> = [
-    { key: "all", label: "All" },
-    { key: "model", label: "Model" },
-    { key: "tool", label: "Tools" },
-    { key: "approval", label: "Approvals" },
-    { key: "error", label: "Errors" }
+  const SIGNALS: Array<{ key: TranscriptFacet; label: string; tone: ChipTone }> = [
+    { key: "error", label: "Failed", tone: "error" },
+    { key: "wait", label: "Waiting", tone: "live" }
   ];
+  const KINDS: Array<{ key: TranscriptFacet; label: string; tone: ChipTone }> = [
+    { key: "model", label: "Model", tone: "accent" },
+    { key: "tool", label: "Tool", tone: "accent" },
+    { key: "client", label: "Client", tone: "accent" },
+    { key: "state", label: "State", tone: "accent" },
+    { key: "message", label: "Messages", tone: "accent" }
+  ];
+  const isSignal = (key: TranscriptFacet) => key === "error" || key === "wait";
 
-  function matchesFilter(row: ReplayLogRow, key: TranscriptFilter): boolean {
-    if (key === "all") return true;
-    if (key === "model") return row.actor === "model" || row.actor === "reasoning";
-    if (key === "tool") return row.actor === "tool";
-    if (key === "approval") return row.actor === "approval";
-    if (key === "error") return row.tone === "error" || row.actor === "error";
-    return true;
+  /** The kind an event is filed under: a client callback with approvals, as both wait on someone
+      outside the agent, not under the tool that asked for it. */
+  function kindOf(row: ReplayLogRow): TranscriptFacet {
+    if (row.actor === "model" || row.actor === "reasoning") return "model";
+    if (row.actor === "approval" || row.event.startsWith("callback_")) return "client";
+    if (row.actor === "tool" || row.actor === "subagent" || row.event.startsWith("tool_")) return "tool";
+    if (row.event.startsWith("state_")) return "state";
+    return "message";
   }
+
+  function hasFacet(row: ReplayLogRow, key: TranscriptFacet): boolean {
+    if (key === "error") return rowGlyph(row) === "error";
+    if (key === "wait") return rowGlyph(row) === "approval";
+    return kindOf(row) === key;
+  }
+
+  /** Any pressed signal, and any pressed kind: Failed with Tool is the tools that failed. */
+  function matchesFilter(row: ReplayLogRow, keys: TranscriptFacet[]): boolean {
+    const signals = keys.filter(isSignal);
+    const kinds = keys.filter((key) => !isSignal(key));
+    return (signals.length === 0 || signals.some((key) => hasFacet(row, key))) && (kinds.length === 0 || kinds.some((key) => key === kindOf(row)));
+  }
+
+  function toggleFacet(key: TranscriptFacet): void {
+    onFilterChange?.(filter.includes(key) ? filter.filter((pressed) => pressed !== key) : [...filter, key]);
+  }
+
+  /** Each facet's count over the run as of the cursor, so a press never lands on nothing. */
+  const tallies = $derived.by(() => {
+    const counts = new Map<TranscriptFacet, number>();
+    for (const group of groups) {
+      for (const row of group.rows) {
+        for (const facet of [...SIGNALS, ...KINDS]) if (hasFacet(row, facet.key)) counts.set(facet.key, (counts.get(facet.key) ?? 0) + 1);
+      }
+    }
+    return counts;
+  });
 
   interface PrimaryPayload {
     label: string;
@@ -119,43 +160,35 @@
     return null;
   }
 
-  function fullLogDetail(row: ReplayLogRow): string {
-    const sections: string[] = [];
-    const body = formatLogValue(row.body);
-    const detail = formatLogValue(row.detail);
-    const input = inputText(row);
-    const output = formatLogValue(row.output);
-    const citations = row.citations
-      .map(
-        (citation) =>
-          citation.custom_metadata?.deep_url ??
-          citation.document_uri ??
-          citation.file_name ??
-          "Source"
-      )
-      .filter(Boolean);
-    const metadata = [
-      `event: ${row.event}`,
-      `actor: ${row.actor}`,
-      `turn: ${row.turnNumber}`,
-      `source_turn: ${row.sourceTurnNumber}`,
-      row.sourceLabel ? `source: ${row.sourceLabel}` : "",
-      row.workflowId ? `workflow_id: ${row.workflowId}` : "",
-      row.status ? `status: ${row.status}` : "",
-      row.toolName ? `tool: ${row.toolName}` : "",
-      row.toolId ? `tool_id: ${row.toolId}` : "",
-      row.model ? `model: ${row.model}` : "",
-      `timestamp: ${formatTimestamp(row.timestamp)}`
-    ].filter(Boolean);
-
-    if (output) sections.push(`output:\n${output}`);
-    if (body) sections.push(`message:\n${body}`);
-    if (detail) sections.push(`detail:\n${detail}`);
-    if (input) sections.push(`input:\n${input}`);
-    if (citations.length > 0) sections.push(`citations:\n${citations.join("\n")}`);
-    sections.push(metadata.join("\n"));
-
-    return sections.join("\n\n");
+  /**
+   * The event as JSON, from what the log row kept of it. Not the frame on the wire, which the
+   * log does not keep, so it is labelled "event" rather than "payload". An absent field is
+   * left out rather than written as null.
+   */
+  function eventJson(row: ReplayLogRow): string {
+    return JSON.stringify(
+      {
+        type: row.event,
+        status: row.status,
+        tool_name: row.toolName,
+        tool_id: row.toolId,
+        model: row.model ?? undefined,
+        input: row.input,
+        message: row.message,
+        output: row.output,
+        body: row.body,
+        detail: row.detail,
+        usage: row.usage,
+        citations: row.citations.length ? row.citations : undefined,
+        turn: row.turnNumber,
+        source_turn: row.sourceTurnNumber === row.turnNumber ? undefined : row.sourceTurnNumber,
+        source: row.sourceLabel,
+        workflow_id: row.workflowId,
+        timestamp: formatTimestamp(row.timestamp)
+      },
+      null,
+      2
+    );
   }
 
   function matchesQuery(row: ReplayLogRow, needle: string): boolean {
@@ -175,7 +208,7 @@
     return haystack.includes(needle);
   }
 
-  const filtering = $derived(filter !== "all" || query.trim().length > 0);
+  const filtering = $derived(filter.length > 0 || query.trim().length > 0);
 
   /* Unfiltered, the groups pass through as they are, so a commit that touched one turn
      leaves every other turn's object, and so its rendered section, alone. */
@@ -365,7 +398,7 @@
   });
 
   /* Each drawn turn's rows, by turn number, to reveal a row the turn has not drawn. */
-  const rowLists: Record<number, { scrollToIndex(index: number): void; measure(): void } | null> = {};
+  const rowLists: Record<number, { scrollToIndex(index: number, align?: "auto" | "start"): void; measure(): void } | null> = {};
 
   function remeasureLogRow(turnNumber: number): void {
     rowLists[turnNumber]?.measure();
@@ -405,6 +438,45 @@
     follower.to(target, revealActiveTurn);
   });
 
+  /**
+   * A State flow card's "view in logs". Unlike following the cursor it was asked for, so it
+   * clears a filter or search that would hide the row, brings its turn into the drawn window,
+   * and then reveals it the way a call's trail does: open, marked, and scrolled to even if the
+   * reader had scrolled away. It never moves the replay cursor.
+   */
+  async function revealLogRow(rowId: string): Promise<void> {
+    const row = groups.flatMap((group) => group.rows).find((item) => item.id === rowId);
+    if (!row) return;
+    if (!matchesFilter(row, filter)) onFilterChange?.([]);
+    const needle = query.trim().toLowerCase();
+    if (needle && !matchesQuery(row, needle)) query = "";
+    await tick();
+    const index = visibleGroups.findIndex((group) => group.rows.some((item) => item.id === rowId));
+    if (index < 0) return;
+    const group = visibleGroups[index];
+    /* Only a drawn turn has rows to scroll to; revealRow settles the rest. */
+    if (!rowLists[group.turnNumber]) turnList().scrollToIndex(index, { align: "start" });
+    /* Every call that folds the row away, outermost first: a subagent's events sit inside the
+       parent's call to it, and its own model call folds them again. */
+    let call: TraceStep | null = null;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const folded = linesFor(group).find(
+        (line) => line.kind === "step" && line.collapsed && line.rowIds.has(rowId)
+      );
+      if (folded?.kind !== "step") break;
+      call = folded.step;
+      collapsedSteps = { ...collapsedSteps, [folded.step.id]: false };
+      await tick();
+    }
+    revealRow(group, call, rowId);
+  }
+
+  $effect(() => {
+    const target = reveal;
+    if (!target) return;
+    untrack(() => void revealLogRow(target.rowId));
+  });
+
   function isRowExpanded(rowId: string): boolean {
     return expandedRows[rowId] ?? false;
   }
@@ -424,9 +496,9 @@
   let revealedRowId = $state<string | null>(null);
 
   /** Unfold a call, open one of its events and bring that row into view: a folded call's trail
-      icon, or an event in an open row's call. */
-  function revealRow(group: TurnLogGroup, step: TraceStep, rowId: string): void {
-    collapsedSteps = { ...collapsedSteps, [step.id]: false };
+      icon, an event in an open row's call, or a State flow card's row (which may be in no call). */
+  function revealRow(group: TurnLogGroup, step: TraceStep | null, rowId: string): void {
+    if (step) collapsedSteps = { ...collapsedSteps, [step.id]: false };
     revealedRowId = rowId;
     if (!isRowExpanded(rowId)) toggleRow(rowId);
     /* The windowed rows place it from estimates, and unfolding the call just changed every
@@ -520,8 +592,39 @@
     }
   }
 
-  const rowHue = (row: ReplayLogRow) => (row.tone === "error" ? "var(--error)" : actorHue(row.actor));
-  const rowTone = (row: ReplayLogRow) => (row.tone === "error" ? "error" : ACTOR_TONE[row.actor]);
+  /** A row's bar: who it is from, with a client callback set apart from the tool that asked for
+      it (the log files both under the tool), and red once it failed. */
+  function rowHue(row: ReplayLogRow): string {
+    if (rowGlyph(row) === "error") return "var(--error)";
+    if (row.event.startsWith("callback_")) return "var(--syntax-type)";
+    return actorHue(row.actor);
+  }
+
+  /** A row's chip says how the event ended, once it has: done green, waiting amber, failed red.
+      Until then, who it is from. */
+  function rowTone(row: ReplayLogRow): ChipTone {
+    const glyph = rowGlyph(row);
+    if (glyph === "error") return "error";
+    if (glyph === "complete") return "success";
+    if (glyph === "approval") return "live";
+    return ACTOR_TONE[row.actor];
+  }
+
+  /** And its icon, swapped the same way, so the chip carries the state and the row needs no
+      second glyph for it. */
+  function rowIconFor(row: ReplayLogRow): typeof XCircle {
+    const glyph = rowGlyph(row);
+    if (glyph === "error") return XCircle;
+    if (glyph === "complete") return CheckCircle2;
+    if (glyph === "approval") return ShieldAlert;
+    return actorIcon(row.actor);
+  }
+
+  /** A row waiting on a person, or one that failed, is tinted across its width in its own hue. */
+  function rowFill(row: ReplayLogRow): string | undefined {
+    const glyph = rowGlyph(row);
+    return glyph === "error" || glyph === "approval" ? `color-mix(in srgb, ${rowHue(row)} 10%, transparent)` : undefined;
+  }
 
   /** A trail icon's color: how the event ended, once it has, else who it is from. */
   function trailHue(row: ReplayLogRow): string {
@@ -553,10 +656,11 @@
 
   const rowFigure = (row: ReplayLogRow) => (row.usage?.total ? `${formatTokens(row.usage.total)} tok` : undefined);
 
-  /** The row's muted context: a status neither the glyph nor its tokens already say, its source. */
+  /** The row's muted context: a status neither the chip nor its tokens already say ("approved",
+      "Waiting on client", but not a green chip's "complete"), its source. */
   function rowNote(row: ReplayLogRow, glyph: StatusKind | null, status: string | null): string | undefined {
     const parts = [
-      row.usage?.total || glyph ? null : status,
+      row.usage?.total || glyph === "complete" ? null : status,
       row.parentTurnNumber != null ? `subagent turn ${row.sourceTurnNumber}` : null
     ].filter(Boolean);
     return parts.length ? parts.join(" · ") : undefined;
@@ -564,27 +668,46 @@
 
 </script>
 
+{#snippet eventChip(row: ReplayLogRow)}
+  {@const Icon = rowIconFor(row)}
+  <Chip size="xs" tone={rowTone(row)} fill="quiet" toned dense class="event-type" label={eventWords(row)}>
+    {#snippet lead()}<Icon size={13} />{/snippet}
+  </Chip>
+{/snippet}
+
 <section class="transcript" aria-label="Replay logs">
   <!-- Nothing to filter or search in a run with no events, so its empty state stands alone. -->
   {#if runHasEvents}
     <div class="transcript-controls">
       <div class="filter-row">
-        <div class="filter-chips" role="group" aria-label="Filter logs">
-          {#each filters as item (item.key)}
+        <!-- One line at any width: what doesn't fit scrolls sideways under a faded edge. -->
+        <div class="filter-chips fade-end" role="group" aria-label="Filter logs">
+          {#snippet facet(item: { key: TranscriptFacet; label: string; tone: ChipTone })}
+            {@const pressed = filter.includes(item.key)}
+            {@const count = tallies.get(item.key) ?? 0}
             <Chip
-              label={item.label}
-              tone="accent"
+              tone={item.tone}
               size="xs"
               fill="quiet"
-              active={filter === item.key}
-              aria-pressed={filter === item.key}
-              onclick={() => onFilterChange?.(item.key)}
-            />
-          {/each}
+              toned={pressed}
+              active={pressed}
+              disabled={count === 0 && !pressed}
+              aria-pressed={pressed}
+              onclick={() => toggleFacet(item.key)}
+            >
+              <span class="chip-label">{item.label}</span><span class="facet-count">{count}</span>
+            </Chip>
+          {/snippet}
+          {#each SIGNALS as item (item.key)}{@render facet(item)}{/each}
+          <span class="facet-rule" aria-hidden="true"></span>
+          {#each KINDS as item (item.key)}{@render facet(item)}{/each}
         </div>
         <span class="event-count" dir="auto">
           {filtering ? `${shownRows}/${plural(totalRows, "event")}` : plural(totalRows, "event")}
         </span>
+        {#if filter.length}
+          <button type="button" class="clear-facets" onclick={() => onFilterChange?.([])}>Clear</button>
+        {/if}
       </div>
       <div class="field">
         <Search size={14} aria-hidden="true" />
@@ -696,6 +819,7 @@
                   id={lineElementId(line)}
                   class={["log-line", "log-step", tone, active && "active-row"]}
                   style:--hue={step.state === "failed" || step.state === "rejected" ? "var(--error)" : actorHue(step.rows[0]!.actor)}
+                  style:--fill={step.state === "failed" || step.state === "rejected" ? "color-mix(in srgb, var(--error) 10%, transparent)" : undefined}
                 >
                   <TraceRow
                     glyph={STEP_GLYPHS[step.state]}
@@ -719,7 +843,7 @@
                       <span class="trail-glyph" aria-hidden="true"></span>
                       <div class="trail" role="group" aria-label={`${step.name} events`}>
                         {#each runs as run, index (run.row.id)}
-                          {@const Icon = actorIcon(run.row.actor)}
+                          {@const Icon = rowIconFor(run.row)}
                           {#if index > 0}<span class="trail-link" aria-hidden="true"></span>{/if}
                           <button
                             type="button"
@@ -748,16 +872,16 @@
               {@const expanded = isRowExpanded(row.id)}
               {@const status = statusNote(row)}
               {@const glyph = rowGlyph(row)}
-              {@const RowIcon = actorIcon(row.actor)}
               <article
                 id={lineElementId(line)}
                 class={["log-line", tone, active && "active-row", revealedRowId === row.id && "revealed"]}
                 style:--hue={rowHue(row)}
+                style:--fill={rowFill(row)}
               >
                 <!-- The protocol's own name for the event, so a reader learns the event types by
-                     reading the log; the same thing in a sentence is in the tip. -->
+                     reading the log; the same thing in a sentence is in the tip. Its state is the
+                     chip's icon and tone, so the glyph cell holds only the caret. -->
                 <TraceRow
-                  {glyph}
                   glyphLabel={glyph && status ? status : undefined}
                   name={line.underStep ? undefined : rowName(row)}
                   mono
@@ -766,38 +890,35 @@
                   meta={offset}
                   tip={[formatTimestamp(row.timestamp), row.label, row.sourceLabel].filter(Boolean).join(" · ")}
                   depth={line.depth}
-                  expandable={rowHasDetails(row) || row.citations.length > 0}
+                  expandable
                   {expanded}
                   controls={`log-row-${row.id}-details`}
                   onToggle={() => toggleRow(row.id)}
                 >
                     {@const primary = primaryPayload(row)}
-                    {@const fullDetail = fullLogDetail(row)}
+                    {@const event = eventJson(row)}
                     {@const ids = rowIdentifiers(row)}
                     {@const images = toolImages(row.output, row.toolName)}
                     {@const call = cachedLines(group).stepOf.get(row.id)}
+                    {@const subject = row.toolName || row.model}
+                    <!-- One event, read on its own: what it is, the call it belongs to, then
+                         everything it carried. -->
                     <div class="line-details" id={`log-row-${row.id}-details`}>
-                      <!-- The rest of the call this event belongs to, so an event reads in its place
-                           without scrolling back up to the head. -->
-                      {#if call}
-                        <section class="call-events" aria-label={`${call.name} events`}>
-                          <span class="payload-label">
-                            {call.name}{#if call.durationMs}<span class="call-took"> · took {formatElapsedDuration(call.durationMs)}</span>{/if}
-                          </span>
-                          <ol>
-                            {#each eventRuns(call.rows) as run (run.row.id)}
-                              {@const Icon = actorIcon(run.row.actor)}
-                              {@const here = run.ids.includes(row.id)}
-                              <li>
-                                <button type="button" class:here aria-current={here ? "true" : undefined} onclick={() => revealRow(group, call, here ? row.id : run.row.id)}>
-                                  <span class="call-icon" style:color={trailHue(run.row)}><Icon size={12} aria-hidden="true" /></span>
-                                  <span class="call-type">{eventWords(run.row)}{#if run.count > 1}<span class="call-count">×{run.count}</span>{/if}</span>
-                                  <span class="call-at">+{formatDuration(run.row.timestamp - call.startedAt)}</span>
-                                </button>
-                              </li>
-                            {/each}
-                          </ol>
-                        </section>
+                      <div class="detail-head">
+                        {@render eventChip(row)}
+                        <span class="detail-sentence">{row.label}</span>
+                        <span class="detail-at">+{formatDuration(row.timestamp - group.startedAt)}</span>
+                      </div>
+                      {#if subject}<p class="detail-subject">{subject}</p>{/if}
+                      <!-- What the event said, when it is more than its name: a traceback, a progress
+                           chunk, why it is waiting. -->
+                      {#if row.body && row.body !== subject && row.body !== primary?.text}
+                        <pre class={["detail-note", glyph === "error" && "error"]}>{row.body}</pre>
+                      {/if}
+                      <!-- How long the call took. Its other events are not listed: opening a row
+                           unfolds the call, so they are the rows right around this card. -->
+                      {#if call?.durationMs}
+                        <span class="call-took"><span class="full-details-head">took</span>{formatElapsedDuration(call.durationMs)}</span>
                       {/if}
                       <TraceImages {images} />
                       {#if primary}
@@ -831,19 +952,16 @@
                           {/each}
                         </dl>
                       {/if}
-                      <section class="full-details" aria-label="Full details">
-                        <LongContent id={`log-${row.id}-details`} text={fullDetail} label="Full details" onResize={() => remeasureLogRow(group.turnNumber)}>
-                          <Copyable block value={fullDetail} label="Copy full details">
-                            <pre>{fullDetail}</pre>
+                      <section class="full-details" aria-label="Event">
+                        <span class="full-details-head">event</span>
+                        <LongContent id={`log-${row.id}-details`} text={event} label="Event" onResize={() => remeasureLogRow(group.turnNumber)}>
+                          <Copyable block value={event} label="Copy event">
+                            <pre>{event}</pre>
                           </Copyable>
                         </LongContent>
                       </section>
                     </div>
-                    {#snippet badge()}
-                      <Chip size="xs" tone={rowTone(row)} fill="quiet" toned dense class="event-type" label={eventWords(row)}>
-                        {#snippet lead()}<RowIcon size={13} />{/snippet}
-                      </Chip>
-                    {/snippet}
+                    {#snippet badge()}{@render eventChip(row)}{/snippet}
                 </TraceRow>
               </article>
               {/if}
@@ -869,18 +987,52 @@
     overflow: hidden;
   }
 
-  /* The chips give way first; the count only drops to its own line when even the
-     widest chip beside it would cut it short. */
+  /* The facets give way, scrolling under their faded edge; the count and Clear keep their place. */
   .filter-row {
     display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    justify-content: space-between;
+    align-items: center;
     gap: 8px;
   }
 
   .filter-row .filter-chips {
     flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .filter-chips > :global(*) {
+    flex: none;
+  }
+
+  .facet-count {
+    margin-inline-start: 5px;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .facet-rule {
+    align-self: center;
+    width: 1px;
+    height: 14px;
+    margin-inline: 2px;
+    background: var(--border);
+  }
+
+  .clear-facets {
+    flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--font-xs);
+    cursor: pointer;
+  }
+
+  .clear-facets:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   /* A figure, not a control, so no box: the turn header's figures read the same way. */
@@ -894,6 +1046,7 @@
 
   .transcript-controls {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
     padding: var(--pane-inset);
     border-bottom: 1px solid var(--border);
@@ -1100,6 +1253,10 @@
     line-height: 1.45;
   }
 
+  .log-line {
+    background: var(--fill, transparent);
+  }
+
   .log-line.active-row {
     background: var(--selected-bg);
   }
@@ -1130,7 +1287,7 @@
 
   .log-line :global(.trace-line) {
     grid-template-columns: auto auto minmax(0, 1fr);
-    min-height: var(--control-height);
+    min-height: var(--control-height-xs);
     padding: 0 var(--gap-md) 0 0;
     border-radius: 0;
   }
@@ -1192,76 +1349,16 @@
     background: var(--border-strong);
   }
 
-  /* An open event's call: each of its events by the protocol's name, this one marked, and how
-     long after the call began. */
-  .call-events {
-    min-width: 0;
-    display: grid;
-    gap: 5px;
-  }
-
   .call-took {
-    color: var(--text-3);
-    font-weight: 400;
-  }
-
-  .call-events ol {
-    display: grid;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .call-events button {
-    width: 100%;
-    min-height: 22px;
     display: flex;
-    gap: 8px;
-    align-items: center;
-    padding: 0 6px;
-    border: 0;
-    background: none;
-    color: var(--text-3);
+    align-items: baseline;
+    color: var(--text-2);
     font: var(--font-sm) var(--font-mono);
-    text-align: start;
-    cursor: pointer;
   }
 
-  .call-events button:hover {
-    background: var(--control-hover);
-  }
-
-  .call-events button.here {
-    background: var(--selected-bg);
-    color: var(--text-1);
-  }
-
-  .call-events button:focus-visible {
-    outline: 1px solid var(--focus-ring);
-    outline-offset: -1px;
-  }
-
-  .call-icon {
-    display: inline-flex;
-  }
-
-  .call-type {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .call-count {
-    margin-inline-start: 6px;
-    color: var(--text-4);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .call-at {
-    color: var(--text-4);
-    font-variant-numeric: tabular-nums;
+  .call-took .full-details-head {
+    padding: 0 var(--gap-md) 0 0;
+    border: 0;
   }
 
   /* At the turn header's inset whatever the row's depth (TraceRow steps in only its line), so a
@@ -1270,6 +1367,69 @@
     display: grid;
     gap: 8px;
     padding: 0 var(--gap-md) var(--gap-md);
+    /* A card under its row, the pane's full width, so it reads as this event's and not as
+       more rows. */
+    padding-block-start: var(--gap-md);
+    border-block: 1px solid var(--border);
+    background: var(--surface-0);
+  }
+
+  .detail-head {
+    min-width: 0;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .detail-head :global(.event-type) {
+    flex: none;
+    height: 18px;
+    gap: 3px;
+    padding: 0 5px;
+    font-size: var(--font-xs);
+    letter-spacing: 0.03em;
+  }
+
+  .detail-sentence {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: var(--font-sm);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .detail-at {
+    margin-inline-start: auto;
+    color: var(--text-3);
+    font: var(--font-sm) var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .detail-subject {
+    color: var(--text-1);
+    font: 650 var(--font-md) / 1.35 var(--font-mono);
+    overflow-wrap: anywhere;
+  }
+
+  /* The card's own blocks, a step darker than the card and in the console's mono. */
+  .line-details pre {
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    font: var(--font-sm) / 1.45 var(--font-mono);
+  }
+
+  .line-details .detail-note {
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  /* A failure's message wears the failed row's tint, so the two read as one. */
+  .line-details .detail-note.error {
+    border-color: color-mix(in srgb, var(--error) 45%, transparent);
+    background: color-mix(in srgb, var(--error) 10%, var(--surface-1));
+    color: var(--text-1);
   }
 
   p {
@@ -1342,6 +1502,26 @@
     color: var(--text-2);
     font-family: var(--font-mono);
     font-size: var(--font-sm);
+  }
+
+  /* The raw event in one framed box, its name in a header strip, so the card ends on it. */
+  .full-details {
+    display: grid;
+    border: 1px solid var(--border);
+  }
+
+  .full-details-head {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-4);
+    font: var(--label-weight) var(--font-xs) / 1 var(--font-mono);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .line-details .full-details pre {
+    border: 0;
+    background: var(--surface-0);
   }
 
   .full-details pre {

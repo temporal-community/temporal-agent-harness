@@ -26,7 +26,7 @@
     AgentNodeData
   } from "$lib/state/flowProjection";
   import { keepUnchanged, lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
-  import AgentStateNode, { kindFromState, setNodeOpener } from "./AgentStateNode.svelte";
+  import AgentStateNode, { kindFromState, setNodeLogViewer, setNodeOpener } from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
   import StateFlowEmpty from "./StateFlowEmpty.svelte";
@@ -50,6 +50,8 @@
     focus: boolean;
     onFocusChange: (focus: boolean) => void;
     onNodeSelect?: (nodeId: string) => void;
+    /** A card's "view in logs": the host finds the row and brings the Logs pane to it. */
+    onViewInLogs?: (nodeId: string) => void;
     /**
      * Whether the whole run, not the cursor's view of it, has a turn. Until it does the
      * pane shows its empty state, and scrubbing a run that has turns back to its start
@@ -68,6 +70,7 @@
     focus,
     onFocusChange,
     onNodeSelect,
+    onViewInLogs,
     runHasTurns = true,
     agentLabel = "",
     accepts = []
@@ -226,6 +229,9 @@
     const node = nodes.find((item) => item.id === nodeId);
     if (node) handleNodeClick(node);
   });
+
+  /* The Logs pane is not this component's to open, so the host answers. */
+  setNodeLogViewer((nodeId) => onViewInLogs?.(nodeId));
 
   function closeInspector(): void {
     inspectedNode = null;
@@ -574,10 +580,10 @@
      cannot drift: control into the agent in the accent, the reply out in
      green, an approval in the live color. */
   .flow-wrap {
-    --edge-main: color-mix(in srgb, var(--accent) 78%, var(--border-strong));
+    --edge-main: var(--accent);
     --edge-reasoning: color-mix(in srgb, var(--reasoning) 70%, var(--border-strong));
     --edge-approval: color-mix(in srgb, var(--live) 78%, var(--text-1) 6%);
-    --edge-output: color-mix(in srgb, var(--success) 72%, var(--border-strong));
+    --edge-output: var(--success);
   }
 
   :global(.svelte-flow__edge-path) {
@@ -589,11 +595,39 @@
   :global(.edge-approval .svelte-flow__edge-path) { stroke: var(--edge-approval); }
   :global(.edge-output .svelte-flow__edge-path) { stroke: var(--edge-output); }
 
+  /* The turn's own path, and its last leg into Output: full weight with round caps,
+     and, while it keeps its kind's color, a soft glow of that hue. An edge recolored
+     for its state (waiting, failed, unreached) carries the color inline and no glow,
+     so a red line never wears a blue halo. */
+  .flow-wrap :global(:is(.edge-main, .edge-output) .svelte-flow__edge-path) {
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+
+  .flow-wrap :global(.edge-main .svelte-flow__edge-path:not([style*="stroke:"])) {
+    filter: drop-shadow(0 0 3px color-mix(in srgb, var(--edge-main) 55%, transparent));
+  }
+
+  .flow-wrap :global(.edge-output .svelte-flow__edge-path:not([style*="stroke:"])) {
+    filter: drop-shadow(0 0 3px color-mix(in srgb, var(--edge-output) 55%, transparent));
+  }
+
+  /* xyflow's selected rule would grey the path; selection brightens it in its own hue. */
+  .flow-wrap :global(.svelte-flow__edge.edge-main:is(.selected, :focus-visible) .svelte-flow__edge-path) {
+    stroke: color-mix(in srgb, var(--edge-main) 62%, var(--text-1));
+  }
+
+  .flow-wrap :global(.svelte-flow__edge.edge-output:is(.selected, :focus-visible) .svelte-flow__edge-path) {
+    stroke: color-mix(in srgb, var(--edge-output) 62%, var(--text-1));
+  }
+
   /* xyflow's `animated` edge, which flowProjection sets only on an edge into a step still
      working or waiting, redrawn as the timeline's open span: 3px on, 3px off, one 6px
      period per --dash-cycle. Only these few paths animate, and only their dash offset. */
   .flow-wrap :global(.svelte-flow__edge.animated path) {
     stroke-dasharray: 3 3;
+    /* Square ends, or a 3px round cap fills the 3px gap and the dash stops reading. */
+    stroke-linecap: butt;
     animation: edge-march var(--dash-cycle) linear infinite;
   }
 

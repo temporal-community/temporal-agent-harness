@@ -32,7 +32,7 @@ export type StoredPane = {
 export type StoredDesk = StoredPane[][];
 
 export type OperatorPrefs = {
-  transcriptFilter?: string;
+  transcriptFilter?: string | string[];
   drawerHeight?: number;
   sessionDrawerWidth?: number;
   followDefault?: boolean;

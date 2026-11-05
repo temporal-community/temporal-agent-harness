@@ -31,6 +31,7 @@ js_library(
         "//typescript/apps/ui/src/lib/state:agentRunStorage",
         "//typescript/apps/ui/src/lib/state:favicon",
         "//typescript/apps/ui/src/lib/state:hydration",
+        "//typescript/apps/ui/src/lib/state:nodeLogRows",
         "//typescript/apps/ui/src/lib/state:paneStack.svelte",
         "//typescript/apps/ui/src/lib/state:pendingRequests",
         "//typescript/apps/ui/src/lib/state:quickSwitch",

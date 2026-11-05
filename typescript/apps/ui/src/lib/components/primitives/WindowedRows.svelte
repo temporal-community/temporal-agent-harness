@@ -1,3 +1,13 @@
+<script lang="ts" module>
+  /* Every row height a list under this scroller has measured, by row key. An outer list drops
+     an item's rows when it leaves the window and builds a new list when it comes back; seeded
+     from here, that list expects the heights it measures, so it has nothing to correct the
+     scroller for. Started from the flat estimate, it moved the scroller for every row that
+     wasn't one line tall, which pushed the item back out of the window, and scrolling up
+     looped there. */
+  const measured = new WeakMap<HTMLElement, Map<string | number, number>>();
+</script>
+
 <script lang="ts" generics="T">
   import type { Snippet } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -45,17 +55,29 @@
     return () => observer.disconnect();
   };
 
+  const keyOf = (index: number) => {
+    const item = items[index];
+    return item === undefined ? index : getKey(item, index);
+  };
+  const sizes = () => {
+    if (!scroller) return undefined;
+    let map = measured.get(scroller);
+    if (!map) measured.set(scroller, (map = new Map()));
+    return map;
+  };
+
   const rows = createVirtualizer<HTMLElement, HTMLElement>({
     /* Seeded here as well as in the effect below, which SSR never runs. */
     count: untrack(() => items.length),
-    getItemKey: (index) => {
-      const item = items[index];
-      return item === undefined ? index : getKey(item, index);
-    },
-    estimateSize: () => estimateSize,
+    getItemKey: keyOf,
+    estimateSize: (index) => sizes()?.get(keyOf(index)) ?? estimateSize,
     /* Unrounded: the default rounds each row to a whole pixel, and a column of 18.6px code
        lines drawn at 19px drifts a line lower every 50 lines. */
-    measureElement: (node, entry) => entry?.borderBoxSize[0]?.blockSize ?? node.getBoundingClientRect().height,
+    measureElement: (node, entry, instance) => {
+      const size = entry?.borderBoxSize[0]?.blockSize ?? node.getBoundingClientRect().height;
+      sizes()?.set(keyOf(instance.indexFromElement(node)), size);
+      return size;
+    },
     gap: untrack(() => gap),
     getScrollElement: () => scroller,
     initialRect: { width: 0, height: 800 },
