@@ -211,6 +211,16 @@ describe("the Logs pane during a scrub", () => {
     assert.match(windowed, /initialOffset: \(\) => scroller\?\.scrollTop \?\? 0,/);
   });
 
+  /* A turn scrolled back into view builds its rows anew. Estimating each from scratch, it moved
+     the scroller for every folded call (a name and a trail, taller than a line), which pushed
+     the turn back out of view, so wheeling up looped at a turn's edge and never got past it. */
+  it("seeds a remounted turn's rows with the heights it measured before", () => {
+    const windowed = readFileSync(new URL("../primitives/WindowedRows.svelte", import.meta.url), "utf8");
+    assert.match(windowed, /const measured = new WeakMap<HTMLElement, Map<string \| number, number>>\(\);/);
+    assert.match(windowed, /estimateSize: \(index\) => sizes\(\)\?\.get\(keyOf\(index\)\) \?\? estimateSize,/);
+    assert.match(windowed, /sizes\(\)\?\.set\(keyOf\(instance\.indexFromElement\(node\)\), size\);/);
+  });
+
   /* Windowing whole turns drew every row of one in view: 533k DOM nodes for a dense turn. */
   it("draws a screenful of a 100,000-row turn, not all of it", () => {
     const { groups } = buildReplayLog(scaleScenario("dense50k").frames);
@@ -260,12 +270,12 @@ describe("the Logs pane's filter", () => {
   /* The cursor on one row of every kind of event the run has. */
   const cursors = (rows) => [...new Map(rows.map((row) => [row.event, row])).values()];
 
-  it("shows nothing under Errors on a run with no errors, wherever the cursor is", () => {
+  it("shows nothing under Failed on a run with no errors, wherever the cursor is", () => {
     for (const scenario of [jsonReplyScenarios().markdown, scaleScenario("timelineworst")]) {
       const { groups, rows } = buildReplayLog(scenario.frames);
       assert.ok(!rows.some(isError), "sanity: the run has no errors");
       for (const row of cursors(rows)) {
-        const html = draw(groups, "error", row);
+        const html = draw(groups, ["error"], row);
         assert.match(html, /No events match this filter\./, `cursor on ${row.event}`);
         assert.match(html, new RegExp(`>\\s*0/${rows.length.toLocaleString("en-US")} events\\s*<`), `cursor on ${row.event}`);
       }
@@ -278,19 +288,34 @@ describe("the Logs pane's filter", () => {
       const errors = rows.filter(isError);
       assert.ok(errors.length > 0, "sanity: the run has errors");
       for (const row of cursors(rows)) {
-        const html = draw(groups, "error", row);
+        const html = draw(groups, ["error"], row);
         assert.match(html, new RegExp(`>\\s*${errors.length}/${rows.length.toLocaleString("en-US")} events\\s*<`), `cursor on ${row.event}`);
         assert.ok(html.includes(`id="log-row-${errors[0].id}"`), `cursor on ${row.event}: the first error is drawn`);
       }
     }
   });
+
+  /* Each facet says how many events it would keep, and a signal pressed with a kind keeps only
+     events that are both: Failed with Tool is the tools that failed. */
+  it("counts each facet, and narrows by a signal and a kind together", () => {
+    const { groups, rows } = buildReplayLog(scaleScenario("logsworst").frames);
+    const errors = rows.filter(isError);
+    const total = rows.length.toLocaleString("en-US");
+    const shown = (html) => Number(html.match(new RegExp(`>\\s*(\\d+)/${total} events\\s*<`))?.[1]);
+    const all = draw(groups, [], rows[0]);
+    assert.match(all, new RegExp(`>Failed</span><span class="facet-count[^"]*">${errors.length}<`));
+    assert.doesNotMatch(all, /class="clear-facets/, "nothing pressed, nothing to clear");
+    const failedTools = draw(groups, ["error", "tool"], rows[0]);
+    assert.ok(shown(failedTools) > 0 && shown(failedTools) < errors.length, `${shown(failedTools)} of ${errors.length} failures are tools`);
+    assert.match(failedTools, /aria-pressed="true"[^>]*>\s*<span class="chip-label[^"]*">Failed</);
+    assert.match(failedTools, /class="clear-facets/);
+  });
 });
 
-/* The Logs rows are the chat trace's TraceRow, one per event: a state glyph only where there is a
-   state, the tool in mono once on its head. The pane exists to show the protocol, so each event is
-   named by its protocol type in a quiet chip in its actor's hue, with a bar of that hue down the
-   row; the same thing as a sentence is in the tip. The fixture has done, awaiting and failed rows,
-   so every glyph is drawn. */
+/* The Logs rows are the chat trace's TraceRow, one per event, the tool in mono once on its head.
+   The pane exists to show the protocol, so each event is named by its protocol type in a quiet
+   chip, toned by how it ended or else by who it is from, with a bar of that hue down the row; the
+   same thing as a sentence is in the tip. The fixture has done, awaiting and failed rows. */
 describe("the Logs pane's rows", () => {
   const { groups } = buildReplayLog(scaleScenario("reply-failed").frames);
   const html = stripComments(
@@ -305,23 +330,18 @@ describe("the Logs pane's rows", () => {
     return source.match(new RegExp(`\\n\\s*${escaped} \\{([^}]*)\\}`))?.[1] ?? "";
   };
 
-  it("draws every event as one TraceRow, a button only where it has details", () => {
+  /* Every event opens, if only to its event JSON, so a trail icon always opens the one it
+     stands for. */
+  it("draws every event as one TraceRow, each a button that opens it", () => {
     assert.ok(rows.length > 10, `sanity: drew ${rows.length} rows`);
-    let toggles = 0;
     for (const row of rows) {
       assert.match(row, /class="trace-row\b/);
       const buttons = row.match(/<button\b[^>]*>/g) ?? [];
-      assert.ok(buttons.length <= 1, "a collapsed row is at most one button");
-      if (buttons.length === 0) {
-        assert.doesNotMatch(row, /aria-expanded|disclosure/, "a row with nothing to open is no toggle");
-        continue;
-      }
-      toggles++;
+      assert.equal(buttons.length, 1, "a collapsed row is one button");
       assert.match(buttons[0], /class="trace-line disclosure/);
       assert.match(buttons[0], /aria-expanded="false"/);
       assert.match(buttons[0], /aria-controls="log-row-[^"]+-details"/);
     }
-    assert.ok(toggles > 0 && toggles < rows.length, `some rows open and some do not (${toggles}/${rows.length})`);
   });
 
   const typeOf = (chunk) => chunk.match(/class="chip [^"]*event-type[^"]*"[\s\S]*?<span class="chip-label[^"]*">([^<]*)<\/span>/)?.[1] ?? null;
@@ -335,11 +355,20 @@ describe("the Logs pane's rows", () => {
       assert.ok(types.has(typeOf(row)), `the chip is a protocol event type, not "${typeOf(row)}"`);
       assert.doesNotMatch(row, /class="badge\b|kicker|line-kind|actor-icon|trace-prefix/);
       const svgs = row.match(/<svg\b/g)?.length ?? 0;
-      const allowed = 1 + (row.match(/class="state-glyph/g)?.length ?? 0) + (row.match(/disclosure-chevron/g)?.length ?? 0);
-      assert.equal(svgs, allowed, "only the type's icon, StateGlyph and the chevron may draw an icon");
+      const allowed = 1 + (row.match(/disclosure-chevron/g)?.length ?? 0);
+      assert.equal(svgs, allowed, "only the type's icon and the chevron may draw an icon");
+      assert.doesNotMatch(row, /class="state-glyph/, "the chip carries the state, so no second glyph does");
     }
-    const glyphs = rows.join("").match(/class="state-glyph/g)?.length ?? 0;
-    assert.ok(glyphs > 0 && glyphs < rows.length, `the glyph marks some rows' state, not every row (${glyphs}/${rows.length})`);
+  });
+
+  /* Once an event has ended, its chip says how: done green with a check, waiting amber, failed
+     red with a cross. Until then, who it is from. */
+  it("tones and marks an event's chip by how it ended", () => {
+    assert.match(rowOf("tool error"), /class="chip [^"]*\berror\b/);
+    assert.match(rowOf("tool end"), /class="chip [^"]*\bsuccess\b/);
+    assert.match(rowOf("tool start"), /class="chip [^"]*\btool\b/);
+    assert.match(source, /if \(glyph === "complete"\) return CheckCircle2;/);
+    assert.match(source, /if \(glyph === "error"\) return XCircle;/);
   });
 
   it("colors each event by who it is from, on its chip and its bar, and an error red", () => {
@@ -366,9 +395,9 @@ describe("the Logs pane's rows", () => {
   /* A row of any height but the one WindowedRows estimates makes the windowed list jump as it
      measures, and the rows no longer have a rule under them to make up the difference. */
   it("keeps a folded line at the height WindowedRows estimates for it, its focus ring inside", () => {
-    const controlHeight = readFileSync(new URL("../../../app.css", import.meta.url), "utf8").match(/--control-height: (\d+)px;/)?.[1];
+    const controlHeight = readFileSync(new URL("../../../app.css", import.meta.url), "utf8").match(/--control-height-xs: (\d+)px;/)?.[1];
     assert.match(source, new RegExp(`const LINE_HEIGHT = ${controlHeight};`));
-    assert.match(rule(".log-line :global(.trace-line)"), /min-height: var\(--control-height\);/);
+    assert.match(rule(".log-line :global(.trace-line)"), /min-height: var\(--control-height-xs\);/);
     assert.doesNotMatch(rule(".log-line"), /border/);
     assert.match(source, /estimateSize=\{LINE_HEIGHT\}/);
     assert.match(rule(".log-line :global(.trace-line:focus-visible)"), /outline-offset: -2px;/);
@@ -507,10 +536,19 @@ describe("the Logs pane's calls", () => {
     assert.match(toggle, /expandedRows = isRowExpanded\(rowId\) \? \{\} : \{ \[rowId\]: true \};/);
   });
 
-  it("lists an open event's call in its details, marking this event", () => {
+  /* Opening a row unfolds its call, so the call's other events are the rows around the card;
+     listing them in it as well only doubled them. What the rows can't say is how long it took. */
+  it("gives an open event its call's time, not a second list of the call's events", () => {
     assert.match(source, /\{@const call = cachedLines\(group\)\.stepOf\.get\(row\.id\)\}/);
-    assert.match(source, /<section class="call-events" aria-label=\{`\$\{call\.name\} events`\}>/);
-    assert.match(source, /aria-current=\{here \? "true" : undefined\}/);
+    assert.match(source, /\{#if call\?\.durationMs\}/);
+    assert.doesNotMatch(source, /call-events/);
+  });
+
+  /* The card ends on the event itself, as JSON in a framed box under its name, copyable. */
+  it("ends an open event's card on its event JSON", () => {
+    assert.match(source, /<section class="full-details" aria-label="Event">\s*<span class="full-details-head">event<\/span>/);
+    assert.match(source, /<Copyable block value=\{event\} label="Copy event">/);
+    assert.match(source, /function eventJson\(row: ReplayLogRow\): string \{/);
   });
 });
 

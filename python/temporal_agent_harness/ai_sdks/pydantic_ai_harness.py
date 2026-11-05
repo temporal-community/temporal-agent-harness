@@ -13,22 +13,23 @@
 Wire it onto a worker with the upstream plugin, unmodified:
 
 >>> from pydantic_ai import Agent
->>> from pydantic_ai.durable_exec.temporal import AgentPlugin, PydanticAIPlugin, TemporalAgent
+>>> from pydantic_ai.durable_exec.temporal import AgentPlugin, PydanticAIPlugin
 >>> from temporal_agent_harness.ai_sdks.pydantic_ai_harness import (
+...     HarnessDeps,
+...     TemporalAgentHarnessDurability,
 ...     build_harness_toolset,
-...     harness_event_stream_handler,
 ... )
->>> toolset, tool_config = build_harness_toolset([my_tool], id="my-tools")
->>> agent = Agent("openai:gpt-5.1", toolsets=[toolset])
->>> temporal_agent = TemporalAgent(
-...     agent,
+>>> toolset = build_harness_toolset([my_tool], id="my-tools")  # runs in-workflow, not in an activity
+>>> durable_agent = Agent(
+...     "openai:gpt-5.1",  # a model-name string: see TemporalAgentHarnessDurability
 ...     name="my-agent",
-...     event_stream_handler=harness_event_stream_handler,
-...     tool_activity_config=tool_config,  # run harness tools in-workflow, not in an activity
+...     deps_type=HarnessDeps,
+...     toolsets=[toolset],
+...     capabilities=[TemporalAgentHarnessDurability()],
 ... )
->>> # worker: Worker(..., plugins=[AgentPlugin(temporal_agent)]); client: plugins=[PydanticAIPlugin()]
+>>> # worker: Worker(..., plugins=[AgentPlugin(durable_agent)]); client: plugins=[PydanticAIPlugin()]
 
-Then, inside the agent workflow, call ``await temporal_agent.run(text, deps=deps)`` where
+Then, inside the agent workflow, call ``await durable_agent.run(text, deps=deps)`` where
 ``deps`` carries the in-flight turn's stream context (see :class:`HarnessDeps`); the streamed
 model call publishes ``reply_delta`` / ``thought_summary`` / ``tool_requested`` and
 ``model_interaction_started`` / ``…_ended`` onto the harness turn stream live — the same vocabulary
@@ -40,10 +41,20 @@ the Gemini and OpenAI integrations produce.
 
 from __future__ import annotations
 
-import json
-from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Any, Literal
+import inspect
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
+from contextlib import AsyncExitStack, asynccontextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_core import to_jsonable_python
@@ -56,8 +67,13 @@ _INSTALL_MESSAGE = (
 
 try:
     from pydantic_ai import FunctionToolset, Tool
+    from pydantic_ai.agent.abstract import AbstractAgent
+    from pydantic_ai.capabilities import AbstractCapability, ModelIdResolver
+    from pydantic_ai.durable_exec.temporal import TemporalDurability
+    from pydantic_ai.exceptions import UserError
     from pydantic_ai.messages import (
         BaseToolCallPart,
+        ModelMessage,
         PartDeltaEvent,
         PartEndEvent,
         PartStartEvent,
@@ -66,8 +82,17 @@ try:
         ThinkingPart,
         ThinkingPartDelta,
     )
-    from pydantic_ai.models import StreamedResponse
-    from pydantic_ai.tools import RunContext
+    from pydantic_ai.models import (
+        KnownModelName,
+        Model,
+        ModelRequestParameters,
+        ModelResolutionContext,
+        StreamedResponse,
+        infer_model,
+    )
+    from pydantic_ai.models.wrapper import WrapperModel
+    from pydantic_ai.settings import ModelSettings
+    from pydantic_ai.tools import AgentDepsT, RunContext
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise RuntimeError(_INSTALL_MESSAGE) from exc
 
@@ -90,11 +115,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HarnessDeps",
+    "HarnessStreamingModel",
     "PydanticAIStreamObserver",
-    "harness_event_stream_handler",
+    "TemporalAgentHarnessDurability",
     "as_pydantic_ai_tool",
     "as_pydantic_ai_tools",
     "build_harness_toolset",
+    "harness_event_stream_handler",
+    "harness_model",
 ]
 
 _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
@@ -104,9 +132,10 @@ _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
 # Live streaming: raw Pydantic AI stream events -> harness turn vocabulary
 # ---------------------------------------------------------------------------
 #
-# Pydantic AI's Temporal plugin runs the agent's `event_stream_handler` INSIDE the model-request
-# activity, handing it the live `StreamedResponse` (an async iterable of `ModelResponseStreamEvent`s:
-# PartStart / PartDelta / PartEnd / FinalResult). That is where this observer translates, so — like
+# Pydantic AI's `TemporalDurability` capability runs the agent's `event_stream_handler` INSIDE the
+# model-request activity, handing it the live model stream (an async iterable of
+# `ModelResponseStreamEvent`s: PartStart / PartDelta / PartEnd / FinalResult). That is where this
+# observer translates, so — like
 # the Gemini `_StreamEventPublisher` — it works in part/delta terms rather than the flat event
 # vocabulary the OpenAI Responses stream uses:
 #
@@ -148,10 +177,10 @@ class PydanticAIStreamObserver:
         # Part index -> the tool-call part seen at PartStart, flushed on the matching PartEnd (or,
         # defensively, on close if the stream ended without one).
         self._pending_tool_calls: dict[int, BaseToolCallPart] = {}
-        # Token usage, recorded off the drained StreamedResponse for the ended bracket.
+        # Token usage for the ended bracket, when the driver can supply it (see set_usage).
         self._usage: TokenUsage | None = None
 
-    async def __aenter__(self) -> PydanticAIStreamObserver:
+    async def __aenter__(self) -> Self:
         self._stack = AsyncExitStack()
         self._publisher = await self._stack.enter_async_context(
             AgentWorkflowRunner.publisher_from_activity(self._context)
@@ -160,7 +189,12 @@ class PydanticAIStreamObserver:
         self._publisher.publish(ModelInteractionStarted(model=self._model))
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
         try:
             if self._publisher is not None:
                 # Flush any tool call whose PartEnd never arrived (defensive — Pydantic AI
@@ -208,9 +242,10 @@ class PydanticAIStreamObserver:
             if isinstance(delta, TextPartDelta):
                 if delta.content_delta:
                     pub.publish(ReplyDelta(text=delta.content_delta))
-            elif isinstance(delta, ThinkingPartDelta):
-                if delta.content_delta or delta.signature_delta:
-                    pub.publish(ThoughtSummaryDelta(delta=_dump(delta)))
+            elif isinstance(delta, ThinkingPartDelta) and (
+                delta.content_delta or delta.signature_delta
+            ):
+                pub.publish(ThoughtSummaryDelta(delta=_dump(delta)))
             # A ToolCallPartDelta streams arg fragments; the COMPLETE part arrives on PartEnd, so
             # there is nothing to consolidate here.
         elif isinstance(event, PartEndEvent):
@@ -270,7 +305,7 @@ def _to_token_usage(usage: Any) -> TokenUsage | None:
 
 
 # ---------------------------------------------------------------------------
-# The event_stream_handler wired onto the TemporalAgent
+# The event_stream_handler wired onto the TemporalDurability capability
 # ---------------------------------------------------------------------------
 
 
@@ -330,35 +365,179 @@ async def harness_event_stream_handler(
 ) -> None:
     """Pydantic AI ``event_stream_handler`` that streams model events onto the harness turn.
 
-    Pass as ``TemporalAgent(event_stream_handler=harness_event_stream_handler)``. Pydantic AI
-    invokes it in two places, both of which this handler must fully drain:
+    :class:`TemporalAgentHarnessDurability` installs it. Pydantic AI invokes it in two places, both of
+    which this handler must fully drain:
 
-    * inside the ``…__model_request_stream`` activity, on the live :class:`StreamedResponse` — the
-      model-delta path this integration cares about. We drive a :class:`PydanticAIStreamObserver`
-      over it and record final usage for the ended bracket.
+    * inside the ``…__model_request_stream`` activity, on the live model stream. There
+      :class:`HarnessStreamingModel` has already opened this call's observer, and the handler feeds
+      it each event as it arrives.
     * once per ``…__event_stream_handler`` activity for each in-workflow ``HandleResponseEvent``
-      (tool call/result). The harness owns tool lifecycle via ``run_tool``, so this handler no-ops
-      those — one lightweight activity per response event, inherent to setting a handler.
-
-    With no harness turn context on ``deps`` (e.g. outside a harness-driven run), it drains the
-    stream and publishes nothing.
+      (tool call/result). No observer is open there, and the harness owns tool lifecycle via
+      ``run_tool``, so this handler drains those — one lightweight activity per response event,
+      inherent to setting a handler.
     """
-    context = _resolve_stream_context(ctx)
-    if context is None or not isinstance(stream, StreamedResponse):
-        # No turn to publish against, or the per-response-event path — drain and ignore.
+    observer = _ACTIVE_OBSERVER.get()
+    if observer is None:
         async for _ in stream:
             pass
         return
+    async for event in stream:
+        await observer.on_event(event)
 
-    model = getattr(stream, "model_name", None)
-    async with PydanticAIStreamObserver(context, model=model) as obs:
-        async for event in stream:
-            await obs.on_event(event)
-        # Final usage is known only once the stream is exhausted.
-        try:
-            obs.set_usage(stream.usage())
-        except Exception:  # noqa: BLE001 - usage is best-effort; never fail the model activity
-            pass
+
+# The observer of the model call running in this activity, set by HarnessStreamingModel while its
+# stream is open. The activity enters the model's stream and then calls the event-stream handler in
+# the same task, so the handler reads the observer its own call opened, never another activity's.
+_ACTIVE_OBSERVER: ContextVar[PydanticAIStreamObserver | None] = ContextVar(
+    "pydantic_ai_harness_active_observer", default=None
+)
+
+
+class HarnessStreamingModel(WrapperModel):
+    """Wraps the agent's model so each streamed call publishes its harness model-interaction bracket.
+
+    Its ``request_stream`` runs inside the model-request activity, where it sees the provider's
+    ``StreamedResponse``. It opens a :class:`PydanticAIStreamObserver` before the request is sent,
+    so ``model_interaction_started`` measures time-to-first-token. It closes the observer once the
+    stream is drained, with the call's usage on ``model_interaction_ended``. The deltas in between
+    reach the observer through :func:`harness_event_stream_handler`.
+
+    Outside a harness turn (no stream context on ``deps``) it is a plain pass-through.
+    """
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        run_context: RunContext[Any] | None = None,
+    ) -> AsyncGenerator[StreamedResponse]:
+        context = _resolve_stream_context(run_context) if run_context is not None else None
+        if context is None:
+            async with self.wrapped.request_stream(
+                messages, model_settings, model_request_parameters, run_context
+            ) as streamed:
+                yield streamed
+            return
+
+        # The observer is entered first, so `started` is published before the request is sent.
+        async with (
+            PydanticAIStreamObserver(context, model=self.model_name) as observer,
+            self.wrapped.request_stream(
+                messages, model_settings, model_request_parameters, run_context
+            ) as streamed,
+        ):
+            token = _ACTIVE_OBSERVER.set(observer)
+            try:
+                yield streamed
+            finally:
+                _ACTIVE_OBSERVER.reset(token)
+            observer.set_usage(streamed.usage)
+
+
+@dataclass(init=False, kw_only=True)
+class TemporalAgentHarnessDurability(TemporalDurability[AgentDepsT]):
+    """Pydantic AI's ``TemporalDurability`` capability with harness turn streaming wired in.
+
+    Use it in place of ``TemporalDurability``; it takes the same arguments except
+    ``event_stream_handler``, which it sets to :func:`harness_event_stream_handler`::
+
+        Agent("openai:gpt-5.1", name="my-agent", deps_type=HarnessDeps, toolsets=[toolset],
+              capabilities=[TemporalAgentHarnessDurability()])
+
+    It also wraps each model it resolves in a :class:`HarnessStreamingModel`. Inside the
+    model-request activity the worker rebuilds the agent's model from its model-name string through
+    ``resolve_model_id``, so the wrapper is what the activity streams from.
+
+    A ``Model`` instance given as the agent's model is used as-is in the activity, never resolved,
+    so it has to arrive already wrapped: pass ``harness_model(instance)``. Binding rejects an
+    unwrapped instance, which would otherwise run with no turn streaming at all.
+
+    To build models from their names yourself (a custom provider, or per-tenant credentials read
+    off ``deps``), pass the resolver here as ``model_resolver``. It takes what Pydantic AI's
+    ``ResolveModelId`` takes and is consulted first; returning ``None`` falls back to the
+    ``models=`` registry, then ``infer_model``. Whatever it returns is wrapped like any other model.
+    The harness owns model-name resolution, so binding rejects any other capability on the agent
+    that resolves model names (such as a separate ``ResolveModelId``).
+
+    The resolver runs in workflow code as well as in the activity: once when ``agent.run()`` picks
+    the run's model (again on replay), then inside each model-request activity. So it must be
+    deterministic and do no I/O. Fetch a credential only when ``activity.in_activity()`` is true,
+    and don't put secrets on ``deps``: deps are serialized into every activity input, which lands
+    in workflow history. Carry an identifier there (a tenant id) and look the secret up in the
+    activity instead.
+    """
+
+    def __init__(
+        self, *, model_resolver: ModelIdResolver[AgentDepsT] | None = None, **kwargs: Any
+    ) -> None:
+        super().__init__(event_stream_handler=harness_event_stream_handler, **kwargs)
+        self._model_resolver = model_resolver
+
+    def for_agent(self, agent: AbstractAgent[AgentDepsT, Any]) -> AbstractCapability[AgentDepsT]:
+        model = agent.model
+        if isinstance(model, Model) and not _wraps_harness_model(model):
+            raise UserError(
+                f"Agent {agent.name!r} has a {type(model).__name__} instance as its model, which "
+                "TemporalAgentHarnessDurability cannot stream from. Wrap it: "
+                "Agent(harness_model(<model>), ...), or pass a model-name string such as "
+                "'openai:gpt-5.1'."
+            )
+        # Durability capabilities bind last, so every other capability is already in the tree.
+        resolvers: list[AbstractCapability[AgentDepsT]] = []
+        agent.root_capability.apply(
+            lambda cap: resolvers.append(cap)
+            if cap is not self and cap.has_resolve_model_id
+            else None
+        )
+        if resolvers:
+            names = ", ".join(type(cap).__name__ for cap in resolvers)
+            raise UserError(
+                f"Agent {agent.name!r} has another capability that resolves model names ({names}). "
+                "The Temporal agent harness owns model-name resolution; pass the resolver as "
+                "TemporalAgentHarnessDurability(model_resolver=...) instead."
+            )
+        return super().for_agent(agent)
+
+    async def resolve_model_id(
+        self,
+        ctx: ModelResolutionContext[AgentDepsT],
+        *,
+        model_id: KnownModelName | str,
+    ) -> Model | None:
+        model = await self._resolve_with_author_resolver(ctx, model_id)
+        if model is None:
+            model = await super().resolve_model_id(ctx, model_id=model_id) or infer_model(model_id)
+        return model if _wraps_harness_model(model) else HarnessStreamingModel(model)
+
+    async def _resolve_with_author_resolver(
+        self, ctx: ModelResolutionContext[AgentDepsT], model_id: str
+    ) -> Model | None:
+        if self._model_resolver is None:
+            return None
+        resolved = self._model_resolver(ctx, model_id)
+        return await resolved if inspect.isawaitable(resolved) else resolved
+
+
+def harness_model(model: Model) -> HarnessStreamingModel:
+    """Wrap a ``Model`` instance so a :class:`TemporalAgentHarnessDurability` agent streams from it::
+
+        Agent(harness_model(OpenAIChatModel("gpt-5.1", provider=...)), name="my-agent", ...,
+              capabilities=[TemporalAgentHarnessDurability()])
+
+    A model-name string needs no wrapping; the capability wraps what it resolves."""
+    return model if isinstance(model, HarnessStreamingModel) else HarnessStreamingModel(model)
+
+
+def _wraps_harness_model(model: Model) -> bool:
+    """Whether ``model`` is, or wraps somewhere inside it, a :class:`HarnessStreamingModel`."""
+    current: Model | None = model
+    while current is not None:
+        if isinstance(current, HarnessStreamingModel):
+            return True
+        current = current.wrapped if isinstance(current, WrapperModel) else None
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +549,7 @@ def as_pydantic_ai_tool(
     tool_callable: Callable[..., Awaitable[Any]],
     *,
     injections: Mapping[str, Any] | None = None,
-) -> "Tool[Any]":
+) -> Tool[Any]:
     """Adapt a harness tool into a Pydantic AI :class:`~pydantic_ai.Tool`.
 
     ``tool_callable`` must be produced by :func:`harness.agent.tool_defn`,
@@ -381,12 +560,12 @@ def as_pydantic_ai_tool(
 
     The runner is resolved per call from ``ctx.deps`` (a :class:`HarnessDeps`) — threaded
     EXPLICITLY by the author at the ``agent.run(deps=...)`` call site, not assumed off the workflow
-    instance. This is what lets one module-level ``TemporalAgent`` serve every concurrent workflow
+    instance. This is what lets one module-level agent serve every concurrent workflow
     correctly: each run supplies its own runner via its own ``deps``.
 
     The tool MUST run in-workflow (the harness approval gate and event publishing are workflow-side),
     so register it with the Temporal activity wrapper DISABLED — use :func:`build_harness_toolset`,
-    which returns the matching ``tool_activity_config`` for ``TemporalAgent``. (When wrongly run
+    which marks its tools ``metadata={"temporal": False}``. (When wrongly run
     inside an activity, ``ctx.deps`` has no live ``runner`` and the call raises with guidance.)
     """
     _require_harness_tool(tool_callable)
@@ -422,7 +601,7 @@ def as_pydantic_ai_tools(
     ),
     *,
     injections: Mapping[str, Any] | None = None,
-) -> list["Tool[Any]"]:
+) -> list[Tool[Any]]:
     """Adapt several harness tools into Pydantic AI tools."""
     tools = (
         list(tool_callables.values())
@@ -440,28 +619,22 @@ def build_harness_toolset(
     *,
     id: str = "harness_tools",
     injections: Mapping[str, Any] | None = None,
-) -> tuple["FunctionToolset[Any]", dict[str, dict[str, Literal[False]]]]:
-    """Build a Pydantic AI ``FunctionToolset`` of harness tools plus the ``tool_activity_config``
-    that disables the Temporal activity wrapper for them.
+) -> FunctionToolset[Any]:
+    """Build a Pydantic AI ``FunctionToolset`` of harness tools that run in-workflow.
 
-    Returns ``(toolset, tool_activity_config)``. Build it once (module level is fine — no runner is
-    captured here; each run supplies its runner via ``deps``) and wire both onto the agent::
+    Build it once (module level is fine — no runner is captured here; each run supplies its runner
+    via ``deps``) and pass it to the agent::
 
-        toolset, tool_config = build_harness_toolset([get_weather], id="hello-tools")
-        agent = Agent("openai:gpt-5.1", toolsets=[toolset])
-        temporal_agent = TemporalAgent(agent, name="hello", tool_activity_config=tool_config, ...)
+        toolset = build_harness_toolset([get_weather], id="hello-tools")
+        agent = Agent("openai:gpt-5.1", toolsets=[toolset], capabilities=[TemporalAgentHarnessDurability()])
 
-    The config maps ``{id: {tool_name: False}}`` so each (async) harness tool runs in-workflow —
-    required for the harness approval gate (``workflow.wait_condition``), its in-process tool
-    lifecycle events, and reading the live runner off ``deps``. Without it, Pydantic AI would offload
-    each call into its own activity, where none of that works.
+    Every tool carries ``metadata={"temporal": False}``, which tells ``TemporalDurability`` not to
+    wrap its calls in an activity. The harness needs them in-workflow for its approval gate
+    (``workflow.wait_condition``), its tool lifecycle events, and reading the live runner off
+    ``deps``; none of that works inside an activity.
     """
     tools = as_pydantic_ai_tools(tool_callables, injections=injections)
-    toolset = FunctionToolset(tools, id=id)
-    tool_config: dict[str, dict[str, Literal[False]]] = {
-        id: {tool.name: False for tool in tools}
-    }
-    return toolset, tool_config
+    return FunctionToolset(tools, id=id, metadata={"temporal": False})
 
 
 def _tool_schema(
@@ -499,14 +672,14 @@ def _runner_from_ctx(ctx: RunContext[Any], *, tool_name: str) -> AgentWorkflowRu
     ``workflow.instance()`` — it is whatever the author passed as ``agent.run(deps=HarnessDeps(
     runner=...))``. A harness tool runs in-workflow, where ``deps`` is still that live object, so the
     runner is available here. If it is missing, the tool was most likely run inside a Temporal
-    activity (its ``tool_activity_config`` wrapper was not disabled) or ``deps`` did not carry the
+    activity (its ``temporal`` metadata did not disable the wrapper) or ``deps`` did not carry the
     runner; raise with guidance."""
     runner = getattr(getattr(ctx, "deps", None), "runner", None)
-    if not isinstance(runner, AgentWorkflowRunner):
-        raise RuntimeError(
-            f"harness Pydantic AI tool {tool_name!r} has no live AgentWorkflowRunner on its "
-            "RunContext.deps. Pass deps=HarnessDeps(runner=<your runner>) to agent.run(...), and "
-            "make sure the tool runs in-workflow (use build_harness_toolset(...) so its Temporal "
-            "activity wrapper is disabled)."
-        )
-    return runner
+    if isinstance(runner, AgentWorkflowRunner):
+        return runner
+    raise RuntimeError(
+        f"harness Pydantic AI tool {tool_name!r} has no live AgentWorkflowRunner on its "
+        "RunContext.deps. Pass deps=HarnessDeps(runner=<your runner>) to agent.run(...), and "
+        "make sure the tool runs in-workflow (use build_harness_toolset(...) so its Temporal "
+        "activity wrapper is disabled)."
+    )
