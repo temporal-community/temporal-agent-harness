@@ -102,6 +102,8 @@ const QUERY_BLEED = "b";
  * to be right by the time they let go and reach for it.
  */
 const URL_WRITE_MS = 250;
+/** How far past the window fit a drag pulls against the fit before letting go. Under `RESIZE_STEP`, so a key step still lends. */
+const LEND_DETENT = 12;
 /** Marks the frontmost tab of a column in the pane list, e.g. `chat|*logs`. */
 const ACTIVE_MARK = "*";
 /** Joins panes sharing a column: tabbed, and stacked as a split. */
@@ -690,6 +692,12 @@ export class PaneStack {
    * follows the pointer, and comes back as soon as a drag the other way fills
    * it; the last open column's own width never changes. The last open column
    * has none after it, so `#fill` stretches over the room it leaves.
+   *
+   * The fit is magnetic for `LEND_DETENT`: within it the column eases away from
+   * the fit at a fraction of the pointer, then lets go onto the pointer, the way
+   * a drawer snaps shut past its minimum. Dragging back is pulled onto the fit.
+   * Pushing the desk past the window edge pulls the same way, so the folded
+   * columns after the last open one hold at the edge before the rail scrolls.
    */
   setGroupSize(id: string, size: number | null): void {
     const loc = this.locate(id);
@@ -709,6 +717,17 @@ export class PaneStack {
     const gap = this.#railWidth - this.#deskWidth() - (this.#lent?.px ?? 0);
     const last = this.groups.slice(loc.group + 1).filter((item) => !item.every((pane) => pane.collapsed)).at(-1);
     if (gap > 0 && last) this.#lent = { id: last[0].id, px: (this.#lent?.px ?? 0) + gap };
+    const lent = this.#fill?.lent?.px ?? 0;
+    if (lent > 0 && lent <= LEND_DETENT && this.#lent) {
+      const eased = Math.round((lent * lent) / (2 * LEND_DETENT));
+      this.#setOwnSize(group, next + lent - eased);
+      this.#lent = eased > 0 ? { id: this.#lent.id, px: eased } : null;
+    }
+    const overflow = this.#deskWidth() - this.#railWidth;
+    if (overflow > 0 && overflow <= LEND_DETENT) {
+      const eased = Math.round((overflow * overflow) / (2 * LEND_DETENT));
+      this.#setOwnSize(group, Math.max(min, this.#ownSize(group) - overflow + eased));
+    }
   }
 
   #setOwnSize(group: Pane[], size: number): void {

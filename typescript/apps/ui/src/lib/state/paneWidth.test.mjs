@@ -73,6 +73,42 @@ describe("a column's width", () => {
     assert.equal(deskWidth(stack), 1480, "only past that does the rail scroll");
   });
 
+  it("pulls against the fit for the first few pixels, then lets go onto the pointer, both ways", () => {
+    const stack = deskAt(1440);
+    const before = widths(stack);
+    const moved = () => before.graph - widths(stack).graph;
+    stack.setGroupSize("graph", before.graph - 3);
+    assert.equal(moved(), 0, "a nudge stays on the fit");
+    stack.setGroupSize("graph", before.graph - 8);
+    assert.ok(moved() > 0 && moved() < 8, `eases away at a fraction of the pointer, moved ${moved()}`);
+    stack.setGroupSize("graph", before.graph - 13);
+    assert.deepEqual(widths(stack), { ...before, graph: before.graph - 13, usage: before.usage + 13 }, "then snaps onto it");
+    stack.setGroupSize("graph", before.graph - 6);
+    assert.ok(moved() < 6, "dragging back is pulled onto the fit");
+    stack.setGroupSize("graph", before.graph);
+    assert.deepEqual(widths(stack), before);
+    assert.equal(deskWidth(stack), 1440);
+  });
+
+  it("pulls against pushing the folded columns past the window edge, then lets the rail scroll", () => {
+    const stack = deskAt(1440);
+    const before = widths(stack);
+    const grew = () => widths(stack).chat - before.chat;
+    stack.setGroupSize("chat", before.chat + 3);
+    assert.equal(grew(), 0, "a nudge keeps the folded columns at the edge");
+    stack.setGroupSize("chat", before.chat + 8);
+    assert.ok(grew() > 0 && grew() < 8, `eases past it at a fraction of the pointer, grew ${grew()}`);
+    stack.setGroupSize("chat", before.chat + 13);
+    assert.equal(grew(), 13, "then lets go onto the pointer");
+    assert.equal(deskWidth(stack), 1453, "and the rail scrolls");
+    stack.setGroupSize("chat", before.chat + 6);
+    assert.ok(grew() < 6, "dragging back is pulled onto the fit");
+    stack.setGroupSize("chat", before.chat);
+    assert.deepEqual(widths(stack), before);
+    stack.setGroupSize("chat", before.chat + 24);
+    assert.equal(grew(), 24, "an arrow-key step is not held");
+  });
+
   it("narrows the last open column with the state flow stretching over its room, and lets it grow past", () => {
     const stack = deskAt(1440);
     const before = widths(stack);
