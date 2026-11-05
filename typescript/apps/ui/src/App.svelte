@@ -1,6 +1,6 @@
 <script lang="ts">
   import TranscriptPanel, {
-    type TranscriptFilter
+    type TranscriptFacet
   } from "$lib/components/agent/TranscriptPanel.svelte";
   import AgentStateFlow from "$lib/components/flow/AgentStateFlow.svelte";
   import LatencyWaterfall from "$lib/components/flow/LatencyWaterfall.svelte";
@@ -116,13 +116,13 @@
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
-  let transcriptFilter = $state<TranscriptFilter>(
-    savedPrefs.transcriptFilter === "model" ||
-      savedPrefs.transcriptFilter === "tool" ||
-      savedPrefs.transcriptFilter === "approval" ||
-      savedPrefs.transcriptFilter === "all"
-      ? savedPrefs.transcriptFilter
-      : "all"
+  const FACETS = new Set<string>(["error", "wait", "model", "tool", "client", "state", "message"]);
+  /* A list of facets now; a single filter saved before that maps onto its facet. */
+  const savedFilter = savedPrefs.transcriptFilter;
+  let transcriptFilter = $state<TranscriptFacet[]>(
+    (Array.isArray(savedFilter) ? savedFilter : [savedFilter === "approval" ? "client" : savedFilter]).filter(
+      (key): key is TranscriptFacet => typeof key === "string" && FACETS.has(key)
+    )
   );
   let chatTargetId = $state<string | null>(null);
   let hotkeyHelpOpen = $state(false);
@@ -297,14 +297,14 @@
   function selectNode(nodeId: string): void {
     const localNodeId = nodeId.split("::").at(-1) ?? nodeId;
     if (localNodeId === "model" || localNodeId === "reasoning") {
-      transcriptFilter = "model";
+      transcriptFilter = ["model"];
     } else {
       transcriptFilter =
         localNodeId.startsWith("tool:") || localNodeId === "tool-container"
-          ? "tool"
+          ? ["tool"]
           : localNodeId === "approval"
-            ? "approval"
-            : "all";
+            ? ["client"]
+            : [];
     }
   }
 
