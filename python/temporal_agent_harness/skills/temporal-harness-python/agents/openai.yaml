@@ -1,0 +1,4 @@
+interface:
+  display_name: "Temporal Harness Python"
+  short_description: "Build durable Python agents and harness API clients"
+  default_prompt: "Use $temporal-harness-python to build and verify this harness application."

@@ -6,6 +6,7 @@ ts_project(
     srcs = ["cli.ts"],
     declaration = True,
     tsconfig = "//typescript/packages/codegen:tsconfig",
+    visibility = ["//typescript/packages/codegen:__pkg__"],
     deps = [":generate"],
 )
 

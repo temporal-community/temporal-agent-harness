@@ -1,3 +1,4 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
 load("//bazel:js_test.bzl", "harness_js_test")
 
@@ -56,4 +57,10 @@ harness_js_test(
     name = "plugin_test",
     data = [":plugin.test"],
     entry_point = "plugin.test.js",
+)
+
+js_test(
+    name = "development_test",
+    data = ["//typescript/packages/worker:development"],
+    entry_point = "development.test.mjs",
 )

@@ -1,0 +1,6 @@
+exports_files([
+    "agent-resources/env.example.tmpl",
+    "agent-resources/gitignore.tmpl",
+    "agent-resources/verification.md",
+    "api/README.md",
+])
