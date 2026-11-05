@@ -262,7 +262,8 @@ export function prepare(env = process.env, run = execute) {
 
   const prs = JSON.parse(run('gh', ['pr', 'list', '--repo', env.GITHUB_REPOSITORY,
     '--base', 'main', '--state', 'open', '--limit', '1000', '--json', 'headRefName,url']));
-  const existing = prs.find((pr) => pr.headRefName.startsWith(`release/${unit}-v`));
+  const existing = prs.find((pr) => pr.headRefName.startsWith(`release/${unit}-v`)
+    || (unit === 'npm' && pr.headRefName.startsWith('security/npm-v')));
   assert(!existing, `An open ${unit} release PR already exists: ${existing?.url}`);
 
   let previous;

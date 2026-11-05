@@ -1,0 +1,58 @@
+name: Dependabot npm security releases
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release-npm
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Require the automation token
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_RELEASE_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN" || { echo '::error::Configure DEPENDABOT_RELEASE_TOKEN (see RELEASE.md).'; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.DEPENDABOT_RELEASE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Select, merge and prepare security updates
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_RELEASE_TOKEN }}
+          PUBLISH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          node scripts/dependabot-release.mjs reconcile
+      - if: steps.plan.outputs.prepare == 'true'
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
+      - name: Bump, test and open the patch release PR
+        if: steps.plan.outputs.prepare == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_RELEASE_TOKEN }}
+        run: node scripts/dependabot-release.mjs prepare

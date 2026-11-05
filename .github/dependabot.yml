@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /typescript
+    schedule:
+      interval: daily
+    # Security updates are advisory-driven and have their own PR limit. Do not
+    # create routine version-update PRs for the automatic patch-release flow.
+    open-pull-requests-limit: 0

@@ -8,3 +8,12 @@ js_test(
     data = ["release.mjs"],
     entry_point = "release.test.mjs",
 )
+
+js_test(
+    name = "dependabot_release_test",
+    data = [
+        "dependabot-release.mjs",
+        "release.mjs",
+    ],
+    entry_point = "dependabot-release.test.mjs",
+)

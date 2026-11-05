@@ -246,6 +246,14 @@ test('prepare refuses to run off main or beside an open release PR, changing not
   assert.equal(lockstepVersion(lockstepPackages()), '0.1.0');
 }));
 
+test('manual npm preparation waits for an automatic security release PR', () => fixture(() => {
+  assert.throws(() => prepare({ RELEASE_UNIT: 'npm', RELEASE_BUMP: 'patch',
+    GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: repository }, () =>
+    JSON.stringify([{ headRefName: 'security/npm-v0.1.1', url: 'https://example.test/pr' }])),
+  /already exists/);
+  assert.equal(lockstepVersion(lockstepPackages()), '0.1.0');
+}));
+
 test('PR creation link prefills base, branch, title and multiline body', () => {
   const body = 'Release notes\n\nDependency: ^0.2.0 & checks passed.';
   const url = new URL(releasePrUrl(repository, 'release/pypi-v0.9.0', body));

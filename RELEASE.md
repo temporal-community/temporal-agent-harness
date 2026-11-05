@@ -150,6 +150,88 @@ matching tag yourself (`0.9.0` or `npm-v0.9.0`) is the manual fallback and also 
 - **Coordinated changes** (a new server and a new client): publication is not atomic across
   PyPI and npm. Publish in the tested upgrade order and announce when every artifact is live.
 
+## Automatic TypeScript security patches
+
+[Dependabot npm security releases](.github/workflows/dependabot-release.yml) runs at minute 23
+of every hour, or manually through **Run workflow** on `main`. GitHub may delay scheduled runs.
+It covers the `typescript/` workspace and publishes only npm, not Python or the embedded console.
+
+The release starts from the latest published `npm-v*` tag. Only verified Dependabot security
+fixes are cherry-picked onto that tag, followed by a patch version bump. Unrelated work on
+`main` stays out of the release. After npm publication succeeds, the automation merges the
+patch-release PR back into `main`, retaining main's other work. No bootstrap release is needed.
+
+### One-time setup
+
+1. Keep Dependabot security updates enabled in repository settings (already enabled here).
+   [.github/dependabot.yml](.github/dependabot.yml) disables routine npm version-update PRs with
+   `open-pull-requests-limit: 0`; advisory-driven security PRs remain enabled. All severities,
+   including development dependencies, are eligible. The hourly job processes Dependabot's PRs;
+   it cannot force a scan or generate a fix when Dependabot cannot produce one.
+2. Add the Actions repository secret **`DEPENDABOT_RELEASE_TOKEN`**, a fine-grained personal
+   access token restricted to this repository, with **Dependabot alerts: read**, **Contents:
+   read/write**, **Pull requests: read/write**, and **Actions: read**. Its owner must be allowed
+   to merge under repository rules. Rotate it before expiration. This token lets created PRs
+   run CI unattended. The job's `GITHUB_TOKEN` creates tags/releases and explicitly dispatches
+   publishing, avoiding duplicate tag-triggered publish runs.
+3. Keep required CI and branch protections enabled. The automation does not bypass rules or
+   provide reviews. Required reviews still need an eligible reviewer; configure repository rules
+   accordingly if these PRs should merge unattended.
+4. Keep the `npm` environment's `npm-v*` tag policy and each package's OIDC trusted publisher
+   configured. Environment reviewers still require approval. Change that setting yourself if
+   npm publication should be unattended; the workflow does not alter environment protections.
+
+### What each run does
+
+1. Query GitHub's actual alert-to-PR relationship, including fixed alerts. Labels, titles and
+   branch names alone cannot qualify a PR. Eligible PRs come from Dependabot in this repository,
+   target `main`, and change only the TypeScript lockfile or dependency versions in existing
+   manifests. Source edits, script changes, added/removed dependencies and non-version dependency
+   sources require manual review.
+2. Squash-merge at most one eligible security PR after its current head's **Tests** workflow and
+   other checks pass and merge rules allow it. The merge is guarded by that head SHA. Pending,
+   failing, conflicting or review-blocked PRs wait for a later run.
+3. Find merged security fixes not already included in the latest successfully published npm tag.
+   Cherry-pick only those fixes onto that tag, bump all npm packages by one patch, update pins and
+   lockstep references, and run `bazel test //typescript/...` on the isolated release tree. Open
+   `security/npm-vX.Y.Z` as a PR into `main`. An empty queue creates no release.
+4. Wait for the release PR's CI and merge rules. Before publishing, verify the branch's entire
+   history: exactly the previous tag, cherry-picks matching the original reviewed patches, and
+   a version-only commit. Provenance in the final commit records the original PRs and SHAs. The
+   lockfile cannot include additional upgrades introduced during version preparation.
+5. Tag the **isolated branch head**, create release notes identifying the fixes, and dispatch
+   the existing **Publish to npm** workflow. Do not tag main's merge commit: it may contain
+   unrelated features. Wait for successful publication, then squash-merge the patch-release PR
+   into `main`. The normal **Release merged PR** workflow ignores `security/` branches, so this
+   integration does not publish again. Subsequent runs remember already released fixes even
+   though a squash merge does not preserve the maintenance branch's ancestry.
+
+A manual npm release and an automatic release cannot be prepared together. If main's package
+version has already advanced, a backport conflicts, a dependency change cannot apply to the
+released code, CI fails, or merge rules block the PR, the run stops for review. Never resolve a
+backport by copying all of main's lockfile: that could include unrelated upgrades. Release notes
+and run summaries identify the selected fixes and blockers. Lockfile-only app/test updates can
+produce a workspace patch, but a new SDK version does not force consumers to refresh their own
+lockfiles.
+
+For a read-only preflight, fetch `main` and tags and authenticate `gh` with alert-read access:
+
+```sh
+GITHUB_REPOSITORY=temporal-community/temporal-agent-harness node scripts/dependabot-release.mjs inspect
+```
+
+This reads existing refs and GitHub metadata without merging or publishing. If preparation
+pushed a branch but could not open its PR, open it yourself or delete the unused branch before
+rerunning; the automation never force-pushes. Do not merge a security-release PR before npm
+publication succeeds. If publication fails, rerun **Publish to npm** against the same tag;
+existing package versions are skipped and the next hourly run resumes integration after success.
+A published tag is never moved. If main advances to a newer release before integration, resolve
+the integration manually rather than downgrading main's version.
+
+GitHub references: [security updates](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-security-updates),
+[version-update limits](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#open-pull-requests-limit),
+and [workflow token behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
 ## First TypeScript SDK release
 
 `@temporalio/agent-harness` and `@temporalio/agent-harness-worker` are already in the lockstep set
