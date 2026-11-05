@@ -40,10 +40,12 @@
     }
   },
   "bin": {
-    "agent-harness-schema": "./dist/src/harness/agent-schema.js"
+    "agent-harness-schema": "./dist/src/harness/agent-schema.js",
+    "agent-harness": "./bin/agent-harness.mjs"
   },
   "files": [
-    "dist/src"
+    "dist/src",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json --outDir dist",

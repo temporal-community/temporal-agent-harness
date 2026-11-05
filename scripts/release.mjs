@@ -108,6 +108,37 @@ export function updateReadmePins(readme, previous, next) {
   return text;
 }
 
+// Update consumer instructions wherever they ship, including templates and bundled references.
+export function updateDevelopmentPins(unit, previous, next, root = '.') {
+  const paths = ['README.md', 'python/README.md', 'typescript/README.md'];
+  function walk(directory) {
+    if (!existsSync(join(root, directory))) return;
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(md|tmpl)$/.test(entry.name)) paths.push(path);
+    }
+  }
+  for (const directory of ['docs', 'python/temporal_agent_harness/skills', 'typescript/packages/core/skills']) walk(directory);
+  for (const pkg of lockstepPackages(root)) paths.push(`${pkg.directory}/README.md`);
+  const escaped = escapeRegExp(previous);
+  const pattern = unit === 'pypi'
+    ? new RegExp(`(temporal-agent-harness(?:\\[[^\\]]+\\])?==)${escaped}(?![\\d.])`, 'g')
+    : new RegExp(`(@temporalio/agent-harness(?:-[a-z-]+)?@)${escaped}(?![\\d.])`, 'g');
+  for (const relative of new Set(paths)) {
+    const path = join(root, relative);
+    if (!existsSync(path)) continue;
+    const original = readFileSync(path, 'utf8');
+    let text = original.replace(pattern, `$1${next}`);
+    if (unit === 'pypi' && ['python/README.md', 'docs/guides/examples.md'].includes(relative)) {
+      text = text.replace(new RegExp(`(--branch )${escaped}(?![\\d.])`, 'g'), `$1${next}`)
+        .replace(new RegExp(`git diff \\S+ ${escaped}(?![\\d.])`, 'g'), `git diff ${previous} ${next}`);
+    }
+    if (unit === 'npm') text = text.replaceAll(`npm-v${previous}`, `npm-v${next}`);
+    if (text !== original) writeFileSync(path, text);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // npm: the lockstep package set
 
@@ -243,7 +274,8 @@ export function prepare(env = process.env, run = execute) {
     version = bumpVersion(previous, bump);
     writeFileSync(PYPROJECT, setPythonVersion(pyproject, version));
     run('uv', ['lock'], { cwd: 'python' });
-    writeFileSync(README, updateReadmePins(readFileSync(README, 'utf8'), previous, version));
+    assert(readFileSync(README, 'utf8').includes(`temporal-agent-harness[ui]==${previous}`),
+      `${README} must pin the current Python package version`);
     lines.push(`Release \`temporal-agent-harness\` ${previous} → **${version}** to PyPI.`, '',
       `Changed: \`${PYPROJECT}\`, \`python/uv.lock\` (\`uv lock\`), the README's install pins.`,
       'Review the lockfile diff for dependency changes beyond the version.');
@@ -264,6 +296,7 @@ export function prepare(env = process.env, run = execute) {
     lines.push('Every workspace dependency on these packages now requires `^' + version + '`.');
   }
 
+  updateDevelopmentPins(unit, previous, version);
   const details = unitDetails(unit, version);
   appendFileSync(env.GITHUB_OUTPUT, [
     `unit=${unit}`, `version=${version}`, `branch=${details.branch}`, `tag=${details.tag}`,

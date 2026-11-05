@@ -1,0 +1,4 @@
+interface:
+  display_name: "Temporal Harness TypeScript"
+  short_description: "Build durable TypeScript agents and harness API clients"
+  default_prompt: "Use $temporal-harness-typescript to build and verify this harness application."

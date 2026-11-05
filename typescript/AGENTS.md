@@ -27,7 +27,7 @@ bazel run //typescript:pnpm -- --dir "$PWD/typescript/packages/client" run test
 | [`@temporalio/agent-harness-client`](packages/client) | Transport, `startSession`, message and state types, schema forms, and `AgentSessionCore` with `PlainSessionState` for code with no framework |
 | [`@temporalio/agent-harness-react`](packages/react) | `useAgentSession`, `useAgentSessionSelector` and `HarnessProvider` |
 | [`@temporalio/agent-harness-svelte`](packages/svelte) | `AgentSession` and `createHarnessContext` |
-| [`@temporal-agent-harness/codegen`](packages/codegen) | `harness-codegen`: an agent's handlers, states and init data as TypeScript types |
+| [`@temporalio/agent-harness-codegen`](packages/codegen) | `harness-codegen`: an agent's handlers, states and init data as TypeScript types |
 
 Each binding re-exports the client, so an app imports from one package.
 
@@ -40,8 +40,8 @@ Each binding re-exports the client, so an app imports from one package.
    `temporal-agent-harness schema module:Class` into `harness-codegen` as
    [packages/codegen/README.md](packages/codegen/README.md) shows. Commit the output; never edit it.
 2. **The rest** (connecting, starting or attaching, reading selectively, sending, answering the
-   agent, testing) is in the root README's walkthrough,
-   [Build a UI in React or Svelte](../README.md#build-a-ui-in-react-or-svelte), and in each
+   agent, testing) is in the application walkthrough,
+   [Build a UI in React or Svelte](../docs/guides/client-ui.md), and in each
    binding's README: [React](packages/react/README.md), [Svelte](packages/svelte/README.md).
 
 Worked references:

@@ -1,6 +1,8 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
 load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:committed_files.bzl", "committed_files")
+load("//bazel:npm_package.bzl", "published_npm_package")
 
 npm_link_all_packages(name = "node_modules")
 
@@ -24,4 +26,22 @@ ts_config(
         ":node_modules/@types/node",
         ":package_json",
     ],
+)
+
+published_npm_package(
+    name = "pkg",
+    srcs = [
+        "LICENSE",
+        "README.md",
+        "package.json",
+        "//typescript/packages/codegen/src:cli",
+    ],
+    replace_prefixes = {"src/": "dist/src/"},
+    visibility = ["//visibility:public"],
+)
+
+committed_files(
+    name = "license",
+    srcs = ["LICENSE"],
+    generated = {"LICENSE": "//:LICENSE"},
 )
