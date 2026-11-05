@@ -60,7 +60,7 @@
   const judgment = $derived.by(() => {
     const calls = agent.messages.flatMap((m) => m.parts).filter((p) => p.type === "tool");
     const last = calls.findLast((p) => p.toolName === "typesafe_system_one" && p.state === "done");
-    return last?.output ? (JSON.parse(last.output) as Judgment) : null;
+    return last?.output ? (last.output as unknown as Judgment) : null;
   });
   const move = $derived(judgment?.choices.move);
 
@@ -98,11 +98,12 @@
           return [{ kind: "tool", label: `${data.tool_name} →`, body, at }];
         }
         case "tool_end": {
-          const pick = data.tool_name === "typesafe_system_one" && (JSON.parse(data.tool_output) as Judgment).choices.move;
+          const output = data.tool_output;
+          const pick = data.tool_name === "typesafe_system_one" && (output as unknown as Judgment).choices.move;
           const top = Object.entries(pick ? pick.probabilities : {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
           const body = pick
             ? `${pick.choice} @ ${percent(pick.confidence)} · top ${top.map(([cell, p]) => `${cell.slice(5)}:${percent(p)}`).join(" ")}`
-            : data.tool_output.split("\n")[0]!;
+            : (typeof output === "string" ? output : JSON.stringify(output)).split("\n")[0]!;
           return [{ kind: "tool", label: `${data.tool_name} ←`, body, at }];
         }
         case "tool_error":

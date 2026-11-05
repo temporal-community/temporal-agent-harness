@@ -42,7 +42,9 @@ const ROWS = [
   ["Subagent stream unavailable", "degraded", null],
   ["Reply streaming", "streaming", null],
   ["Final reply", "complete", null],
-  ["Turn ended", "idle", null]
+  ["Turn ended", "idle", null],
+  ["Agent closed", "closed", null],
+  ["Agent closed: idle timeout expired", "closed", null]
 ];
 
 describe("statusNote", () => {
@@ -59,12 +61,12 @@ describe("statusNote", () => {
 
     /* The pair count is the coverage claim this file used to print on the way out:
        if a label/status pair is added or dropped, say so here. */
-    assert.equal(ROWS.length, 22, "every label/status pair the app can produce is swept above");
+    assert.equal(ROWS.length, 24, "every label/status pair the app can produce is swept above");
 
     const suppressed = ROWS.filter(([, , expected]) => expected === null).length;
     assert.equal(
       suppressed,
-      20,
+      22,
       "the count is part of the claim: if a row moved between suppressed and surviving, say so here"
     );
   });

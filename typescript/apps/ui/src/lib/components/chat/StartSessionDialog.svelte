@@ -115,7 +115,7 @@
 </script>
 
 <script lang="ts">
-  import { ChevronRight, RefreshCw, Search, X } from "@lucide/svelte";
+  import { Bot, ChevronRight, RefreshCw, Search, SearchX, X } from "@lucide/svelte";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
   import { untrack } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -436,9 +436,12 @@
         {#if filtered.length === 0}
           <div class="grid-empty">
             {#if agents.length === 0}
-              <EmptyState title={refreshing ? "Loading agents…" : "No agents are registered yet."} />
+              <EmptyState
+                title={refreshing ? "Loading agents…" : "No agents are registered yet."}
+                icon={refreshing ? undefined : Bot}
+              />
             {:else}
-              <EmptyState title="No agents match">Try another word, or fewer filters.</EmptyState>
+              <EmptyState title="No agents match" icon={SearchX}>Try another word, or fewer filters.</EmptyState>
             {/if}
           </div>
         {/if}

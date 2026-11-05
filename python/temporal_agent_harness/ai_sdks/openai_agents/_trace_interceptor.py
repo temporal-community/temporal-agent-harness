@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import Any, Protocol
 
-from agents import CustomSpanData, custom_span, get_current_span, trace
+from agents import CustomSpanData, Trace, custom_span, get_current_span, trace
 from agents.tracing import (
     get_trace_provider,
 )
@@ -210,17 +210,23 @@ class OpenAIAgentsContextPropagationInterceptor(
             else:
                 Scope.set_current_span(current_span)
 
+    @contextmanager
     def context_from_header(
         self,
         input: _InputWithHeaders,
-    ):
-        """Extracts and initializes trace information the input header."""
-        span_info = self.get_header_contents(input)
-        if span_info is None:
-            return
-
-        self.trace_context_from_header_contents(span_info)
-        self.span_context_from_header_contents(span_info)
+    ) -> Generator[None, None, None]:
+        """Restore the caller's trace context for an inbound operation."""
+        previous_trace: Trace | None = Scope.get_current_trace()
+        previous_span: Span[Any] | None = Scope.get_current_span()
+        try:
+            span_info = self.get_header_contents(input)
+            if span_info is not None:
+                self.trace_context_from_header_contents(span_info)
+                self.span_context_from_header_contents(span_info)
+            yield
+        finally:
+            Scope.set_current_span(previous_span)
+            Scope.set_current_trace(previous_trace)
 
     @contextmanager
     def maybe_span(self, span_name: str, data: dict[str, Any] | None):
@@ -318,9 +324,11 @@ class _ContextPropagationActivityInboundInterceptor(
     async def execute_activity(
         self, input: temporalio.worker.ExecuteActivityInput
     ) -> Any:
-        self._root.context_from_header(input)
-        with temporal_span(self._root._add_temporal_spans, "temporal:executeActivity"):
-            return await self.next.execute_activity(input)
+        with self._root.context_from_header(input):
+            with temporal_span(
+                self._root._add_temporal_spans, "temporal:executeActivity"
+            ):
+                return await self.next.execute_activity(input)
 
 
 class _ContextPropagationWorkflowInboundInterceptor(
@@ -342,14 +350,18 @@ class _ContextPropagationWorkflowInboundInterceptor(
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
     ) -> Any:
-        self.root().context_from_header(input)
-        with temporal_span(self.root()._add_temporal_spans, "temporal:executeWorkflow"):
-            return await self.next.execute_workflow(input)
+        with self.root().context_from_header(input):
+            with temporal_span(
+                self.root()._add_temporal_spans, "temporal:executeWorkflow"
+            ):
+                return await self.next.execute_workflow(input)
 
     async def handle_signal(self, input: temporalio.worker.HandleSignalInput) -> None:
-        self.root().context_from_header(input)
-        with temporal_span(self.root()._add_temporal_spans, "temporal:handleSignal"):
-            return await self.next.handle_signal(input)
+        with self.root().context_from_header(input):
+            with temporal_span(
+                self.root()._add_temporal_spans, "temporal:handleSignal"
+            ):
+                return await self.next.handle_signal(input)
 
     async def handle_query(self, input: temporalio.worker.HandleQueryInput) -> Any:
         with temporal_span(self.root()._add_temporal_spans, "temporal:handleQuery"):
@@ -358,14 +370,14 @@ class _ContextPropagationWorkflowInboundInterceptor(
     def handle_update_validator(
         self, input: temporalio.worker.HandleUpdateInput
     ) -> None:
-        self.root().context_from_header(input)
-        self.next.handle_update_validator(input)
+        with self.root().context_from_header(input):
+            self.next.handle_update_validator(input)
 
     async def handle_update_handler(
         self, input: temporalio.worker.HandleUpdateInput
     ) -> Any:
-        self.root().context_from_header(input)
-        return await self.next.handle_update_handler(input)
+        with self.root().context_from_header(input):
+            return await self.next.handle_update_handler(input)
 
 
 class _ContextPropagationWorkflowOutboundInterceptor(

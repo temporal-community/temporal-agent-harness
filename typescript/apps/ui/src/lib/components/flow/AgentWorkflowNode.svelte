@@ -15,14 +15,11 @@
 
   let { data }: Props = $props();
 
-  const boundaryWidth = $derived(
-    typeof data.boundaryWidth === "number" ? data.boundaryWidth : 930
-  );
-  const boundaryHeight = $derived(
-    typeof data.boundaryHeight === "number" ? data.boundaryHeight : 240
-  );
   const headerPrefix = $derived(
     typeof data.headerPrefix === "string" ? data.headerPrefix : null
+  );
+  const headerHeight = $derived(
+    typeof data.headerHeight === "number" ? `${data.headerHeight}px` : undefined
   );
   const interfaces = $derived(
     Array.isArray(data.interfaces) ? data.interfaces : []
@@ -48,12 +45,9 @@
   const titleTip = $derived(data.title.length > 40 ? data.title : undefined);
 </script>
 
-<div
-  class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}
-  style={`width: ${boundaryWidth}px; height: ${boundaryHeight}px;`}
->
+<div class={["workflow-boundary", runtimeRole, `status-${STATUS_TONES[statusKind]}`]}>
   <Handle id="target-top" class="workflow-handle" type="target" position={Position.Top} />
-  <div class="workflow-head">
+  <div class="workflow-head" style:min-height={headerHeight}>
     <div class="workflow-title-group">
       <span class="workflow-title-row" data-tip={titleTip} data-tip-below>
         <StateGlyph kind={statusKind} {running} />
@@ -86,23 +80,45 @@
       <StatusChip label={data.state} kind={statusKind} plain />
     </span>
   </div>
+  <!-- The raised floor the runtime's cards stand on (they are separate nodes, laid over it). -->
+  <div class="workflow-body"></div>
   <Handle id="source-bottom" class="workflow-handle" type="source" position={Position.Bottom} />
 </div>
 
 <style>
+  /* The node box flowProjection sizes from boundaryWidth/boundaryHeight. Rounded like the
+     cards it holds (see --radius-card in app.css), and coloured the same way: the runtime's
+     tone tints the head and the hairline. No lift — it is the ground the cards stand on. */
   .workflow-boundary {
     --status-color: var(--accent);
-    pointer-events: none;
-    border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
-    border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--surface-1) 90%, var(--accent) 10%);
-    box-shadow: var(--shadow-node-tall);
+    --frame-border: color-mix(in srgb, var(--status-color) 34%, var(--color-border-primary));
+    width: 100%;
+    height: 100%;
+    /* Takes the pointer, so hovering a subagent's frame is not hovering the Subagent activity
+       card under it: that card's footer would come up over the frame, as if it were the frame's. */
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--frame-border);
+    border-radius: var(--radius-card);
+    /* No more than 8%: --text-3 on a 12% green band measured 4.36:1. */
+    background: color-mix(in srgb, var(--status-color) 8%, var(--surface-1));
   }
 
+  /* A subagent's frame sits on a card's body rather than the canvas, so it takes a
+     little less tint to read as one step further in. */
   .workflow-boundary.subagent {
-    border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
-    background: color-mix(in srgb, var(--surface-1) 92%, var(--accent) 8%);
-    box-shadow: var(--shadow-node-mid);
+    background: color-mix(in srgb, var(--status-color) 6%, var(--surface-1));
+  }
+
+  /* The raised floor, flush with the frame's sides and foot like a card's body. */
+  .workflow-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0 -1px -1px;
+    border: 1px solid var(--frame-border);
+    border-radius: var(--radius-card-inner);
+    background: var(--color-surface-primary);
   }
 
   .status-neutral { --status-color: var(--text-3); }
@@ -112,7 +128,8 @@
   .status-error { --status-color: var(--error); }
   .status-live { --status-color: var(--live); }
 
-  /* Zero-sized for the same reason as AgentStateNode's .node-handle. */
+  /* Zero-sized for the same reason as AgentStateNode's .node-handle, on the node box and
+     pulled out by 1px. flowProjection's handlesFor mirrors this, so change both. */
   :global(.workflow-handle) {
     width: 0;
     height: 0;
@@ -124,19 +141,18 @@
     pointer-events: none;
   }
 
+  /* Held at the height flowProjection reserves (runtimeHeaderHeight): the runtime's
+     cards are laid out from that number, not from this box. */
   .workflow-head {
+    flex: none;
     min-height: 88px;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 12px;
-    padding: 13px 14px 11px;
-    border-bottom: 1px solid color-mix(in srgb, var(--status-color) 26%, var(--border));
-    /* No more than 8%: --text-3 on a 12% green band measured 4.36:1. */
-    background: color-mix(in srgb, var(--status-color) 8%, var(--surface-1));
-    color: var(--text-1);
+    gap: var(--gap-lg);
+    padding: var(--gap-lg) var(--gap-lg) var(--gap-md);
+    color: var(--color-content-primary);
     font-size: var(--font-md);
-    font-weight: 700;
   }
 
   .workflow-title-group {
@@ -157,6 +173,8 @@
 
   .workflow-title {
     overflow: hidden;
+    font-size: var(--font-xl);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -176,9 +194,8 @@
 
   .workflow-subtitle {
     overflow: hidden;
-    color: var(--text-3);
-    font-size: var(--font-sm);
-    font-weight: 600;
+    color: var(--color-content-secondary);
+    font-size: var(--font-md);
     line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -206,18 +223,25 @@
      carries the handler's description. */
   .handler {
     min-width: 0;
-    max-width: 120px;
+    max-width: 96px;
     overflow: hidden;
-    color: color-mix(in srgb, var(--accent) 74%, var(--text-1));
-    font-family: var(--font-mono);
-    font-size: var(--font-sm);
-    font-weight: 500;
+    padding: var(--gap-2xs) var(--gap-md);
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--color-border-primary));
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: color-mix(in srgb, var(--accent) 74%, var(--color-content-primary));
+    font-family: var(--font-sans);
+    font-size: var(--font-xs);
+    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .handler.more {
     flex: 0 0 auto;
-    color: var(--text-3);
+    max-width: none;
+    border-color: var(--color-border-primary);
+    background: var(--color-surface-overlay-secondary);
+    color: var(--color-content-tertiary);
   }
 </style>

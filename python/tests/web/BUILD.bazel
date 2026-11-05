@@ -166,3 +166,14 @@ harness_pytest_test(
         "@pypi//pytest_asyncio",
     ],
 )
+
+harness_pytest_test(
+    name = "test_temporal_ui",
+    srcs = ["test_temporal_ui.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:temporal_ui",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)

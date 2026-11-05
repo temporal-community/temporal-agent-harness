@@ -15,6 +15,7 @@ Env vars:
     TEMPORAL_PROFILE             profile name to load (default: "default")
     GEMINI_API_KEY               required — the conversational agents call the Gemini Interactions API
     MONTY_AGENT_TASK_QUEUE       task queue to poll (default: monty-dynamic-agent)
+    TASK_QUEUE_PREFIX            put in front of the default queue's name, if set
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
 agents) — not the session manager. The packaged session manager is hosted by
@@ -36,6 +37,7 @@ from temporalio.worker import Worker
 
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.monty import activities
 from examples.monty.conversational_subagent_workflow import MontyChatSubagentWorkflow
@@ -57,7 +59,7 @@ async def main() -> None:
     for name in ("temporalio", "temporalio.workflow", "temporalio.activity"):
         logging.getLogger(name).setLevel(logging.INFO)
 
-    task_queue = os.environ.get("MONTY_AGENT_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("MONTY_AGENT_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     # The conversational Monty agent (MontyChatAgent) drives the Gemini Interactions API, so
     # this worker needs the Gemini plugin (it auto-registers the interactions activity). The

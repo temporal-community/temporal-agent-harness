@@ -21,7 +21,7 @@ from temporal_agent_harness.harness.agent_protocol.events import (
 Handler = Literal["run_reject", "run_enqueue", "run_accept"]
 """The scripted agent's handlers, one per ``MidTurn`` mode."""
 
-ToolName = Literal["add", "echo", "fail", "gated", "ask_client"]
+ToolName = Literal["add", "lookup", "echo", "noop", "fail", "gated", "ask_client"]
 
 INTEGRATION_EVENT_TYPES = frozenset(
     {

@@ -1,7 +1,12 @@
 // run_subagent_turn: drive one turn on a child agent and return its reply
 
 import { Context, ApplicationFailure } from "@temporalio/activity";
-import { WorkflowUpdateFailedError, type Client } from "@temporalio/client";
+import {
+  WorkflowNotFoundError,
+  WorkflowUpdateFailedError,
+  isGrpcServiceError,
+  type Client,
+} from "@temporalio/client";
 import { subscribe } from "./stream-merge/index.ts";
 import {
   SEND_AGENT_MESSAGE_UPDATE,
@@ -12,6 +17,9 @@ import {
   type SubagentTurnResult,
 } from "@temporalio/agent-harness/harness/agent-protocol";
 import { publisherFromActivity } from "./agent-workflow.ts";
+
+// gRPC's NOT_FOUND status code.
+const GRPC_NOT_FOUND = 5;
 
 interface TurnProgress {
   sent: true;
@@ -46,6 +54,18 @@ async function submit(client: Client, req: RunSubagentTurnInput): Promise<TurnPr
         type: cause?.type ?? "SubagentSendRejected",
         nonRetryable: true,
         message: cause?.message ?? "subagent rejected the message",
+      });
+    }
+    // The parent started this child, so a missing workflow is one that has already ended: closed
+    // from outside, terminated, or failed.
+    if (
+      e instanceof WorkflowNotFoundError ||
+      (isGrpcServiceError(e) && e.code === GRPC_NOT_FOUND)
+    ) {
+      throw ApplicationFailure.create({
+        type: "AgentClosed",
+        nonRetryable: true,
+        message: `subagent workflow '${req.child_workflow_id}' is no longer running`,
       });
     }
     throw e;

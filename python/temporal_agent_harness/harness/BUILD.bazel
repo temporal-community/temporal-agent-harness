@@ -66,6 +66,7 @@ py_library(
         "//python/temporal_agent_harness/harness/state:decl",
         "//python/temporal_agent_harness/harness/state:events",
         "@pypi//pydantic",
+        "@pypi//pydantic_core",
         "@pypi//temporalio",
     ],
 )

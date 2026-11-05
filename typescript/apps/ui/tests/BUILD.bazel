@@ -173,6 +173,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "known-node-sizes_test",
+    src = "known-node-sizes.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+        "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+    ],
+)
+
+vitest_test(
     name = "long-text-containment_test",
     src = "long-text-containment.test.mjs",
     deps = [

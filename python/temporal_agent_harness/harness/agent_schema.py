@@ -35,6 +35,22 @@ __all__ = [
 
 _REF_TEMPLATE = "#/$defs/{model}"
 
+# pydantic renders its `JsonValue` as `{}` (any JSON value), which json-schema-to-typescript turns
+# into an object type, so the protocol spells out the JSON union instead.
+_JSON_VALUE_REF = {"$ref": _REF_TEMPLATE.format(model="JsonValue")}
+_JSON_VALUE_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        {"type": "array", "items": _JSON_VALUE_REF},
+        {"type": "object", "additionalProperties": _JSON_VALUE_REF},
+        {"type": "string"},
+        {"type": "boolean"},
+        {"type": "integer"},
+        {"type": "number"},
+        {"type": "null"},
+    ],
+    "description": "Any JSON value.",
+}
+
 
 class _WireJsonSchema(GenerateJsonSchema):
     """Serialization-mode schemas describe what ``model_dump(mode="json")`` emits.
@@ -198,6 +214,8 @@ def protocol_schema() -> dict[str, Any]:
     )
     defs: dict[str, Any] = top.pop("$defs")
     defs[AgentEvent.__name__] = top
+    if "JsonValue" in defs:
+        defs["JsonValue"] = _JSON_VALUE_SCHEMA
     return {
         "event": {"$ref": _REF_TEMPLATE.format(model=AgentEvent.__name__)},
         "stream_items": top["properties"]["event"]["oneOf"],

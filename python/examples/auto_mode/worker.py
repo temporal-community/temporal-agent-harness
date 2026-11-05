@@ -17,6 +17,7 @@ Env vars:
     TYPESAFE_API_KEY             required — auto mode judges gated calls with Jev
                                  (TYPESAFE_AI_API_KEY is accepted as an alias)
     AUTO_MODE_AGENT_TASK_QUEUE   task queue to poll (default: auto-mode-agent)
+    TASK_QUEUE_PREFIX            put in front of the default queue's name, if set
 
 Both keys are required up front, and that is deliberate even though a missing TypeSafe key
 would not wedge anything: the Jev call would fail, and every gated call would fall through
@@ -46,6 +47,7 @@ from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
 
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.utils.task_queue import task_queue_name
 
 from examples.monty import activities
 from examples.auto_mode.workflow import TASK_QUEUE, AutoModeTravelAgentWorkflow
@@ -63,7 +65,7 @@ async def main() -> None:
     for name in ("temporalio", "temporalio.workflow", "temporalio.activity"):
         logging.getLogger(name).setLevel(logging.INFO)
 
-    task_queue = os.environ.get("AUTO_MODE_AGENT_TASK_QUEUE", TASK_QUEUE)
+    task_queue = os.environ.get("AUTO_MODE_AGENT_TASK_QUEUE") or task_queue_name(TASK_QUEUE)
 
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_api_key:

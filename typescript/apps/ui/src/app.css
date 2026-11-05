@@ -1,3 +1,5 @@
+@import "./lib/theme/io-tokens.css";
+
 :root {
   color-scheme: dark;
   /* Instrument, not terminal: sans carries content, mono is reserved for chrome
@@ -77,14 +79,15 @@
   --accent: #6173f3;
   --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */
-  --live: #ffc53d;
+  --color-attention: var(--color-amber-9);
+  --live: var(--color-attention);
   --model: #a9aef5;
   --reasoning: #53dfca;
   /* Identity, not outcome: --tool says a tool is what this is, the way --model and
      --reasoning do, and it answers a different question from --success/--warning/
      --error, which say how it went. The two maps overlay — a tool that warns is
      both — so they cannot be one token. */
-  --tool: #ff9d00;
+  --tool: var(--color-pink-9);
   --success: #6ee7b7;
   --warning: #fcd34d;
   /* Retrying. Deliberately between --warning and --error, because that is what
@@ -125,6 +128,15 @@
   --radius-sm: 0;
   --radius-md: 0;
   --radius-lg: 0;
+  /* The one exception, and deliberately outside the scale above: the State flow's
+     cards and runtime frames round and lift, so the run's steps read as objects on
+     the canvas rather than as boxes ruled onto it. */
+  --radius-card: 10px;
+  --radius-card-inner: 9px;
+  --radius-pill: 999px;
+  --shadow-card-lift:
+    0 10px 24px -12px color-mix(in srgb, var(--surface-0) 92%, transparent),
+    0 2px 6px -2px color-mix(in srgb, var(--surface-0) 70%, transparent);
   /* Spacing. Five steps, taken from what the app already reaches for: 2 to
      separate two lines of the same thought, 4 inside a control, 6 between rows
      of a list, 8 between things in a box, 12 between boxes. An even 3/5/7/9/11
@@ -184,9 +196,7 @@
   /* How small and how low a thing starts before it settles into place. */
   --motion-scale: 0.97;
   --motion-rise: 4px;
-  /* A working agent: one sweep of the reply loader's pixel wave and of a shimmering label. */
-  --duration-pixel-cycle: 650ms;
-  --duration-pixel-step: 90ms;
+  /* A working agent: one sweep of a shimmering label. */
   --duration-shimmer: 1400ms;
   /* Work still open: Temporal Web UI's 3px-on, 3px-off dash scrolls one 6px period per
      cycle, on a timeline span and on a state-graph edge alike. */
@@ -261,6 +271,7 @@ body {
   color: var(--text-1);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 ::-webkit-scrollbar {
@@ -821,7 +832,7 @@ pre[data-language]::before,
 
 /* The trace's glyph column: one cell for every state glyph and for the working loader, so
    they and the tree rule AgentChatPanel draws through them share one axis, 8.5px in. Odd,
-   so a 13px glyph and the 11px loader both center on whole pixels. */
+   so a 13px glyph and the 13px loader both center on whole pixels. */
 .trace-glyph {
   flex: none;
   width: 15px;

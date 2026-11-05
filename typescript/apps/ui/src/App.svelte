@@ -1,6 +1,6 @@
 <script lang="ts">
   import TranscriptPanel, {
-    type TranscriptFilter
+    type TranscriptFacet
   } from "$lib/components/agent/TranscriptPanel.svelte";
   import AgentStateFlow from "$lib/components/flow/AgentStateFlow.svelte";
   import LatencyWaterfall from "$lib/components/flow/LatencyWaterfall.svelte";
@@ -41,6 +41,7 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
+  import { latestLogRowForNode } from "$lib/state/nodeLogRows";
   import { countPendingRequests, pendingRequestLabel } from "$lib/state/pendingRequests";
   import { focusReturnTarget } from "$lib/state/quickSwitch";
   import { sessionHeadline } from "$lib/state/sessionHistory";
@@ -78,16 +79,16 @@
   const DRAWER_MIN_H = 96;
   /* Only reached when there is nothing measurable to fit to — a drawer holding a
      pane with no natural height, or opened before its trace has loaded. */
-  const DRAWER_DEFAULT_H = 340;
+  const DRAWER_DEFAULT_H = 240;
   /* Not pixel-tight. A fitted drawer sitting exactly on its last row reads as
      clipped rather than fitted, sub-pixel rounding is enough to raise a scrollbar
      on a trace that fits, and during a live run this is where the next turn
      appears before anything has to move. */
   const DRAWER_FIT_SLACK = 12;
-  /* An unattended fit stops well short of the row's own ceiling. Nothing that happens
-     without being asked for should be able to take three fifths of the window; the
-     reader who wants that drags for it, and the gutter goes all the way to 60vh. */
-  const DRAWER_FIT_MAX_FRACTION = 0.5;
+  /* An unattended fit stops well short of the row's own ceiling. The default desk stacks
+     two panes in one column above it, which need the height more than a long trace
+     does; the reader who wants the trace drags for it, and the gutter goes to 60vh. */
+  const DRAWER_FIT_MAX_FRACTION = 0.25;
   /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
      grid — so a drawer is never set larger than it can be drawn. */
   const DRAWER_MAX_FRACTION = 0.6;
@@ -115,13 +116,13 @@
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
-  let transcriptFilter = $state<TranscriptFilter>(
-    savedPrefs.transcriptFilter === "model" ||
-      savedPrefs.transcriptFilter === "tool" ||
-      savedPrefs.transcriptFilter === "approval" ||
-      savedPrefs.transcriptFilter === "all"
-      ? savedPrefs.transcriptFilter
-      : "all"
+  const FACETS = new Set<string>(["error", "wait", "model", "tool", "client", "state", "message"]);
+  /* A list of facets now; a single filter saved before that maps onto its facet. */
+  const savedFilter = savedPrefs.transcriptFilter;
+  let transcriptFilter = $state<TranscriptFacet[]>(
+    (Array.isArray(savedFilter) ? savedFilter : [savedFilter === "approval" ? "client" : savedFilter]).filter(
+      (key): key is TranscriptFacet => typeof key === "string" && FACETS.has(key)
+    )
   );
   let chatTargetId = $state<string | null>(null);
   let hotkeyHelpOpen = $state(false);
@@ -275,17 +276,35 @@
     })
   );
 
+  /* What the Logs pane is asked to bring forward; the nonce makes a second press on the same
+     card a second request. */
+  let logReveal = $state<{ rowId: string; nonce: number } | null>(null);
+
+  /**
+   * A card's "view in logs": its latest row, in a Logs pane brought to the reader. An open
+   * Logs pane is reused wherever it is, rail or drawer, and pulled next to the graph only
+   * within its own stack; a closed one opens beside the graph that asked. The replay cursor
+   * does not move: this is "show me", not "take me back to".
+   */
+  function viewNodeInLogs(nodeId: string, originPaneId: string): void {
+    const holder = [stack, drawer].find((candidate) => candidate.has("logs"));
+    if (holder) holder.openPane({ kind: "logs" }, holder.has(originPaneId) ? originPaneId : null);
+    else (drawer.has(originPaneId) ? drawer : stack).openPane({ kind: "logs" }, originPaneId);
+    const row = latestLogRowForNode(nodeId, run.replayLog.rows);
+    if (row) logReveal = { rowId: row.id, nonce: (logReveal?.nonce ?? 0) + 1 };
+  }
+
   function selectNode(nodeId: string): void {
     const localNodeId = nodeId.split("::").at(-1) ?? nodeId;
     if (localNodeId === "model" || localNodeId === "reasoning") {
-      transcriptFilter = "model";
+      transcriptFilter = ["model"];
     } else {
       transcriptFilter =
         localNodeId.startsWith("tool:") || localNodeId === "tool-container"
-          ? "tool"
+          ? ["tool"]
           : localNodeId === "approval"
-            ? "approval"
-            : "all";
+            ? ["client"]
+            : [];
     }
   }
 
@@ -431,7 +450,7 @@
     );
     if (action == null) return;
     event.preventDefault();
-    applyReplayAction(action, replaySurface);
+    applyReplayAction(action, replaySurface, event.repeat);
   }
 
   /* Which rail the keys act on, read off where the reader last put their hands
@@ -874,6 +893,12 @@
           ready={motionReady}
           onFocusChange={(next) => run.setGraphFocus(next)}
           onNodeSelect={selectNode}
+          onViewInLogs={(nodeId) => viewNodeInLogs(nodeId, pane.id)}
+          runHasTurns={run.stepTimeline.turns.length > 0}
+          agentLabel={run.runInfo.agentLabel}
+          accepts={(run.session ? run.agentInterfaces[run.session.workflow_id] ?? [] : []).map(
+            (item) => item.name
+          )}
         />
       {:else if pane.kind === "chat" && run.sessionGone && run.frames.length === 0}
         <EmptyState title="This session's workflow no longer exists and nothing was cached" />
@@ -960,11 +985,13 @@
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}
+          runHasEvents={run.fullReplayLog.groups.length > 0}
           activeTurnNumber={run.currentLogRow?.turnNumber ?? null}
           activeRowId={run.currentLogRow?.id ?? null}
           activeOrdinal={run.currentLogRow?.ordinal ?? null}
           filter={transcriptFilter}
           onFilterChange={(next) => (transcriptFilter = next)}
+          reveal={logReveal}
         />
       {/if}
     </div>

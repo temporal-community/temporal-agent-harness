@@ -132,6 +132,97 @@ jobs:
       - name: Every library in the Python package ships in the wheel and sdist
         run: scripts/check-python-package-entry-points.sh
 
+  # The release checks a maintainer used to run by hand, on every change instead: the built
+  # artifacts install into empty projects outside the repository and work there. The checks are
+  # scripts/check-installed-python.sh and scripts/check-installed-npm.sh; RELEASE.md relies on them.
+  installed-python:
+    name: Installed wheel works (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and newest interpreters the package claims (pyproject.toml's classifiers).
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
+
+      # main's newest disk cache for python/ on the default interpreter, which builds the wheel.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-py313-${{ github.sha }}
+          restore-keys: bazel-disk-py313-
+
+      # The wheel and sdist publish.yml would publish, and the pinned Temporal CLI for the dev
+      # server the conformance scenarios run on.
+      - name: Build the wheel and sdist
+        id: dists
+        run: |
+          flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
+          bazel build //python:dists //bazel/temporal:cli "${flags[@]}" --remote_download_toplevel
+          root="$(bazel info execution_root "${flags[@]}")"
+          echo "dists=$root/$(bazel cquery //python:dists "${flags[@]}" --output=files)" >> "$GITHUB_OUTPUT"
+          # The CLI is an external repository's file: stable under the output base, whereas the
+          # execution root's external/ is re-made per build.
+          echo "cli=$(bazel info output_base "${flags[@]}")/$(bazel cquery //bazel/temporal:cli "${flags[@]}" --output=files)" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: Install the wheel into an empty environment and run the conformance scenarios
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+          TEMPORAL_CLI_PATH: ${{ steps.dists.outputs.cli }}
+        run: scripts/check-installed-python.sh "${{ steps.dists.outputs.dists }}"
+
+  installed-npm:
+    name: Installed npm packages work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
+
+      # main's newest disk cache for everything outside python/.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-other-${{ github.sha }}
+          restore-keys: bazel-disk-other-
+
+      # The tarballs publish-npm.yml would publish: every public package's :pkg_tgz.
+      - name: Build the tarballs
+        run: |
+          flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
+          directories="$(node scripts/release.mjs npm-packages)"
+          targets=()
+          for directory in $directories; do targets+=("//$directory:pkg_tgz"); done
+          bazel build "${targets[@]}" "${flags[@]}" --remote_download_toplevel
+          root="$(bazel info execution_root "${flags[@]}")"
+          mkdir "$RUNNER_TEMP/tarballs"
+          for directory in $directories; do
+            cp "$root/$(bazel cquery "//$directory:pkg_tgz" "${flags[@]}" --output=files)" \
+              "$RUNNER_TEMP/tarballs/$(basename "$directory").tgz"
+          done
+
+      - name: Install the tarballs into an empty project and type-check a consumer
+        run: scripts/check-installed-npm.sh "$RUNNER_TEMP/tarballs"
+
   # TEMPORARY: the tests Bazel does not run yet, run under uv instead. Each group below says why.
   # When Bazel runs a group, delete it here; when none are left, delete this job.
   pytest-outside-bazel:

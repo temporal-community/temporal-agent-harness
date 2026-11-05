@@ -31,7 +31,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporal_agent_harness.harness.state import HarnessState
 from tests.conformance.script import Script, ScriptReply
-from tests.conformance.scripted_agent import SCRIPTED_AGENT, TOOLS, add
+from tests.conformance.scripted_agent import SCRIPTED_AGENT, TOOLS, add, lookup
 
 GRAPH = "scripted"
 
@@ -185,12 +185,18 @@ class LangGraphScriptedAgent:
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_tools(
-                ["add", "echo", "fail", "ask_client"]
+                ["add", "lookup", "echo", "noop", "fail", "ask_client"]
             ),
         )
         self.subagents: dict[str, str] = {}
         self._graph = graph(GRAPH, self._runner, agent=self).compile(checkpointer=InMemorySaver())
         self._thread = {"configurable": {"thread_id": workflow.info().workflow_id}}
+
+    @agent.teardown
+    async def hold_open(self) -> None:
+        """Keep a closed agent's workflow running, so a message sent after close reaches the
+        agent and is refused by it rather than by the server for a completed workflow."""
+        await workflow.wait_condition(lambda: False)
 
     @agent.accepts(mid_turn=MidTurn.REJECT)
     async def run_reject(self, script: Script) -> ScriptReply:
@@ -215,4 +221,4 @@ class LangGraphScriptedAgent:
         return ScriptReply(text="".join(state.values["reply"]))
 
 
-ACTIVITY_TOOLS = [add]
+ACTIVITY_TOOLS = [add, lookup]

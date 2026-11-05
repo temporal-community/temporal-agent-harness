@@ -15,6 +15,7 @@ ts_project(
         "//typescript/packages/worker/src/harness:subagent-activities",
         "//typescript/packages/worker/src/harness/code-mode:activity-fs",
         "//typescript/packages/worker/src/utils:large-payload",
+        "//typescript/packages/worker/src/utils:task-queue",
     ],
 )
 

@@ -16,6 +16,7 @@ harness_module_binary(
     deps = [
         ":workflow",
         "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/utils:task_queue",
         "@pypi//temporalio",
         "@pypi//temporalio_typesafe",
         "@pypi//typesafe_sdk",

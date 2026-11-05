@@ -256,7 +256,7 @@ export class StreamEventPublisher {
         type: "tool_end",
         tool_id: end.toolId,
         tool_name: end.toolName,
-        tool_output: "",
+        tool_output: null,
       });
       return;
     }

@@ -1,4 +1,5 @@
 import type { AgentSseFrame, JsonRecord } from "$lib/api/types";
+import { toolOutputText } from "$lib/state/toolOutput";
 
 export interface EditorWorkspaceEdit {
   toolId: string;
@@ -36,7 +37,7 @@ export function reconstructEditorWorkspace(
     if (!key) continue;
     if (frame.event === "tool_end") {
       if (terminals.get(key)?.ok !== false) {
-        terminals.set(key, { ok: true, result: frame.data.tool_output });
+        terminals.set(key, { ok: true, result: toolOutputText(frame.data.tool_output) });
       }
     } else if (frame.event === "callback_resolved") {
       if (frame.data.outcome === "ok" && terminals.get(key)?.ok !== false) {

@@ -64,7 +64,7 @@
 </script>
 
 <script lang="ts">
-  import { CheckCircle2, ShieldAlert, XCircle } from "@lucide/svelte";
+  import { CheckCircle2, Hourglass, ShieldAlert, ShieldCheck, XCircle } from "@lucide/svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
@@ -126,6 +126,7 @@
     {#if ahead > 0}
       <EmptyState
         title={`${ahead} approval ${ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor`}
+        icon={Hourglass}
       >
         <p>
           This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
@@ -135,7 +136,7 @@
         <Chip label="Jump to latest step" tone="accent" size="xs" onclick={onJumpToLive} />
       </EmptyState>
     {:else}
-      <EmptyState title="No completed approval decisions">
+      <EmptyState title="No completed approval decisions" icon={ShieldCheck}>
         <p>
           Completed <code>auto_approval_evaluation_ended</code> events will appear here as
           the replay cursor reaches them.

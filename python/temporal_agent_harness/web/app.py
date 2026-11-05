@@ -67,6 +67,7 @@ from temporal_agent_harness.web.session_manager import (
     SessionManagerWorkflow,
 )
 from temporal_agent_harness.web.task_queue_status import describe_task_queue_workers
+from temporal_agent_harness.web.temporal_ui import temporal_workflows_url
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
 _SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
@@ -163,6 +164,9 @@ def create_agent_harness_app(
             **connect_config,
             plugins=[AgentHarnessPlugin(large_payload_offload=large_payload_offload)],
         )
+        app.state.temporal_workflows_url = temporal_workflows_url(
+            connect_config.get("target_host"), connect_config.get("namespace")
+        )
 
         resolved_registry = _resolve_registry(registry, registry_path)
         # Read from this process's own registry rather than the manager's copy, so a change to
@@ -180,6 +184,8 @@ def create_agent_harness_app(
     app = FastAPI(lifespan=lifespan)
     # Filled at startup; empty means every agent's start interface is unknown.
     app.state.agent_starts = {}
+    # Filled at startup; None means the Temporal Web UI's address is unknown.
+    app.state.temporal_workflows_url = None
     # Open CORS: this is a local dev server whose API is meant to be driven by any client,
     # including a standalone HTML page opened from disk (origin ``null``).
     # Nothing here is credentialed, so the wildcard is safe.
@@ -253,7 +259,9 @@ def create_agent_harness_app(
         discovered = await _discover_untracked_sessions(
             app.state.temporal, registry_result, known_workflow_ids
         )
-        return await _sessions_with_execution_state(app.state.temporal, sessions + discovered)
+        return await _sessions_with_execution_state(
+            app.state.temporal, sessions + discovered, app.state.temporal_workflows_url
+        )
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
@@ -272,7 +280,9 @@ def create_agent_harness_app(
             ),
             result_type=Session,
         )
-        return await _session_with_execution_state(app.state.temporal, session)
+        return await _session_with_execution_state(
+            app.state.temporal, session, app.state.temporal_workflows_url
+        )
 
     @app.get("/api/workflow-status/{workflow_id}")
     async def workflow_status(workflow_id: str):
@@ -501,6 +511,7 @@ async def _workflow_execution_state(
 async def _session_with_execution_state(
     temporal: Client,
     session: Session,
+    temporal_workflows_url: str | None = None,
 ) -> dict[str, object]:
     state, initial_user_message = await asyncio.gather(
         _workflow_execution_state(temporal, session.workflow_id),
@@ -509,6 +520,8 @@ async def _session_with_execution_state(
     content = {**asdict(session), **state}
     if initial_user_message is not None:
         content["initial_user_message"] = initial_user_message
+    if temporal_workflows_url is not None:
+        content["temporal_workflows_url"] = temporal_workflows_url
     return content
 
 
@@ -554,10 +567,14 @@ async def _discover_untracked_sessions(
 async def _sessions_with_execution_state(
     temporal: Client,
     sessions: list[Session],
+    temporal_workflows_url: str | None = None,
 ) -> list[dict[str, object]]:
     return list(
         await asyncio.gather(
-            *(_session_with_execution_state(temporal, session) for session in sessions)
+            *(
+                _session_with_execution_state(temporal, session, temporal_workflows_url)
+                for session in sessions
+            )
         )
     )
 

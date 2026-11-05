@@ -1,4 +1,8 @@
-name: Release merged npm PR
+name: Release merged PR
+
+# When a release PR (a release/<unit>-v<version> branch from prepare-release.yml) merges: tag the
+# merged commit, create the GitHub Release from the PR description, and dispatch the unit's publish
+# workflow. GITHUB_TOKEN-created tags and releases trigger no workflows, hence the dispatch.
 
 on:
   pull_request:
@@ -9,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: finish-npm-${{ github.event.pull_request.number }}
+  group: finish-release-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +21,7 @@ jobs:
     if: >-
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.event.pull_request.head.ref, 'release/npm-')
+      startsWith(github.event.pull_request.head.ref, 'release/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,7 +35,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Tag merged commit and dispatch publishing
+      - name: Tag, release and dispatch publishing
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/npm-release.mjs finish
+        run: node scripts/release.mjs finish

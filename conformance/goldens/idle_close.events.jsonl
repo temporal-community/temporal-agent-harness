@@ -1,0 +1,10 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_enqueue", "payload": {"steps": [{"model": "scripted", "reply": ["Hello."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Hello.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": "Hello."}, "type": "message_handler_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"reason": "idle_timeout_expired", "type": "agent_closed"}, "message_id": null, "turn_id": "", "turn_number": 0}

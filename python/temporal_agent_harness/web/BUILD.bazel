@@ -33,6 +33,7 @@ py_library(
         ":registry",
         ":session_manager",
         ":task_queue_status",
+        ":temporal_ui",
         "//python/temporal_agent_harness:plugin",
         "//python/temporal_agent_harness/harness:agent_client",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
@@ -56,6 +57,7 @@ harness_module_binary(
         ":session_manager",
         ":session_manager_worker",
         "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/utils:task_queue",
     ],
 )
 
@@ -92,6 +94,7 @@ py_library(
     deps = [
         ":session_manager",
         "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/utils:task_queue",
         "@pypi//pydantic",
     ],
 )
@@ -106,6 +109,7 @@ py_library(
         ":client",
         ":registry",
         "//python/temporal_agent_harness/ui:__init__",
+        "//python/temporal_agent_harness/utils:task_queue",
         "@pypi//fastapi",
         "@pypi//uvicorn",
     ],
@@ -140,4 +144,11 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "temporal_ui",
+    srcs = ["temporal_ui.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
 )

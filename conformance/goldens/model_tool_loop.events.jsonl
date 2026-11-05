@@ -7,7 +7,7 @@
 {"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
 {"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_input": {"a": 2, "b": 3}, "tool_name": "add", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
 {"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_input": {"a": 2, "b": 3}, "tool_name": "add", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
-{"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_name": "add", "tool_output": "5", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-add", "tool_name": "add", "tool_output": 5, "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
 {"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
 {"agent_id": "agent-1", "event": {"text": "It is 5.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
 {"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}

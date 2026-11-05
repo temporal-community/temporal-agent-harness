@@ -123,7 +123,7 @@
 
   /** A finished `check_code` that found errors: its report, to show under the chip. */
   const checkErrors = (p: ToolPart) =>
-    p.toolName === "check_code" && p.state === "done" && p.output && !p.output.startsWith("No errors") ? p.output : null;
+    p.toolName === "check_code" && p.state === "done" && typeof p.output === "string" && p.output && !p.output.startsWith("No errors") ? p.output : null;
 
   function editLabel(p: ToolPart): { icon: string; text: string } {
     const input = p.input as Record<string, string>;

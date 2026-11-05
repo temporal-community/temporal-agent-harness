@@ -21,7 +21,7 @@ python/               # the Python SDK as a uv project (pyproject.toml, uv.lock)
 └── tests/            # mirrors the package layout
 
 typescript/           # one pnpm workspace (pnpm-workspace.yaml, one pnpm-lock.yaml)
-├── packages/         # client, react, svelte (published to npm), codegen
+├── packages/         # client, react, svelte (published to npm), core, worker, codegen
 └── apps/
     ├── ui/           # the console: the Svelte frontend the Python package serves
     └── chat-server/  # Chat SDK front end for Slack/Discord
@@ -109,7 +109,8 @@ The wheel and sdist include:
 - the `ui` extra, which pulls in `fastapi[standard]`
 
 `//python/tests:test_packaged_distributions` checks those archives, and
-[Publish to PyPI](../../.github/workflows/publish.yml) uploads them after `bazel test //python/...`.
+[Publish to PyPI](../../.github/workflows/publish.yml) uploads them after `bazel test //python/...`,
+dispatched when a release PR merges ([RELEASE.md](../../RELEASE.md)).
 What ships is what `//python/temporal_agent_harness` reaches under
 `python/temporal_agent_harness/`: its deps are the package's entry points (the modules nothing
 else in the package imports), and their sources and data (the UI) make up the archives. A new
