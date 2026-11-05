@@ -21,14 +21,22 @@ extras. `uv sync` installs the project and dependencies and creates `uv.lock`.
 ```bash
 cp env.example .env.local
 uv run temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
-uv run temporal-agent-harness skills install              # Codex reads .agents/skills
-uv run temporal-agent-harness skills install --for claude # Claude Code reads .claude/skills
+uv run temporal-agent-harness skills install   # asks which coding agents to install the skill for
 ```
 
 `.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `schema`
-exports your agent's handlers and types to `agent.schema.json`. `skills install` copies this SDK
-release's skill, with authoring, API, advanced-feature, and verification references, into the
-directory your coding agent reads. Run it for each tool you use. For another tool, run
+exports your agent's handlers and types to `agent.schema.json`. `skills install` asks which coding
+agents you use and copies this SDK release's skill, with authoring, API, advanced-feature, and
+verification references, into the directories they read:
+
+| Choice | `--for` | Skill directory | Read by |
+| --- | --- | --- | --- |
+| 1 | `claude` | `.claude/skills` | Claude Code |
+| 2 | `agents` | `.agents/skills` | Codex and other agents that read the shared `.agents/skills` directory |
+
+Choose both if you use Claude Code alongside another agent. To skip the question, as in scripts,
+pass the choices: `skills install --for claude --for agents`.
+For a tool with another skill directory, run
 `uv run temporal-agent-harness skills path` to locate the bundled resources, or use
 `skills install --dest <directory>`.
 
@@ -65,10 +73,20 @@ consistent across services. Keep all three processes running.
 
 1. Open the **harness console at <http://localhost:8000>**. Create a session for
    **OpenAI Hello (Python)**.
-2. Send `ping` a text message. Expect the same text back without a model request or an API key.
-3. Set `OPENAI_API_KEY` in `.env.local`, restart the worker, then send `ask`
-   **“What's the weather in Paris?”**. Expect a streamed reply and a completed `get_weather`
-   tool trace with sample weather data. This step calls OpenAI.
+2. Send a `ping` message. The message box's handler button names the handler your
+   message goes to; a new session starts on `ping`. Type any text, such as `hello`,
+   and press Enter. Expect the same text back without a model request or an API key.
+3. Send an `ask` message. This step calls OpenAI:
+   1. Set `OPENAI_API_KEY` in `.env.local`.
+   2. Restart the worker so it reads the key, which it loads only at startup: in Terminal 3,
+      press Ctrl+C, then run `uv run --env-file .env.local python -m my_agent.worker` again.
+      Leave the other services running; your session picks up where it left off once
+      the worker is back.
+   3. Switch the message box to `ask`: click the handler button (it shows `ping`) and choose
+      `ask`, or type `/` in the message box and pick `ask` from the list. The button now shows
+      `ask`, and later messages go to `ask` until you switch again.
+   4. Send **“What's the weather in Paris?”**. Expect a streamed reply and a completed
+      `get_weather` tool trace with sample weather data.
 4. Reload the page and confirm the session reconnects.
 5. Check configuration and service availability:
 

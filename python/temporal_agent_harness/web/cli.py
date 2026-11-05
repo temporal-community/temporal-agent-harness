@@ -36,7 +36,7 @@ import json
 import sys
 from pathlib import Path
 
-from temporal_agent_harness.development import DEFAULT_SKILL_DIRECTORY, SKILL_DIRECTORIES
+from temporal_agent_harness.development import SKILL_DIRECTORIES, SKILL_TARGETS
 from temporal_agent_harness.web.client import (
     DEFAULT_TEMPORAL_ADDRESS,
     ensure_temporal_address,
@@ -135,6 +135,7 @@ def _development(args: argparse.Namespace) -> None:
     from temporal_agent_harness.development import (
         SKILL_NAME,
         SKILL_PROMPTS,
+        choose_skill_tools,
         create_starter,
         install_skill,
         package_version,
@@ -151,7 +152,10 @@ def _development(args: argparse.Namespace) -> None:
             print(skill_path())
         elif args.command == "skills":
             release = package_version()
-            for destination in skill_destinations(args.tools, args.dest):
+            tools = args.tools
+            if not tools and args.dest is None and sys.stdin.isatty():
+                tools = choose_skill_tools()
+            for destination in skill_destinations(tools, args.dest):
                 installed = install_skill(destination)
                 state = "Installed" if installed.changed else "Already up to date:"
                 print(f"{state} {SKILL_NAME} {release} in {installed.root}")
@@ -202,9 +206,9 @@ def main(argv: list[str] | None = None) -> None:
         "skills",
         help="Locate or install this SDK release's coding-agent skill.",
         description="`path` prints the bundled skill directory. `install` copies it into the "
-        "project where your coding agent discovers skills: Codex reads .agents/skills (the "
-        "default), Claude Code reads .claude/skills. Reruns update unchanged files and preserve "
-        "local edits.",
+        "project where your coding agents discover skills: Claude Code reads .claude/skills; Codex "
+        "and other agents read the shared .agents/skills. Without --for or --dest it asks which to "
+        "install for. Reruns update unchanged files and preserve local edits.",
     )
     skills.add_argument("action", choices=("path", "install"))
     skills.add_argument(
@@ -213,9 +217,11 @@ def main(argv: list[str] | None = None) -> None:
         action="append",
         choices=tuple(SKILL_DIRECTORIES),
         metavar="{" + ",".join(SKILL_DIRECTORIES) + "}",
-        help="Install for this coding agent (repeatable): " + ", ".join(f"{k} -> {v}" for k, v in SKILL_DIRECTORIES.items()) + ".",
+        help="Install for these coding agents (repeatable): "
+        + "; ".join(f"{k}: {SKILL_TARGETS[k]} ({v})" for k, v in SKILL_DIRECTORIES.items())
+        + ".",
     )
-    skills.add_argument("--dest", default=None, help=f"Parent directory for another tool (default: {DEFAULT_SKILL_DIRECTORY}).")
+    skills.add_argument("--dest", default=None, help="Parent directory for a tool that reads skills from somewhere else.")
     skills.set_defaults(handler=_development)
     doctor = subparsers.add_parser("doctor", parents=[connection], help="Read-only configuration and service diagnostics.")
     doctor.add_argument("--registry", help="Validate this TOML registry and its referenced schemas.")

@@ -50,15 +50,23 @@ existing files. The starter's weather tool returns sample data.
 
 ```bash
 cp env.example .env.local
-npm run schema
-npm run harness:skill                          # Codex reads .agents/skills
-npx agent-harness skills install --for claude  # Claude Code reads .claude/skills
+npm run harness:schema
+npm run harness:skill   # asks which coding agents to install the skill for
 ```
 
-`.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `schema`
-compiles the agent and writes `agent.schema.json`. `harness:skill` copies this SDK release's skill, with
-authoring, API, advanced-feature, and verification references, into the directory your coding
-agent reads; run it for each tool you use. Installing the npm package bundles the skill; this
+`.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `harness:schema`
+compiles the agent and writes `agent.schema.json`. `harness:skill` asks which coding agents you use
+and copies this SDK release's skill, with authoring, API, advanced-feature, and verification
+references, into the directories they read:
+
+| Choice | `--for` | Skill directory | Read by |
+| --- | --- | --- | --- |
+| 1 | `claude` | `.claude/skills` | Claude Code |
+| 2 | `agents` | `.agents/skills` | Codex and other agents that read the shared `.agents/skills` directory |
+
+Choose both if you use Claude Code alongside another agent. To skip the question, as in scripts,
+pass the choices: `npm run harness:skill -- --for claude --for agents`.
+Installing the npm package bundles the skill; this
 explicit step makes it discoverable in your project. For a tool with another skill directory,
 run `npx agent-harness skills path` to locate the bundled resources, or use
 `npx agent-harness skills install --dest <directory>`.
@@ -98,10 +106,19 @@ Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all three pr
 
 1. Open the **harness console at <http://localhost:8000>**. Create a session for
    **OpenAI Hello (TypeScript)**.
-2. Send `ping` a text message. Expect the same text back without a model request or an API key.
-3. Set `OPENAI_API_KEY` in `.env.local`, restart the worker, then send `ask`
-   **“What's the weather in Paris?”**. Expect a streamed reply and a completed `get_weather`
-   tool trace with sample weather data. This step calls OpenAI.
+2. Send a `ping` message. The message box's handler button names the handler your
+   message goes to; a new session starts on `ping`. Type any text, such as `hello`,
+   and press Enter. Expect the same text back without a model request or an API key.
+3. Send an `ask` message. This step calls OpenAI:
+   1. Set `OPENAI_API_KEY` in `.env.local`.
+   2. Restart the worker so it reads the key, which it loads only at startup: in Terminal 3,
+      press Ctrl+C, then run `npm start` again. Leave the other services running; your session
+      picks up where it left off once the worker is back.
+   3. Switch the message box to `ask`: click the handler button (it shows `ping`) and choose
+      `ask`, or type `/` in the message box and pick `ask` from the list. The button now shows
+      `ask`, and later messages go to `ask` until you switch again.
+   4. Send **“What's the weather in Paris?”**. Expect a streamed reply and a completed
+      `get_weather` tool trace with sample weather data.
 4. Reload the page and confirm the session reconnects.
 5. Check startup and worker availability:
 
@@ -120,7 +137,7 @@ already running, then ask it to use the skill:
 | Claude Code | `/temporal-harness-typescript Explain the starter, then verify it with ping before making model calls.` |
 
 Edit `agents.ts` to change your agent and `worker.ts` for worker configuration. After changes,
-stop the worker, run `npm run schema`, and restart `npm start`. Use a new session for changed
+stop the worker, run `npm run harness:schema`, and restart `npm start`. Use a new session for changed
 workflow behavior. Commit `agent.schema.json` and `package-lock.json`.
 
 After upgrading the SDK, rerun the `skills install` commands to update unchanged skill files.
@@ -210,7 +227,7 @@ Create `package.json`. The install commands below add its dependencies:
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "schema": "npm run build && agent-harness-schema ./dist/agents.js#OpenAIHelloAgentTs -o OpenAIHelloAgentTs.schema.json",
+    "harness:schema": "npm run build && agent-harness-schema ./dist/agents.js#OpenAIHelloAgentTs -o OpenAIHelloAgentTs.schema.json",
     "start": "node --env-file=.env.local dist/worker.js"
   }
 }
@@ -386,7 +403,7 @@ schema = "OpenAIHelloAgentTs.schema.json"
 Build the project and generate the schema:
 
 ```bash
-npm run schema
+npm run harness:schema
 ```
 
 The server reads this document without importing your agent code. It describes handlers, state,
@@ -417,7 +434,7 @@ session-manager worker are shared infrastructure; your agent code runs on your T
 From the next Python release, `temporal-agent-harness dev ./agents.toml` runs steps 2 and 3 in
 one process, as the quickstart's `npm run harness:dev` does.
 Leave all four processes running while using the console. After editing TypeScript, stop your
-worker, rerun `npm run schema`, and start it again. Start a new session when changing agent behavior.
+worker, rerun `npm run harness:schema`, and start it again. Start a new session when changing agent behavior.
 
 ### Your first session
 
@@ -497,7 +514,7 @@ workflow module, add a matching registry entry, and generate its schema using th
 | Cannot connect to Temporal | Start the dev server, or check `TEMPORAL_CONFIG_FILE`, `TEMPORAL_PROFILE`, and `TEMPORAL_*` overrides in every terminal. |
 | Console loads but agent discovery or session creation stalls | Start the session-manager worker and confirm it uses the same Temporal address and namespace as the console. |
 | A session starts but messages never progress | Start the TypeScript worker. Its task queue must match `agents.toml`, and its address and namespace must match the other services. |
-| `dist/worker.js` or the schema file is missing | Run `npm run schema` from the project root before starting the services. |
+| `dist/worker.js` or the schema file is missing | Run `npm run harness:schema` from the project root before starting the services. |
 | Duplicate protobuf registrations or incompatible Temporal types | Reinstall with the pinned dependency versions above. Keep the underlying Temporal SDK packages aligned with the OpenAI plugin. |
 | An edited registry still shows the old agents | The session-manager workflow caches its registry. For disposable local development, restart a fresh in-memory Temporal dev server, then restart the services. This discards local sessions; use it only when you can discard them. |
 | Port 8000 shows nothing useful | Open the harness console on 8000; Temporal's workflow UI on 8233 is a separate application. Check the `serve` terminal for startup errors. |

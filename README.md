@@ -149,21 +149,21 @@ when using the local dev server. Both quickstarts explain which processes to sta
 ## Coding-agent setup
 
 Each SDK ships a skill, focused references, and an OpenAI starter matching that SDK release.
-After installing the SDK, install its skill where your coding agent discovers project skills:
+After installing the SDK, install its skill where your coding agents discover project skills:
 
 ```bash
-# Python
-uv run temporal-agent-harness skills install              # Codex: .agents/skills
-uv run temporal-agent-harness skills install --for claude # Claude Code: .claude/skills
-
-# TypeScript
-npx agent-harness skills install
-npx agent-harness skills install --for claude
+uv run temporal-agent-harness skills install   # Python
+npx agent-harness skills install               # TypeScript
 ```
 
-Then ask the agent to use it: `$temporal-harness-python` or `$temporal-harness-typescript` in
-Codex, `/temporal-harness-python` or `/temporal-harness-typescript` in Claude Code. Other tools
-can install from the directory printed by `skills path`, or with `skills install --dest`.
+Each asks which coding agents to install for: Claude Code, which reads `.claude/skills`
+(`--for claude`), and Codex and other agents that read the shared `.agents/skills` directory
+(`--for agents`). Choose both if you use both; pass `--for` to skip the question.
+
+Then ask the agent to use it: `/temporal-harness-python` or `/temporal-harness-typescript` in
+Claude Code, `$temporal-harness-python` or `$temporal-harness-typescript` in Codex. Tools with
+another skill directory can install from the directory printed by `skills path`, or with
+`skills install --dest`.
 Package installation alone does not activate a skill.
 
 Use `temporal-agent-harness init ./my-agent` or `npx agent-harness init ./my-agent` to copy a

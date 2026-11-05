@@ -14,25 +14,24 @@ skills in its own directory, so install for each tool you use:
 
 | Tool | Skill directory | Command | Invoke it with |
 | --- | --- | --- | --- |
-| Codex | `.agents/skills` (default) | `skills install` | `$temporal-harness-python` / `$temporal-harness-typescript` |
 | Claude Code | `.claude/skills` | `skills install --for claude` | `/temporal-harness-python` / `/temporal-harness-typescript` |
-| Another tool | its own | `skills install --dest <directory>` | per that tool |
+| Codex and other agents that read the shared directory | `.agents/skills` | `skills install --for agents` | `$temporal-harness-python` / `$temporal-harness-typescript` in Codex; per tool otherwise |
+| A tool with another skill directory | its own | `skills install --dest <directory>` | per that tool |
 
 ```bash
 # Python
 uv run temporal-agent-harness skills path
 uv run temporal-agent-harness skills install
-uv run temporal-agent-harness skills install --for claude
 
 # TypeScript: the command comes from @temporalio/agent-harness-worker
 npx agent-harness skills path
 npx agent-harness skills install
-npx agent-harness skills install --for claude
 ```
 
 `skills path` prints the bundled directory. `skills install` copies it into
 `<skill directory>/temporal-harness-python` or `<skill directory>/temporal-harness-typescript`
-and reports whether anything changed. `--for` is repeatable. Reload your agent session if it was
+and reports whether anything changed. Without `--for` or `--dest`, `skills install` asks which
+coding agents to install for; outside a terminal it requires one of them. `--for` is repeatable. Reload your agent session if it was
 already running. Installing an SDK does not automatically activate a skill or write into your project.
 
 Ask the agent to use the language's skill. Its short `SKILL.md` routes to authoring, API,

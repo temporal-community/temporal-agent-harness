@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import {
+  chooseSkillTools,
   createStarter,
   installSkill,
   diagnose,
@@ -72,8 +73,7 @@ test("refuses symlinks and path traversal in ownership manifests", (t) => {
   assert.throws(() => installSkill(source, dest, "2"), /Invalid resource path/);
 });
 test("skill destinations map tools to their directories", () => {
-  assert.deepEqual(skillDestinations(), [".agents/skills"]);
-  assert.deepEqual(skillDestinations(["claude", "codex", "claude"]), [
+  assert.deepEqual(skillDestinations(["claude", "agents", "claude"]), [
     ".claude/skills",
     ".agents/skills",
   ]);
@@ -81,7 +81,23 @@ test("skill destinations map tools to their directories", () => {
     ".claude/skills",
     "tools/skills",
   ]);
+  assert.throws(() => skillDestinations(), /--for \{claude,agents\} or --dest/);
   assert.throws(() => skillDestinations(["cursor"]), /Unknown coding agent cursor/);
+});
+test("choosing skill tools re-asks until it reads valid numbers", async () => {
+  const answers = ["", "3", "2, 1 2"];
+  const questions = [];
+  const tools = await chooseSkillTools(async (question) => {
+    questions.push(question);
+    return answers.shift();
+  });
+  assert.deepEqual(tools, ["agents", "claude"]);
+  assert.equal(questions.length, 3);
+  assert.match(questions[0], /1\) Claude Code: \.claude\/skills/);
+  assert.match(
+    questions[0],
+    /2\) Codex and other agents that read the shared \.agents\/skills: \.agents\/skills/,
+  );
 });
 test("project name comes from the directory", () => {
   assert.equal(projectName("/tmp/My Agent.Project"), "my-agent-project");
