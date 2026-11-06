@@ -91,6 +91,63 @@ def test_built_distributions_expose_ui_server_console_script(
 
     assert "[console_scripts]" in entry_points
     assert "temporal-agent-harness = temporal_agent_harness.web.cli:main" in entry_points
+    assert "temporal_agent_harness/agent_cli.py" in names
+    assert "temporal_agent_harness/agent_cli_ui.py" in names
+    assert "temporal-agent = temporal_agent_harness.agent_cli:main" in entry_points
+
+
+def test_agent_cli_runs_from_the_wheel_without_agent_implementation(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    wheel_path, _ = built_distributions
+    extracted = tmp_path / "wheel"
+    with zipfile.ZipFile(wheel_path) as wheel:
+        wheel.extractall(extracted)
+    (tmp_path / "agents.toml").write_text(
+        '[[agents]]\nkey = "echo-agent"\nworkflow_type = "EchoAgent"\n'
+        'task_queue = "echo-agent"\nlabel = "Echo"\ndescription = "Echo text"\n'
+        'schema = "echo.schema.json"\n'
+    )
+    (tmp_path / "echo.schema.json").write_text(
+        json.dumps(
+            {
+                "agent": "EchoAgent",
+                "init_data": None,
+                "handlers": {
+                    "echo": {
+                        "description": "Echo text",
+                        "input": {
+                            "type": "object",
+                            "properties": {"text": {"type": "string"}},
+                            "required": ["text"],
+                        },
+                        "output": {"type": "object"},
+                    }
+                },
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "temporal_agent_harness.agent_cli",
+            "echo-agent",
+            "--text",
+            "hello",
+            "--dry-run",
+            "--output",
+            "json",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(extracted)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["input"] == {"text": "hello"}
 
 
 def test_built_distributions_exclude_nexus(

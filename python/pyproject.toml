@@ -43,8 +43,10 @@ Changelog = "https://github.com/temporal-community/temporal-agent-harness/releas
 # script itself imports them lazily and says so if they're missing.
 [project.scripts]
 temporal-agent-harness = "temporal_agent_harness.web.cli:main"
+temporal-agent = "temporal_agent_harness.agent_cli:main"
 
 [project.optional-dependencies]
+cli = ["jsonschema>=4.26,<5", "rich>=15,<16"]
 # The Google Gemini SDK integration: temporal_agent_harness.ai_sdks.google_genai_plugin.
 genai = [
     "google-genai>=2.0.0",
@@ -127,6 +129,8 @@ examples = [
 # so dev includes it. uv installs the `dev` group by default, so a plain `uv run pytest`
 # has everything the whole suite under tests/ needs.
 dev = [
+    "jsonschema>=4.26,<5",
+    "rich>=15,<16",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     # The state layer's property test (tests/state/test_property.py) generates random draft

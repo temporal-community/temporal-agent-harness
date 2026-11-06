@@ -1,4 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "harness_module_binary")
 
 py_library(
     name = "__init__",
@@ -33,6 +34,7 @@ py_library(
     ],
     deps = [
         ":__init__",
+        ":agent_cli_lib",  # keep
         "//python/temporal_agent_harness/ai_sdks:__init__",
         "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
         "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
@@ -43,4 +45,29 @@ py_library(
         "//python/temporal_agent_harness/utils:__init__",
         "//python/temporal_agent_harness/web:cli_lib",
     ],
+)
+
+harness_module_binary(
+    name = "agent_cli",
+    srcs = ["agent_cli.py"],
+    imports = [".."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":agent_cli_ui",
+        ":plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/web:registry",
+        "@pypi//jsonschema",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "agent_cli_ui",
+    srcs = ["agent_cli_ui.py"],
+    imports = [".."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//rich"],
 )

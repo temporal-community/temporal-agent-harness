@@ -37,6 +37,12 @@ agent development, so you get the power without hand-rolling the orchestration.
 
 [Watch the high-level Temporal Agent Harness Explainer](https://github.com/user-attachments/assets/18a34eb2-fc6d-446d-9507-7fe4c870492f)
 
+## Agent CLI
+
+Run agents from your terminal with `temporal agent`. See the [CLI guide](docs/agent-cli.md)
+for setup, sessions, interactive conversations, approvals, and callbacks.
+Use `temporal agent --help` for commands and `temporal agent <agent> --help` for inputs.
+
 ## Installation
 
 Two ways in, depending on what you want:

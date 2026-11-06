@@ -30,3 +30,39 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+py_library(
+    name = "fixture_cli_agent",
+    srcs = ["fixture_cli_agent.py"],
+    imports = [".."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_agent_cli",
+    srcs = ["test_agent_cli.py"],
+    imports = [".."],
+    deps = [
+        ":conftest",
+        ":fixture_cli_agent",
+        "//python/temporal_agent_harness:agent_cli",
+        "//python/temporal_agent_harness:agent_cli_ui",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//rich",
+        "@pypi//temporalio",
+    ],
+)
