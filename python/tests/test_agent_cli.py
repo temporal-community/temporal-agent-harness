@@ -614,6 +614,34 @@ class TerminalOutputTests(unittest.TestCase):
         self.assertIn("Paragraph 15", output.getvalue())
         self.assertIn("\x1b[?25h", output.getvalue())
 
+    def test_thought_text_reads_every_provider_shape(self):
+        for delta, expected in (
+            ({"content": {"type": "text", "text": "gemini"}}, "gemini"),
+            ({"delta": "openai", "item_id": "x"}, "openai"),
+            ({"content": "pydantic", "part_kind": "thinking"}, "pydantic"),
+            ({"content_delta": "more", "signature_delta": "SECRET"}, "more"),
+            ({"signature_delta": "SECRET"}, None),
+            ({"content": {"type": "image"}}, None),
+        ):
+            self.assertEqual(agent_cli.thought_text(delta), expected)
+
+    def test_subagent_replies_are_labelled_as_the_subagent(self):
+        output = Terminal()
+        ui = TerminalChat("Root", console=Console(file=output, width=40))
+        self.addCleanup(ui.flush)
+        ui.progress({"event": "reply_delta", "agent": "root", "text": "from root"})
+        ui.progress(
+            {
+                "event": "reply_delta",
+                "agent": "child",
+                "subagent": True,
+                "text": "from child",
+            }
+        )
+        ui.flush()
+        self.assertIn("● Root", output.getvalue())
+        self.assertIn("● Subagent child", output.getvalue())
+
     def test_interrupt_restores_terminal_and_keeps_partial_reply(self):
         def events():
             yield envelope(ReplyDelta(text="Partial answer"))
@@ -1041,63 +1069,21 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
                     await agent_cli.request_callback(client, event, args)
                 client.provide_callback_result.assert_not_called()
 
-    async def test_callback_prompt_requires_interactive_text_and_a_question_contract(
+    async def test_callback_prompt_requires_terminal_text_and_a_question_contract(
         self,
     ):
+        question = {"question": "Where?"}
+        string = {"type": "string"}
         cases = [
-            (
-                False,
-                "text",
-                True,
-                "ask_user",
-                {"question": "Where?"},
-                {"type": "string"},
-            ),
-            (
-                True,
-                "text",
-                False,
-                "ask_user",
-                {"question": "Where?"},
-                {"type": "string"},
-            ),
-            (
-                True,
-                "json",
-                True,
-                "ask_user",
-                {"question": "Where?"},
-                {"type": "string"},
-            ),
-            (
-                True,
-                "text",
-                True,
-                "local_echo",
-                {"question": "Where?"},
-                {"type": "string"},
-            ),
-            (True, "text", True, "ask_user", {"question": 42}, {"type": "string"}),
-            (
-                True,
-                "text",
-                True,
-                "ask_user",
-                {"question": "Where?", "options": "invalid"},
-                {"type": "string"},
-            ),
-            (
-                True,
-                "text",
-                True,
-                "ask_user",
-                {"question": "Where?"},
-                {"type": "object"},
-            ),
+            ("text", False, "ask_user", question, string),
+            ("json", True, "ask_user", question, string),
+            ("text", True, "local_echo", question, string),
+            ("text", True, "ask_user", {"question": 42}, string),
+            ("text", True, "ask_user", {**question, "options": "invalid"}, string),
+            ("text", True, "ask_user", question, {"type": "object"}),
         ]
-        for interactive, output, terminal, name, inputs, schema in cases:
+        for output, terminal, name, inputs, schema in cases:
             with self.subTest(
-                interactive=interactive,
                 output=output,
                 terminal=terminal,
                 name=name,
@@ -1106,7 +1092,7 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 client = stream_client([])
                 event = PendingCallback("callback", name, inputs, schema, 2)
-                args = argparse.Namespace(interactive=interactive, output=output)
+                args = argparse.Namespace(output=output)
                 with (
                     patch.object(agent_cli.sys.stdin, "isatty", return_value=terminal),
                     patch.object(
