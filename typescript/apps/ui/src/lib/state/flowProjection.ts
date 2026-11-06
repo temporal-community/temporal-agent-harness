@@ -1663,53 +1663,62 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
    */
   function addLaneFrame(laneState: LaneState, frame: AgentSseFrame, outputSchema: unknown): boolean {
     const pair = modelPairFor(laneState.messageId);
-    if (frame.event === "message_handler_start") {
-      laneState.handlerState = "running";
-    } else if (frame.event === "model_interaction_started") {
-      markRuntimeNode(pair.model);
-      laneState.currentModel = frame.data.model ?? "unknown model";
-      laneState.modelState = "running";
-      laneState.reasoningState = "waiting";
-    } else if (frame.event === "model_interaction_ended") {
-      markRuntimeNode(pair.model);
-      laneState.currentModel = frame.data.model ?? laneState.currentModel;
-      laneState.modelState = "finished";
-      if (laneState.reasoningState === "running" || frame.data.usage?.thought_tokens) {
-        laneState.reasoningState = "captured";
+    switch (frame.event) {
+      case "message_handler_start":
+        laneState.handlerState = "running";
+        return true;
+      case "model_interaction_started":
+        markRuntimeNode(pair.model);
+        laneState.currentModel = frame.data.model ?? "unknown model";
+        laneState.modelState = "running";
+        laneState.reasoningState = "waiting";
+        return true;
+      case "model_interaction_ended":
+        markRuntimeNode(pair.model);
+        laneState.currentModel = frame.data.model ?? laneState.currentModel;
+        laneState.modelState = "finished";
+        if (laneState.reasoningState === "running" || frame.data.usage?.thought_tokens) {
+          laneState.reasoningState = "captured";
+        }
+        return true;
+      case "thought_summary":
+        markRuntimeNode(pair.reasoning);
+        laneState.reasoningDetail += thoughtDeltaText(frame.data.delta);
+        laneState.reasoningState = "running";
+        return true;
+      case "reply_delta":
+        markLaneOutput(laneState);
+        laneState.replyText += frame.data.text;
+        laneState.replyIsData = streamingIsData(laneState.replyText, outputSchema);
+        laneState.replyState = "streaming";
+        return true;
+      case "text_annotation":
+        markLaneOutput(laneState);
+        laneState.replyState = "annotated";
+        return true;
+      case "message_handler_end": {
+        laneState.handlerState = "replied";
+        if (laneState.modelState === "running") laneState.modelState = "finished";
+        const reply = handlerReply(frame.data, outputSchema);
+        const returned = reply.text || laneState.replyText ? null : returnedOutput(frame.data.output);
+        laneState.replyText = reply.text || laneState.replyText || (returned ?? "");
+        laneState.replyIsData = reply.json !== undefined || returned != null;
+        /* An Output card even for an empty reply (every steering handler returns one): the
+           handler is done the moment it returns, and a lane with no Output reads as still
+           running. Its steer cards are the one part that settles later. */
+        markLaneOutput(laneState);
+        laneState.replyState = "available";
+        return true;
       }
-    } else if (frame.event === "thought_summary") {
-      markRuntimeNode(pair.reasoning);
-      laneState.reasoningDetail += thoughtDeltaText(frame.data.delta);
-      laneState.reasoningState = "running";
-    } else if (frame.event === "reply_delta") {
-      markLaneOutput(laneState);
-      laneState.replyText += frame.data.text;
-      laneState.replyIsData = streamingIsData(laneState.replyText, outputSchema);
-      laneState.replyState = "streaming";
-    } else if (frame.event === "text_annotation") {
-      markLaneOutput(laneState);
-      laneState.replyState = "annotated";
-    } else if (frame.event === "message_handler_end") {
-      laneState.handlerState = "replied";
-      if (laneState.modelState === "running") laneState.modelState = "finished";
-      const reply = handlerReply(frame.data, outputSchema);
-      const returned = reply.text || laneState.replyText ? null : returnedOutput(frame.data.output);
-      laneState.replyText = reply.text || laneState.replyText || (returned ?? "");
-      laneState.replyIsData = reply.json !== undefined || returned != null;
-      /* An Output card even for an empty reply (every steering handler returns one): the
-         handler is done the moment it returns, and a lane with no Output reads as still
-         running. Its steer cards are the one part that settles later. */
-      markLaneOutput(laneState);
-      laneState.replyState = "available";
-    } else if (frame.event === "message_handler_error") {
-      laneState.handlerState = "error";
-      markLaneOutput(laneState);
-      laneState.replyText = frame.data.message;
-      laneState.replyState = "error";
-    } else {
-      return false;
+      case "message_handler_error":
+        laneState.handlerState = "error";
+        markLaneOutput(laneState);
+        laneState.replyText = frame.data.message;
+        laneState.replyState = "error";
+        return true;
+      default:
+        return false;
     }
-    return true;
   }
 
   function markOutput(): void {
