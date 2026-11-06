@@ -1,6 +1,6 @@
 <script lang="ts">
   /** The launcher identifies the current run; the drawer only browses existing sessions. */
-  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
+  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, Pin, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
   import { createVirtualizer, type VirtualItem } from "@tanstack/svelte-virtual";
   import { tick, untrack, type Snippet } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -76,8 +76,6 @@
     onNewSession?: (workflowType: string, data?: JsonRecord) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onRefreshSessions?: () => void | Promise<void>;
-    /** Re-list when setup opens, so availability reflects the current workers. */
-    onEnsureAgents?: () => void | Promise<void>;
     /** Re-check availability without changing the selected agent or entered data. */
     onRefreshAgents?: () => void | Promise<void>;
     refreshingAgents?: boolean;
@@ -113,7 +111,6 @@
     onNewSession,
     onSelectSession,
     onRefreshSessions,
-    onEnsureAgents,
     onRefreshAgents,
     refreshingAgents = false,
     agentsError = null,
@@ -395,11 +392,6 @@
     ].some((value) => value.toLowerCase().includes(term));
   }
 
-  function openNewSessionMenu(): void {
-    newSessionOpen = true;
-    void onEnsureAgents?.();
-  }
-
   /* Click and Enter both land here, so the listbox's selection follows what was opened. */
   async function openSession(nextSessionId: string): Promise<void> {
     if (!onSelectSession) return;
@@ -607,17 +599,6 @@
 
 {#if display === "launcher"}
   <div class="session-controls">
-    <button
-      type="button"
-      class="head-button session-new"
-      aria-label="New session"
-      data-tip="New session"
-      data-tip-below
-      aria-haspopup="dialog"
-      onclick={openNewSessionMenu}
-    >
-      <Plus size={13} aria-hidden="true" />
-    </button>
     <!-- A label, not a control: the kicker takes the status hue the way a pane's kind does.
          A tab stop all the same, so a keyboard can reach the title in its tip. -->
     {#snippet identity()}

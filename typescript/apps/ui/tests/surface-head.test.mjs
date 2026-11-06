@@ -18,6 +18,7 @@ const minimap = read("lib/panes/PaneMinimap.svelte");
 const shell = read("App.svelte");
 const between = (text, open, close) => text.slice(text.indexOf(open), text.indexOf(close, text.indexOf(open)));
 const lead = between(shell, "{#snippet lead()}", "{/snippet}");
+const start = between(shell, "{#snippet start()}", "{/snippet}");
 const launcher = between(controls, '<div class="session-controls">', "{#if newSessionOpen}");
 const bar = between(minimap, '<nav class="surface-head minimap"', "</nav>");
 
@@ -61,11 +62,11 @@ describe("the shared header row", () => {
   it("is the top bar's row too, with quiet icon buttons and no boxed chips", () => {
     assert.ok(bar, "the top bar takes .surface-head");
     assert.doesNotMatch(rule(minimap, ".minimap"), /\b(height|padding|border-bottom|background):/);
-    assert.match(lead, /<button\s+type="button"\s+class=\{\["head-button session-drawer-trigger"[^>]*aria-label="Sessions"[^>]*aria-pressed=[^>]*aria-expanded=[^>]*aria-controls="session-manager-drawer"/);
-    assert.match(launcher, /<button\s+type="button"\s+class="head-button session-new"\s+aria-label="New session"/);
+    assert.match(start, /<button\s+type="button"\s+class=\{\["head-button labelled session-drawer-trigger"[^>]*aria-label="Sessions"[^>]*aria-pressed=[^>]*aria-expanded=[^>]*aria-controls="session-manager-drawer"/);
+    assert.match(start, /<button\s+type="button"\s+class="head-button labelled session-new"\s+aria-label="New session"/);
     assert.match(launcher, /<a\s+class="head-button session-temporal"[^>]*aria-label="Open in Temporal Web UI"/);
     assert.match(launcher, /class="head-name session-anchor"[\s\S]*class="kicker head-kind session-name"/);
-    for (const [name, markup] of [["lead", lead], ["launcher", launcher], ["minimap", bar]]) {
+    for (const [name, markup] of [["start", start], ["lead", lead], ["launcher", launcher], ["minimap", bar]]) {
       assert.doesNotMatch(markup, /<(Chip|IconButton)\b/, `the ${name} draws no bordered chip or boxed icon`);
     }
   });
