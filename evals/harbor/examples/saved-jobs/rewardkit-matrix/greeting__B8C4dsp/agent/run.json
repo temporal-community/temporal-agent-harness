@@ -1,0 +1,823 @@
+{
+  "schema_version": 1,
+  "session_id": "harness-eval-8f48f60360de4f7b95ff2306ea776b61",
+  "workflow_type": "PydanticAIHelloAgent",
+  "task_queue": "pydantic-ai-hello",
+  "harness_version": "0.8.0",
+  "instruction": "Write a brief, friendly welcome message for a new teammate. Do not look up the weather.\n",
+  "events": [
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998544.701382,
+      "event": {
+        "type": "message_accepted",
+        "handler": "ask",
+        "payload": {
+          "text": "Write a brief, friendly welcome message for a new teammate. Do not look up the weather.\n"
+        },
+        "disposition": "opened"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": null,
+      "timestamp": 1793998544.701382,
+      "event": {
+        "type": "turn_started"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998544.701382,
+      "event": {
+        "type": "message_handler_start"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.551523,
+      "event": {
+        "type": "model_interaction_started",
+        "model": "gpt-5.1-2025-11-13"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.905324,
+      "event": {
+        "type": "reply_delta",
+        "text": "Welcome"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.905531,
+      "event": {
+        "type": "reply_delta",
+        "text": " aboard"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.905663,
+      "event": {
+        "type": "reply_delta",
+        "text": "!"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.907207,
+      "event": {
+        "type": "reply_delta",
+        "text": " We"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.915798,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019re"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.916131,
+      "event": {
+        "type": "reply_delta",
+        "text": " really"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.932556,
+      "event": {
+        "type": "reply_delta",
+        "text": " glad"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.932676,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.933064,
+      "event": {
+        "type": "reply_delta",
+        "text": " have"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.9333708,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.9336908,
+      "event": {
+        "type": "reply_delta",
+        "text": " on"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.965611,
+      "event": {
+        "type": "reply_delta",
+        "text": " the"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.965858,
+      "event": {
+        "type": "reply_delta",
+        "text": " team"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.966161,
+      "event": {
+        "type": "reply_delta",
+        "text": "."
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.966419,
+      "event": {
+        "type": "reply_delta",
+        "text": " \ud83d\ude0a"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998545.9880939,
+      "event": {
+        "type": "reply_delta",
+        "text": "  \n\n"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.023377,
+      "event": {
+        "type": "reply_delta",
+        "text": "We"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.049608,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019re"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.07728,
+      "event": {
+        "type": "reply_delta",
+        "text": " looking"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.0774589,
+      "event": {
+        "type": "reply_delta",
+        "text": " forward"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.077604,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.077717,
+      "event": {
+        "type": "reply_delta",
+        "text": " getting"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.1023512,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.102636,
+      "event": {
+        "type": "reply_delta",
+        "text": " know"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.102786,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.1029172,
+      "event": {
+        "type": "reply_delta",
+        "text": " and"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.1237671,
+      "event": {
+        "type": "reply_delta",
+        "text": " working"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.124168,
+      "event": {
+        "type": "reply_delta",
+        "text": " together"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.142593,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2014"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.142743,
+      "event": {
+        "type": "reply_delta",
+        "text": "please"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.1432152,
+      "event": {
+        "type": "reply_delta",
+        "text": " don"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.143529,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019t"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.169237,
+      "event": {
+        "type": "reply_delta",
+        "text": " hesitate"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.169476,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.169631,
+      "event": {
+        "type": "reply_delta",
+        "text": " ask"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.169726,
+      "event": {
+        "type": "reply_delta",
+        "text": " questions"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.232128,
+      "event": {
+        "type": "reply_delta",
+        "text": ","
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.2604601,
+      "event": {
+        "type": "reply_delta",
+        "text": " share"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.260637,
+      "event": {
+        "type": "reply_delta",
+        "text": " ideas"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.260766,
+      "event": {
+        "type": "reply_delta",
+        "text": ","
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.261037,
+      "event": {
+        "type": "reply_delta",
+        "text": " or"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.294042,
+      "event": {
+        "type": "reply_delta",
+        "text": " suggest"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.31468,
+      "event": {
+        "type": "reply_delta",
+        "text": " improvements"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.3148422,
+      "event": {
+        "type": "reply_delta",
+        "text": "."
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.339534,
+      "event": {
+        "type": "reply_delta",
+        "text": " You"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.3565922,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019re"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.3716018,
+      "event": {
+        "type": "reply_delta",
+        "text": " among"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.3718982,
+      "event": {
+        "type": "reply_delta",
+        "text": " friends"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.379172,
+      "event": {
+        "type": "reply_delta",
+        "text": " here"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.379283,
+      "event": {
+        "type": "reply_delta",
+        "text": ","
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.379468,
+      "event": {
+        "type": "reply_delta",
+        "text": " and"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.404753,
+      "event": {
+        "type": "reply_delta",
+        "text": " we"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.404923,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019re"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.405042,
+      "event": {
+        "type": "reply_delta",
+        "text": " excited"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.40515,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.4069839,
+      "event": {
+        "type": "reply_delta",
+        "text": " see"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.407264,
+      "event": {
+        "type": "reply_delta",
+        "text": " what"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.425523,
+      "event": {
+        "type": "reply_delta",
+        "text": " we"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.448428,
+      "event": {
+        "type": "reply_delta",
+        "text": " can"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.4778109,
+      "event": {
+        "type": "reply_delta",
+        "text": " accomplish"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.4780312,
+      "event": {
+        "type": "reply_delta",
+        "text": " with"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.493922,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.49426,
+      "event": {
+        "type": "reply_delta",
+        "text": " on"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.59055,
+      "event": {
+        "type": "reply_delta",
+        "text": " the"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.603123,
+      "event": {
+        "type": "reply_delta",
+        "text": " team"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.603414,
+      "event": {
+        "type": "reply_delta",
+        "text": "!"
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.828992,
+      "event": {
+        "type": "model_interaction_ended",
+        "model": "gpt-5.1-2025-11-13",
+        "usage": null
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+      "timestamp": 1793998546.834089,
+      "event": {
+        "type": "message_handler_end",
+        "output": {
+          "text": "Welcome aboard! We\u2019re really glad to have you on the team. \ud83d\ude0a  \n\nWe\u2019re looking forward to getting to know you and working together\u2014please don\u2019t hesitate to ask questions, share ideas, or suggest improvements. You\u2019re among friends here, and we\u2019re excited to see what we can accomplish with you on the team!"
+        }
+      }
+    },
+    {
+      "agent_id": "ff870e",
+      "turn_id": "8d0cee58-e38b-4c56-8e33-c13f8b07580f",
+      "turn_number": 1,
+      "message_id": null,
+      "timestamp": 1793998546.834089,
+      "event": {
+        "type": "turn_end"
+      }
+    }
+  ],
+  "complete": true,
+  "error": null,
+  "output": {
+    "text": "Welcome aboard! We\u2019re really glad to have you on the team. \ud83d\ude0a  \n\nWe\u2019re looking forward to getting to know you and working together\u2014please don\u2019t hesitate to ask questions, share ideas, or suggest improvements. You\u2019re among friends here, and we\u2019re excited to see what we can accomplish with you on the team!"
+  },
+  "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d"
+}

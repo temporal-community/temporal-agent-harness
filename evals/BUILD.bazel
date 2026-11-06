@@ -1,0 +1,3 @@
+# This experimental project has its own uv environment and is not part of the SDK build.
+# Keep implementation, dependencies, task data, and tests together under harbor/.
+# gazelle:exclude harbor

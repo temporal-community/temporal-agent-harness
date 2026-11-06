@@ -1,0 +1,78 @@
+{
+  "behavior": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "trajectory_tool_used:get_weather",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "Agent used tool 'get_weather' (trajectory: trajectory.json)"
+      },
+      {
+        "name": "completed",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "completed"
+      },
+      {
+        "name": "correct_weather_arguments",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "correct_weather_arguments"
+      },
+      {
+        "name": "successful_weather_result",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "successful_weather_result"
+      }
+    ],
+    "kind": "programmatic"
+  },
+  "quality": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "grounded_answer",
+        "value": 1.0,
+        "raw": "yes",
+        "weight": 1.0,
+        "description": "The final answer directly answers the request about Paris, accurately reflects the observed weather tool result (72 degrees Fahrenheit and sunny), and is brief (one or two sentences). Equivalent temperature units are acceptable. Fail contradictions or invented weather details. Cite relevant trajectory steps in your reasoning.",
+        "reasoning": "The final answer states that it is 72\u00b0F and sunny in Paris, which matches the weather tool result from Step 2. It is given in two sentences and does not introduce conflicting or invented weather details; the second sentence is evaluative but still consistent. Therefore, it meets the grounded_answer criterion."
+      }
+    ],
+    "kind": "llm",
+    "judge": {
+      "model": "openai/gpt-5.1",
+      "reasoning_effort": "medium",
+      "timeout": 60,
+      "files": [],
+      "atif_trajectory": "trajectory.json",
+      "reference": null,
+      "mode": "batched",
+      "samples": 1,
+      "guard": "off"
+    },
+    "judge_output": "{\"score\":\"yes\",\"reasoning\":\"The final answer states that it is 72\u00b0F and sunny in Paris, which matches the weather tool result from Step 2. It is given in two sentences and does not introduce conflicting or invented weather details; the second sentence is evaluative but still consistent. Therefore, it meets the grounded_answer criterion.\"}",
+    "usage": {
+      "input_tokens": 279,
+      "output_tokens": 137,
+      "reasoning_output_tokens": 54,
+      "total_tokens": 416,
+      "cost_usd": 0.0017187500000000002,
+      "models": {
+        "openai/gpt-5.1": {
+          "input_tokens": 279,
+          "output_tokens": 137,
+          "reasoning_output_tokens": 54,
+          "total_tokens": 416,
+          "cost_usd": 0.0017187500000000002
+        }
+      }
+    }
+  }
+}

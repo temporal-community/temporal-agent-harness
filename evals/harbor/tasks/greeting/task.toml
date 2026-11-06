@@ -1,0 +1,13 @@
+version = "1.0"
+
+[agent]
+timeout_sec = 150
+
+[verifier]
+timeout_sec = 180
+environment_mode = "shared"
+
+[environment]
+cpus = 1
+memory_mb = 1024
+storage_mb = 1024

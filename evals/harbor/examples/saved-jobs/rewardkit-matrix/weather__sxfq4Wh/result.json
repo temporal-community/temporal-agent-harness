@@ -1,0 +1,134 @@
+{
+  "id": "5229f9b2-ca5c-4126-80c9-4f17a562830e",
+  "task_name": "weather",
+  "trial_name": "weather__sxfq4Wh",
+  "trial_uri": "file:examples/saved-jobs/rewardkit-matrix/weather__sxfq4Wh",
+  "task_id": {
+    "path": "tasks/weather"
+  },
+  "source": null,
+  "task_checksum": "384792e41c817e486ae4858d053b7a0fdf752d21faed834d806311fbc64f6d36",
+  "config": {
+    "task": {
+      "path": "tasks/weather",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": null
+    },
+    "trial_name": "weather__sxfq4Wh",
+    "trials_dir": "examples/saved-jobs/rewardkit-matrix",
+    "install_only": false,
+    "timeout_multiplier": 1.0,
+    "agent_timeout_multiplier": null,
+    "verifier_timeout_multiplier": null,
+    "agent_setup_timeout_multiplier": null,
+    "environment_build_timeout_multiplier": null,
+    "agent": {
+      "name": null,
+      "import_path": "harness_evals.adapter:TemporalHarnessAgent",
+      "model_name": null,
+      "n_concurrent": null,
+      "concurrency_group": null,
+      "skills": [],
+      "override_timeout_sec": null,
+      "override_setup_timeout_sec": null,
+      "max_timeout_sec": null,
+      "resume_trajectory": false,
+      "load_trajectory": null,
+      "extra_allowed_hosts": [],
+      "kwargs": {
+        "workflow_type": "OpenAIHelloAgent",
+        "task_queue": "openai-hello",
+        "address": "127.0.0.1:17323",
+        "namespace": "default"
+      },
+      "mcp_servers": []
+    },
+    "user_agent": null,
+    "environment": {
+      "type": "docker",
+      "import_path": null,
+      "force_build": false,
+      "delete": true,
+      "cpu_enforcement_policy": "auto",
+      "memory_enforcement_policy": "auto",
+      "override_cpus": null,
+      "override_memory_mb": null,
+      "override_storage_mb": null,
+      "override_gpus": null,
+      "override_tpu": null,
+      "mounts": null,
+      "extra_docker_compose": [],
+      "kwargs": {},
+      "extra_allowed_hosts": []
+    },
+    "verifier": {
+      "override_timeout_sec": null,
+      "max_timeout_sec": null,
+      "env": {
+        "HARNESS_EVAL_JUDGE": "1",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "REWARDKIT_JUDGE": "openai/gpt-5.1"
+      },
+      "disable": false
+    },
+    "artifacts": [],
+    "extra_instruction_paths": [],
+    "extra_instructions": [],
+    "job_id": "e1c21bcf-3fc9-455d-b177-c91ba7fc5534",
+    "source_trial": null
+  },
+  "agent_info": {
+    "name": "temporal-harness:OpenAIHelloAgent",
+    "version": "0.8.0",
+    "model_info": null
+  },
+  "agent_result": {
+    "n_input_tokens": 356,
+    "n_cache_tokens": 0,
+    "n_output_tokens": 48,
+    "cost_usd": null,
+    "model_usage": {
+      "gpt-5.1": {
+        "n_input_tokens": 356,
+        "n_cache_tokens": 0,
+        "n_output_tokens": 48,
+        "cost_usd": null
+      }
+    },
+    "rollout_details": null,
+    "metadata": null
+  },
+  "verifier_result": {
+    "rewards": {
+      "behavior": 1.0,
+      "quality": 1.0,
+      "reward": 1.0
+    }
+  },
+  "verifier_environment_mode": "shared",
+  "exception_info": null,
+  "started_at": "2026-11-06T20:55:01.503240Z",
+  "finished_at": "2026-11-06T20:55:16.109492Z",
+  "environment_setup": {
+    "started_at": "2026-11-06T20:55:01.647761Z",
+    "finished_at": "2026-11-06T20:55:03.423945Z"
+  },
+  "agent_setup": {
+    "started_at": "2026-11-06T20:55:03.424041Z",
+    "finished_at": "2026-11-06T20:55:03.424152Z"
+  },
+  "agent_execution": {
+    "started_at": "2026-11-06T20:55:03.425256Z",
+    "finished_at": "2026-11-06T20:55:07.839606Z"
+  },
+  "verifier": {
+    "started_at": "2026-11-06T20:55:08.191935Z",
+    "finished_at": "2026-11-06T20:55:12.563934Z"
+  },
+  "step_results": null
+}

@@ -1,0 +1,127 @@
+{
+  "id": "a26cbbc1-36d2-4f65-917e-7dc01b0c91ff",
+  "task_name": "greeting",
+  "trial_name": "greeting__B8C4dsp",
+  "trial_uri": "file:examples/saved-jobs/rewardkit-matrix/greeting__B8C4dsp",
+  "task_id": {
+    "path": "tasks/greeting"
+  },
+  "source": null,
+  "task_checksum": "26039c42d4812e16e15e75b535a9c04de1db56f6830dd120601ffa7cfd9b556a",
+  "config": {
+    "task": {
+      "path": "tasks/greeting",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": null
+    },
+    "trial_name": "greeting__B8C4dsp",
+    "trials_dir": "examples/saved-jobs/rewardkit-matrix",
+    "install_only": false,
+    "timeout_multiplier": 1.0,
+    "agent_timeout_multiplier": null,
+    "verifier_timeout_multiplier": null,
+    "agent_setup_timeout_multiplier": null,
+    "environment_build_timeout_multiplier": null,
+    "agent": {
+      "name": null,
+      "import_path": "harness_evals.adapter:TemporalHarnessAgent",
+      "model_name": null,
+      "n_concurrent": null,
+      "concurrency_group": null,
+      "skills": [],
+      "override_timeout_sec": null,
+      "override_setup_timeout_sec": null,
+      "max_timeout_sec": null,
+      "resume_trajectory": false,
+      "load_trajectory": null,
+      "extra_allowed_hosts": [],
+      "kwargs": {
+        "workflow_type": "PydanticAIHelloAgent",
+        "task_queue": "pydantic-ai-hello",
+        "address": "127.0.0.1:17323",
+        "namespace": "default"
+      },
+      "mcp_servers": []
+    },
+    "user_agent": null,
+    "environment": {
+      "type": "docker",
+      "import_path": null,
+      "force_build": false,
+      "delete": true,
+      "cpu_enforcement_policy": "auto",
+      "memory_enforcement_policy": "auto",
+      "override_cpus": null,
+      "override_memory_mb": null,
+      "override_storage_mb": null,
+      "override_gpus": null,
+      "override_tpu": null,
+      "mounts": null,
+      "extra_docker_compose": [],
+      "kwargs": {},
+      "extra_allowed_hosts": []
+    },
+    "verifier": {
+      "override_timeout_sec": null,
+      "max_timeout_sec": null,
+      "env": {
+        "HARNESS_EVAL_JUDGE": "1",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "REWARDKIT_JUDGE": "openai/gpt-5.1"
+      },
+      "disable": false
+    },
+    "artifacts": [],
+    "extra_instruction_paths": [],
+    "extra_instructions": [],
+    "job_id": "e1c21bcf-3fc9-455d-b177-c91ba7fc5534",
+    "source_trial": null
+  },
+  "agent_info": {
+    "name": "temporal-harness:PydanticAIHelloAgent",
+    "version": "0.8.0",
+    "model_info": null
+  },
+  "agent_result": {
+    "n_input_tokens": null,
+    "n_cache_tokens": null,
+    "n_output_tokens": null,
+    "cost_usd": null,
+    "model_usage": null,
+    "rollout_details": null,
+    "metadata": null
+  },
+  "verifier_result": {
+    "rewards": {
+      "behavior": 1.0,
+      "quality": 1.0,
+      "reward": 1.0
+    }
+  },
+  "verifier_environment_mode": "shared",
+  "exception_info": null,
+  "started_at": "2026-11-06T20:55:42.304878Z",
+  "finished_at": "2026-11-06T20:55:57.085460Z",
+  "environment_setup": {
+    "started_at": "2026-11-06T20:55:42.307733Z",
+    "finished_at": "2026-11-06T20:55:44.686220Z"
+  },
+  "agent_setup": {
+    "started_at": "2026-11-06T20:55:44.686284Z",
+    "finished_at": "2026-11-06T20:55:44.686398Z"
+  },
+  "agent_execution": {
+    "started_at": "2026-11-06T20:55:44.687722Z",
+    "finished_at": "2026-11-06T20:55:46.856840Z"
+  },
+  "verifier": {
+    "started_at": "2026-11-06T20:55:47.220775Z",
+    "finished_at": "2026-11-06T20:55:52.508478Z"
+  },
+  "step_results": null
+}

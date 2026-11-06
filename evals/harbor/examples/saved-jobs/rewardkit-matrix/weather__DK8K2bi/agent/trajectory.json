@@ -1,0 +1,70 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "harness-eval-e17072b605f44dcfb61f894bc6d42ed2",
+  "agent": {
+    "name": "PydanticAIHelloAgent",
+    "version": "0.8.0"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "user",
+      "message": "What's the weather in Paris? Please use the weather tool and answer in one or two sentences.\n"
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-06T20:55:19.175809+00:00",
+      "source": "agent",
+      "model_name": "gpt-5.1-2025-11-13",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_6NENqLqPuZfvUVsExjMxfD72",
+          "function_name": "get_weather",
+          "arguments": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_6NENqLqPuZfvUVsExjMxfD72",
+            "content": "It's 72°F and sunny in Paris.",
+            "extra": {
+              "error": false,
+              "event_index": 7
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "event_index": 3,
+        "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1"
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-06T20:55:20.251343+00:00",
+      "source": "agent",
+      "model_name": "gpt-5.1-2025-11-13",
+      "message": "It’s currently 72°F and sunny in Paris. Sounds like a great day to be outside.",
+      "llm_call_count": 1,
+      "extra": {
+        "event_index": 8,
+        "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1"
+      }
+    }
+  ],
+  "notes": "Observed harness interactions; full provider request prompts are not captured.",
+  "final_metrics": {
+    "total_steps": 3
+  },
+  "extra": {
+    "complete": true,
+    "error": null,
+    "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+    "recording_schema_version": 1
+  }
+}

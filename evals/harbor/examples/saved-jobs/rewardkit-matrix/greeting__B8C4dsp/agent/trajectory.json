@@ -1,0 +1,37 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "harness-eval-8f48f60360de4f7b95ff2306ea776b61",
+  "agent": {
+    "name": "PydanticAIHelloAgent",
+    "version": "0.8.0"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "user",
+      "message": "Write a brief, friendly welcome message for a new teammate. Do not look up the weather.\n"
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-06T20:55:45.551523+00:00",
+      "source": "agent",
+      "model_name": "gpt-5.1-2025-11-13",
+      "message": "Welcome aboard! We’re really glad to have you on the team. 😊  \n\nWe’re looking forward to getting to know you and working together—please don’t hesitate to ask questions, share ideas, or suggest improvements. You’re among friends here, and we’re excited to see what we can accomplish with you on the team!",
+      "llm_call_count": 1,
+      "extra": {
+        "event_index": 3,
+        "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d"
+      }
+    }
+  ],
+  "notes": "Observed harness interactions; full provider request prompts are not captured.",
+  "final_metrics": {
+    "total_steps": 2
+  },
+  "extra": {
+    "complete": true,
+    "error": null,
+    "message_id": "84fdd48e-aca0-4e50-b358-4771b2fbf86d",
+    "recording_schema_version": 1
+  }
+}

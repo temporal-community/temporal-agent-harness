@@ -1,0 +1,643 @@
+{
+  "schema_version": 1,
+  "session_id": "harness-eval-85fcc0e74a8b46208568db7baf0347f1",
+  "workflow_type": "OpenAIHelloAgent",
+  "task_queue": "openai-hello",
+  "harness_version": "0.8.0",
+  "instruction": "Write a brief, friendly welcome message for a new teammate. Do not look up the weather.\n",
+  "events": [
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998531.612708,
+      "event": {
+        "type": "message_accepted",
+        "handler": "ask",
+        "payload": {
+          "text": "Write a brief, friendly welcome message for a new teammate. Do not look up the weather.\n"
+        },
+        "disposition": "opened"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": null,
+      "timestamp": 1793998531.612708,
+      "event": {
+        "type": "turn_started"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998531.612708,
+      "event": {
+        "type": "message_handler_start"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998531.642685,
+      "event": {
+        "type": "model_interaction_started",
+        "model": "gpt-5.1"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.545283,
+      "event": {
+        "type": "reply_delta",
+        "text": "Welcome"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.5454001,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.5611572,
+      "event": {
+        "type": "reply_delta",
+        "text": " the"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.5613298,
+      "event": {
+        "type": "reply_delta",
+        "text": " team"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.561419,
+      "event": {
+        "type": "reply_delta",
+        "text": "!"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.574535,
+      "event": {
+        "type": "reply_delta",
+        "text": " We"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.574613,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019re"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.599714,
+      "event": {
+        "type": "reply_delta",
+        "text": " really"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.599827,
+      "event": {
+        "type": "reply_delta",
+        "text": " glad"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.5999,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.6187541,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019re"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.618921,
+      "event": {
+        "type": "reply_delta",
+        "text": " here"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.6191008,
+      "event": {
+        "type": "reply_delta",
+        "text": " and"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.657196,
+      "event": {
+        "type": "reply_delta",
+        "text": " excited"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.657436,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.657557,
+      "event": {
+        "type": "reply_delta",
+        "text": " get"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.657635,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.6836119,
+      "event": {
+        "type": "reply_delta",
+        "text": " know"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.683724,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.697672,
+      "event": {
+        "type": "reply_delta",
+        "text": " and"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.7140338,
+      "event": {
+        "type": "reply_delta",
+        "text": " learn"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.714166,
+      "event": {
+        "type": "reply_delta",
+        "text": " from"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.733261,
+      "event": {
+        "type": "reply_delta",
+        "text": " your"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.7584798,
+      "event": {
+        "type": "reply_delta",
+        "text": " experience"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.788397,
+      "event": {
+        "type": "reply_delta",
+        "text": "."
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.788506,
+      "event": {
+        "type": "reply_delta",
+        "text": " If"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.788623,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.788716,
+      "event": {
+        "type": "reply_delta",
+        "text": " have"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.7910578,
+      "event": {
+        "type": "reply_delta",
+        "text": " any"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.809001,
+      "event": {
+        "type": "reply_delta",
+        "text": " questions"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.8091671,
+      "event": {
+        "type": "reply_delta",
+        "text": " or"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.8092642,
+      "event": {
+        "type": "reply_delta",
+        "text": " need"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.8238661,
+      "event": {
+        "type": "reply_delta",
+        "text": " anything"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.8453498,
+      "event": {
+        "type": "reply_delta",
+        "text": " as"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.866789,
+      "event": {
+        "type": "reply_delta",
+        "text": " you"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.866984,
+      "event": {
+        "type": "reply_delta",
+        "text": " get"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.924244,
+      "event": {
+        "type": "reply_delta",
+        "text": " settled"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.9417632,
+      "event": {
+        "type": "reply_delta",
+        "text": " in"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.9419038,
+      "event": {
+        "type": "reply_delta",
+        "text": ","
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.958943,
+      "event": {
+        "type": "reply_delta",
+        "text": " just"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.959116,
+      "event": {
+        "type": "reply_delta",
+        "text": " reach"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.9778812,
+      "event": {
+        "type": "reply_delta",
+        "text": " out"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998532.9779682,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2014"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.046967,
+      "event": {
+        "type": "reply_delta",
+        "text": "everyone"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.211262,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019s"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.2113311,
+      "event": {
+        "type": "reply_delta",
+        "text": " happy"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.2114391,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.2293062,
+      "event": {
+        "type": "reply_delta",
+        "text": " help"
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.2294059,
+      "event": {
+        "type": "reply_delta",
+        "text": "."
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.426422,
+      "event": {
+        "type": "model_interaction_ended",
+        "model": "gpt-5.1",
+        "usage": {
+          "input_tokens": 159,
+          "output_tokens": 59,
+          "thought_tokens": 0,
+          "cached_tokens": 0,
+          "tool_use_tokens": null,
+          "total_tokens": 218
+        }
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+      "timestamp": 1793998533.432671,
+      "event": {
+        "type": "message_handler_end",
+        "output": {
+          "text": "Welcome to the team! We\u2019re really glad you\u2019re here and excited to get to know you and learn from your experience. If you have any questions or need anything as you get settled in, just reach out\u2014everyone\u2019s happy to help."
+        }
+      }
+    },
+    {
+      "agent_id": "a8df4b",
+      "turn_id": "41d50c8f-1f87-49d8-919e-326e873772d1",
+      "turn_number": 1,
+      "message_id": null,
+      "timestamp": 1793998533.432671,
+      "event": {
+        "type": "turn_end"
+      }
+    }
+  ],
+  "complete": true,
+  "error": null,
+  "output": {
+    "text": "Welcome to the team! We\u2019re really glad you\u2019re here and excited to get to know you and learn from your experience. If you have any questions or need anything as you get settled in, just reach out\u2014everyone\u2019s happy to help."
+  },
+  "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2"
+}

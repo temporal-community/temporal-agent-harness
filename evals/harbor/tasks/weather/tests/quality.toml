@@ -1,0 +1,9 @@
+[judge]
+judge = "openai/gpt-5.1"
+atif-trajectory = "trajectory.json"
+timeout = 60
+
+[[criterion]]
+name = "grounded_answer"
+description = "The final answer directly answers the request about Paris, accurately reflects the observed weather tool result (72 degrees Fahrenheit and sunny), and is brief (one or two sentences). Equivalent temperature units are acceptable. Fail contradictions or invented weather details. Cite relevant trajectory steps in your reasoning."
+type = "binary"

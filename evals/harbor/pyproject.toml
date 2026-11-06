@@ -1,0 +1,42 @@
+[project]
+name = "temporal-harness-evals"
+version = "0.1.0"
+description = "Experimental Harbor evaluations for Temporal Agent Kit agents"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "harbor==0.23.0",
+    "harbor-rewardkit==0.2.4",
+    "pydantic>=2.12",
+    "temporal-agent-harness[openai-agents,pydantic-ai]",
+]
+
+[project.scripts]
+harness-evals = "harness_evals.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_evals"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tasks", "/tests", "/examples", "/README.md", "/VALIDATION.md", "/run.py", "/pyproject.toml", "/uv.lock"]
+
+[tool.uv.sources]
+temporal-agent-harness = { path = "../../python", editable = true }
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.9"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

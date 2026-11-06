@@ -1,0 +1,383 @@
+{
+  "schema_version": 1,
+  "session_id": "harness-eval-e17072b605f44dcfb61f894bc6d42ed2",
+  "workflow_type": "PydanticAIHelloAgent",
+  "task_queue": "pydantic-ai-hello",
+  "harness_version": "0.8.0",
+  "instruction": "What's the weather in Paris? Please use the weather tool and answer in one or two sentences.\n",
+  "events": [
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998517.948638,
+      "event": {
+        "type": "message_accepted",
+        "handler": "ask",
+        "payload": {
+          "text": "What's the weather in Paris? Please use the weather tool and answer in one or two sentences.\n"
+        },
+        "disposition": "opened"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": null,
+      "timestamp": 1793998517.948638,
+      "event": {
+        "type": "turn_started"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998517.948638,
+      "event": {
+        "type": "message_handler_start"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998519.175809,
+      "event": {
+        "type": "model_interaction_started",
+        "model": "gpt-5.1-2025-11-13"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998519.816548,
+      "event": {
+        "type": "tool_requested",
+        "tool_id": "call_6NENqLqPuZfvUVsExjMxfD72",
+        "tool_name": "get_weather",
+        "tool_input": {
+          "city": "Paris"
+        }
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998519.8166459,
+      "event": {
+        "type": "model_interaction_ended",
+        "model": "gpt-5.1-2025-11-13",
+        "usage": null
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998519.861918,
+      "event": {
+        "type": "tool_start",
+        "tool_id": "call_6NENqLqPuZfvUVsExjMxfD72",
+        "tool_name": "get_weather",
+        "tool_input": {
+          "city": "Paris"
+        }
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998519.861918,
+      "event": {
+        "type": "tool_end",
+        "tool_id": "call_6NENqLqPuZfvUVsExjMxfD72",
+        "tool_name": "get_weather",
+        "tool_output": "It's 72\u00b0F and sunny in Paris."
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.251343,
+      "event": {
+        "type": "model_interaction_started",
+        "model": "gpt-5.1-2025-11-13"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.640636,
+      "event": {
+        "type": "reply_delta",
+        "text": "It"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.657432,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u2019s"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.657714,
+      "event": {
+        "type": "reply_delta",
+        "text": " currently"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.6751978,
+      "event": {
+        "type": "reply_delta",
+        "text": " "
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.6755672,
+      "event": {
+        "type": "reply_delta",
+        "text": "72"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.6756852,
+      "event": {
+        "type": "reply_delta",
+        "text": "\u00b0F"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.675837,
+      "event": {
+        "type": "reply_delta",
+        "text": " and"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.685387,
+      "event": {
+        "type": "reply_delta",
+        "text": " sunny"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.685659,
+      "event": {
+        "type": "reply_delta",
+        "text": " in"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.685902,
+      "event": {
+        "type": "reply_delta",
+        "text": " Paris"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.686094,
+      "event": {
+        "type": "reply_delta",
+        "text": "."
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.695437,
+      "event": {
+        "type": "reply_delta",
+        "text": " Sounds"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.719993,
+      "event": {
+        "type": "reply_delta",
+        "text": " like"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.720205,
+      "event": {
+        "type": "reply_delta",
+        "text": " a"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.720342,
+      "event": {
+        "type": "reply_delta",
+        "text": " great"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.7206101,
+      "event": {
+        "type": "reply_delta",
+        "text": " day"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.738341,
+      "event": {
+        "type": "reply_delta",
+        "text": " to"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.755884,
+      "event": {
+        "type": "reply_delta",
+        "text": " be"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.7560792,
+      "event": {
+        "type": "reply_delta",
+        "text": " outside"
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998520.7738628,
+      "event": {
+        "type": "reply_delta",
+        "text": "."
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998521.048793,
+      "event": {
+        "type": "model_interaction_ended",
+        "model": "gpt-5.1-2025-11-13",
+        "usage": null
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1",
+      "timestamp": 1793998521.054284,
+      "event": {
+        "type": "message_handler_end",
+        "output": {
+          "text": "It\u2019s currently 72\u00b0F and sunny in Paris. Sounds like a great day to be outside."
+        }
+      }
+    },
+    {
+      "agent_id": "5c8872",
+      "turn_id": "579f82cc-1848-4aa4-b586-3c2994054316",
+      "turn_number": 1,
+      "message_id": null,
+      "timestamp": 1793998521.054284,
+      "event": {
+        "type": "turn_end"
+      }
+    }
+  ],
+  "complete": true,
+  "error": null,
+  "output": {
+    "text": "It\u2019s currently 72\u00b0F and sunny in Paris. Sounds like a great day to be outside."
+  },
+  "message_id": "f4b2eaca-45f1-43f3-bb9d-1a689f1bf1e1"
+}

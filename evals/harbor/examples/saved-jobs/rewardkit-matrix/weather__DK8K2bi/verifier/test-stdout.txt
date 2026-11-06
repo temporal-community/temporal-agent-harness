@@ -1,0 +1,3 @@
+behavior: 1.0
+quality: 1.0
+reward: 1.0

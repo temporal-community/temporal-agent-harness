@@ -1,0 +1,52 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "harness-eval-85fcc0e74a8b46208568db7baf0347f1",
+  "agent": {
+    "name": "OpenAIHelloAgent",
+    "version": "0.8.0"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "user",
+      "message": "Write a brief, friendly welcome message for a new teammate. Do not look up the weather.\n"
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-06T20:55:31.642685+00:00",
+      "source": "agent",
+      "model_name": "gpt-5.1",
+      "message": "Welcome to the team! We’re really glad you’re here and excited to get to know you and learn from your experience. If you have any questions or need anything as you get settled in, just reach out—everyone’s happy to help.",
+      "metrics": {
+        "prompt_tokens": 159,
+        "completion_tokens": 59,
+        "cached_tokens": 0,
+        "extra": {
+          "input_tokens": 159,
+          "output_tokens": 59,
+          "thought_tokens": 0,
+          "cached_tokens": 0,
+          "total_tokens": 218
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "event_index": 3,
+        "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2"
+      }
+    }
+  ],
+  "notes": "Observed harness interactions; full provider request prompts are not captured.",
+  "final_metrics": {
+    "total_prompt_tokens": 159,
+    "total_completion_tokens": 59,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "complete": true,
+    "error": null,
+    "message_id": "1a8968d1-8019-46c4-aa8c-5e3db2b47bf2",
+    "recording_schema_version": 1
+  }
+}

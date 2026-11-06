@@ -1,0 +1,97 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "harness-eval-9c3a2a5039cb440a93209bea3783e24a",
+  "agent": {
+    "name": "OpenAIHelloAgent",
+    "version": "0.8.0"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "user",
+      "message": "What's the weather in Paris? Please use the weather tool and answer in one or two sentences.\n"
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-06T20:55:03.481490+00:00",
+      "source": "agent",
+      "model_name": "gpt-5.1",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_bWctGKpa56Y6KH5KCeUSpQZH",
+          "function_name": "get_weather",
+          "arguments": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_bWctGKpa56Y6KH5KCeUSpQZH",
+            "content": "It's 72°F and sunny in Paris.",
+            "extra": {
+              "error": false,
+              "event_index": 7
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 159,
+        "completion_tokens": 24,
+        "cached_tokens": 0,
+        "extra": {
+          "input_tokens": 159,
+          "output_tokens": 24,
+          "thought_tokens": 0,
+          "cached_tokens": 0,
+          "total_tokens": 183
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "event_index": 3,
+        "message_id": "cd67d966-9972-445d-b0c3-24940410786e"
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-06T20:55:05.685737+00:00",
+      "source": "agent",
+      "model_name": "gpt-5.1",
+      "message": "It’s currently 72°F and sunny in Paris. Sounds like a great day to be outside!",
+      "metrics": {
+        "prompt_tokens": 197,
+        "completion_tokens": 24,
+        "cached_tokens": 0,
+        "extra": {
+          "input_tokens": 197,
+          "output_tokens": 24,
+          "thought_tokens": 0,
+          "cached_tokens": 0,
+          "total_tokens": 221
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "event_index": 8,
+        "message_id": "cd67d966-9972-445d-b0c3-24940410786e"
+      }
+    }
+  ],
+  "notes": "Observed harness interactions; full provider request prompts are not captured.",
+  "final_metrics": {
+    "total_prompt_tokens": 356,
+    "total_completion_tokens": 48,
+    "total_cached_tokens": 0,
+    "total_steps": 3
+  },
+  "extra": {
+    "complete": true,
+    "error": null,
+    "message_id": "cd67d966-9972-445d-b0c3-24940410786e",
+    "recording_schema_version": 1
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "task": {
+    "path": "tasks/weather"
+  },
+  "trial_name": "weather__DK8K2bi",
+  "trials_dir": "examples/saved-jobs/rewardkit-matrix",
+  "agent": {
+    "import_path": "harness_evals.adapter:TemporalHarnessAgent",
+    "kwargs": {
+      "workflow_type": "PydanticAIHelloAgent",
+      "task_queue": "pydantic-ai-hello",
+      "address": "127.0.0.1:17323",
+      "namespace": "default"
+    }
+  },
+  "verifier": {
+    "env": {
+      "HARNESS_EVAL_JUDGE": "1",
+      "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+      "REWARDKIT_JUDGE": "openai/gpt-5.1"
+    }
+  },
+  "job_id": "e1c21bcf-3fc9-455d-b177-c91ba7fc5534"
+}

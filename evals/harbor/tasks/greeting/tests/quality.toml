@@ -1,0 +1,9 @@
+[judge]
+judge = "openai/gpt-5.1"
+atif-trajectory = "trajectory.json"
+timeout = 60
+
+[[criterion]]
+name = "friendly_welcome"
+description = "The final answer is a brief, friendly, natural welcome message appropriate for a new teammate. It follows the user's request without irrelevant weather information or invented facts about the teammate. Cite relevant trajectory steps in your reasoning."
+type = "binary"
