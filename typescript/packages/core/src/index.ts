@@ -9,6 +9,7 @@ export {
   type HandlerDecl,
   type HandlerImpl,
 } from "./harness/agent-workflow.ts";
+export { ClaimedSteering, type SteeringMessage } from "./harness/steering.ts";
 export { state, StateRef, HarnessStateError, type StateDecl } from "./harness/state/index.ts";
 export {
   codeModeTool,

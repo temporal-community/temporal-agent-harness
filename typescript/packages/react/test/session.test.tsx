@@ -13,7 +13,14 @@ import type {
   WorkflowExecutionState
 } from "@temporalio/agent-harness-client";
 
-import { HarnessProvider, useAgentSession, useAgentSessionSelector, type AgentSession } from "../src/index.js";
+import {
+  HarnessProvider,
+  useAgentSession,
+  useAgentSessionSelector,
+  useSteering,
+  type AgentSession,
+  type SteeringView
+} from "../src/index.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -287,6 +294,51 @@ describe("useAgentSession", () => {
     /* One render per connection change, none for the flushes that only brought frames. */
     expect(connections).toEqual(["stopped", "connecting", "live", "idle"]);
     expect(fullRenders).toBeGreaterThan(connections.length);
+    unmount();
+  });
+
+  test("useSteering re-renders on steering, not on the reply streaming around it", async () => {
+    const transport = new FakeTransport();
+    const a = { message_id: "a" };
+    const s = { message_id: "s" };
+    transport.scripts.set("s1", [
+      [
+        frame("message_accepted", { handler: "ask", payload: { text: "plan" }, disposition: "opened" }, a),
+        frame("turn_started", {}),
+        frame("message_accepted", { handler: "ask", payload: { text: "auth first" }, disposition: "joined" }, s),
+        frame("steering_enqueued", { steering_id: "s1", text: "[user] auth first" }, s),
+        ...["Work", "ing", " on", " it"].map((text) => frame("reply_delta", { text }, a)),
+        frame("steering_claimed", { steering_ids: ["s1"], tool_id: "t1" }, a),
+        ...[" still", " going"].map((text) => frame("reply_delta", { text }, a))
+      ]
+    ]);
+    const seen: SteeringView[] = [];
+    let fullRenders = 0;
+    function Steering() {
+      seen.push(useSteering({ sessionId: "s1", transport, ...quick }));
+      return null;
+    }
+    function Everything() {
+      fullRenders += 1;
+      useAgentSession({ sessionId: "s1", transport, ...quick });
+      return null;
+    }
+    const { unmount } = render(
+      <HarnessProvider>
+        <Steering />
+        <Everything />
+      </HarnessProvider>
+    );
+    await until(() => seen.at(-1)?.claimed.length === 1);
+    await released();
+
+    const [claimed] = seen.at(-1)!.claimed;
+    expect([claimed!.messageId, claimed!.input, claimed!.steeredText, claimed!.toolId]).toEqual([
+      "s", { text: "auth first" }, "[user] auth first", "t1"
+    ]);
+    /* Every render it saw was a different steering view: none came from a flush of reply text. */
+    expect(seen.every((view, i) => i === 0 || view !== seen[i - 1])).toBe(true);
+    expect(fullRenders).toBeGreaterThan(seen.length);
     unmount();
   });
 

@@ -914,6 +914,16 @@ vitest_test(
 )
 
 vitest_test(
+    name = "steeringStatus_test",
+    src = "steeringStatus.test.mjs",
+    deps = [
+        ":replayLog",
+        ":transcript",
+        "//typescript/apps/ui/src/lib/mock:scaleScenarios",
+    ],
+)
+
+vitest_test(
     name = "structuredReply_test",
     src = "structuredReply.test.mjs",
     deps = [

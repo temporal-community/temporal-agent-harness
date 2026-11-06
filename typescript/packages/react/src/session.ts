@@ -25,6 +25,7 @@ import {
   type HandlerInput,
   type HandlerName,
   type HarnessMessage,
+  type SteeringView,
   type SubmitMessageResponse,
   type ToolApprovalDecision,
   type UntypedAgent,
@@ -108,6 +109,9 @@ export interface AgentSession<A extends AgentSchema = UntypedAgent> {
   readonly agentStatus: "idle" | "busy";
   /** Messages sent from here that the server has not admitted yet, and failed sends. */
   readonly pending: readonly HarnessMessage<A>[];
+  /** The root agent's steering in its latest turn: queued now, or claimed or dropped by that
+   *  turn. Empty again when the next turn opens; `useSteering` re-renders on nothing else. */
+  readonly steering: SteeringView<A>;
   /** Every agent in the session's tree — the root and its subagents at any depth — by id. */
   readonly agents: Readonly<Record<string, AgentView>>;
   /** The agent the session was opened for, once the stream has named it. */
@@ -172,6 +176,20 @@ export function useAgentSessionSelector<T, A extends AgentSchema = UntypedAgent>
   return useSyncExternalStore(entry.state.subscribe, get, get);
 }
 
+/**
+ * The root agent's steering in its latest turn, as `useAgentSession(...).steering`, re-rendering
+ * only when a steer is queued, claimed or dropped, or a new turn clears the last one's.
+ */
+export function useSteering<A extends AgentSchema = UntypedAgent>(
+  options: AgentSessionOptions<A>
+): SteeringView<A> {
+  return useAgentSessionSelector(options, selectSteering<A>);
+}
+
+function selectSteering<A extends AgentSchema>(snapshot: SessionSnapshot<A>): SteeringView<A> {
+  return rootView<A>(snapshot).steering;
+}
+
 /** The session's shared entry, held open while the calling component is mounted. */
 function useEntry<A extends AgentSchema>(options: AgentSessionOptions<A>): SessionEntry<A> {
   const context = useContext(StoreContext);
@@ -198,6 +216,7 @@ function sessionView<A extends AgentSchema>(entry: SessionEntry<A>, snapshot: Se
     messages: root.messages,
     states: root.states,
     agentStatus: root.agentStatus,
+    steering: root.steering,
     pending: snapshot.pending,
     agents: snapshot.agents,
     rootAgentId: snapshot.rootAgentId,

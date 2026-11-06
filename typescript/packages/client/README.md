@@ -19,6 +19,12 @@ session.start();
 await session.sendMessage("play", { cell: 5 });
 ```
 
+Each agent's view also carries `steering`: what is queued for its model now, and what its latest
+turn claimed or dropped, each entry with the message the user sent (`handler`, `input`) and,
+separately, the text the agent queued (`steeredText`). It empties when the next turn opens, and
+keeps its identity across the flushes that only stream reply text. The React and Svelte bindings
+expose the root agent's as `steering`; their READMEs show it in use.
+
 ## Temporal Cloud Actions
 
 On Temporal Cloud, Queries and Updates are billable Actions. Each attach is two Queries and an

@@ -5,7 +5,13 @@ import type { AgentSseFrame } from "./frames.ts";
 import type { HarnessMessage } from "./messages.ts";
 import type { AgentSchema, UntypedAgent } from "./schema.ts";
 import type { ConnectionStatus, SessionState } from "./session.ts";
-import { applyAgentUpdate, rootView, type AgentUpdate, type AgentView } from "./views.ts";
+import {
+  applyAgentUpdate,
+  rootView,
+  type AgentUpdate,
+  type AgentView,
+  type SteeringView
+} from "./views.ts";
 
 export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements SessionState<A> {
   #connection: ConnectionStatus = "stopped";
@@ -35,6 +41,11 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
   /** Whether the root agent has a turn open. */
   get agentStatus(): "idle" | "busy" {
     return rootView<A>(this).agentStatus;
+  }
+
+  /** The root agent's steering in its latest turn: queued now, or claimed or dropped by that turn. */
+  get steering(): SteeringView<A> {
+    return rootView<A>(this).steering;
   }
 
   /** Any agent in the tree by `agent_id` — e.g. a subagent part's `subagentId` — typed as `B`

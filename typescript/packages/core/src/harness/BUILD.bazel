@@ -22,6 +22,7 @@ ts_project(
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],
     deps = [
+        ":steering",
         "//typescript/packages/core:node_modules/@temporalio/common",
         "//typescript/packages/core:node_modules/@temporalio/workflow",
         "//typescript/packages/core:node_modules/@temporalio/workflow-streams",
@@ -52,6 +53,14 @@ ts_project(
 ts_project(
     name = "py-repr",
     srcs = ["py-repr.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "steering",
+    srcs = ["steering.ts"],
     declaration = True,
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],

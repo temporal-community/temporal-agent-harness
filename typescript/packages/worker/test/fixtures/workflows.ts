@@ -594,6 +594,70 @@ export const CodeModeProbeAgent = defineAgent({
   },
 });
 
+// -- steering -----------------------------------------------------------------------------------
+
+/**
+ * `steer` joins the open turn and steers it. `hold` waits to be steered and, given "claim", claims
+ * the steering as a hand-written model loop would. `run_code` runs a Code Mode script whose host
+ * call waits to be steered, then claims for the run-code result as an SDK adapter does.
+ */
+export const SteeringProbeAgent = defineAgent({
+  name: "SteeringProbeAgent",
+  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+  handlers: {
+    steer: handler({
+      description: "Steer the open turn.",
+      input: TextMessage,
+      output: TextReply,
+      midTurn: MidTurn.ACCEPT,
+    }),
+    hold: handler({
+      description: "Wait to be steered.",
+      input: TextMessage,
+      output: TextReply,
+      midTurn: MidTurn.ENQUEUE,
+    }),
+    run_code: handler({
+      description: "Run a Code Mode script.",
+      input: TextMessage,
+      output: TextReply,
+      midTurn: MidTurn.ENQUEUE,
+    }),
+  },
+  create: ({ runner }) => {
+    let steered = false;
+    const waitForSteering = tool({
+      name: "wait_for_steering",
+      description: "Wait until the agent has been steered, then report what claiming saw inside.",
+      inputSchema: z.object({}),
+      outputSchema: z.string(),
+      inherentlySafe: true,
+      execute: async () => {
+        await condition(() => steered);
+        return runner.claimSteering() === undefined ? "inside: nothing to claim" : "inside: claimed";
+      },
+    });
+    const codeTool = codeModeTool([waitForSteering], { name: "run_code" });
+    return {
+      async steer({ text }) {
+        runner.steer(text);
+        steered = true;
+        return { text: "" };
+      },
+      async hold({ text }) {
+        await condition(() => steered);
+        steered = false;
+        if (text !== "claim") return { text: "held" };
+        return { text: runner.claimSteering()?.appendTo("model input") ?? "nothing" };
+      },
+      async run_code({ text }) {
+        const output = await runner.runTool("code-1", codeTool, { script: text });
+        return { text: runner.claimSteering({ toolId: "code-1" })?.appendTo(output) ?? output };
+      },
+    };
+  },
+});
+
 /** A Code Mode tool with a seeded read-only /skills and a writable /workspace tracked in state. Reads are allow-listed; writes ask. */
 export const VfsProbeAgent = defineAgent({
   name: "VfsProbeAgent",

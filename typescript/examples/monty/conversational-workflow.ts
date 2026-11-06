@@ -120,15 +120,20 @@ export async function runFunctionCall(
     result: "",
   };
   if (call.signature) base.signature = call.signature;
+  let response: FunctionResultStepParam;
   try {
     const tool = toolsByName.get(call.name);
     if (tool === undefined) throw new Error(`unknown tool: '${call.name}'`);
     const result = await runner.runTool(call.id, tool, call.arguments);
-    return { ...base, result: typeof result === "string" ? result : JSON.stringify(result) };
+    response = { ...base, result: typeof result === "string" ? result : JSON.stringify(result) };
   } catch (e) {
     if (isCancellation(e)) throw e;
-    return { ...base, result: e instanceof Error ? e.message : String(e), is_error: true };
+    response = { ...base, result: e instanceof Error ? e.message : String(e), is_error: true };
   }
+  // This loop builds the model's input itself, so it attaches any steering itself. A script's own
+  // host calls never get it: claimSteering returns undefined inside a tool call.
+  const steering = runner.claimSteering({ toolId: call.id });
+  return steering ? { ...response, result: steering.appendTo(String(response.result)) } : response;
 }
 
 export const MontyChatAgentTs = defineAgent({
@@ -147,10 +152,12 @@ export const MontyChatAgentTs = defineAgent({
     ask: handler({
       description: `Chat with the travel assistant. Describe the trip you want (flights, hotels,
 dates, traveler name) in plain text; the assistant converses, writes and runs Python
-scripts against a simulated travel backend as needed, and replies with the results.`,
+scripts against a simulated travel backend as needed, and replies with the results.
+Sent while it is working, the message steers it instead: the text reaches the model with the next
+tool result.`,
       input: TextMessage,
       output: TextReply,
-      midTurn: MidTurn.ENQUEUE,
+      midTurn: MidTurn.ACCEPT,
     }),
     // ACCEPT: reconfiguring the session is not work, so it should not wait behind work. It joins
     // the open turn and applies immediately, which is the whole point of being able to switch
@@ -231,7 +238,11 @@ scripts against a simulated travel backend as needed, and replies with the resul
     }
 
     return {
-      ask: async ({ text }) => ({ text: await handleChatTurn(text) }),
+      ask: async ({ text }, ctx) => {
+        if (!ctx.joined_turn) return { text: await handleChatTurn(text) };
+        runner.steer(text);
+        return { text: "" };
+      },
       set_model: async (message) => {
         model = message.model;
         return { text: `Model set to **${message.model}**.` };

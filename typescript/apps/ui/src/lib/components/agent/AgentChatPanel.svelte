@@ -103,7 +103,7 @@
     takesScript
   } from "$lib/state/handlerRouting";
   import { singleStringPayload } from "$lib/state/inboundMessageText";
-  import type { TranscriptItem } from "$lib/state/transcript";
+  import type { Steering, TranscriptItem } from "$lib/state/transcript";
   import type { InterfaceStatus } from "$lib/state/agentRun.svelte";
   import JsonReply from "$lib/components/chat/JsonReply.svelte";
   import MarkdownMessage, { markdownBlocks, markdownToText } from "$lib/components/chat/MarkdownMessage.svelte";
@@ -215,6 +215,10 @@
     citations: FileCitationAnnotation[];
     /** A user message sent as a `script` payload, drawn as code rather than markdown. */
     script?: boolean;
+    /** The handler a user message went to. */
+    handler?: string;
+    /** What a user message's handler queued for the model, and what became of it. */
+    steering?: Steering[];
     streaming?: boolean;
     data?: boolean;
     json?: unknown;
@@ -532,6 +536,8 @@
     return {
       id: `action:${activeTarget?.workflowId ?? sessionId}:${runTurn}`,
       index: -1,
+      // The console's own card, built from no frame: nothing arrived on the wire for it.
+      wire: [],
       ordinal: -1,
       turnNumber: runTurn,
       sourceTurnNumber: runTurn,
@@ -800,7 +806,9 @@
         text: item.text,
         timestamp: item.timestamp,
         citations: [],
-        script: item.field === "script"
+        script: item.field === "script",
+        handler: item.handler,
+        steering: item.steering
       };
     }
     return {
@@ -829,7 +837,10 @@
       "turn_started",
       "turn_end",
       "reply_delta",
-      "text_annotation"
+      "text_annotation",
+      "steering_enqueued",
+      "steering_claimed",
+      "steering_dropped"
     ].includes(row.event);
   }
 
@@ -1626,10 +1637,10 @@
   async function dispatchMessage(
     handler: AgentInterfaceFunction,
     payload: Record<string, unknown>,
-    displayText: string
+    displayText: string,
+    target = activeTarget
   ): Promise<boolean> {
     const outbound: AgentInboundMessage = { type: handler.name, payload };
-    const target = activeTarget;
     if (onSend) return (await onSend(outbound, target?.workflowId ?? null)) !== false;
 
     const now = Date.now() / 1000;
@@ -1653,6 +1664,24 @@
     ];
     return true;
   }
+
+  /* Dropped steering goes again as a new message to the session agent, to the handler plain
+     typing goes to there; not to the one that steered, which only steers an open turn. */
+  const steeringTarget = $derived(targets.find((target) => target.role === "parent" && !target.closed) ?? null);
+  async function resendSteering(message: ChatMessage, text: string): Promise<void> {
+    const typed = (steeringTarget?.agentInterface ?? []).filter((handler) => textFieldOf(handler) != null);
+    const handler =
+      composerHandler(typed.filter((handler) => handler.name !== message.handler), null) ??
+      composerHandler(typed, null);
+    const field = handler ? textFieldOf(handler) : null;
+    if (!steeringTarget || !handler || !field || composerBusy) return;
+    await dispatchMessage(handler, singleStringPayload(field, text), text, steeringTarget);
+  }
+
+  /* A claimed steering message names the tool call whose result carried it. */
+  const toolNames = $derived(
+    new Map(items.flatMap((item) => (item.kind === "tool" ? [[item.toolId, item.toolName] as const] : [])))
+  );
 
   function selectedPickerItem(): PickerItem | null {
     return pickerItems[pickerSelectionIndex] ?? pickerItems[0] ?? null;
@@ -2001,6 +2030,38 @@
             <span class="message-copy"><Copyable value={message.text} label="Copy message" /></span>
           {/if}
         </article>
+        {#if message.steering?.length}
+          <ul class="steering" aria-label="Steering">
+            {#each message.steering as steering, index (index)}
+              <li class={["steering-status", steering.status]}>
+                {#if steering.status === "enqueued"}
+                  <ClipboardList size={12} aria-hidden="true" />
+                  <span>Queued for the model's next tool result</span>
+                {:else if steering.status === "claimed"}
+                  <CheckCircle2 size={12} aria-hidden="true" />
+                  <span>
+                    Sent to the model with
+                    {#if steering.toolId}<strong class="steering-tool">{toolNames.get(steering.toolId) ?? "a tool result"}</strong>{:else}its input{/if}
+                  </span>
+                {:else}
+                  <CircleAlert size={12} aria-hidden="true" />
+                  <span>Dropped: the turn ended before it reached the model</span>
+                  <Chip
+                    fill="quiet"
+                    title="Send this text again as a new message"
+                    disabled={!steeringTarget || composerBusy}
+                    onclick={() => void resendSteering(message, steering.text)}
+                  >
+                    {#snippet lead()}
+                      <RotateCw size={12} />
+                    {/snippet}
+                    Send as a new message
+                  </Chip>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
         {/if}
 
         {#if message.role === "user" && message.turnNumber != null && turnOpeners.get(message.turnNumber) === message.id}
@@ -2806,6 +2867,43 @@
   .reply-error > :global(svg) {
     flex: none;
     margin-top: 3px;
+  }
+
+  /* Under the message that steered, on its side: one quiet line per steer, saying what became
+     of it. A dropped one keeps its tone and its resend. */
+  .steering {
+    margin: var(--gap-xs) 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--gap-xs);
+  }
+
+  .steering-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gap-sm);
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+  }
+
+  .steering-status > :global(svg) {
+    flex: none;
+  }
+
+  .steering-tool {
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-weight: 500;
+  }
+
+  .steering-status.dropped {
+    color: var(--warning);
   }
 
   /* A setting change is one quiet line, not an exchange: the value, then what the agent said. */

@@ -199,6 +199,38 @@ describe("AgentSession", () => {
     stop();
   });
 
+  test("steering is reactive, per turn, and still across the reply streaming around it", async () => {
+    const transport = new FakeTransport();
+    const a = { message_id: "a" };
+    const s = { message_id: "s" };
+    transport.scripts.set("s1", [
+      [
+        frame("message_accepted", { handler: "ask", payload: { text: "plan" }, disposition: "opened" }, a),
+        frame("turn_started", {}),
+        frame("message_accepted", { handler: "ask", payload: { text: "auth first" }, disposition: "joined" }, s),
+        frame("steering_enqueued", { steering_id: "s1", text: "[user] auth first" }, s),
+        ...["Work", "ing", " on", " it"].map((text) => frame("reply_delta", { text }, a)),
+        frame("steering_dropped", { steering_ids: ["s1"] }),
+        frame("turn_end", {})
+      ]
+    ]);
+    const session = new AgentSession({ sessionId: "s1", transport, ...quick });
+    const seen: unknown[] = [];
+    const stop = watch(() => seen.push(session.steering));
+    flushSync();
+    await until(() => session.steering.dropped.length === 1);
+    flushSync();
+
+    const [dropped] = session.steering.dropped;
+    expect([dropped!.messageId, dropped!.input, dropped!.steeredText]).toEqual([
+      "s", { text: "auth first" }, "[user] auth first"
+    ]);
+    expect(session.steering.queued).toEqual([]);
+    /* Each run of the effect saw a different steering view: none came from reply text alone. */
+    expect(seen.every((view, i) => i === 0 || view !== seen[i - 1])).toBe(true);
+    stop();
+  });
+
   test("pendingCallbacks leaves out the tools callbackTools answers", async () => {
     const transport = new FakeTransport();
     const env = { message_id: "a" };
