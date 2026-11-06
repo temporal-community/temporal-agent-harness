@@ -111,6 +111,9 @@ export interface AgentEvent {
     | MessageHandlerStart
     | MessageHandlerEnd
     | MessageHandlerError
+    | SteeringEnqueued
+    | SteeringClaimed
+    | SteeringDropped
     | TurnStarted
     | TurnEnded
     | AgentClosed
@@ -460,6 +463,58 @@ export interface ReplyDelta {
   type: "reply_delta";
   /**
    * One incremental text chunk (word/token) of the agent's reply.
+   */
+  text: string;
+}
+/**
+ * Queued steering was taken by code building model input.
+ *
+ * The envelope's `message_id` is the CLAIMING participant — the message whose handler runs
+ * the model loop. What it claimed is `steering_ids`, named explicitly so a consumer never
+ * infers it from what was enqueued before this event.
+ */
+export interface SteeringClaimed {
+  type: "steering_claimed";
+  /**
+   * The `steering_id` of each `steering_enqueued` claimed, in the order they were enqueued.
+   */
+  steering_ids: string[];
+  /**
+   * The tool call whose result carries the steering, so a consumer can show it with that call's `tool_start` / `tool_end`. `None` when it went to the model some other way, e.g. as user input in a hand-written model loop. `tool_end.tool_output` never includes the steering: it is published before the steering is attached.
+   */
+  tool_id: string | null;
+}
+/**
+ * The turn ended with steering still queued, and the harness discarded it.
+ *
+ * It never reached the model: no outermost tool call resolved after it was queued, or the
+ * handler running the model loop returned first. Steering does not carry into the next turn,
+ * because it is about the work that just finished. A client should tell the user and offer to
+ * resubmit the text as a new message. The envelope's `message_id` is `None`, like
+ * `TurnEnded`'s, which follows it.
+ */
+export interface SteeringDropped {
+  type: "steering_dropped";
+  /**
+   * The `steering_id` of each `steering_enqueued` dropped, in the order they were enqueued.
+   */
+  steering_ids: string[];
+}
+/**
+ * A message handler queued steering text for the model.
+ *
+ * The envelope's `message_id` is the message whose handler called `runner.steer`. The
+ * `steering_id` names this one piece of steering, which a handler that steers twice needs:
+ * the later `SteeringClaimed` or `SteeringDropped` lists it.
+ */
+export interface SteeringEnqueued {
+  type: "steering_enqueued";
+  /**
+   * Minted by the harness for this steering; exactly one later `steering_claimed` or `steering_dropped` lists it in its `steering_ids`.
+   */
+  steering_id: string;
+  /**
+   * The steering text, as the model will see it once claimed.
    */
   text: string;
 }
@@ -847,6 +902,9 @@ export type AgentStreamItem =
   | MessageHandlerStart
   | MessageHandlerEnd
   | MessageHandlerError
+  | SteeringEnqueued
+  | SteeringClaimed
+  | SteeringDropped
   | TurnStarted
   | TurnEnded
   | AgentClosed

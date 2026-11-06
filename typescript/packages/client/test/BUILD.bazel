@@ -42,6 +42,7 @@ ts_project(
         ":support",
         "//typescript/packages/client/src:messages",
         "//typescript/packages/client/src:projection",
+        "//typescript/packages/client/src:views",
     ],
 )
 

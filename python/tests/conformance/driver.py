@@ -409,7 +409,9 @@ _ID_FIELDS = {
     "message_id": "message",
     "workflow_id": "workflow",
     "evaluation_id": "evaluation",
+    "steering_id": "steering",
 }
+_ID_LIST_FIELDS = {"steering_ids": "steering"}
 
 
 class _Ids:
@@ -428,12 +430,16 @@ class _Ids:
         return self._names[value]
 
     def replace(self, obj: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        return {
-            key: self.name(_ID_FIELDS[key], value)
-            if key in _ID_FIELDS and isinstance(value, str) and value
-            else value
-            for key, value in obj.items()
-        }
+        return {key: self._replace_field(key, value) for key, value in obj.items()}
+
+    def _replace_field(self, key: str, value: JsonValue) -> JsonValue:
+        if key in _ID_FIELDS and isinstance(value, str) and value:
+            return self.name(_ID_FIELDS[key], value)
+        if key in _ID_LIST_FIELDS and isinstance(value, list):
+            return [
+                self.name(_ID_LIST_FIELDS[key], v) if isinstance(v, str) else v for v in value
+            ]
+        return value
 
 
 @dataclass

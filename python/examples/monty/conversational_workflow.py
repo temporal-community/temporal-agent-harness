@@ -43,12 +43,13 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
+        MessageContext,
         MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner, Injected
 
     from examples.monty import activities, trip_board
     from examples.monty.ask_user import ask_user
@@ -163,11 +164,16 @@ class MontyChatAgentWorkflow:
             runner=self._runner,
         )
 
-    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
-    async def ask(self, message: TextMessage) -> TextReply:
-        """Chat with the travel assistant. Describe the trip you want (flights, hotels,
-        dates, traveler name) in plain text; the assistant converses, writes and runs Python
-        scripts against a simulated travel backend as needed, and replies with the results."""
+    @agent.accepts(mid_turn=MidTurn.ACCEPT)
+    async def ask(self, message: TextMessage, ctx: Injected[MessageContext]) -> TextReply:
+        """Chat with the travel assistant. Describe the trip you want (flights, hotels, dates,
+        traveler name) in plain text; the assistant converses, writes and runs Python scripts
+        against a simulated travel backend as needed, and replies with the results. Sent while it
+        is working, the message steers it instead: the text reaches the model with the next tool
+        result."""
+        if ctx.joined_turn:
+            self._runner.steer(message.text)
+            return TextReply(text="")
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
 
@@ -233,23 +239,21 @@ class MontyChatAgentWorkflow:
             if tool is None:
                 raise ValueError(f"unknown tool: {call.name!r}")
             result = await self._runner.run_tool(call.id, tool, injections=None, **call.arguments)
-            response: FunctionResultStepParam = {
-                "type": "function_result",
-                "call_id": call.id,
-                "name": call.name,
-                "result": str(result),
-            }
-            if call.signature:
-                response["signature"] = call.signature
-            return response
+            text, is_error = str(result), False
         except Exception as e:
-            response = {
-                "type": "function_result",
-                "call_id": call.id,
-                "name": call.name,
-                "result": str(e),
-                "is_error": True,
-            }
-            if call.signature:
-                response["signature"] = call.signature
-            return response
+            text, is_error = str(e), True
+        # This loop builds the model's input itself, so it attaches any steering itself. A
+        # script's own host calls never get it: claim_steering returns None inside a tool call.
+        if steering := self._runner.claim_steering(tool_id=call.id):
+            text = steering.append_to(text)
+        response: FunctionResultStepParam = {
+            "type": "function_result",
+            "call_id": call.id,
+            "name": call.name,
+            "result": text,
+        }
+        if is_error:
+            response["is_error"] = True
+        if call.signature:
+            response["signature"] = call.signature
+        return response

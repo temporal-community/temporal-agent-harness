@@ -866,7 +866,7 @@ class MessageContext(BaseModel):
         @agent.accepts(mid_turn=MidTurn.ACCEPT)
         async def user_text(self, msg: UserText, ctx: Injected[MessageContext]) -> Reply:
             if ctx.joined_turn:
-                self._steering.append(msg.text)   # drained by the running model loop
+                self._runner.steer(msg.text)   # rides the next tool result to the model
             else:
                 return await self._prompt(msg.text)
 

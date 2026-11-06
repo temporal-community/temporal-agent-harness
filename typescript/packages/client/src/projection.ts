@@ -16,7 +16,7 @@ import type {
   JsonValue
 } from "./frames.ts";
 import { applyOps } from "./jsonPatch.ts";
-import type { HarnessMessage, MessagePart, ToolPart } from "./messages.ts";
+import type { HarnessMessage, MessagePart, Steering, ToolPart } from "./messages.ts";
 
 type Message = HarnessMessage;
 
@@ -54,6 +54,8 @@ export interface AgentChanges {
   messages?: Array<[index: number, message: Message]>;
   states?: Array<[stateId: string, document: StateDocument]>;
   agentStatus?: "idle" | "busy";
+  /** The latest turn the agent opened, whenever `agentStatus` is reported. */
+  turnNumber?: number;
 }
 
 export interface ProjectionChanges {
@@ -82,6 +84,8 @@ export class AgentProjection {
    *  for them does not walk every tool call the agent ever made. */
   readonly #awaiting = new Set<string>();
   readonly #subagentTurns = new Map<string, PartLocation>();
+  /** The message that enqueued each steering not yet claimed or dropped. */
+  readonly #steeringMessages = new Map<string, string>();
   readonly #touchedMessages = new Set<string>();
   readonly #touchedStates = new Set<string>();
   #statusTouched = false;
@@ -164,7 +168,10 @@ export class AgentProjection {
         return doc ? [[id, { ...doc, value: clone(doc.value) }] as [string, StateDocument]] : [];
       });
     }
-    if (this.#statusTouched) changes.agentStatus = this.agentStatus;
+    if (this.#statusTouched) {
+      changes.agentStatus = this.agentStatus;
+      changes.turnNumber = this.lastTurnNumber;
+    }
     this.#touchedMessages.clear();
     this.#touchedStates.clear();
     this.#statusTouched = false;
@@ -197,6 +204,7 @@ export class AgentProjection {
             turnNumber: d.turn_number,
             parts: [],
             error: null,
+            steering: [],
             acceptedAt: d.timestamp,
             startedAt: null,
             endedAt: null
@@ -204,6 +212,31 @@ export class AgentProjection {
         }
         return;
       }
+      case "steering_enqueued": {
+        const message = this.#message(id);
+        if (!message) return;
+        const steering: Steering = {
+          steeringId: frame.data.steering_id,
+          text: frame.data.text,
+          status: "enqueued",
+          toolId: null,
+          turnNumber: data.turn_number,
+          enqueuedAt: data.timestamp,
+          settledAt: null
+        };
+        this.#steeringMessages.set(steering.steeringId, message.id);
+        return this.#update(message.id, { steering: [...message.steering, steering] });
+      }
+      case "steering_claimed": {
+        const toolId = frame.data.tool_id;
+        for (const steeringId of frame.data.steering_ids)
+          this.#settleSteering(steeringId, "claimed", toolId, data.timestamp);
+        return;
+      }
+      case "steering_dropped":
+        for (const steeringId of frame.data.steering_ids)
+          this.#settleSteering(steeringId, "dropped", null, data.timestamp);
+        return;
       case "message_handler_start":
         return this.#update(id, { status: "running", startedAt: data.timestamp });
       case "message_handler_end":
@@ -382,6 +415,22 @@ export class AgentProjection {
       default:
         frame satisfies never;
     }
+  }
+
+  /** Settle the steering `steeringId` names, on the message that enqueued it. */
+  #settleSteering(
+    steeringId: string,
+    status: "claimed" | "dropped",
+    toolId: string | null,
+    settledAt: number
+  ): void {
+    const message = this.#message(this.#steeringMessages.get(steeringId) ?? null);
+    if (!message) return;
+    this.#steeringMessages.delete(steeringId);
+    const steering = message.steering.map((s) =>
+      s.steeringId === steeringId ? { ...s, status, toolId, settledAt } : s
+    );
+    this.#update(message.id, { steering });
   }
 
   #message(id: string | null): Message | undefined {

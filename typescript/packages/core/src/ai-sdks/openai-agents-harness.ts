@@ -103,16 +103,22 @@ export function asOpenAIAgentTool(
           `Payload for tool '${name}' does not match its schema: ${parsed.message}`,
         );
       const callId = details?.toolCall?.callId || newToolCallId(name);
-      let result: unknown;
+      let output: string;
       try {
-        result = await runner.runTool(callId, tool, json, injections ? { injections } : {});
+        const result = await runner.runTool(callId, tool, json, injections ? { injections } : {});
+        output = typeof result === "string" ? result : JSON.stringify(result ?? null);
       } catch (e) {
         if (isCancellation(e)) throw e;
-        return `Tool '${name}' failed: ${errorMessage(e)}`;
+        output = `Tool '${name}' failed: ${errorMessage(e)}`;
       }
-      return typeof result === "string" ? result : JSON.stringify(result ?? null);
+      return withSteering(runner, callId, output);
     },
   };
+}
+
+/** `output` with any queued steering appended, claimed for this tool call. */
+function withSteering(runner: AgentWorkflowRunner, toolId: string, output: string): string {
+  return runner.claimSteering({ toolId })?.appendTo(output) ?? output;
 }
 
 /** Adapt several harness tools; see `asOpenAIAgentTool`. */
@@ -342,7 +348,7 @@ export function asHarnessMcpServer<S extends MCPServer>(
 ): S {
   if (isHarnessMcpServer(server)) return server;
   const inner = server.callTool.bind(server);
-  server.callTool = (toolName, args, meta, options) => {
+  server.callTool = async (toolName, args, meta, options) => {
     const toolId = mcpCallId.getStore() ?? newToolCallId(toolName);
     const toolInput = { ...args };
     const invoke = async (): Promise<CallToolResultContent> => {
@@ -386,7 +392,11 @@ export function asHarnessMcpServer<S extends MCPServer>(
       );
       return result;
     };
-    return runner.runTool(toolId, { name: toolName, invoke }, undefined);
+    const result = await runner.runTool(toolId, { name: toolName, invoke }, undefined);
+    const steering = runner.claimSteering({ toolId });
+    if (steering === undefined) return result;
+    const withBlock = [...result, { type: "text" as const, text: steering.render() }];
+    return result.isError ? Object.assign(withBlock, { isError: true }) : withBlock;
   };
   (server as MarkedServer)[MCP_GOVERNED] = true;
   return server;

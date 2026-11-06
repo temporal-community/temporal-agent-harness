@@ -34,6 +34,7 @@ from tests.conformance.script import (
     ScriptReply,
     StateDeleteStep,
     StateSetStep,
+    SteerStep,
     SubagentSendStep,
     SubagentStartStep,
     SubagentStopStep,
@@ -165,6 +166,10 @@ class ScriptedAgent:
                         await self._runner.run_tool(step.id, TOOLS[step.name], **step.args)
                     except Exception:  # noqa: BLE001 — a failed call is the model's next input
                         pass
+                    # As an AI-SDK adapter does, for the result it hands the model.
+                    self._runner.claim_steering(tool_id=step.id)
+                case SteerStep():
+                    self._runner.steer(step.text)
                 case StateSetStep():
                     with self.entries.mutate() as d:
                         d.values[step.key] = step.value

@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import type { HarnessMessage, ToolPart } from "../src/messages.ts";
 import { SessionProjection } from "../src/projection.ts";
+import { applyAgentUpdate, type AgentView } from "../src/views.ts";
 import { Frames } from "./support.ts";
 
 function project(frames: ReturnType<Frames["make"]>[]): SessionProjection {
@@ -46,6 +47,88 @@ test("two messages streaming in one turn keep their own replies", () => {
   );
   assert.deepEqual(p.root!.messages[0]!.output, { text: "Hello" });
   assert.equal(p.root!.agentStatus, "idle");
+});
+
+test("each steering settles by its own id, even two from one message", () => {
+  const f = new Frames();
+  const a = { message_id: "a" };
+  const s = { message_id: "s" };
+  const p = project([
+    f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, a),
+    f.make("turn_started"),
+    f.make("message_accepted", { handler: "ask", payload: { text: "auth first" }, disposition: "joined" }, s),
+    f.make("steering_enqueued", { steering_id: "s1", text: "auth first" }, s),
+    f.make("steering_enqueued", { steering_id: "s2", text: "then docs" }, s)
+  ]);
+  const steering = () => p.root!.messages.find((m) => m.id === "s")!.steering;
+  assert.deepEqual(
+    steering().map(({ steeringId, text, status, toolId, turnNumber, settledAt }) => ({
+      steeringId, text, status, toolId, turnNumber, settledAt
+    })),
+    [
+      { steeringId: "s1", text: "auth first", status: "enqueued", toolId: null, turnNumber: 1, settledAt: null },
+      { steeringId: "s2", text: "then docs", status: "enqueued", toolId: null, turnNumber: 1, settledAt: null }
+    ]
+  );
+  assert.deepEqual(p.root!.messages[0]!.steering, []);
+
+  p.apply(f.make("steering_claimed", { steering_ids: ["s1"], tool_id: "t1" }, a));
+  assert.deepEqual(
+    steering().map((x) => [x.steeringId, x.status, x.toolId]),
+    [["s1", "claimed", "t1"], ["s2", "enqueued", null]]
+  );
+
+  p.apply(f.make("steering_dropped", { steering_ids: ["s2"] }));
+  assert.deepEqual(
+    steering().map((x) => [x.steeringId, x.status, x.toolId]),
+    [["s1", "claimed", "t1"], ["s2", "dropped", null]]
+  );
+});
+
+test("an agent's steering view holds only its latest turn, and keeps its identity", () => {
+  const f = new Frames();
+  const p = new SessionProjection();
+  let view: AgentView | undefined;
+  const flush = (...frames: ReturnType<Frames["make"]>[]) => {
+    for (const frame of frames) p.apply(frame);
+    for (const [id, update] of p.takeChanges().agents) if (id === "root") view = applyAgentUpdate(view, id, update);
+    return view!;
+  };
+  const a = { message_id: "a" };
+  const s = { message_id: "s" };
+  const ids = (list: readonly { steeringId: string }[]) => list.map((e) => e.steeringId);
+
+  flush(
+    f.make("message_accepted", { handler: "ask", payload: { text: "plan" }, disposition: "opened" }, a),
+    f.make("turn_started"),
+    f.make("message_accepted", { handler: "ask", payload: { text: "auth first" }, disposition: "joined" }, s),
+    f.make("steering_enqueued", { steering_id: "s1", text: "[user] auth first" }, s),
+    f.make("steering_enqueued", { steering_id: "s2", text: "[user] then docs" }, s),
+    f.make("steering_claimed", { steering_ids: ["s1"], tool_id: "t1" }, a)
+  );
+  const first = view!.steering;
+  assert.deepEqual(ids(first.queued), ["s2"]);
+  assert.deepEqual(ids(first.claimed), ["s1"]);
+  assert.deepEqual(first.dropped, []);
+  // What the user sent, typed by the handler, beside what the agent queued for the model.
+  assert.deepEqual(
+    [first.claimed[0]!.messageId, first.claimed[0]!.handler, first.claimed[0]!.input, first.claimed[0]!.steeredText],
+    ["s", "ask", { text: "auth first" }, "[user] auth first"]
+  );
+
+  // A streamed chunk changes the messages, not the steering.
+  assert.equal(flush(f.make("reply_delta", { text: "Working" }, a)).steering, first);
+
+  const ended = flush(f.make("steering_dropped", { steering_ids: ["s2"] }), f.make("turn_end")).steering;
+  assert.deepEqual([ids(ended.queued), ids(ended.claimed), ids(ended.dropped)], [[], ["s1"], ["s2"]]);
+  assert.equal(ended.claimed, first.claimed, "an unchanged list keeps its identity");
+
+  const next = { turn_number: 2 };
+  const opened = flush(
+    f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, { message_id: "b", ...next }),
+    f.make("turn_started", {}, next)
+  ).steering;
+  assert.deepEqual([opened.queued, opened.claimed, opened.dropped], [[], [], []]);
 });
 
 test("a queued message stays accepted until its handler starts", () => {
@@ -273,7 +356,8 @@ test("a sent message waits in pending until the server admits it", () => {
   const p = new SessionProjection();
   const sending = {
     id: "local-1", key: "local-1", handler: "ask", input: { text: "hi" }, output: null, status: "sending" as const,
-    disposition: null, turnNumber: null, parts: [], error: null, acceptedAt: null, startedAt: null, endedAt: null
+    disposition: null, turnNumber: null, parts: [], error: null, steering: [], acceptedAt: null, startedAt: null,
+    endedAt: null
   };
 
   p.addSending(sending);

@@ -896,6 +896,48 @@ function questionsScenario(): MockScenario {
   return { agents, sessions, frames, instantFrames: frames.length, answersApprovals: true };
 }
 
+/* Mid-turn steering: a `steer` message joins the open turn and rides the next tool result to the
+   model; a second arrives after the last tool call, so the turn ends with it still queued and the
+   harness drops it. */
+function steeringScenario(): MockScenario {
+  const steerInterface: AgentInterfaceFunction[] = [
+    { name: "ask", description: "Ask the agent anything.", parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }, output: textOutput, mid_turn: "enqueue", model_callable: true },
+    { name: "steer", description: "Redirect the running turn.", parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }, output: textOutput, mid_turn: "accept", model_callable: false }
+  ];
+  const ask = (t: number) => meta(1, t);
+  const steer = (id: string, t: number) => ({ ...meta(1, t), message_id: id });
+  const search = { tool_id: "tool-steer-search", tool_name: "search_flights", tool_input: { from: "SFO", to: "CDG", month: "May" } };
+  const reply = "Found a nonstop on May 12 for $1,180, departing in the morning as you asked.";
+  const model = "gemini-3.8-flash";
+  const frames: AgentSseFrame[] = [
+    frame("message_accepted", { type: "message_accepted", ...ask(1), handler: "ask", payload: { text: "Find me flights from SFO to Paris in May" }, disposition: "opened" }),
+    frame("turn_started", { type: "turn_started", ...ask(1) }),
+    frame("message_handler_start", { type: "message_handler_start", ...ask(1) }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...ask(1.2), model }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...ask(2.4), model, usage: usage(1600, 80, 0, 0, 60) }),
+    frame("tool_requested", { type: "tool_requested", ...ask(2.4), ...search }),
+    frame("tool_start", { type: "tool_start", ...ask(2.5), ...search }),
+    frame("message_accepted", { type: "message_accepted", ...steer("msg-steer-1", 3), handler: "steer", payload: { text: "Morning departures only" }, disposition: "joined" }),
+    frame("message_handler_start", { type: "message_handler_start", ...steer("msg-steer-1", 3) }),
+    frame("steering_enqueued", { type: "steering_enqueued", ...steer("msg-steer-1", 3), steering_id: "steering-1", text: "Morning departures only" }),
+    frame("message_handler_end", { type: "message_handler_end", ...steer("msg-steer-1", 3), output: { text: "Noted, passing that on." } }),
+    frame("tool_end", { type: "tool_end", ...ask(4), ...search, tool_output: "3 nonstop flights, 11 with one stop" }),
+    frame("steering_claimed", { type: "steering_claimed", ...ask(4), steering_ids: ["steering-1"], tool_id: search.tool_id }),
+    frame("model_interaction_started", { type: "model_interaction_started", ...ask(4.1), model }),
+    frame("reply_delta", { type: "reply_delta", ...ask(5), text: reply }),
+    frame("message_accepted", { type: "message_accepted", ...steer("msg-steer-2", 5.2), handler: "steer", payload: { text: "Window seat, please" }, disposition: "joined" }),
+    frame("message_handler_start", { type: "message_handler_start", ...steer("msg-steer-2", 5.2) }),
+    frame("steering_enqueued", { type: "steering_enqueued", ...steer("msg-steer-2", 5.2), steering_id: "steering-2", text: "Window seat, please" }),
+    frame("message_handler_end", { type: "message_handler_end", ...steer("msg-steer-2", 5.2), output: { text: "Noted, passing that on." } }),
+    frame("model_interaction_ended", { type: "model_interaction_ended", ...ask(5.6), model, usage: usage(2100, 140, 0, 1200) }),
+    frame("message_handler_end", { type: "message_handler_end", ...ask(5.6), output: { text: reply } }),
+    frame("steering_dropped", { type: "steering_dropped", ...ask(5.6), message_id: null, steering_ids: ["steering-2"] }),
+    frame("turn_end", { type: "turn_end", ...ask(5.6) })
+  ];
+  const sessions = [{ ...sessionList(1)[0]!, workflow_id: "agent-session-scale-steering", agent_workflow_type: "QaAgent", label: "Mid-turn steering", execution_status: "RUNNING", closed: false }];
+  return { agents, sessions, frames, agentInterface: steerInterface };
+}
+
 const markdownQuestion = {
   tool_name: "ask_user",
   tool_input: { question: "Refund **order #4417**?\n\n- `€312` total\n- card ending 0042\n\n# not a heading <script>alert(1)</script>" },
@@ -1764,6 +1806,8 @@ export function scaleScenario(name: string): MockScenario | undefined {
       return panesScenario(true, 3_000);
     case "questions":
       return questionsScenario();
+    case "steering":
+      return steeringScenario();
     case "actions":
     case "actionsworst":
       return actionsScenario(name === "actionsworst");

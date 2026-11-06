@@ -91,6 +91,9 @@ from temporal_agent_harness.harness.agent_protocol import (
     MessageHandlerStart,
     MidTurn,
     PendingApproval,
+    SteeringClaimed,
+    SteeringDropped,
+    SteeringEnqueued,
     PendingCallback,
     PendingTurn,
     RunSubagentTurnInput,
@@ -123,6 +126,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 # lives in its own leaf module so the sandbox-safe activity contracts in agent_protocol can embed
 # it without a circular import back through this module.
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_harness.harness.steering import ClaimedSteering, SteeringMessage
 
 # ParamSpec/return-type vars for the tool decorators. They let each be typed as an
 # identity over the wrapped callable (``Callable[P, Awaitable[R]] -> Callable[P,
@@ -2091,6 +2095,9 @@ class AgentWorkflowRunner:
         # Strong references to in-flight participant tasks. Held only so a spawned task is not
         # garbage-collected mid-flight; turn accounting lives in the refcount, not here.
         self._participant_tasks: set[asyncio.Future[None]] = set()
+        # Steering queued by ``steer`` for the open turn, oldest first. Emptied by
+        # ``claim_steering``, or dropped when the turn ends; it never outlives a turn.
+        self._steering: list[SteeringMessage] = []
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -3175,6 +3182,12 @@ class AgentWorkflowRunner:
         # the bracket closes the TURN, not this message — the ambient id would misattribute it
         # to whichever participant happened to leave last.
         if self._status.leave_turn():
+            if self._steering:
+                dropped = [m.steering_id for m in self._steering]
+                self._steering.clear()
+                self._pub(
+                    turn_id, turn_number, SteeringDropped(steering_ids=dropped), message_id=None
+                )
             self._pub(turn_id, turn_number, TurnEnded(), message_id=None)
 
     async def _dispatch_turn(
@@ -3552,6 +3565,63 @@ class AgentWorkflowRunner:
                 events=client.topic(TURN_EVENTS_TOPIC, type=AgentEvent),
                 context=context,
             )
+
+    # -- Steering -------------------------------------------------------------
+
+    def steer(self, text: str) -> str:
+        """Queue ``text`` for the model, to arrive with the next outermost tool result.
+
+        Call it from a message handler — typically a ``MidTurn.ACCEPT`` handler that
+        ``joined_turn``. It returns at once; the handler need not wait for the steering to reach
+        the model, and returning does not end the turn while the handler running the model loop
+        is still in it.
+
+        The AI-SDK adapters claim the queue (see :meth:`claim_steering`) when a tool call made
+        outside any other tool call resolves, and append it to that result, so a Code Mode
+        script's host calls never carry it. If the turn ends with steering still queued, the
+        harness drops it and publishes ``steering_dropped``.
+
+        Returns the ``steering_id`` minted for it, which ``steering_enqueued`` carries and the
+        ``steering_claimed`` or ``steering_dropped`` that settles it lists.
+
+        Raises:
+            RuntimeError: called outside a message handler, so there is no message to
+                attribute the steering to.
+        """
+        message_id = _CURRENT_MESSAGE_ID.get()
+        if message_id is None:
+            raise RuntimeError("steer() must be called from within a message handler")
+        steering_id = str(workflow.uuid4())
+        self._steering.append(
+            SteeringMessage(steering_id=steering_id, message_id=message_id, text=text)
+        )
+        self.publish(SteeringEnqueued(steering_id=steering_id, text=text))
+        return steering_id
+
+    def claim_steering(self, *, tool_id: str | None = None) -> ClaimedSteering | None:
+        """Take all queued steering, for appending to content about to go to the model.
+
+        The AI-SDK adapters call this after each model tool call and append
+        :meth:`ClaimedSteering.render` to its result. Call it yourself in a model loop you
+        write: when building a tool result (pass its ``tool_id``), or before sending other input.
+
+        Returns ``None``, leaving the queue untouched, while a tool call is in flight in the
+        current context: a tool that calls other tools (a Code Mode script's host calls, for
+        one) must not hand its result's consumer the model's steering. Otherwise returns every
+        queued message, oldest first, and empties the queue — or ``None`` if nothing is queued.
+
+        ``tool_id`` names the tool call whose result will carry the steering, published on
+        ``steering_claimed``; leave it ``None`` when the steering goes in some other way.
+
+        Synchronous on purpose: with no ``await`` between reading and clearing the queue, two
+        concurrent claimants on the workflow's event loop can never take the same message.
+        """
+        if _CURRENT_TOOL_ID.get() is not None or not self._steering:
+            return None
+        claimed = ClaimedSteering(messages=tuple(self._steering))
+        self._steering.clear()
+        self.publish(SteeringClaimed(steering_ids=claimed.steering_ids, tool_id=tool_id))
+        return claimed
 
     # -- Tool execution -----------------------------------------------------
 

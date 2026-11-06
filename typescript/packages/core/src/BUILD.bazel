@@ -13,6 +13,7 @@ ts_project(
         "//typescript/packages/core/src/ai-sdks/jev:evaluator",
         "//typescript/packages/core/src/harness:agent",
         "//typescript/packages/core/src/harness:agent-workflow",
+        "//typescript/packages/core/src/harness:steering",
         "//typescript/packages/core/src/harness:subagent-toolset",
         "//typescript/packages/core/src/harness/agent-protocol:index",
         "//typescript/packages/core/src/harness/code-mode:activity-fs",

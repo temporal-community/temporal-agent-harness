@@ -81,6 +81,7 @@ try:
         TextPartDelta,
         ThinkingPart,
         ThinkingPartDelta,
+        tool_return_ta,
     )
     from pydantic_ai.models import (
         KnownModelName,
@@ -574,7 +575,7 @@ def as_pydantic_ai_tool(
     async def on_invoke_tool(ctx: RunContext[Any], **kwargs: Any) -> Any:
         runner = _runner_from_ctx(ctx, tool_name=name)
         try:
-            return await runner.run_tool(
+            result = await runner.run_tool(
                 ctx.tool_call_id,
                 tool_callable,
                 injections=injections,
@@ -583,7 +584,11 @@ def as_pydantic_ai_tool(
         except Exception as exc:  # noqa: BLE001 - surface as a model-visible tool failure
             # Mirror the OpenAI adapter: a denied/failed tool becomes a result the model sees and
             # moves past, rather than crashing the turn.
-            return f"Tool {name!r} failed: {exc}"
+            result = f"Tool {name!r} failed: {exc}"
+        steering = runner.claim_steering(tool_id=ctx.tool_call_id)
+        if steering is None:
+            return result
+        return steering.append_to(_model_response_str(result))
 
     return Tool.from_schema(
         on_invoke_tool,
@@ -592,6 +597,16 @@ def as_pydantic_ai_tool(
         json_schema=json_schema,
         takes_ctx=True,
     )
+
+
+def _model_response_str(result: Any) -> str:
+    """``result`` as the text Pydantic AI would send the model for it, so appending steering
+    changes nothing but the appended block (``ToolReturnPart.model_response_str``)."""
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result
+    return tool_return_ta.dump_json(result, by_alias=True).decode()
 
 
 def as_pydantic_ai_tools(

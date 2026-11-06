@@ -116,6 +116,11 @@ just worker
    lists the bundle, reads what's relevant and replies from it.
 4. Start a third session with `memory_dir` set to `bob`. It finds nothing.
 
+While it is working, send another `ask` ("Also remember I'm vegetarian") to correct it without
+stopping it. The text reaches the model appended to the next `run_code` result, never to a
+result the script itself reads. If the turn ends before another `run_code` call, the steering is
+dropped and the console shows it, so you can send it again.
+
 Every file operation and host function call also shows up in the console's tool timeline under
 the `run_code` call that made it. This example skips approvals, since approving every read
 would mean a click per file.

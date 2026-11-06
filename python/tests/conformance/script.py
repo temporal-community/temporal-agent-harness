@@ -84,6 +84,13 @@ class SubagentStopStep(_Step):
     name: str
 
 
+class SteerStep(_Step):
+    """The handler steers the open turn with ``text`` (``runner.steer``)."""
+
+    step: Literal["steer"] = "steer"
+    text: str
+
+
 class RaiseStep(_Step):
     """The handler raises ``message``; later steps never run."""
 
@@ -99,6 +106,7 @@ Step = Annotated[
     | SubagentStartStep
     | SubagentSendStep
     | SubagentStopStep
+    | SteerStep
     | RaiseStep,
     Field(discriminator="step"),
 ]

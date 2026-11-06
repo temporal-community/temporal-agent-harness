@@ -36,9 +36,10 @@ The integration publishes only what a model integration would, and only what the
 | Step | Publishes, then calls |
 | --- | --- |
 | `model` | `model_interaction_started`, a `reply_delta` per `reply` chunk, `model_interaction_ended` with `usage` |
-| `tool` | `tool_requested`, then `run_tool` with the step's `id` |
+| `tool` | `tool_requested`, then `run_tool` with the step's `id`, then `claim_steering` for that id, as an AI-SDK adapter does for the result it hands the model |
 | `state_set`, `state_delete` | nothing; one `mutate()` of the agent's `entries` state |
 | `subagent_start`, `subagent_send`, `subagent_stop` | nothing; the runner's subagent calls |
+| `steer` | nothing; `steer(text)` |
 | `raise` | nothing; the handler raises `message` and later steps never run |
 
 Its tools are `add` (an activity tool), `lookup` (an activity tool with a structured result),
@@ -70,7 +71,8 @@ rather than by the server for a completed workflow.
 - Every id the harness mints becomes `<kind>-<n>`, numbered by first appearance across the
   scenario (the root agent's stream, then each subagent's in start order, then the sends):
   `agent_id` and `subagent_id` (`agent-`), `turn_id` (`turn-`), `message_id` (`message-`),
-  `workflow_id` (`workflow-`), `evaluation_id` (`evaluation-`). Tool ids come from the script and
+  `workflow_id` (`workflow-`), `evaluation_id` (`evaluation-`), `steering_id` and each entry of
+  `steering_ids` (`steering-`). Tool ids come from the script and
   stay, and so does the empty `turn_id` of an event published outside a turn (a state snapshot
   at registration, `turn_number` 0).
 - `timestamp` is dropped, after checking it never decreases within a stream.

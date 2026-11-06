@@ -161,34 +161,12 @@
   }
 
   /**
-   * The event as JSON, from what the log row kept of it. Not the frame on the wire, which the
-   * log does not keep, so it is labelled "event" rather than "payload". An absent field is
-   * left out rather than written as null.
+   * The event exactly as it arrived on the wire, nothing added or renamed: the console's own
+   * reading of it (labels, summaries, durations) belongs to the row and the card, never here. A
+   * collapsed reply run shows every chunk it folded, in order.
    */
   function eventJson(row: ReplayLogRow): string {
-    return JSON.stringify(
-      {
-        type: row.event,
-        status: row.status,
-        tool_name: row.toolName,
-        tool_id: row.toolId,
-        model: row.model ?? undefined,
-        input: row.input,
-        message: row.message,
-        output: row.output,
-        body: row.body,
-        detail: row.detail,
-        usage: row.usage,
-        citations: row.citations.length ? row.citations : undefined,
-        turn: row.turnNumber,
-        source_turn: row.sourceTurnNumber === row.turnNumber ? undefined : row.sourceTurnNumber,
-        source: row.sourceLabel,
-        workflow_id: row.workflowId,
-        timestamp: formatTimestamp(row.timestamp)
-      },
-      null,
-      2
-    );
+    return JSON.stringify(row.wire.length === 1 ? row.wire[0] : row.wire, null, 2);
   }
 
   function matchesQuery(row: ReplayLogRow, needle: string): boolean {
@@ -916,8 +894,10 @@
                         <pre class={["detail-note", glyph === "error" && "error"]}>{row.body}</pre>
                       {/if}
                       <!-- How long the call took. Its other events are not listed: opening a row
-                           unfolds the call, so they are the rows right around this card. -->
-                      {#if call?.durationMs}
+                           unfolds the call, so they are the rows right around this card. A steering
+                           claim is filed under the call that carried it but is a moment, not part
+                           of the call's work, so it shows no duration. -->
+                      {#if call?.durationMs && !row.event.startsWith("steering_")}
                         <span class="call-took"><span class="full-details-head">took</span>{formatElapsedDuration(call.durationMs)}</span>
                       {/if}
                       <TraceImages {images} />

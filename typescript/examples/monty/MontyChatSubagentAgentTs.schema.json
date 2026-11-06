@@ -4,8 +4,8 @@
   "init_data": null,
   "handlers": {
     "ask": {
-      "description": "Chat with the travel assistant. Describe the trip you want (flights, hotels,\ndates, traveler name) in plain text; the assistant converses, writes Python scripts,\nand runs them against a simulated travel backend via a script-runner subagent, then\nreplies with the results.",
-      "mid_turn": "enqueue",
+      "description": "Chat with the travel assistant. Describe the trip you want (flights, hotels,\ndates, traveler name) in plain text; the assistant converses, writes Python scripts,\nand runs them against a simulated travel backend via a script-runner subagent, then\nreplies with the results.\nSent while it is working, the message steers it instead: the text reaches the model with the next\ntool result.",
+      "mid_turn": "accept",
       "input": {
         "$ref": "#/$defs/TextMessage"
       },

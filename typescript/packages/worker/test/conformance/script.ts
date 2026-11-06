@@ -56,6 +56,9 @@ const SubagentSendStep = z.strictObject({
 
 const SubagentStopStep = z.strictObject({ step: z.literal("subagent_stop"), name: z.string() });
 
+/** The handler steers the open turn with `text` (`runner.steer`). */
+const SteerStep = z.strictObject({ step: z.literal("steer"), text: z.string() });
+
 /** The handler raises `message`; later steps never run. */
 const RaiseStep = z.strictObject({ step: z.literal("raise"), message: z.string() });
 
@@ -67,6 +70,7 @@ const Step = z.discriminatedUnion("step", [
   SubagentStartStep,
   SubagentSendStep,
   SubagentStopStep,
+  SteerStep,
   RaiseStep,
 ]);
 

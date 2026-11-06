@@ -1,0 +1,32 @@
+{"agent_id": "agent-1", "event": {"state_id": "entries", "type": "state_snapshot", "value": {"values": {}}, "version": 0}, "message_id": null, "turn_id": "", "turn_number": 0}
+{"agent_id": "agent-1", "event": {"disposition": "opened", "handler": "run_reject", "payload": {"steps": [{"model": "scripted", "reply": ["Planning."], "step": "model", "usage": null}, {"args": {"question": "Which city?"}, "id": "call-city", "name": "ask_client", "step": "tool"}, {"model": "scripted", "reply": ["Booked."], "step": "model", "usage": null}]}, "type": "message_accepted"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_started"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Planning.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-city", "tool_input": {"question": "Which city?"}, "tool_name": "ask_client", "type": "tool_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-city", "tool_input": {"question": "Which city?"}, "tool_name": "ask_client", "type": "tool_start"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output_schema": {"type": "string"}, "tool_id": "call-city", "tool_input": {"question": "Which city?"}, "tool_name": "ask_client", "type": "callback_requested"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"disposition": "joined", "handler": "run_accept", "payload": {"steps": [{"step": "steer", "text": "Only cities by the sea."}]}, "type": "message_accepted"}, "message_id": "message-2", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-2", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"steering_id": "steering-1", "text": "Only cities by the sea.", "type": "steering_enqueued"}, "message_id": "message-2", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": ""}, "type": "message_handler_end"}, "message_id": "message-2", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"disposition": "joined", "handler": "run_accept", "payload": {"steps": [{"args": {"question": "Anything else?"}, "id": "call-more", "name": "ask_client", "step": "tool"}, {"step": "steer", "text": "Too late."}]}, "type": "message_accepted"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "message_handler_start"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-more", "tool_input": {"question": "Anything else?"}, "tool_name": "ask_client", "type": "tool_requested"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-more", "tool_input": {"question": "Anything else?"}, "tool_name": "ask_client", "type": "tool_start"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output_schema": {"type": "string"}, "tool_id": "call-more", "tool_input": {"question": "Anything else?"}, "tool_name": "ask_client", "type": "callback_requested"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"error": null, "outcome": "ok", "tool_id": "call-city", "tool_name": "ask_client", "type": "callback_resolved"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-city", "tool_name": "ask_client", "tool_output": "Lisbon", "type": "tool_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"steering_ids": ["steering-1"], "tool_id": "call-city", "type": "steering_claimed"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_started"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"text": "Booked.", "type": "reply_delta"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"model": "scripted", "type": "model_interaction_ended", "usage": null}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": "Planning.Booked."}, "type": "message_handler_end"}, "message_id": "message-1", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"error": null, "outcome": "ok", "tool_id": "call-more", "tool_name": "ask_client", "type": "callback_resolved"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"tool_id": "call-more", "tool_name": "ask_client", "tool_output": "No.", "type": "tool_end"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"steering_id": "steering-2", "text": "Too late.", "type": "steering_enqueued"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"output": {"text": ""}, "type": "message_handler_end"}, "message_id": "message-3", "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"steering_ids": ["steering-2"], "type": "steering_dropped"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
+{"agent_id": "agent-1", "event": {"type": "turn_end"}, "message_id": null, "turn_id": "turn-1", "turn_number": 1}
