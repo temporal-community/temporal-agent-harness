@@ -102,6 +102,8 @@ const QUERY_BLEED = "b";
  * to be right by the time they let go and reach for it.
  */
 const URL_WRITE_MS = 250;
+/** How far past the window fit a drag pulls against the fit before letting go. Under `RESIZE_STEP`, so a key step still lends. */
+const LEND_DETENT = 12;
 /** Marks the frontmost tab of a column in the pane list, e.g. `chat|*logs`. */
 const ACTIVE_MARK = "*";
 /** Joins panes sharing a column: tabbed, and stacked as a split. */
@@ -151,7 +153,7 @@ function rememberedSize(size: unknown): number | null {
  * on the state flow, the chat beside it at full height, and the tokens stacked
  * over the agent state, with the logs and the latency waterfall folded to spines
  * after them: on the desk, one click from open, without costing the width. The
- * state flow gives up width to fit the rest; see `#fillOnce`. The stacked pair
+ * state flow gives up width to fit the rest; see `#fill`. The stacked pair
  * splits evenly: a fixed height for either one squeezes the other to nothing once
  * the drawer is opened tall.
  */
@@ -330,8 +332,33 @@ export class PaneStack {
    */
   #desks = new Map<string, Pane[][]>();
   /** Last measured rail width. Zero means not measured yet. */
-  #railWidth = 0;
-  #fillPending = true;
+  #railWidth = $state(0);
+  /**
+   * The column that stretches over spare room, so the desk never leaves room
+   * empty after its last column: the state flow, or failing an open one, the
+   * last open column. Until the reader sizes it, it also gives width back down
+   * to its minimum so the desk fits the window; once they have, their width is
+   * its floor and a desk wider than the window scrolls. Null until the rail is
+   * measured.
+   *
+   * Room a drag leaves is lent to the last open column first (see
+   * `setGroupSize`), but only as much as is still empty, so dragging back takes
+   * it straight back.
+   */
+  #fill = $derived.by(() => {
+    if (!(this.#railWidth > 0)) return null;
+    const open = this.groups.filter((group) => !group.every((pane) => pane.collapsed));
+    const group = open.find((item) => item.some((pane) => PANE_META[pane.kind].flexible)) ?? open.at(-1);
+    if (!group) return null;
+    const room = this.#railWidth - (this.#deskWidth() - this.#ownSize(group));
+    const floor = group.some((pane) => pane.size != null) ? this.#ownSize(group) : this.minOfGroup(group);
+    const last = open.at(-1);
+    const owed = this.#lent?.id === last?.[0].id && last !== group ? this.#lent?.px ?? 0 : 0;
+    const lent = Math.max(0, Math.min(owed, room - floor));
+    return { id: group[0].id, group, width: Math.max(floor, room - lent), lent: lent ? { id: last![0].id, px: lent } : null };
+  });
+  /** Width lent to the last open column by a drag; see `setGroupSize`. */
+  #lent = $state<{ id: string; px: number } | null>(null);
   /** Whether the address bar named this stack's desk on load. */
   #deskFromLink = false;
 
@@ -351,9 +378,15 @@ export class PaneStack {
     return pane.size ?? PANE_META[pane.kind].defaultSize;
   }
 
+  /** A column's width, and the width it is drawn at: its own, plus any slack `#fill` gives it. */
+  sizeOfGroup(group: Pane[]): number {
+    const fill = this.#fill;
+    if (fill && group[0]?.id === fill.id) return fill.width;
+    return this.#ownSize(group) + (fill?.lent?.id === group[0]?.id ? fill.lent.px : 0);
+  }
+
   /**
-   * A column's width, and the width it is drawn at: nothing grows or shrinks
-   * it to fit the rail. Tabs share it, so a width set by dragging the gutter
+   * A column's own width. Tabs share it, so a width set by dragging the gutter
    * holds whichever tab is in front — the column is the thing being sized, not
    * the pane. Failing an explicit width, the frontmost tab's default decides.
    * A split column has every pane in front, so the widest default decides
@@ -361,7 +394,7 @@ export class PaneStack {
    * header, between the press that focuses it and the release that lands on
    * its buttons.
    */
-  sizeOfGroup(group: Pane[]): number {
+  #ownSize(group: Pane[]): number {
     const explicit = group.find((pane) => pane.size != null);
     if (explicit) return this.sizeOf(explicit);
     if (isSplit(group)) return Math.max(...group.map((pane) => this.sizeOf(pane)));
@@ -402,7 +435,6 @@ export class PaneStack {
       } else {
         this.#adoptStoredSizes(sessionId);
       }
-      this.#fillOnce();
       this.#desks.set(sessionId, this.groups);
       writeStoredDesk(sessionId, this.groups as StoredDesk);
       return;
@@ -417,10 +449,6 @@ export class PaneStack {
     this.#desks.set(sessionId, restored);
     this.groups = restored;
     this.activeSessionId = sessionId;
-    if (!saved) {
-      this.#fillPending = true;
-      this.#fillOnce();
-    }
     /* The pane that had focus may have been one of the leftovers. */
     if (!this.focusedId || !this.has(this.focusedId)) {
       this.focusedId = (this.expandedPanes[0] ?? this.panes[0])?.id ?? null;
@@ -459,44 +487,14 @@ export class PaneStack {
   }
 
   /**
-   * The rail's measured width: the first visit's fill, and the widest a drag
-   * can make a column. It never changes a width already set.
+   * The rail's measured width: what `#fill` stretches the desk to, and the widest a
+   * drag can make a column. It never changes a width already set.
    *
    * Zero is an unmeasured rail, reported before layout, and is ignored.
    */
   noteRailWidth(width: number): void {
     if (!Number.isFinite(width) || width <= 0) return;
     this.#railWidth = width;
-    this.#fillOnce();
-  }
-
-  /**
-   * A first visit has no saved widths, so the flexible column takes what the
-   * defaults leave of the rail, or gives back what they overflow it by down to
-   * its minimum, once, and keeps that as its own width. After that nothing fits
-   * the rail: a window resize changes no column, room left over sits empty at
-   * the end of the rail, and a rail too narrow scrolls.
-   *
-   * Waits for both a measured rail and the session's stored widths, so a
-   * reload never fills over a width the reader saved.
-   */
-  #fillOnce(): void {
-    if (!this.#fillPending || !(this.#railWidth > 0) || !this.activeSessionId) return;
-    this.#fillPending = false;
-    if (this.panes.some((pane) => pane.size != null)) return;
-    const group = this.groups.find(
-      (item) =>
-        !item.every((pane) => pane.collapsed) &&
-        item.some((pane) => PANE_META[pane.kind].flexible)
-    );
-    if (!group) return;
-    const used = this.groups.reduce(
-      (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.sizeOfGroup(item)),
-      0
-    );
-    if (used !== this.#railWidth) {
-      this.setGroupSize(group[0].id, this.sizeOfGroup(group) + this.#railWidth - used);
-    }
   }
 
   #deskFromStorage(sessionId: string): Pane[][] | null {
@@ -683,10 +681,23 @@ export class PaneStack {
 
   /**
    * The column's width, written to every tab in it so that pulling one out keeps
-   * the width the reader set. Only this column changes. A null returns it to its
-   * kind's default. No wider than the rail measured now, since a column wider
-   * than the window cannot be read whole; a narrower window later does not
-   * shrink it, the rail scrolls instead.
+   * the width the reader set. Only this column changes and the ones after it
+   * slide, so the edge stays under the pointer; a desk wider than the window
+   * scrolls. A null returns it to its kind's default. No wider than the rail
+   * measured now, since a column wider than the window cannot be read whole.
+   *
+   * `#fill` keeps the width it is drawn at rather than take up the change, or
+   * the dragged column would grow from its left edge. Room a narrower column
+   * leaves is lent to the last open column after it instead, so its edge still
+   * follows the pointer, and comes back as soon as a drag the other way fills
+   * it; the last open column's own width never changes. The last open column
+   * has none after it, so `#fill` stretches over the room it leaves.
+   *
+   * The fit is magnetic for `LEND_DETENT`: within it the column eases away from
+   * the fit at a fraction of the pointer, then lets go onto the pointer, the way
+   * a drawer snaps shut past its minimum. Dragging back is pulled onto the fit.
+   * Pushing the desk past the window edge pulls the same way, so the folded
+   * columns after the last open one hold at the edge before the rail scrolls.
    */
   setGroupSize(id: string, size: number | null): void {
     const loc = this.locate(id);
@@ -695,7 +706,40 @@ export class PaneStack {
     const min = this.minOfGroup(group);
     const max = this.#railWidth > 0 ? Math.max(min, this.#railWidth) : Infinity;
     const next = size == null ? null : Math.max(min, Math.min(max, Math.round(size)));
-    for (const pane of group) pane.size = next;
+    const fill = this.#fill;
+    if (next == null || !fill) {
+      for (const pane of group) pane.size = next;
+      return;
+    }
+    this.#setOwnSize(fill.group, fill.width);
+    this.#lent = fill.lent?.id === group[0].id ? null : fill.lent;
+    this.#setOwnSize(group, next);
+    const gap = this.#railWidth - this.#deskWidth() - (this.#lent?.px ?? 0);
+    const last = this.groups.slice(loc.group + 1).filter((item) => !item.every((pane) => pane.collapsed)).at(-1);
+    if (gap > 0 && last) this.#lent = { id: last[0].id, px: (this.#lent?.px ?? 0) + gap };
+    const lent = this.#fill?.lent?.px ?? 0;
+    if (lent > 0 && lent <= LEND_DETENT && this.#lent) {
+      const eased = Math.round((lent * lent) / (2 * LEND_DETENT));
+      this.#setOwnSize(group, next + lent - eased);
+      this.#lent = eased > 0 ? { id: this.#lent.id, px: eased } : null;
+    }
+    const overflow = this.#deskWidth() - this.#railWidth;
+    if (overflow > 0 && overflow <= LEND_DETENT) {
+      const eased = Math.round((overflow * overflow) / (2 * LEND_DETENT));
+      this.#setOwnSize(group, Math.max(min, this.#ownSize(group) - overflow + eased));
+    }
+  }
+
+  #setOwnSize(group: Pane[], size: number): void {
+    for (const pane of group) pane.size = size;
+  }
+
+  /** The desk's width from each column's own width, folded ones as spines. */
+  #deskWidth(): number {
+    return this.groups.reduce(
+      (sum, item) => sum + (item.every((pane) => pane.collapsed) ? SPINE_SIZE : this.#ownSize(item)),
+      0
+    );
   }
 
   /**

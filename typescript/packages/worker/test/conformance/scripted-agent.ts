@@ -122,6 +122,11 @@ async function playScript(
         });
         // A failed call is the model's next input.
         await runner.runTool(step.id, TOOLS[step.name], step.args).catch(() => undefined);
+        // As an AI-SDK adapter does, for the result it hands the model.
+        runner.claimSteering({ toolId: step.id });
+        break;
+      case "steer":
+        runner.steer(step.text);
         break;
       case "state_set":
         entries.mutate((d) => {

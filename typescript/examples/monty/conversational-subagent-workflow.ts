@@ -92,10 +92,12 @@ export const MontyChatSubagentAgentTs = defineAgent({
       description: `Chat with the travel assistant. Describe the trip you want (flights, hotels,
 dates, traveler name) in plain text; the assistant converses, writes Python scripts,
 and runs them against a simulated travel backend via a script-runner subagent, then
-replies with the results.`,
+replies with the results.
+Sent while it is working, the message steers it instead: the text reaches the model with the next
+tool result.`,
       input: TextMessage,
       output: TextReply,
-      midTurn: MidTurn.ENQUEUE,
+      midTurn: MidTurn.ACCEPT,
     }),
     // See MontyChatAgentTs's set_model for why this is ACCEPT and not model-callable.
     set_model: handler({
@@ -159,7 +161,11 @@ replies with the results.`,
     }
 
     return {
-      ask: async ({ text }) => ({ text: await handleChatTurn(text) }),
+      ask: async ({ text }, ctx) => {
+        if (!ctx.joined_turn) return { text: await handleChatTurn(text) };
+        runner.steer(text);
+        return { text: "" };
+      },
       set_model: async (message) => {
         model = message.model;
         return { text: `Model set to **${message.model}**.` };

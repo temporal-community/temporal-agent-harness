@@ -1,4 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:committed_files.bzl", "committed_files")
 
 py_library(
     name = "__init__",
@@ -27,6 +28,7 @@ py_library(
 # while a library in the package is outside this target's dependencies.
 py_library(
     name = "temporal_agent_harness",  # keep
+    data = [":development_resources"],  # keep
     visibility = [
         "//python:__pkg__",
         "//python/tests:__pkg__",
@@ -43,4 +45,37 @@ py_library(
         "//python/temporal_agent_harness/utils:__init__",
         "//python/temporal_agent_harness/web:cli_lib",
     ],
+)
+
+filegroup(
+    name = "development_resources",
+    srcs = glob(
+        ["skills/**"],
+        exclude = ["skills/**/BUILD.bazel"],
+    ),
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "development",
+    srcs = ["development.py"],
+    data = [":development_resources"],  # keep
+    imports = [".."],
+    visibility = ["//python:__subpackages__"],
+)
+
+committed_files(
+    name = "shared_skill_files",
+    srcs = [
+        "skills/temporal-harness-python/assets/starter/env.example.tmpl",
+        "skills/temporal-harness-python/assets/starter/gitignore.tmpl",
+        "skills/temporal-harness-python/references/api.md",
+        "skills/temporal-harness-python/references/verification.md",
+    ],
+    generated = {
+        "skills/temporal-harness-python/assets/starter/env.example.tmpl": "//docs:agent-resources/env.example.tmpl",
+        "skills/temporal-harness-python/assets/starter/gitignore.tmpl": "//docs:agent-resources/gitignore.tmpl",
+        "skills/temporal-harness-python/references/api.md": "//docs:api/README.md",
+        "skills/temporal-harness-python/references/verification.md": "//docs:agent-resources/verification.md",
+    },
 )

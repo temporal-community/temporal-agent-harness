@@ -51,6 +51,12 @@ export interface ReplayLogRow {
    * `index` and `body` grow with it.
    */
   runStartIndex?: number;
+  /**
+   * The frame data this row was built from, exactly as received: what the Logs pane shows as the
+   * event. A collapsed reply run holds every chunk it folded, in order. Everything else on the
+   * row is the console's own reading of these frames.
+   */
+  wire: readonly AgentSseFrame["data"][];
   ordinal: number;
   turnNumber: number;
   sourceTurnNumber: number;
@@ -61,6 +67,8 @@ export interface ReplayLogRow {
   sourceLabel?: string;
   turnId: string;
   messageId?: string;
+  /** The `steering_id` a `steering_enqueued` minted, or the ones a claim or drop settles. */
+  steeringIds?: string[];
   evaluationId?: string;
   /** What judged an automatic approval: `jev_evaluator`, or the evaluator callable's name. */
   evaluator?: string;
@@ -205,6 +213,7 @@ function rowFromFrame(
     return {
       id: `${entry.workflowId ?? "parent"}-stream-error-${ordinal}`,
       index: ordinal,
+      wire: [frame.data],
       ordinal,
       turnNumber: 0,
       sourceTurnNumber: 0,
@@ -231,6 +240,7 @@ function rowFromFrame(
   const base = {
     id: `${entry.workflowId ?? frame.data.agent_id}-${frame.data.type}-${ordinal}`,
     index: ordinal,
+    wire: [frame.data] as readonly AgentSseFrame["data"][],
     ordinal,
     turnNumber,
     sourceTurnNumber,
@@ -272,6 +282,48 @@ function rowFromFrame(
       message: { handler: frame.data.handler, payload: frame.data.payload },
       marker: queued ? "queue" : undefined,
       markerLabel: queued ? "queued turn" : undefined
+    };
+  }
+
+  if (frame.event === "steering_enqueued") {
+    return {
+      ...base,
+      actor: "queue",
+      tone: "queue",
+      label: "Steering queued",
+      body: frame.data.text,
+      steeringIds: [frame.data.steering_id],
+      status: "queued"
+    };
+  }
+
+  /* Filed under the tool call whose result carried it, so the Logs pane nests it there. */
+  if (frame.event === "steering_claimed") {
+    const count = frame.data.steering_ids.length;
+    return {
+      ...base,
+      actor: "queue",
+      tone: "done",
+      label: "Steering sent to the model",
+      body: `${count} steering message${count === 1 ? "" : "s"}`,
+      steeringIds: frame.data.steering_ids,
+      toolId: frame.data.tool_id ?? undefined,
+      status: "claimed"
+    };
+  }
+
+  if (frame.event === "steering_dropped") {
+    const count = frame.data.steering_ids.length;
+    return {
+      ...base,
+      actor: "queue",
+      tone: "queue",
+      label: "Steering dropped",
+      body: `${count} steering message${count === 1 ? "" : "s"} never reached the model`,
+      steeringIds: frame.data.steering_ids,
+      status: "dropped",
+      marker: "queue",
+      markerLabel: "steering dropped"
     };
   }
 
@@ -758,7 +810,14 @@ export function replayLogBuilder(): (
   /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
      is left exactly as it was — it is already one event, and a row that announced
      itself as a collapsed run of one would only be noise. */
-  let open: { key: string; startIndex: number; text: string; row: number; groupRow: number } | null = null;
+  let open: {
+    key: string;
+    startIndex: number;
+    text: string;
+    wire: AgentSseFrame["data"][];
+    row: number;
+    groupRow: number;
+  } | null = null;
   let rows: ReplayLogRow[] = [];
   let turnRows = new Map<number, ReplayLogRow[]>();
   let groups = new Map<number, TurnLogGroup>();
@@ -792,7 +851,14 @@ export function replayLogBuilder(): (
       const key = chunk == null ? null : replyRunKey(entry);
       if (open && key === open.key) {
         open.text += chunk;
-        const row = { ...rows[open.row]!, runStartIndex: open.startIndex, index: index + 1, body: open.text };
+        open.wire.push(frame.data);
+        const row = {
+          ...rows[open.row]!,
+          runStartIndex: open.startIndex,
+          index: index + 1,
+          body: open.text,
+          wire: open.wire
+        };
         rows[open.row] = row;
         turnRows.get(row.turnNumber)![open.groupRow] = row;
         dirty.add(row.turnNumber);
@@ -807,7 +873,11 @@ export function replayLogBuilder(): (
       }
       const turn = turnRows.get(row.turnNumber) ?? [];
       turnRows.set(row.turnNumber, turn);
-      if (key != null) open = { key, startIndex: index + 1, text: chunk!, row: rows.length, groupRow: turn.length };
+      if (key != null) {
+        const wire = [...row.wire];
+        row.wire = wire;
+        open = { key, startIndex: index + 1, text: chunk!, wire, row: rows.length, groupRow: turn.length };
+      }
       rows.push(row);
       turn.push(row);
       dirty.add(row.turnNumber);
@@ -847,12 +917,15 @@ export function replayLogAt(full: ReplayLog, input: readonly ReplayLogInput[], c
   const cut = full.rows[kept];
   if (cut?.runStartIndex != null && cut.runStartIndex <= cursor) {
     let body = "";
+    const wire = cut.wire.slice(0, cursor - cut.runStartIndex + 1);
     for (let index = cut.runStartIndex; index <= cursor; index += 1) {
       const { frame } = normalizeReplayLogFrame(input[index - 1]!);
       if (frame.event === "reply_delta" && "type" in frame.data) body += frame.data.text;
     }
     const { runStartIndex, ...row } = cut;
-    rows.push(cursor === runStartIndex ? { ...row, index: cursor, body } : { ...cut, index: cursor, body });
+    rows.push(
+      cursor === runStartIndex ? { ...row, index: cursor, body, wire } : { ...cut, index: cursor, body, wire }
+    );
   }
   const shortened = rows.length > kept ? rows[kept]! : null;
   const groups: TurnLogGroup[] = [];
@@ -937,14 +1010,27 @@ export interface RowIdentifier {
  * shows it. A turn or message ID is only shown on the row that event is about,
  * or it would repeat down the whole turn the same way.
  */
+/**
+ * A queued steering's own id, or each one a claim or drop settled. A claim or drop settles
+ * everything queued, so each id is labelled as one of a list ("claimed steering 1 of 1"), never as
+ * a single-valued field.
+ */
+function steeringIdentifiers(row: ReplayLogRow): Array<[string, string]> {
+  const ids = row.steeringIds ?? [];
+  if (row.event === "steering_enqueued") return ids.map((id) => ["steering", id]);
+  const verb = row.event === "steering_claimed" ? "claimed" : "dropped";
+  return ids.map((id, i) => [`${verb} steering ${i + 1} of ${ids.length}`, id]);
+}
+
 export function rowIdentifiers(row: ReplayLogRow): RowIdentifier[] {
   const turnRow = row.event === "turn_started" || row.event === "turn_end";
-  const messageRow = row.event.startsWith("message_");
+  const messageRow = row.event.startsWith("message_") || row.event.startsWith("steering_");
   const candidates: Array<[string, string | undefined]> = [
     ["tool call", row.toolId],
     ["evaluation", row.evaluationId],
     ["child workflow", row.childWorkflowId],
     ["message", messageRow ? row.messageId : undefined],
+    ...steeringIdentifiers(row),
     ["turn", turnRow ? row.turnId : undefined],
     ["offset", row.eventOffset?.toString()]
   ];

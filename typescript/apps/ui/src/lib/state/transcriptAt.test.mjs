@@ -77,6 +77,7 @@ const scenarios = {
   "three approvals": [timelineOf(scaleScenario("approvals3"))],
   "an evaluator burst": [timelineOf(scaleScenario("burst10"))],
   subagents: [timelineOf(scaleScenario("subagents"))],
+  "steering claimed and dropped": [timelineOf(scaleScenario("steering"))],
   "replies and tools interleaved": [interleavedFrames, proseAsk]
 };
 

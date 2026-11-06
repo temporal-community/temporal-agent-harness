@@ -15,6 +15,8 @@ export type TranscriptItem =
       /** The payload field the text came from (`text`, `script`, …), or null when it was labelled. */
       field: string | null;
       timestamp: number;
+      /** What the handler queued for the model with `runner.steer`, in order; absent when nothing. */
+      steering?: Steering[];
     }
   | {
       kind: "agent";
@@ -63,6 +65,19 @@ export type TranscriptItem =
       text: string;
       timestamp: number;
     };
+
+/**
+ * Steering text a message queued for the open turn's model: waiting for the next outermost
+ * tool result, attached to one (`toolId`, or null when it reached the model some other way),
+ * or dropped because the turn ended first.
+ */
+export interface Steering {
+  /** The `steering_id` its `steering_enqueued` carried. */
+  steeringId: string;
+  text: string;
+  status: "enqueued" | "claimed" | "dropped";
+  toolId: string | null;
+}
 
 function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   if (frame.event !== "text_annotation" || !("type" in frame.data)) return [];
@@ -137,12 +152,16 @@ export function transcriptBuilder(): TranscriptFold {
   // can be streaming under one turn_id at once — keying by turn would merge their replies into
   // one bubble and interleave their text.
   let replyIndexByMessage = new Map<string, number>();
+  let userIndexByMessage = new Map<string, number>();
+  // The message that enqueued each steering, so a claim or drop settles exactly the ids it names.
+  let messageBySteering = new Map<string, string>();
   let toolIndexById = new Map<string, number>();
   let citationsByMessage = new Map<string, FileCitationAnnotation[]>();
   let from: number[] = [];
   let changed: number[] = [];
   let sources: number[][] = [];
   let sourcesByMessage = new Map<string, number[]>();
+  let sourcesByUser = new Map<string, number[]>();
   let sourcesByTool = new Map<string, number[]>();
   let run: CutRun = { partial: new Map(), previous: [] };
   let input: readonly TranscriptInput[] = [];
@@ -155,12 +174,15 @@ export function transcriptBuilder(): TranscriptFold {
       items = [];
       schemaOf = outputSchemaTracker();
       replyIndexByMessage = new Map();
+      userIndexByMessage = new Map();
+      messageBySteering = new Map();
       toolIndexById = new Map();
       citationsByMessage = new Map();
       from = [];
       changed = [];
       sources = [];
       sourcesByMessage = new Map();
+      sourcesByUser = new Map();
       sourcesByTool = new Map();
       run = { partial: new Map(), previous: [] };
     }
@@ -196,7 +218,8 @@ export function transcriptBuilder(): TranscriptFold {
       if (MESSAGE_SOURCES.has(frame.event)) sourcesOf(sourcesByMessage, key);
 
       if (frame.event === "message_accepted") {
-        opened(NO_SOURCES);
+        userIndexByMessage.set(key, items.length);
+        opened(sourcesOf(sourcesByUser, key));
         items.push({
           kind: "user",
           id: `user-${key}`,
@@ -206,6 +229,35 @@ export function transcriptBuilder(): TranscriptFold {
           field: promptField(frame.data.payload),
           timestamp
         });
+      }
+
+      if (frame.event === "steering_enqueued" && userIndexByMessage.has(key)) {
+        sourcesOf(sourcesByUser, key);
+        const item = editable(userIndexByMessage.get(key));
+        if (item?.kind === "user") {
+          const { steering_id: steeringId, text } = frame.data;
+          messageBySteering.set(steeringId, key);
+          item.steering = [...(item.steering ?? []), { steeringId, text, status: "enqueued", toolId: null }];
+        }
+      }
+
+      /* Both name the steering they settle by id: the envelope's message is the one running the
+         model loop, or none. */
+      if (frame.event === "steering_claimed" || frame.event === "steering_dropped") {
+        const status = frame.event === "steering_claimed" ? "claimed" : "dropped";
+        const toolId = frame.event === "steering_claimed" ? frame.data.tool_id : null;
+        for (const steeringId of frame.data.steering_ids) {
+          const steered = messageBySteering.get(steeringId);
+          const index = steered === undefined ? undefined : userIndexByMessage.get(steered);
+          const queued = index == null ? undefined : items[index];
+          if (steered === undefined || queued?.kind !== "user" || !queued.steering) continue;
+          sourcesOf(sourcesByUser, steered);
+          const item = editable(index);
+          if (item?.kind !== "user") continue;
+          item.steering = item.steering?.map((entry) =>
+            entry.steeringId === steeringId ? { ...entry, status, toolId } : entry
+          );
+        }
       }
 
       if (frame.event === "text_annotation") {

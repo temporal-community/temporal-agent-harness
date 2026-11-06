@@ -82,6 +82,23 @@ class AgentEventType(StrEnum):
     of the same turn are unaffected, which is why a consumer must attribute this by
     ``message_id`` rather than by ``turn_id``. See :class:`MessageHandlerError`."""
 
+    STEERING_ENQUEUED = "steering_enqueued"
+    """A message handler queued steering text for the model (``runner.steer``). The text waits
+    for the next result of an outermost tool call — one not made inside another tool, so never a
+    Code Mode host call — and is attached to its end. Exactly one STEERING_CLAIMED or
+    STEERING_DROPPED later lists its ``steering_id``. See :class:`SteeringEnqueued`."""
+
+    STEERING_CLAIMED = "steering_claimed"
+    """Queued steering was taken by code building model input (``runner.claim_steering``),
+    normally the AI-SDK adapter appending it to a tool result. "Claimed" rather than
+    "delivered": the harness sees the text attached, not the model reading it. See
+    :class:`SteeringClaimed`."""
+
+    STEERING_DROPPED = "steering_dropped"
+    """The turn ended with steering still queued, so the harness discarded it: it never reached
+    the model. Published just before TURN_END. A client should tell the user and offer to
+    resubmit the text as a new message. See :class:`SteeringDropped`."""
+
     TURN_STARTED = "turn_started"
     """A turn has begun — the agent went from idle to busy. A pure lifecycle bracket: it
     says nothing about WHICH message opened it (that is the preceding MESSAGE_ACCEPTED,
@@ -1034,6 +1051,61 @@ class MessageHandlerError(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_ERR
     )
 
 
+class SteeringEnqueued(StreamEvent[Literal[AgentEventType.STEERING_ENQUEUED]]):
+    """A message handler queued steering text for the model.
+
+    The envelope's ``message_id`` is the message whose handler called ``runner.steer``. The
+    ``steering_id`` names this one piece of steering, which a handler that steers twice needs:
+    the later :class:`SteeringClaimed` or :class:`SteeringDropped` lists it.
+    """
+
+    type: Literal[AgentEventType.STEERING_ENQUEUED] = AgentEventType.STEERING_ENQUEUED
+    steering_id: str = Field(
+        description="Minted by the harness for this steering; exactly one later "
+        "``steering_claimed`` or ``steering_dropped`` lists it in its ``steering_ids``."
+    )
+    text: str = Field(description="The steering text, as the model will see it once claimed.")
+
+
+class SteeringClaimed(StreamEvent[Literal[AgentEventType.STEERING_CLAIMED]]):
+    """Queued steering was taken by code building model input.
+
+    The envelope's ``message_id`` is the CLAIMING participant — the message whose handler runs
+    the model loop. What it claimed is ``steering_ids``, named explicitly so a consumer never
+    infers it from what was enqueued before this event.
+    """
+
+    type: Literal[AgentEventType.STEERING_CLAIMED] = AgentEventType.STEERING_CLAIMED
+    steering_ids: list[str] = Field(
+        description="The ``steering_id`` of each ``steering_enqueued`` claimed, in the order they "
+        "were enqueued."
+    )
+    tool_id: str | None = Field(
+        default=None,
+        description="The tool call whose result carries the steering, so a consumer can show it "
+        "with that call's ``tool_start`` / ``tool_end``. ``None`` when it went to the model some "
+        "other way, e.g. as user input in a hand-written model loop. ``tool_end.tool_output`` "
+        "never includes the steering: it is published before the steering is attached.",
+    )
+
+
+class SteeringDropped(StreamEvent[Literal[AgentEventType.STEERING_DROPPED]]):
+    """The turn ended with steering still queued, and the harness discarded it.
+
+    It never reached the model: no outermost tool call resolved after it was queued, or the
+    handler running the model loop returned first. Steering does not carry into the next turn,
+    because it is about the work that just finished. A client should tell the user and offer to
+    resubmit the text as a new message. The envelope's ``message_id`` is ``None``, like
+    :class:`TurnEnded`'s, which follows it.
+    """
+
+    type: Literal[AgentEventType.STEERING_DROPPED] = AgentEventType.STEERING_DROPPED
+    steering_ids: list[str] = Field(
+        description="The ``steering_id`` of each ``steering_enqueued`` dropped, in the order they "
+        "were enqueued."
+    )
+
+
 class AgentClosed(StreamEvent[Literal[AgentEventType.AGENT_CLOSED]]):
     """The agent closed: it admits no more messages, and its workflow completes once
     ``@agent.teardown`` (if any) returns.
@@ -1096,6 +1168,9 @@ AgentStreamItem = Annotated[
     | MessageHandlerStart
     | MessageHandlerEnd
     | MessageHandlerError
+    | SteeringEnqueued
+    | SteeringClaimed
+    | SteeringDropped
     | TurnStarted
     | TurnEnded
     | AgentClosed

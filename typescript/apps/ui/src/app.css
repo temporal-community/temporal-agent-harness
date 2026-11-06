@@ -304,6 +304,25 @@ body {
   background: var(--scrollbar-track);
 }
 
+/* A thumb shows while the pointer is over its scroller or it is scrolling, and
+   goes two seconds after it stops (scrollActivity.ts marks the scrolling), as
+   the pane rail's overlay bar does. Hidden rather than removed: the track keeps
+   its width, so nothing reflows when it comes back. On the pseudo-element, so a
+   hover repaints that one bar rather than restyling everything inside it. */
+:not(:hover, [data-scrolling])::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  :where(:not(:hover, [data-scrolling])) {
+    scrollbar-color: transparent var(--scrollbar-track);
+  }
+
+  :where(:hover, [data-scrolling]) {
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+}
+
 button,
 input,
 select {

@@ -33,7 +33,15 @@ export interface SessionInspection {
   waitingApprovals: number;
   /** Including the calls `callbackTools` answers. */
   waitingCallbacks: number;
-  agents: Record<string, Omit<AgentView, "messages" | "states"> & { messages: number; states: string[] }>;
+  agents: Record<
+    string,
+    Omit<AgentView, "messages" | "states" | "steering"> & {
+      messages: number;
+      states: string[];
+      /** How many steers its latest turn has queued, claimed and dropped. */
+      steering: { queued: number; claimed: number; dropped: number };
+    }
+  >;
   /** Only when inspecting an AgentSessionCore. */
   activity?: Omit<SessionActivity, "framesLast10s"> & {
     /** Over the last 10 seconds. */
@@ -50,8 +58,17 @@ export function inspectSession(session: InspectableSession | InspectableCore): S
   const state = "state" in session ? session.state : session;
   const { approvals, callbacks } = waitingCalls(state.agents, () => false);
   const agents: SessionInspection["agents"] = {};
-  for (const [id, { messages, states, ...info }] of Object.entries(state.agents)) {
-    agents[id] = { ...info, messages: messages.length, states: Object.keys(states) };
+  for (const [id, { messages, states, steering, ...info }] of Object.entries(state.agents)) {
+    agents[id] = {
+      ...info,
+      messages: messages.length,
+      states: Object.keys(states),
+      steering: {
+        queued: steering.queued.length,
+        claimed: steering.claimed.length,
+        dropped: steering.dropped.length
+      }
+    };
   }
   const inspection: SessionInspection = {
     connection: state.connection,

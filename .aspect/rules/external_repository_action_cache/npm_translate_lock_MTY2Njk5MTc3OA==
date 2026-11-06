@@ -3,14 +3,14 @@
 # This file should be checked into version control along with the pnpm-lock.yaml file.
 typescript/apps/chat-server/package.json=1658478481
 typescript/apps/ui/package.json=180090902
-typescript/examples/monty/package.json=-348862216
-typescript/examples/openai_hello/package.json=516021682
+typescript/examples/monty/package.json=-182201604
+typescript/examples/openai_hello/package.json=-1854237138
 typescript/package.json=-1773980838
-typescript/packages/client/package.json=-311029464
-typescript/packages/codegen/package.json=-221192931
-typescript/packages/core/package.json=675014632
-typescript/packages/react/package.json=1230095814
-typescript/packages/svelte/package.json=1761157389
-typescript/packages/worker/package.json=1076400734
-typescript/pnpm-lock.yaml=-1005672859
+typescript/packages/client/package.json=-583883738
+typescript/packages/codegen/package.json=408870092
+typescript/packages/core/package.json=-1931274386
+typescript/packages/react/package.json=-826224122
+typescript/packages/svelte/package.json=857730765
+typescript/packages/worker/package.json=-1696131000
+typescript/pnpm-lock.yaml=-1623457605
 typescript/pnpm-workspace.yaml=-1916117215

@@ -77,17 +77,20 @@
      fit. Snapping across it also means no band a drag can sit in while chrome
      flickers in and out. */
   const DRAWER_MIN_H = 96;
-  /* Only reached when there is nothing measurable to fit to — a drawer holding a
-     pane with no natural height, or opened before its trace has loaded. */
-  const DRAWER_DEFAULT_H = 240;
+  /* The most a drawer opens to on its own: enough to see it is there and grab it, a
+     little above the height it snaps shut at, so the rail above keeps its room. Also
+     the height when there is nothing measurable to fit to. Double-click or Home fits
+     the trace up to DRAWER_FIT_MAX_FRACTION, and a dragged height outranks both. */
+  const DRAWER_PEEK_H = 120;
   /* Not pixel-tight. A fitted drawer sitting exactly on its last row reads as
      clipped rather than fitted, sub-pixel rounding is enough to raise a scrollbar
      on a trace that fits, and during a live run this is where the next turn
      appears before anything has to move. */
   const DRAWER_FIT_SLACK = 12;
-  /* An unattended fit stops well short of the row's own ceiling. The default desk stacks
-     two panes in one column above it, which need the height more than a long trace
-     does; the reader who wants the trace drags for it, and the gutter goes to 60vh. */
+  /* A fit the reader asks for (double-click or Home) stops well short of the row's own
+     ceiling. The default desk stacks two panes in one column above it, which need the
+     height more than a long trace does; the reader who wants the trace drags for it,
+     and the gutter goes to 60vh. */
   const DRAWER_FIT_MAX_FRACTION = 0.25;
   /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
      grid — so a drawer is never set larger than it can be drawn. */
@@ -112,7 +115,7 @@
   }
   /* A link whose drawer panes are all folded was written by a shut drawer. */
   const drawerBootShut = drawer.allFolded;
-  let drawerHeight = $state(drawerBootShut ? 0 : (chosenDrawerHeightNow() ?? DRAWER_DEFAULT_H));
+  let drawerHeight = $state(drawerBootShut ? 0 : (chosenDrawerHeightNow() ?? DRAWER_PEEK_H));
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
@@ -473,7 +476,7 @@
    * single pixel, because `PaneRail` and `PaneShell` fill their box top-down and an
    * indefinite row leaves every one of them nothing to fill.
    */
-  function fitDrawerToContent(): number | null {
+  function fitDrawerToContent(ceiling = DRAWER_PEEK_H): number | null {
     const target = drawerFitTarget();
     if (!drawerElement || !target) return null;
     const { scroller: turns, last } = target;
@@ -496,7 +499,7 @@
     drawerHeight = Math.round(
       Math.min(
         Math.max(chrome + content + DRAWER_FIT_SLACK, DRAWER_MIN_H),
-        window.innerHeight * DRAWER_FIT_MAX_FRACTION
+        ceiling
       )
     );
     return drawerHeight;
@@ -624,7 +627,7 @@
          if they have one, or else a fresh fit. The fixed height is what it opens at
          while the fit has nothing to measure, and what it keeps if it never does. */
       const chosen = chosenDrawerHeightNow();
-      drawerHeight = chosen ?? DRAWER_DEFAULT_H;
+      drawerHeight = chosen ?? DRAWER_PEEK_H;
       drawerSized = chosen != null;
       if (chosen == null) requestAnimationFrame(() => fitDrawerToContent());
     }
@@ -719,7 +722,9 @@
     chosenDrawerHeight = undefined;
     writeOperatorPrefs({ drawerHeight: undefined });
     drawerSized = false;
-    if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
+    if (fitDrawerToContent(window.innerHeight * DRAWER_FIT_MAX_FRACTION) == null) {
+      drawerHeight = DRAWER_PEEK_H;
+    }
   }
 
   /* Written when a drag or key step ends, not on every move. Dragged to the floor is
@@ -1088,7 +1093,7 @@
     grid-row: 2 / -1;
   }
 
-  .app.has-session-drawer > :global(.rail),
+  .app.has-session-drawer > :global(.rail-frame),
   .app.has-session-drawer > :global(.step-controller),
   .app.has-session-drawer > .drawer {
     grid-column: 2;
@@ -1117,7 +1122,7 @@
 
   /* Direct child, so this reaches the rail above and never the one inside the
      drawer, which is the thing being shown. */
-  .app.bleed-drawer > :global(.rail) {
+  .app.bleed-drawer > :global(.rail-frame) {
     display: none;
   }
 
@@ -1255,7 +1260,7 @@
 
      Keyed off shut rather than a height, because bleeding overrides the grid row and
      a threshold would have fought it. */
-  .app.drawer-shut .drawer :global(.rail) {
+  .app.drawer-shut .drawer :global(.rail-frame) {
     overflow: hidden;
   }
 

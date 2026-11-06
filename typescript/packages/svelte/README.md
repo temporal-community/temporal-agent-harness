@@ -32,6 +32,38 @@ harness agent session.
   `id` changes from its local id to the server's when it is admitted; its `key` does not, so the
   row keeps its DOM, focus and measured height. (From the client release after 0.1.0.)
 
+## Steering
+
+A message sent to a busy agent can steer its current turn: its handler calls `runner.steer`, and
+the text reaches the model with the next tool result, or is dropped if the turn ends first.
+`session.steering` is the root agent's steering in its latest turn. It is derived, so markup and
+effects reading it re-run only when it changes, not on the reply streaming around it.
+
+```svelte
+{#each session.steering.queued as s (s.steeringId)}
+  <Chip>{s.input.text} · waiting for the next tool result</Chip>
+{/each}
+{#each session.steering.claimed as s (s.steeringId)}
+  <Chip>{s.input.text} · sent to the model</Chip>
+{/each}
+{#each session.steering.dropped as s (s.steeringId)}
+  <Notice>
+    “{s.input.text}” never reached the model.
+    <button onclick={() => session.sendMessage(s.handler, s.input)}>Send again</button>
+  </Notice>
+{/each}
+```
+
+- **It is the latest turn, not a history.** `queued` is what is waiting now. `claimed` and
+  `dropped` are what this turn did with its steering, and all three are empty again when the
+  next turn opens. Every turn's steering stays on its message's `message.steering`.
+- **Render `input`, what the user sent,** typed by the handler it went to. `steeredText` is what
+  the handler queued for the model, which the agent may have rewritten or added to; show it
+  only to show the agent's version.
+- **One message can steer more than once.** Each steer is its own entry, keyed by `steeringId`;
+  group by `messageId` to show the message once.
+- **Resending is yours to build:** `handler` and `input` are the original send.
+
 ## Rendering replies as Markdown
 
 A reply is model output, so treat its Markdown as untrusted. With `@tanstack/markdown`, which

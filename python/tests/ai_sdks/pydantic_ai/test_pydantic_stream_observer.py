@@ -276,6 +276,7 @@ class _FakeRunner(AgentWorkflowRunner):
     def __init__(self, stream_context: TurnStreamContext | None = None) -> None:
         self.calls: list[Any] = []
         self._stream_context = stream_context
+        self._steering = []
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:

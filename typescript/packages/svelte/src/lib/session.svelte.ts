@@ -17,6 +17,7 @@ import {
   type HandlerInput,
   type HandlerName,
   type HarnessMessage,
+  type SteeringView,
   type SubmitMessageResponse,
   type ToolApprovalDecision,
   type UntypedAgent,
@@ -95,6 +96,10 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
   readonly #entry: SessionEntry<A> = $derived.by(() => this.#resolve());
   readonly #subscribe: () => void;
 
+  /* Derived so a reader re-runs only when the view does: it keeps its identity across the
+     flushes that only stream reply text. */
+  readonly #steering = $derived.by(() => rootView<A>(this.#state()).steering);
+
   readonly #waiting = $derived.by(() =>
     waitingCalls(this.#state().agents, (toolName) => this.#entry.core.handlesCallback(toolName))
   );
@@ -140,6 +145,12 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
   /** Whether the root agent has a turn open. */
   get agentStatus(): "idle" | "busy" {
     return rootView<A>(this.#state()).agentStatus;
+  }
+
+  /** The root agent's steering in its latest turn: queued now, or claimed or dropped by that
+   *  turn. Empty again when the next turn opens. */
+  get steering(): SteeringView<A> {
+    return this.#steering;
   }
 
   /** Messages sent from here that the server has not admitted yet, and failed sends. */

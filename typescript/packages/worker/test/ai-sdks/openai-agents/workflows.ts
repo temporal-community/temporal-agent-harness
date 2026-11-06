@@ -4,6 +4,7 @@
 import { Agent } from "@openai/agents-core";
 import { z } from "zod";
 import {
+  MidTurn,
   TextMessage,
   TextReply,
   ToolApprovalPolicy,
@@ -104,6 +105,39 @@ export const OpenAIAskUserAgent = weatherAgent(
   askUser,
   SCRIPTED_ASK_MODEL,
 );
+
+/** The ask-user agent, steerable mid-turn while its callback tool waits for the client. */
+export const OpenAISteeredAskUserAgent = defineAgent({
+  name: "OpenAISteeredAskUserAgent",
+  handlers: {
+    ask,
+    steer: handler({
+      description: "Steer the open turn.",
+      input: TextMessage,
+      output: TextReply,
+      midTurn: MidTurn.ACCEPT,
+    }),
+  },
+  approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
+  create: ({ runner }) => ({
+    async ask({ text }) {
+      const agent = new Agent({
+        name: "Planner",
+        instructions: "Ask the user what you need with ask_user.",
+        model: SCRIPTED_ASK_MODEL,
+        tools: asOpenAIAgentTools(runner, [askUser]),
+      });
+      const result = await runStreamed(runner, agent, text);
+      for await (const _ of result) void _;
+      await result.completed;
+      return { text: String(result.finalOutput) };
+    },
+    async steer({ text }) {
+      runner.steer(text);
+      return { text: "" };
+    },
+  }),
+});
 
 function mcpAgent(name: string, model: string, approvalPolicyDefault: ToolApprovalPolicy) {
   return defineAgent({

@@ -263,10 +263,10 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
       '@temporalio/agent-harness':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../../packages/core
       '@temporalio/agent-harness-worker':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../../packages/worker
       '@temporalio/envconfig':
         specifier: ^1.24.0
@@ -303,10 +303,10 @@ importers:
         specifier: ~0.14.3
         version: 0.14.3(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(supports-color@8.1.1)(ws@8.21.3)(zod@4.6.7)
       '@temporalio/agent-harness':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../../packages/core
       '@temporalio/agent-harness-worker':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../../packages/worker
       '@temporalio/envconfig':
         specifier: ^1.24.0
@@ -368,7 +368,7 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
       '@temporalio/agent-harness-client':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../client
       '@temporalio/common':
         specifier: ^1.24.0
@@ -405,7 +405,7 @@ importers:
   packages/react:
     dependencies:
       '@temporalio/agent-harness-client':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../client
     devDependencies:
       '@testing-library/react':
@@ -442,7 +442,7 @@ importers:
   packages/svelte:
     dependencies:
       '@temporalio/agent-harness-client':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../client
     devDependencies:
       '@sveltejs/package':
@@ -479,10 +479,10 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
       '@temporalio/agent-harness':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../core
       '@temporalio/agent-harness-client':
-        specifier: ^0.2.0
+        specifier: ^0.3.1
         version: link:../client
       '@temporalio/client':
         specifier: ^1.24.0
@@ -2429,8 +2429,8 @@ packages:
     resolution: {integrity: sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA==}
     engines: {node: '>= 18.0.0'}
 
-  follow-redirects@1.16.0:
-    resolution: {integrity: sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==}
+  follow-redirects@1.16.2:
+    resolution: {integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -3379,8 +3379,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici@6.28.1:
-    resolution: {integrity: sha512-zWpdTVD54H48CIybL0rWQ3ukpb9d23wM7eH5RtfdmeP70cWHNjtfo7P4vZX+5CoDcO53J4Pu5uXp7lNfjc6DRA==}
+  undici@6.29.1:
+    resolution: {integrity: sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==}
     engines: {node: '>=18.17'}
 
   unified@11.0.5:
@@ -3856,7 +3856,7 @@ snapshots:
       discord-api-types: 0.38.55
       magic-bytes.js: 1.13.1
       tslib: 2.8.1
-      undici: 6.28.1
+      undici: 6.29.1
 
   '@discordjs/util@1.2.0':
     dependencies:
@@ -5079,7 +5079,7 @@ snapshots:
 
   axios@1.20.0(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1):
     dependencies:
-      follow-redirects: 1.16.0(debug@4.4.3(supports-color@8.1.1))
+      follow-redirects: 1.16.2(debug@4.4.3(supports-color@8.1.1))
       form-data: 4.0.6
       https-proxy-agent: 5.0.1(supports-color@8.1.1)
       proxy-from-env: 2.1.0
@@ -5391,7 +5391,7 @@ snapshots:
       lodash.snakecase: 4.1.1
       magic-bytes.js: 1.13.1
       tslib: 2.8.1
-      undici: 6.28.1
+      undici: 6.29.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -5583,7 +5583,7 @@ snapshots:
       - supports-color
     optional: true
 
-  follow-redirects@1.16.0(debug@4.4.3(supports-color@8.1.1)):
+  follow-redirects@1.16.2(debug@4.4.3(supports-color@8.1.1)):
     optionalDependencies:
       debug: 4.4.3(supports-color@8.1.1)
 
@@ -6728,7 +6728,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@6.28.1: {}
+  undici@6.29.1: {}
 
   unified@11.0.5:
     dependencies:

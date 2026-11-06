@@ -64,6 +64,9 @@ class _FakeRunner:
         self.run_tool_ids.append(call_id)
         return await AgentWorkflowRunner.run_tool(self, call_id, tool_callable, **kwargs)  # type: ignore[arg-type]
 
+    def claim_steering(self, *, tool_id: str | None = None) -> None:
+        return None
+
 
 class _FakeMCPServer(MCPServer):  # type: ignore[misc]
     """An MCP server that records its calls and returns a canned result."""

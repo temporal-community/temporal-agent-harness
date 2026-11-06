@@ -35,9 +35,32 @@ interface MessageFields {
   parts: MessagePart[];
   /** The handler's error, or why the submit failed. */
   error: string | null;
+  /** What this message's handler queued for the model with `runner.steer`, in order. */
+  steering: Steering[];
   acceptedAt: number | null;
   startedAt: number | null;
   endedAt: number | null;
+}
+
+/**
+ * Steering text a message's handler queued for the open turn's model.
+ * - `enqueued`: waiting for the next outermost tool result.
+ * - `claimed`: attached to model input — to the result of tool call `toolId`, or some other way
+ *   when that is null.
+ * - `dropped`: the turn ended first, so the model never saw it; offer to resubmit it.
+ */
+export interface Steering {
+  /** The `steering_id` its `steering_enqueued` carried. */
+  steeringId: string;
+  /** What the handler queued for the model, which may not be what the user sent. */
+  text: string;
+  status: "enqueued" | "claimed" | "dropped";
+  toolId: string | null;
+  /** The turn it was queued in: the one whose model it was meant for. */
+  turnNumber: number;
+  enqueuedAt: number;
+  /** When it was claimed or dropped; null while queued. */
+  settledAt: number | null;
 }
 
 /** One inbound message and its answer, narrowed on `handler` to that handler's types. */

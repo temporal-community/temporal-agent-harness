@@ -9,15 +9,17 @@ Every `@temporalio/agent-harness*` package here shares one version. A release mo
 and every workspace dependency on one of them (`^<version>`), tags `npm-v<version>`, and
 [Publish to npm](../../.github/workflows/publish-npm.yml) publishes the public ones in dependency
 order with npm trusted publishing. `@temporalio/agent-harness` (core) and
-`@temporalio/agent-harness-worker` publish from the first SDK release (see [RELEASE.md](../../RELEASE.md)).
+`@temporalio/agent-harness-worker` are the authoring/runtime packages. The next release also
+publishes `@temporalio/agent-harness-codegen` for application type generation.
 
 | Package | Publishes today |
 | --- | --- |
 | `@temporalio/agent-harness-client` | yes |
 | `@temporalio/agent-harness-react` | yes |
 | `@temporalio/agent-harness-svelte` | yes |
-| `@temporalio/agent-harness` | from the first SDK release |
-| `@temporalio/agent-harness-worker` | from the first SDK release |
+| `@temporalio/agent-harness` | yes |
+| `@temporalio/agent-harness-worker` | yes |
+| `@temporalio/agent-harness-codegen` | starting with the next release |
 
 ## Testing local changes without publishing
 
