@@ -1,12 +1,13 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { Funnel, X } from "@lucide/svelte";
+  import { Funnel, Map as MapIcon, Minus, X } from "@lucide/svelte";
   import {
     Background,
     BackgroundVariant,
     ControlButton,
     Controls,
     MiniMap,
+    Panel,
     SvelteFlow,
     type DefaultEdgeOptions,
     type Edge,
@@ -25,6 +26,7 @@
     AgentNodeContext,
     AgentNodeData
   } from "$lib/state/flowProjection";
+  import { readOperatorPrefs, writeOperatorPrefs } from "$lib/state/agentRunStorage";
   import { keepUnchanged, lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
   import AgentLaneNode from "./AgentLaneNode.svelte";
   import AgentStateNode, { kindFromState, setNodeLogViewer, setNodeOpener } from "./AgentStateNode.svelte";
@@ -79,6 +81,7 @@
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let settled = $state(false);
+  let showMinimap = $state(readOperatorPrefs().flowMinimap ?? false);
   let inspectedNode = $state<Node<AgentNodeData> | null>(null);
   let inspectorElement = $state<HTMLDialogElement | null>(null);
   let flowWrapElement = $state<HTMLDivElement | null>(null);
@@ -319,14 +322,29 @@
         <Funnel size={14} />
       </ControlButton>
     </Controls>
-    <MiniMap
-      pannable
-      zoomable
-      nodeColor={mapMarkColor}
-      nodeClass={mapMarkClass}
-      nodeBorderRadius={5}
-      ariaLabel="Flow overview"
-    />
+    {#if showMinimap}
+      <MiniMap
+        pannable
+        zoomable
+        nodeColor={mapMarkColor}
+        nodeClass={mapMarkClass}
+        nodeBorderRadius={5}
+        ariaLabel="Flow overview"
+      />
+    {/if}
+    <!-- On the minimap's corner while it shows; in the corner it left once hidden. -->
+    <Panel position="bottom-right" class={["minimap-toggle-panel", showMinimap && "open"]}>
+      <button
+        class="minimap-toggle"
+        aria-label={showMinimap ? "Hide minimap" : "Show minimap"}
+        onclick={() => {
+          showMinimap = !showMinimap;
+          writeOperatorPrefs({ flowMinimap: showMinimap });
+        }}
+      >
+        {#if showMinimap}<Minus size={12} />{:else}<MapIcon size={14} />{/if}
+      </button>
+    </Panel>
     <Background
       variant={BackgroundVariant.Dots}
       gap={18}
@@ -682,6 +700,45 @@
   :global(.svelte-flow__minimap) {
     background: var(--surface-1);
     border: 1px solid var(--border);
+  }
+
+  /* Inside the minimap's bottom-right corner (15px panel margin, 1px border, 3px inset), where
+     the show button sits once it is hidden, so hide and show never move the target. */
+  :global(.minimap-toggle-panel.open) {
+    margin: 0 19px 19px 0;
+  }
+
+  .minimap-toggle {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-3);
+    cursor: pointer;
+  }
+
+  :global(.minimap-toggle-panel.open) .minimap-toggle {
+    width: 20px;
+    height: 20px;
+    border-color: transparent;
+    background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+  }
+
+  .minimap-toggle:hover {
+    color: var(--text-1);
+  }
+
+  :global(.minimap-toggle-panel.open) .minimap-toggle:hover {
+    border-color: var(--border);
+    background: var(--surface-2);
+  }
+
+  .minimap-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* Shape is the second channel: colour alone smears at MiniMap size.
