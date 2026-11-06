@@ -112,7 +112,9 @@ class TerminalChat:
             key = (event, agent)
             if self.block != key:
                 self.flush()
-                role = "Thinking" if event == "thought_summary" else self.label
+                role = f"Subagent {agent}" if data.get("subagent") else self.label
+                if event == "thought_summary":
+                    role = "Thinking"
                 self.console.print(
                     Text(
                         f"● {role}",

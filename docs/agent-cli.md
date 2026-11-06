@@ -70,7 +70,7 @@ temporal agent deny <session> <tool-id> --reason "Explain the decision"
 temporal agent follow <session>
 ```
 
-In interactive mode, `ask_user` callbacks prompt for an answer in the terminal.
+`ask_user` callbacks prompt for an answer in the terminal.
 Other callbacks leave work pending and print instructions. Inspect the request
 with `status`, perform the work, and submit its result:
 

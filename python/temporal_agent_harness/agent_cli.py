@@ -95,6 +95,17 @@ def resolve_schema(
     return definition
 
 
+def thought_text(delta: dict[str, Any]) -> str | None:
+    """The text fragment of a provider's thought delta (Gemini, OpenAI, Pydantic AI)."""
+    content = delta.get("content")
+    if isinstance(content, dict):
+        content = content.get("text")
+    for fragment in (content, delta.get("content_delta"), delta.get("delta")):
+        if isinstance(fragment, str):
+            return fragment
+    return None
+
+
 def json_value(value: str) -> Any:
     return json.loads(Path(value[1:]).read_text() if value.startswith("@") else value)
 
@@ -453,8 +464,7 @@ async def request_callback(
     question = event.tool_input.get("question")
     options = event.tool_input.get("options")
     if not (
-        getattr(args, "interactive", False)
-        and getattr(args, "output", "text") == "text"
+        getattr(args, "output", "text") == "text"
         and sys.stdin.isatty()
         and event.tool_name == "ask_user"
         and isinstance(question, str)
@@ -546,9 +556,7 @@ async def follow(
                 if own and getattr(args, "output", "text") == "text":
                     replies.setdefault(envelope.message_id, []).append(text)
             elif kind == "thought_summary":
-                if event.delta.get("type") == "response.reasoning_summary_text.delta":
-                    summary = event.delta.get("delta")
-                    text = summary if isinstance(summary, str) else None
+                text = thought_text(event.delta)
             elif kind in ("tool_start", "tool_end", "tool_error"):
                 text = f"{kind}: {event.tool_name}"
             elif kind in ("message_handler_start", "model_interaction_started"):
@@ -581,6 +589,7 @@ async def follow(
                         "text": text,
                         "event": kind,
                         "agent": envelope.agent_id,
+                        "subagent": envelope.agent_id != root_agent,
                         **(
                             {"tool_id": event.tool_id}
                             if kind in ("tool_start", "tool_end", "tool_error")
