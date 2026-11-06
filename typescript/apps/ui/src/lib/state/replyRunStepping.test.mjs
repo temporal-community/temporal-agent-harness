@@ -105,6 +105,16 @@ describe("collapsed reply runs", () => {
     );
   });
 
+  it("the run's row keeps every chunk exactly as it arrived", () => {
+    const row = run.fullReplayLog.rows.find(
+      (item) => item.event === "reply_delta" && item.runStartIndex === streamed.startIndex
+    );
+    const chunks = run.frames
+      .slice(streamed.startIndex - 1, streamed.endIndex)
+      .map((frame) => frame.data);
+    assert.deepEqual(row.wire, chunks, "the event box shows the frames received, nothing merged or added");
+  });
+
   it("a cursor anywhere inside the run reads as that one event", () => {
     for (let index = streamed.startIndex; index <= streamed.endIndex; index += 1) {
       run.goTo(index);

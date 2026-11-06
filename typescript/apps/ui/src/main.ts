@@ -1,12 +1,14 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
 import type { AgentApi } from "./lib/api/client";
+import { watchScrollActivity } from "./lib/components/primitives/scrollActivity";
 import { keepTipsInView, quietProgrammaticTips } from "./lib/components/primitives/tipFocus";
 import { writeOperatorPrefs } from "./lib/state/agentRunStorage";
 import "./app.css";
 
 quietProgrammaticTips(document);
 keepTipsInView(document);
+watchScrollActivity(document);
 
 const target = document.getElementById("app");
 if (!target) throw new Error("Missing #app mount target");

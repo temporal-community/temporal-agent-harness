@@ -22,14 +22,21 @@ session creation have nothing to answer them, since both are workflow queries.
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
 ``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
-of an ``agents.toml`` registry.
+of an ``agents.toml`` registry. The running server exposes the HTTP contract at ``/openapi.json``.
+
+``dev`` runs ``session-manager`` and ``serve`` together in one process for local development.
+``init`` copies a bundled starter; ``skills`` locates or installs this release's agent skill.
+``doctor`` reads configuration and service status without creating or resetting workflows.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
+from temporal_agent_harness.development import SKILL_DIRECTORIES, SKILL_TARGETS
 from temporal_agent_harness.web.client import (
     DEFAULT_TEMPORAL_ADDRESS,
     ensure_temporal_address,
@@ -37,7 +44,7 @@ from temporal_agent_harness.web.client import (
 
 TEMPORAL_CONNECTION_HELP = """\
 Temporal connection:
-  Every subcommand resolves its connection with temporalio's standard client config, so the
+  Service commands and doctor resolve connections with temporalio's standard client config, so the
   server and the session-manager worker land on the same namespace when configured the same
   way. In precedence order:
 
@@ -63,6 +70,7 @@ Task queues:
   session manager's workflow id and queue all become `<prefix>-<name>`.
 
 Examples:
+  temporal-agent-harness dev ./agents.toml            # session manager + API/console, one process
   temporal-agent-harness session-manager
   temporal-agent-harness serve ./agents.toml
   temporal-agent-harness serve one/agents.toml two/agents.toml --port 9000
@@ -80,6 +88,12 @@ def _serve(args: argparse.Namespace) -> None:
     from temporal_agent_harness.web.serve import run_server
 
     run_server(*args.registry_paths, host=args.host, port=args.port)
+
+
+def _dev(args: argparse.Namespace) -> None:
+    from temporal_agent_harness.web.dev import run_dev
+
+    run_dev(*args.registry_paths, host=args.host, port=args.port)
 
 
 def _session_manager(args: argparse.Namespace) -> None:
@@ -117,6 +131,52 @@ def _schema(args: argparse.Namespace) -> None:
             f.write(text)
 
 
+def _development(args: argparse.Namespace) -> None:
+    from temporal_agent_harness.development import (
+        SKILL_NAME,
+        SKILL_PROMPTS,
+        choose_skill_tools,
+        create_starter,
+        install_skill,
+        package_version,
+        skill_destinations,
+        skill_path,
+    )
+
+    try:
+        if args.command == "init":
+            root = create_starter(Path(args.destination))
+            print(f"Created {root}")
+            print("Next: follow its README.md to install dependencies, add credentials, and start the services.")
+        elif args.command == "skills" and args.action == "path":
+            print(skill_path())
+        elif args.command == "skills":
+            release = package_version()
+            tools = args.tools
+            if not tools and args.dest is None and sys.stdin.isatty():
+                tools = choose_skill_tools()
+            for destination in skill_destinations(tools, args.dest):
+                installed = install_skill(destination)
+                state = "Installed" if installed.changed else "Already up to date:"
+                print(f"{state} {SKILL_NAME} {release} in {installed.root}")
+            prompts = ", ".join(f"`{prompt}` in {tool}" for tool, prompt in SKILL_PROMPTS.items())
+            print(f"Next: ask your coding agent to use the skill ({prompts}).")
+        else:
+            from temporal_agent_harness.web.doctor import diagnose
+
+            report = diagnose(Path(args.registry) if args.registry else None, args.api_url, args.timeout)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print("Versions: " + ", ".join(f"{k}={v}" for k, v in report["versions"].items()))
+                for check in report["checks"]:
+                    print(f"{'OK' if check['ok'] else 'FAIL'} {check['check']}: {check['detail']}")
+            if not report["ok"]:
+                raise SystemExit(1)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"temporal-agent-harness {args.command}: {error}") from None
+
+
 def main(argv: list[str] | None = None) -> None:
     # --temporal-address is shared rather than duplicated, so the two subcommands can never
     # drift on the one setting that has to agree between them.
@@ -132,13 +192,63 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="temporal-agent-harness",
-        description="Run the packaged Temporal agent harness: the web UI over your "
-        "agents.toml registries, and the session-manager worker they need. Or print an "
-        "agent's schema for client codegen.",
+        description="Build and run Temporal agents: create a starter, install a coding-agent skill, "
+        "export schemas, diagnose services, or run the shared API/UI and session manager.",
         epilog=TEMPORAL_CONNECTION_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+
+    init = subparsers.add_parser("init", help="Copy the bundled OpenAI starter without overwriting files.")
+    init.add_argument("destination")
+    init.set_defaults(handler=_development)
+    skills = subparsers.add_parser(
+        "skills",
+        help="Locate or install this SDK release's coding-agent skill.",
+        description="`path` prints the bundled skill directory. `install` copies it into the "
+        "project where your coding agents discover skills: Claude Code reads .claude/skills; Codex "
+        "and other agents read the shared .agents/skills. Without --for or --dest it asks which to "
+        "install for. Reruns update unchanged files and preserve local edits.",
+    )
+    skills.add_argument("action", choices=("path", "install"))
+    skills.add_argument(
+        "--for",
+        dest="tools",
+        action="append",
+        choices=tuple(SKILL_DIRECTORIES),
+        metavar="{" + ",".join(SKILL_DIRECTORIES) + "}",
+        help="Install for these coding agents (repeatable): "
+        + "; ".join(f"{k}: {SKILL_TARGETS[k]} ({v})" for k, v in SKILL_DIRECTORIES.items())
+        + ".",
+    )
+    skills.add_argument("--dest", default=None, help="Parent directory for a tool that reads skills from somewhere else.")
+    skills.set_defaults(handler=_development)
+    doctor = subparsers.add_parser("doctor", parents=[connection], help="Read-only configuration and service diagnostics.")
+    doctor.add_argument("--registry", help="Validate this TOML registry and its referenced schemas.")
+    doctor.add_argument("--api-url", default="http://localhost:8000")
+    doctor.add_argument("--timeout", type=float, default=5)
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(handler=_development)
+
+    dev = subparsers.add_parser(
+        "dev",
+        parents=[connection],
+        help="Run the session-manager worker and the web UI/API together for local development.",
+        description="Run the packaged session-manager worker and the prebuilt harness web UI and "
+        "JSON API in one process. Equivalent to `session-manager` and `serve` in two terminals; "
+        "start Temporal and your agent worker separately.",
+        epilog=TEMPORAL_CONNECTION_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dev.add_argument(
+        "registry_paths",
+        nargs="+",
+        metavar="registry_path",
+        help="Path(s) to agents.toml registries, merged as `serve` does.",
+    )
+    dev.add_argument("--host", default="0.0.0.0")
+    dev.add_argument("--port", type=int, default=8000)
+    dev.set_defaults(handler=_dev)
 
     serve = subparsers.add_parser(
         "serve",

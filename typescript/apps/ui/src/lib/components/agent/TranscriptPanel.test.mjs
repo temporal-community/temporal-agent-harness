@@ -540,8 +540,14 @@ describe("the Logs pane's calls", () => {
      listing them in it as well only doubled them. What the rows can't say is how long it took. */
   it("gives an open event its call's time, not a second list of the call's events", () => {
     assert.match(source, /\{@const call = cachedLines\(group\)\.stepOf\.get\(row\.id\)\}/);
-    assert.match(source, /\{#if call\?\.durationMs\}/);
+    assert.match(source, /\{#if call\?\.durationMs && !row\.event\.startsWith\("steering_"\)\}/);
     assert.doesNotMatch(source, /call-events/);
+  });
+
+  /* A steering claim is filed under the call that carried it, but it is a moment: the call's
+     time on its card read as the claim taking that long. */
+  it("gives a steering row no duration, though it sits under a call", () => {
+    assert.match(source, /!row\.event\.startsWith\("steering_"\)/);
   });
 
   /* The card ends on the event itself, as JSON in a framed box under its name, copyable. */

@@ -71,6 +71,7 @@ import {
   type TurnStreamContext,
 } from "./agent-protocol/index.ts";
 import { StateRef, type StateEvent } from "./state/index.ts";
+import { ClaimedSteering, type SteeringMessage } from "./steering.ts";
 import {
   CallbackToolError,
   ToolApprovalDenied,
@@ -174,6 +175,9 @@ export class AgentWorkflowRunner {
   #participants = 0;
   #pendingTurns: Admission[] = [];
   #joining: Admission[] = [];
+  // Steering queued by `steer` for the open turn, oldest first. Emptied by `claimSteering`, or
+  // dropped when the turn ends; it never outlives a turn.
+  #steering: SteeringMessage[] = [];
   #policy: ToolApprovalPolicy;
   #criteria: AutoApprovalCriteria;
   #criteriaVersion = 0;
@@ -324,6 +328,44 @@ export class AgentWorkflowRunner {
     const ctx = this.currentStreamContext;
     if (ctx === null) throw new Error("publish() called with no active turn");
     this.pub(ctx.turn_id, ctx.turn_number, event);
+  }
+
+  /**
+   * Queue `text` for the model, to arrive with the next outermost tool result. Call it from a
+   * message handler, typically a `MidTurn.ACCEPT` handler that `joined_turn`; it returns at once.
+   * The AI-SDK adapters claim the queue (see `claimSteering`) when a tool call made outside any
+   * other tool call resolves, and append it to that result, so a Code Mode script's host calls
+   * never carry it. Steering still queued when the turn ends is dropped (`steering_dropped`).
+   * Returns the `steering_id` minted for it, which `steering_enqueued` carries and the
+   * `steering_claimed` or `steering_dropped` that settles it lists. Throws outside a message
+   * handler, where there is no message to attribute it to.
+   */
+  steer(text: string): string {
+    const messageId = messageIdStore.getStore();
+    if (messageId === undefined)
+      throw new Error("steer() must be called from within a message handler");
+    const steeringId = uuid4();
+    this.#steering.push({ steering_id: steeringId, message_id: messageId, text });
+    this.publish({ type: "steering_enqueued", steering_id: steeringId, text });
+    return steeringId;
+  }
+
+  /**
+   * Take all queued steering, for appending to content about to go to the model. The AI-SDK
+   * adapters call this after each model tool call; call it yourself in a model loop you write.
+   * Returns `undefined`, leaving the queue untouched, while a tool call is in flight in the
+   * current context: a tool that calls other tools (a Code Mode script's host calls, for one)
+   * must not hand its result's consumer the model's steering. Otherwise returns every queued
+   * message, oldest first, and empties the queue. `toolId` names the tool call whose result
+   * carries it; leave it out when the steering goes in some other way. Synchronous on purpose, so
+   * two concurrent claimants can never take the same message.
+   */
+  claimSteering({ toolId = null }: { toolId?: string | null } = {}): ClaimedSteering | undefined {
+    if (toolCallStore.getStore() !== undefined || this.#steering.length === 0) return undefined;
+    const claimed = new ClaimedSteering(this.#steering);
+    this.#steering = [];
+    this.publish({ type: "steering_claimed", steering_ids: claimed.steeringIds, tool_id: toolId });
+    return claimed;
   }
 
   /**
@@ -490,6 +532,11 @@ export class AgentWorkflowRunner {
         this.pub(turn_id, turn_number, { type: "message_handler_error", message: errorMessage(e) });
       }
       if (this.#leaveTurn()) {
+        if (this.#steering.length > 0) {
+          const dropped = this.#steering.map((m) => m.steering_id);
+          this.#steering = [];
+          this.pub(turn_id, turn_number, { type: "steering_dropped", steering_ids: dropped }, null);
+        }
         this.pub(turn_id, turn_number, { type: "turn_end" }, null);
       }
     });

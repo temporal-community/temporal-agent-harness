@@ -1,7 +1,6 @@
 {
-  "name": "@temporal-agent-harness/codegen",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@temporalio/agent-harness-codegen",
+  "version": "0.3.1",
   "type": "module",
   "description": "Generate TypeScript types for a temporal-agent-harness agent from its `temporal-agent-harness schema` document.",
   "bin": {
@@ -18,5 +17,18 @@
   "devDependencies": {
     "@types/node": "^22.20.4",
     "typescript": "^7.0.2"
+  },
+  "license": "MIT",
+  "files": [
+    "dist/src"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
+    "directory": "typescript/packages/codegen"
   }
 }

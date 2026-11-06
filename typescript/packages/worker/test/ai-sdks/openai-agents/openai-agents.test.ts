@@ -394,6 +394,36 @@ describe("an Agents SDK turn on a dev server", () => {
     assert.ok(JSON.stringify(modelProvider.requests.at(-1)!.input).includes("Lisbon"));
   });
 
+  it("appends steering sent while a tool runs to that tool's result in the next model request", async () => {
+    const handle = await startAgent("OpenAISteeredAskUserAgent");
+    const asked = await send(handle, "ask", { text: "Plan my trip." });
+    let steerer = "";
+    const events = await collect(client, handle.workflowId, {
+      onEvent: async (e) => {
+        if (e.event.type === "callback_requested")
+          steerer = (await send(handle, "steer", { text: "Only cities by the sea." })).message_id;
+        if (e.event.type === "steering_enqueued")
+          await new AgentClient(client, handle.workflowId).provideCallbackResult(ASK_CALL_ID, {
+            result: "Lisbon",
+          });
+      },
+    });
+
+    const toolResult = JSON.stringify(modelProvider.requests.at(-1)!.input);
+    assert.ok(toolResult.includes("Lisbon\\n\\n<steering_messages>"), toolResult);
+    assert.ok(toolResult.includes("<message>Only cities by the sea.</message>"), toolResult);
+    assertMatch(one(events, "tool_end"), { tool_id: ASK_CALL_ID, tool_output: "Lisbon" });
+    const enqueued = events.find((e) => e.event.type === "steering_enqueued")!;
+    assert.equal(enqueued.message_id, steerer);
+    assertMatch(one(events, "steering_claimed"), {
+      steering_ids: [one(events, "steering_enqueued").steering_id],
+      tool_id: ASK_CALL_ID,
+    });
+    const claimed = events.find((e) => e.event.type === "steering_claimed")!;
+    assert.equal(claimed.message_id, asked.message_id);
+    assert.equal(events.filter((e) => e.event.type === "steering_dropped").length, 0);
+  });
+
   it("lets a starting client's plugin modelParams win over the workflow's own", async () => {
     observed.length = 0;
     const pluginClient = new Client({

@@ -228,6 +228,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
       turnNumber: null,
       parts: [],
       error: null,
+      steering: [],
       acceptedAt: null,
       startedAt: null,
       endedAt: null
@@ -510,7 +511,8 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
         info: c.info,
         messages: c.messages,
         states: c.states?.map(([stateId, doc]) => [stateId, doc.value] as const),
-        agentStatus: c.agentStatus
+        agentStatus: c.agentStatus,
+        turnNumber: c.turnNumber
       }
     ]);
     if (updates.length > 0) state.updateAgents(updates);

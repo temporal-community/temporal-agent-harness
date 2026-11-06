@@ -84,3 +84,16 @@ harness_pytest_test(
         "@pypi//pytest",
     ],
 )
+
+harness_pytest_test(
+    name = "test_model_activity_credentials",
+    srcs = ["test_model_activity_credentials.py"],
+    imports = ["../../.."],
+    deps = [
+        ":conftest",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/tests:conftest",
+        "@pypi//openai",
+        "@pypi//pytest",
+    ],
+)

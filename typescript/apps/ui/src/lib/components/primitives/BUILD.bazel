@@ -167,6 +167,12 @@ js_library(
 )
 
 js_library(
+    name = "scrollActivity",
+    srcs = ["scrollActivity.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "tipFocus",
     srcs = ["tipFocus.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -277,6 +283,16 @@ vitest_test(
         ":DockedDrawer",
         ":resizeKeys",
         "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "scrollActivity_test",
+    src = "scrollActivity.test.mjs",
+    deps = [
+        ":scrollActivity",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src:main",
     ],
 )
 

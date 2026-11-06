@@ -9,6 +9,15 @@ through the streaming activity, to the live turn stream the web UI consumes.
 Its workflow type (`OpenAIHelloAgentTs`), registry key (`openai-hello-ts`) and task queue
 (`openai-hello-ts`) differ from the Python example's, so the two can be served side by side.
 
+## Start here
+
+To build an agent in your own project with published npm packages, follow the
+[TypeScript quickstart](../../packages/core/README.md). This directory is the runnable checkout
+example; Bazel supplies its toolchains and dependencies.
+
+[Run this example](#run-it) → [Try a conversation](#your-first-session) →
+[Modify the agent](#modify-the-agent).
+
 ## What it demonstrates
 
 - **Streaming, not blocking.** The turn runs `runStreamed(runner, agent, input)` from
@@ -49,8 +58,13 @@ the Python package; only the agent and its worker are TypeScript.
 
 ## Run it
 
-Prereq: from the repo root, `cp .env.example .env.local` and set `OPENAI_API_KEY` (and your
-Temporal connection profile). Then, from this directory, each in its own terminal:
+Prerequisites: [just](https://just.systems/), [Bazelisk](https://github.com/bazelbuild/bazelisk)
+installed as `bazel`, and the [Temporal CLI](https://docs.temporal.io/cli). Start from the release
+checkout described in the [quickstart](../../packages/core/README.md#try-the-example-agent).
+From the repo root, copy `.env.example` to `.env.local` only if that file is absent, then set
+`OPENAI_API_KEY` (and your Temporal connection profile). The recipes load this root file.
+
+From `typescript/examples/openai_hello/`, run each command in its own terminal:
 
 ```sh
 just temporal          # 1. local Temporal dev server (or bring your own)
@@ -62,9 +76,8 @@ just worker            # 4. the agent worker
 (If the UI build reports missing modules, run `just app-install` once. For UI hot-reloading,
 `just ui-dev` runs it on Vite with `/api` proxied to the server on :8000.)
 
-Open http://localhost:8000, pick **OpenAI Hello (TypeScript)**, and chat — e.g. *"What's the
-weather in Paris?"*. The reply streams in token by token and the `get_weather` tool call appears
-live, each event produced by the observer translating a raw OpenAI event in the streaming activity.
+Follow [Your first session](#your-first-session) below. The harness console is on **8000**;
+Temporal's workflow UI is a separate application on **8233**.
 
 Without `just`, the equivalent commands (from the repo root, with `.env.local`'s variables
 exported):
@@ -76,3 +89,35 @@ bazel run //typescript/examples/openai_hello:worker
 ```
 
 The test runs with `bazel test //typescript/examples/openai_hello/...`.
+
+## Your first session
+
+1. Open <http://localhost:8000>, click **New session** (**+**), choose
+   **OpenAI Hello (TypeScript)**, and click **Start session**.
+2. Send **“What's the weather in Paris?”** to `ask`.
+3. Watch the streamed reply and expand **Ran 1 tool** to inspect `get_weather` with
+   `{ "city": "Paris" }`. Its output
+   is “It's 72°F and sunny in Paris.” — **sample data**, not a live forecast. Model wording varies.
+4. Ask a follow-up, then reload the page to reconnect to the conversation.
+
+![TypeScript weather agent in the harness console](../../../docs/images/typescript-quickstart.png)
+
+This capture uses a scripted model response with a real agent, tool execution, Temporal workflows,
+and console. The normal example uses OpenAI. See
+[troubleshooting](../../packages/core/README.md#troubleshooting) if the session does not progress.
+
+## Modify the agent
+
+- Change the instructions or tool in `agents.ts`, restart `just worker`, and start a new session.
+- For the approval flow, change the example's `dangerouslySkipAll()` policy to
+  `alwaysRequireHumanApproval()` and ask about the weather in a new session.
+- After changing handler, state, or init schemas, run
+  `bazel run //typescript/examples/openai_hello:registry_update` from the repository root.
+  This updates the generated schema and registry; review and commit the generated files.
+- For agent labels, descriptions, or queues, edit the `harness_ts_agent` declaration in
+  `BUILD.bazel` and run the same generator. Keep the worker's queue aligned with the registry.
+  The session manager caches its registry; see the quickstart's local-reset guidance before
+  replacing a running development registry.
+
+For typed init data, state, Code Mode, subagents, and React/Svelte clients, continue with
+[the TypeScript guide](../../packages/core/README.md#what-next).

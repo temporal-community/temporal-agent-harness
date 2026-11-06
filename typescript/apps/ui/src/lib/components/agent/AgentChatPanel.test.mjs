@@ -916,3 +916,46 @@ describe("a script error reply", () => {
     assert.match(open, /aria-label="Copy code"/);
   });
 });
+
+/* Steering rides the model's next tool result, or is dropped when the turn ends first. The message
+   that steered says which, and a dropped one, which the model never saw, can be sent again. */
+describe("a steering message", () => {
+  const { frames, agentInterface } = scaleScenario("steering");
+  const statuses = (body) =>
+    [...body.matchAll(/<li class="steering-status (\w+)[^"]*">([\s\S]*?)<\/li>/g)].map((match) => ({
+      status: match[1],
+      html: match[2],
+      text: match[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
+    }));
+
+  it("says it is queued until the model takes it", () => {
+    const upTo = frames.slice(0, frames.findIndex((f) => f.event === "steering_enqueued") + 1);
+    const body = chat({ items: buildTranscript(upTo), logs: buildReplayLog(upTo).rows, agentInterface });
+    assert.deepEqual(statuses(body).map(({ status, text }) => [status, text]), [["enqueued", "Queued for the model's next tool result"]]);
+  });
+
+  it("names the tool whose result carried it, and offers a dropped one again as a new message", () => {
+    const body = chat({ items: buildTranscript(frames), logs: buildReplayLog(frames).rows, agentInterface });
+    const [claimed, dropped] = statuses(body);
+    assert.equal(claimed.status, "claimed");
+    assert.match(claimed.html, /Sent to the model with\s*<strong class="steering-tool[^"]*">search_flights<\/strong>/);
+    assert.equal(dropped.status, "dropped");
+    assert.match(dropped.text, /the turn ended before it reached the model/);
+    assert.match(dropped.html, /<button[^>]*>[\s\S]*Send as a new message[\s\S]*<\/button>/);
+    assert.doesNotMatch(dropped.html, /<button[^>]*disabled/, "a live session can resend it");
+  });
+
+  it("says when the model took it with its input rather than a tool result", () => {
+    const viaInput = frames.map((f) => (f.event === "steering_claimed" ? { ...f, data: { ...f.data, tool_id: null } } : f));
+    const [claimed] = statuses(chat({ items: buildTranscript(viaInput), agentInterface }));
+    assert.equal(claimed.text, "Sent to the model with its input");
+  });
+
+  it("keeps the steering events out of the running turn's trace, which the message already speaks for", () => {
+    const upTo = frames.slice(0, frames.findIndex((f) => f.event === "steering_claimed") + 1);
+    const body = chat({ items: buildTranscript(upTo), logs: buildReplayLog(upTo).rows, agentInterface });
+    const trace = body.match(/<div class="activity-trace[\s\S]*?<div class="message-row/)?.[0] ?? "";
+    assert.match(trace, /search_flights/, "the trace is open while the turn works");
+    assert.doesNotMatch(trace, /Steering (queued|sent to the model)/);
+  });
+});

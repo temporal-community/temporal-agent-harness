@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import {
   bumpVersion, finish, lockstepPackages, lockstepVersion, npmPlan, prepare, publishablePackages,
   publishOrder, releaseDetails, releasePrUrl, setLockstepVersion, setPythonVersion, summarize,
-  tagDetails, updateReadmePins, validateInputs, validateNpmRelease,
+  tagDetails, updateDevelopmentPins, updateReadmePins, validateInputs, validateNpmRelease,
 } from './release.mjs';
 
 const repository = 'temporal-community/temporal-agent-harness';
@@ -124,7 +124,7 @@ test('README pins move to the new version and the diff command advances one rele
 
 // Under Bazel only the script is beside this test, so the repository's own files are checked by
 // `node --test scripts/release.test.mjs` (and by `prepare`, which refuses a README without pins).
-const repoReadme = new URL('../README.md', import.meta.url);
+const repoReadme = new URL('../python/README.md', import.meta.url);
 const repoPyproject = new URL('../python/pyproject.toml', import.meta.url);
 test('the real README pins exactly the pyproject version',
   { skip: !existsSync(repoReadme) || !existsSync(repoPyproject) }, () => {
@@ -194,6 +194,7 @@ test('npm release validation checks version, metadata and lockstep ranges', () =
 test('prepare pypi bumps pyproject, locks, repins the README and describes the PR', () => fixture((root) => {
   const env = { RELEASE_UNIT: 'pypi', RELEASE_BUMP: 'minor', GITHUB_REF: 'refs/heads/main',
     GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: join(root, 'outputs'), RUNNER_TEMP: root };
+  writeFileSync('README.md', readFileSync('README.md', 'utf8') + '\n@temporalio/agent-harness@0.1.0\n');
   const calls = [];
   prepare(env, (command, args, options) => {
     calls.push([command, ...args, options?.cwd]);
@@ -203,6 +204,7 @@ test('prepare pypi bumps pyproject, locks, repins the README and describes the P
   assert.deepEqual(calls[1], ['uv', 'lock', 'python']);
   assert.match(readFileSync('python/pyproject.toml', 'utf8'), /^version = "0\.2\.0"$/m);
   assert.match(readFileSync('README.md', 'utf8'), /\[ui\]==0\.2\.0'/);
+  assert.match(readFileSync('README.md', 'utf8'), /@temporalio\/agent-harness@0\.1\.0/);
   const outputs = readFileSync(env.GITHUB_OUTPUT, 'utf8');
   assert.match(outputs, /^unit=pypi$/m);
   assert.match(outputs, /^branch=release\/pypi-v0\.2\.0$/m);
@@ -323,4 +325,19 @@ test('npm-plan accepts only a matching npm release tag and prints the publish or
   assert.throws(() => npmPlan({ ...env, GITHUB_REF_TYPE: 'branch' }), /release tag/);
   assert.throws(() => npmPlan({ ...env, GITHUB_REF_NAME: '0.1.0' }), /npm release tag/);
   assert.throws(() => npmPlan({ ...env, GITHUB_REF_NAME: 'npm-v0.1.1' }), /Tag must match/);
+}));
+
+test('public codegen joins the release and developer docs keep independent SDK pins', () => fixture(() => {
+  const path = 'typescript/packages/codegen/package.json';
+  writeFileSync(path, JSON.stringify(manifest('@temporalio/agent-harness-codegen', '0.1.0')));
+  assert(publishablePackages(lockstepPackages()).some(pkg => pkg.name === 'codegen'));
+  setLockstepVersion('0.2.0');
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).version, '0.2.0');
+  writeFileSync('python/README.md', "uv add 'temporal-agent-harness[ui]==0.1.0'\n--branch 0.1.0 \ngit diff 0.0.9 0.1.0\n");
+  writeFileSync('README.md', "temporal-agent-harness[ui]==0.1.0 @temporalio/agent-harness-codegen@0.1.0");
+  updateDevelopmentPins('pypi', '0.1.0', '0.3.0');
+  updateDevelopmentPins('npm', '0.1.0', '0.2.0');
+  assert.match(readFileSync('README.md', 'utf8'), /\[ui\]==0\.3\.0 @temporalio\/agent-harness-codegen@0\.2\.0/);
+  assert.match(readFileSync('python/README.md', 'utf8'), /--branch 0\.3\.0/);
+  assert.match(readFileSync('python/README.md', 'utf8'), /git diff 0\.1\.0 0\.3\.0/);
 }));

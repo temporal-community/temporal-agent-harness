@@ -16,6 +16,15 @@
       "$ref": "#/$defs/MessageHandlerError"
     },
     {
+      "$ref": "#/$defs/SteeringEnqueued"
+    },
+    {
+      "$ref": "#/$defs/SteeringClaimed"
+    },
+    {
+      "$ref": "#/$defs/SteeringDropped"
+    },
+    {
       "$ref": "#/$defs/TurnStarted"
     },
     {
@@ -178,6 +187,9 @@
               "reply_delta": "#/$defs/ReplyDelta",
               "state_patch": "#/$defs/AgentStatePatch",
               "state_snapshot": "#/$defs/AgentStateSnapshot",
+              "steering_claimed": "#/$defs/SteeringClaimed",
+              "steering_dropped": "#/$defs/SteeringDropped",
+              "steering_enqueued": "#/$defs/SteeringEnqueued",
               "subagent_message_sent": "#/$defs/SubagentMessageSent",
               "subagent_reply_received": "#/$defs/SubagentReplyReceived",
               "subagent_started": "#/$defs/SubagentStarted",
@@ -209,6 +221,15 @@
             },
             {
               "$ref": "#/$defs/MessageHandlerError"
+            },
+            {
+              "$ref": "#/$defs/SteeringEnqueued"
+            },
+            {
+              "$ref": "#/$defs/SteeringClaimed"
+            },
+            {
+              "$ref": "#/$defs/SteeringDropped"
             },
             {
               "$ref": "#/$defs/TurnStarted"
@@ -931,6 +952,98 @@
         "text"
       ],
       "title": "ReplyDelta",
+      "type": "object"
+    },
+    "SteeringClaimed": {
+      "description": "Queued steering was taken by code building model input.\n\nThe envelope's ``message_id`` is the CLAIMING participant — the message whose handler runs\nthe model loop. What it claimed is ``steering_ids``, named explicitly so a consumer never\ninfers it from what was enqueued before this event.",
+      "properties": {
+        "type": {
+          "const": "steering_claimed",
+          "default": "steering_claimed",
+          "title": "Type",
+          "type": "string"
+        },
+        "steering_ids": {
+          "description": "The ``steering_id`` of each ``steering_enqueued`` claimed, in the order they were enqueued.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Steering Ids",
+          "type": "array"
+        },
+        "tool_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The tool call whose result carries the steering, so a consumer can show it with that call's ``tool_start`` / ``tool_end``. ``None`` when it went to the model some other way, e.g. as user input in a hand-written model loop. ``tool_end.tool_output`` never includes the steering: it is published before the steering is attached.",
+          "title": "Tool Id"
+        }
+      },
+      "required": [
+        "type",
+        "steering_ids",
+        "tool_id"
+      ],
+      "title": "SteeringClaimed",
+      "type": "object"
+    },
+    "SteeringDropped": {
+      "description": "The turn ended with steering still queued, and the harness discarded it.\n\nIt never reached the model: no outermost tool call resolved after it was queued, or the\nhandler running the model loop returned first. Steering does not carry into the next turn,\nbecause it is about the work that just finished. A client should tell the user and offer to\nresubmit the text as a new message. The envelope's ``message_id`` is ``None``, like\n:class:`TurnEnded`'s, which follows it.",
+      "properties": {
+        "type": {
+          "const": "steering_dropped",
+          "default": "steering_dropped",
+          "title": "Type",
+          "type": "string"
+        },
+        "steering_ids": {
+          "description": "The ``steering_id`` of each ``steering_enqueued`` dropped, in the order they were enqueued.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Steering Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "steering_ids"
+      ],
+      "title": "SteeringDropped",
+      "type": "object"
+    },
+    "SteeringEnqueued": {
+      "description": "A message handler queued steering text for the model.\n\nThe envelope's ``message_id`` is the message whose handler called ``runner.steer``. The\n``steering_id`` names this one piece of steering, which a handler that steers twice needs:\nthe later :class:`SteeringClaimed` or :class:`SteeringDropped` lists it.",
+      "properties": {
+        "type": {
+          "const": "steering_enqueued",
+          "default": "steering_enqueued",
+          "title": "Type",
+          "type": "string"
+        },
+        "steering_id": {
+          "description": "Minted by the harness for this steering; exactly one later ``steering_claimed`` or ``steering_dropped`` lists it in its ``steering_ids``.",
+          "title": "Steering Id",
+          "type": "string"
+        },
+        "text": {
+          "description": "The steering text, as the model will see it once claimed.",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "steering_id",
+        "text"
+      ],
+      "title": "SteeringEnqueued",
       "type": "object"
     },
     "SubagentMessageSent": {

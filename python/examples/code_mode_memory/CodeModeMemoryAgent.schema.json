@@ -9,8 +9,8 @@
   },
   "handlers": {
     "ask": {
-      "description": "Chat with the assistant. Tell it something to remember, or ask about something you\ntold it before, in this session or another one sharing its memory.",
-      "mid_turn": "enqueue",
+      "description": "Chat with the assistant. Tell it something to remember, or ask about something you told\nit before, in this session or another one sharing its memory. Sent while it is working, the\nmessage steers it instead: the text reaches the model with the next tool result.",
+      "mid_turn": "accept",
       "input": {
         "$ref": "#/$defs/TextMessage"
       },

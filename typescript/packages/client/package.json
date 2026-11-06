@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-harness-client",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "license": "MIT",
   "type": "module",
   "description": "A framework-independent client for temporal-agent-harness agents: a session over an agent's event stream, projected into messages and observable state.",

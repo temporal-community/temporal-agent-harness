@@ -429,8 +429,8 @@ def as_openai_agent_tool(
                 **kwargs,
             )
         except Exception as exc:  # noqa: BLE001 - model-visible tool failure
-            return f"Tool {schema.name!r} failed: {exc}"
-        return _stringify_tool_result(result)
+            return _with_steering(runner, tool_call_id, f"Tool {schema.name!r} failed: {exc}")
+        return _with_steering(runner, tool_call_id, _stringify_tool_result(result))
 
     return function_tool_cls(
         name=schema.name,
@@ -514,6 +514,12 @@ def _in_workflow() -> bool:
         return workflow.in_workflow()
     except RuntimeError:
         return False
+
+
+def _with_steering(runner: AgentWorkflowRunner, tool_id: str, output: str) -> str:
+    """``output`` with any queued steering appended, claimed for this tool call."""
+    steering = runner.claim_steering(tool_id=tool_id)
+    return steering.append_to(output) if steering is not None else output
 
 
 def _stringify_tool_result(result: Any) -> str:
@@ -675,7 +681,17 @@ def as_harness_mcp_server(
                 )
             return result
 
-        return await runner.run_tool(tool_id, invoke)
+        result = await runner.run_tool(tool_id, invoke)
+        steering = runner.claim_steering(tool_id=tool_id)
+        if steering is None:
+            return result
+        from mcp import types
+
+        return result.model_copy(
+            update={
+                "content": [*result.content, types.TextContent(type="text", text=steering.render())]
+            }
+        )
 
     server.tool_meta_resolver = tool_meta_resolver
     server.call_tool = call_tool  # type: ignore[method-assign]

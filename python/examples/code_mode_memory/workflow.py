@@ -44,12 +44,13 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
+        MessageContext,
         MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner, Injected
     from temporal_agent_harness.harness.code_mode.vfs import VFSMount
 
     from examples.code_mode_memory.local_disk import (
@@ -145,10 +146,14 @@ class CodeModeMemoryAgentWorkflow:
             runner=self._runner,
         )
 
-    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
-    async def ask(self, message: TextMessage) -> TextReply:
-        """Chat with the assistant. Tell it something to remember, or ask about something you
-        told it before, in this session or another one sharing its memory."""
+    @agent.accepts(mid_turn=MidTurn.ACCEPT)
+    async def ask(self, message: TextMessage, ctx: Injected[MessageContext]) -> TextReply:
+        """Chat with the assistant. Tell it something to remember, or ask about something you told
+        it before, in this session or another one sharing its memory. Sent while it is working, the
+        message steers it instead: the text reaches the model with the next tool result."""
+        if ctx.joined_turn:
+            self._runner.steer(message.text)
+            return TextReply(text="")
         tools = [function_param(self._code_tool)]
         if self._system_instruction is None:
             self._system_instruction = SYSTEM_INSTRUCTION.format(
@@ -182,6 +187,10 @@ class CodeModeMemoryAgentWorkflow:
             is_error = False
         except Exception as e:
             result, is_error = str(e), True
+        # This loop builds the model's input itself, so it attaches any steering itself. The
+        # script's own host calls never get it: claim_steering returns None inside a tool call.
+        if steering := self._runner.claim_steering(tool_id=call.id):
+            result = steering.append_to(result)
         response: FunctionResultStepParam = {
             "type": "function_result",
             "call_id": call.id,

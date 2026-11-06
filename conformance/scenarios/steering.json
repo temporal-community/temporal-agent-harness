@@ -1,0 +1,95 @@
+{
+  "description": "Steering sent while a tool waits rides that tool's result; steering sent after the turn's last tool result is dropped when the turn ends.",
+  "actions": [
+    {
+      "action": "send",
+      "handler": "run_reject",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Planning."
+            ]
+          },
+          {
+            "step": "tool",
+            "id": "call-city",
+            "name": "ask_client",
+            "args": {
+              "question": "Which city?"
+            }
+          },
+          {
+            "step": "model",
+            "reply": [
+              "Booked."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-city"
+    },
+    {
+      "action": "send",
+      "handler": "run_accept",
+      "script": {
+        "steps": [
+          {
+            "step": "steer",
+            "text": "Only cities by the sea."
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "message_handler_end",
+      "send": 2
+    },
+    {
+      "action": "send",
+      "handler": "run_accept",
+      "script": {
+        "steps": [
+          {
+            "step": "tool",
+            "id": "call-more",
+            "name": "ask_client",
+            "args": {
+              "question": "Anything else?"
+            }
+          },
+          {
+            "step": "steer",
+            "text": "Too late."
+          }
+        ]
+      }
+    },
+    {
+      "action": "await",
+      "event": "callback_requested",
+      "tool_id": "call-more"
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-city",
+      "result": "Lisbon"
+    },
+    {
+      "action": "await",
+      "event": "message_handler_end",
+      "send": 1
+    },
+    {
+      "action": "answer_callback",
+      "tool_id": "call-more",
+      "result": "No."
+    }
+  ]
+}

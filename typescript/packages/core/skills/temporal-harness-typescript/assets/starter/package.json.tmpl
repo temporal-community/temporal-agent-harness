@@ -1,0 +1,35 @@
+{
+  "name": "__PROJECT_NAME__",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "harness:schema": "npm run build && agent-harness schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json",
+    "harness:dev": "uvx --from 'temporal-agent-harness[ui]==0.9.0' temporal-agent-harness dev agents.toml",
+    "start": "node --env-file-if-exists=.env.local dist/worker.js",
+    "harness:skill": "agent-harness skills install",
+    "harness:doctor": "agent-harness doctor --schema agent.schema.json"
+  },
+  "dependencies": {
+    "@temporalio/agent-harness": "__HARNESS_VERSION__",
+    "@temporalio/agent-harness-worker": "__HARNESS_VERSION__",
+    "@temporalio/agent-harness-client": "__HARNESS_VERSION__",
+    "@temporalio/activity": "1.24.0",
+    "@temporalio/client": "1.24.0",
+    "@temporalio/common": "1.24.0",
+    "@temporalio/envconfig": "1.24.0",
+    "@temporalio/plugin": "1.24.0",
+    "@temporalio/worker": "1.24.0",
+    "@temporalio/workflow": "1.24.0",
+    "@temporalio/workflow-streams": "1.24.0",
+    "@temporalio/openai-agents": "1.24.0",
+    "@openai/agents-core": "0.14.3",
+    "@openai/agents-openai": "0.14.3",
+    "openai": "6.46.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/node": "22.20.4"
+  }
+}
