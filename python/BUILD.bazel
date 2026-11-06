@@ -27,6 +27,10 @@ load("//bazel:python_dists.bzl", "python_dists")
 # gazelle:exclude tests/nexus_mcp
 # gazelle:exclude tests/ai_sdks/openai_agents/test_nexus_mcp.py
 # gazelle:resolve py nexus_mcp //bazel/excluded:temporal_nexus_mcp
+# The vendored LangGraph plugin imports langgraph's private modules, absent from the manifest.
+# gazelle:resolve py langgraph._internal._constants @pypi//langgraph
+# gazelle:resolve py langgraph._internal._runnable @pypi//langgraph
+# gazelle:resolve py langgraph._internal._scratchpad @pypi//langgraph
 #
 # The coding agent's OpenCode shim converts tokonomics and exxec models when those are installed;
 # neither is in uv.lock.

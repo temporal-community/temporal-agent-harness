@@ -176,6 +176,8 @@ class TypedProbeAgent:
     async def boom(self, message: TextMessage) -> TextReply:
         """Always raises — to prove an errored turn publishes message_handler_error + turn_end and
         the loop survives for the next message."""
+        if message.text == "silent":
+            raise NotImplementedError  # no text: the error must still name its type
         raise RuntimeError(f"boom: {message.text}")
 
     @workflow.query
@@ -506,6 +508,15 @@ async def test_handler_error_publishes_message_handler_error_and_loop_survives(
         e for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_ERROR
     ]
     assert len(errors) == 1 and "boom: x" in errors[0].event.message
+    # An exception with no text is reported by its type name (times out if it is not).
+    await _send(handle, "boom", {"text": "silent"})
+    async with asyncio.timeout(30):
+        async for item in _subscribe_all(client, handle.id):
+            published = item.data.event
+            if published.type == AgentEventType.MESSAGE_HANDLER_ERROR and (
+                published.message == "NotImplementedError"
+            ):
+                break
     # The next message is still handled normally.
     await _send(handle, "greet", {"name": "Bob"})
     seen = await _wait_for_seen(handle, 1)

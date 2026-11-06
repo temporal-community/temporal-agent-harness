@@ -1,0 +1,71 @@
+{
+  "agent": "LangGraphHelloAgent",
+  "source": "examples.langgraph_hello.workflow:LangGraphHelloAgentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the assistant: ask about the weather in a city, ask it to remember something,\nor ask something ambiguous and it will ask you back.",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "notes": {
+      "$ref": "#/$defs/Notes"
+    }
+  },
+  "$defs": {
+    "Notes": {
+      "additionalProperties": false,
+      "description": "What the user asked the agent to remember, shown live in the console's state pane.",
+      "properties": {
+        "items": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "Notes",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}
