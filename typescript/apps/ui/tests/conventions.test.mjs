@@ -271,7 +271,13 @@ describe("console conventions", () => {
     assert.match(css, /::-webkit-scrollbar-track,\s*::-webkit-scrollbar-corner \{\s*background: var\(--scrollbar-track\);/);
     assert.match(css, /scrollbar-width: thin;\s*scrollbar-color: var\(--scrollbar-thumb\) var\(--scrollbar-track\);/);
     assert.doesNotMatch(css, /scrollbar-width:\s*none/);
+    /* The one exception: the pane rail hides its own horizontal bar, which took
+       height from every pane whenever the desk overflowed, and draws an overlay
+       in its place. */
+    const rail = sources.find(({ file }) => file === "lib/panes/PaneRail.svelte")?.text ?? "";
+    assert.match(rail, /class="rail-scrollbar"/, "the rail draws a bar in place of the one it hides");
     const offenders = sources
+      .filter(({ file }) => file !== "lib/panes/PaneRail.svelte")
       .filter(({ text }) => /scrollbar-width\s*:|scrollbar-color\s*:|::-webkit-scrollbar/.test(text))
       .map(({ file }) => file);
     assert.deepEqual(offenders, [], "scrollbar look lives in app.css");

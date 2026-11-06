@@ -29,6 +29,7 @@ js_library(
     deps = [
         ":PaneShell",
         ":paneDrop",
+        ":railScrollbar.svelte",
         ":registry",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
@@ -62,9 +63,26 @@ js_library(
 )
 
 js_library(
+    name = "railScrollbar.svelte",
+    srcs = ["railScrollbar.svelte.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
     name = "registry",
     srcs = ["registry.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+vitest_test(
+    name = "railScrollbar_test",
+    src = "railScrollbar.test.mjs",
+    deps = [
+        ":PaneRail",
+        ":railScrollbar.svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
 )
 
 # One target per test file, depending on what it imports and the files it reads by path.
