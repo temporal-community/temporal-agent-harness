@@ -26,6 +26,7 @@
     AgentNodeData
   } from "$lib/state/flowProjection";
   import { keepUnchanged, lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
+  import AgentLaneNode from "./AgentLaneNode.svelte";
   import AgentStateNode, { kindFromState, setNodeLogViewer, setNodeOpener } from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
@@ -100,7 +101,8 @@
   const fitViewOptions = { padding: 0.16, minZoom, maxZoom: 1 };
   const nodeTypes: NodeTypes = {
     agentState: AgentStateNode,
-    agentWorkflow: AgentWorkflowNode
+    agentWorkflow: AgentWorkflowNode,
+    agentLane: AgentLaneNode
   };
   /* Edges only show the way; nothing happens on clicking one. Without the
      selection and the invisible hit path, an edge cannot turn the selection
@@ -584,6 +586,12 @@
     --edge-reasoning: color-mix(in srgb, var(--reasoning) 70%, var(--border-strong));
     --edge-approval: color-mix(in srgb, var(--live) 78%, var(--text-1) 6%);
     --edge-output: var(--success);
+    /* A steer carries the user's own words into the run, so it takes the input's hue,
+       drawn lighter than the run's own path. */
+    --edge-steer: color-mix(in srgb, var(--accent) 70%, var(--text-3));
+    /* A message handler's lane: a hairline inside the runtime, not a second boundary. */
+    --lane-border: color-mix(in srgb, var(--text-3) 38%, transparent);
+    --lane-fill: color-mix(in srgb, var(--text-3) 3%, transparent);
   }
 
   :global(.svelte-flow__edge-path) {
@@ -594,6 +602,7 @@
   :global(.edge-reasoning .svelte-flow__edge-path) { stroke: var(--edge-reasoning); }
   :global(.edge-approval .svelte-flow__edge-path) { stroke: var(--edge-approval); }
   :global(.edge-output .svelte-flow__edge-path) { stroke: var(--edge-output); }
+  :global(.edge-steer .svelte-flow__edge-path) { stroke: var(--edge-steer); stroke-dasharray: 5 4; }
 
   /* The turn's own path, and its last leg into Output: full weight with round caps,
      and, while it keeps its kind's color, a soft glow of that hue. An edge recolored
