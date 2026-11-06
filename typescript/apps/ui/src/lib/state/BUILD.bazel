@@ -524,6 +524,14 @@ vitest_test(
 )
 
 vitest_test(
+    name = "flowSwimLanes_test",
+    src = "flowSwimLanes.test.mjs",
+    deps = [
+        ":flowProjection",
+    ],
+)
+
+vitest_test(
     name = "flowEdges_test",
     src = "flowEdges.test.mjs",
     deps = [

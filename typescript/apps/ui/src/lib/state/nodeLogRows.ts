@@ -58,6 +58,16 @@ function matcherFor(localId: string): ((row: ReplayLogRow) => boolean) | null {
     const evaluationId = localId.slice("approval:".length);
     return (row) => row.evaluationId === evaluationId;
   }
+  /* A joined message handler's own cards (`input:<message_id>` and so on): the same events
+     as the opener's card of that kind, held to that message. */
+  const laneScoped = /^(input|output|model|reasoning):(.+)$/.exec(localId);
+  if (laneScoped) {
+    const events = { input: INPUT_EVENTS, output: OUTPUT_EVENTS, model: MODEL_EVENTS, reasoning: REASONING_EVENTS }[
+      laneScoped[1] as "input" | "output" | "model" | "reasoning"
+    ];
+    const messageId = laneScoped[2];
+    return (row) => row.messageId === messageId && events.has(row.event);
+  }
   return null;
 }
 

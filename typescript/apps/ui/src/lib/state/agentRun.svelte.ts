@@ -34,8 +34,8 @@ import {
 } from "./agentRunStorage";
 import {
   agentTreeGraphBuilder,
+  heldIdsFromFrame,
   settledNearCursor,
-  settledToolIdFromFrame,
   type AgentGraphSource
 } from "./flowProjection";
 import {
@@ -2460,8 +2460,10 @@ export class AgentRunController {
    * twice, so the card cannot outstay one beat.
    */
   #holdSettledTool(frame: AgentSseFrame): void {
-    const toolId = settledToolIdFromFrame(frame);
-    if (toolId == null) return;
+    for (const id of heldIdsFromFrame(frame)) this.#holdForBeat(id);
+  }
+
+  #holdForBeat(toolId: string): void {
     const running = this.#lingerTimers.get(toolId);
     if (running != null) window.clearTimeout(running);
     this.#lingering = new Set(this.#lingering).add(toolId);

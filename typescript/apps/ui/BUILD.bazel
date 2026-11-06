@@ -108,6 +108,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
         "//typescript/apps/ui/src/lib/components/chat:schemaForm",
+        "//typescript/apps/ui/src/lib/components/flow:AgentLaneNode",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
         "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",

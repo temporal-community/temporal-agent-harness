@@ -7,6 +7,7 @@ js_library(
     srcs = ["AgentStateFlow.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":AgentLaneNode",
         ":AgentStateNode",
         ":AgentWorkflowNode",
         ":AutoFitView",
@@ -37,6 +38,17 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+    ],
+)
+
+js_library(
+    name = "AgentLaneNode",
+    srcs = ["AgentLaneNode.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":AgentStateNode",
+        "//typescript/apps/ui:node_modules/@xyflow/svelte",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
     ],
 )
