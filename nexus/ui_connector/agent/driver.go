@@ -4,6 +4,7 @@ package agent
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/proto"
 )
@@ -239,6 +241,18 @@ type turnHandle struct {
 
 const noSessionReply = "No agent session exists yet. Send a chat message first; then use /help to list supported requests."
 
+// busyNotice answers a message the agent refused because it arrived while a turn was open.
+const busyNotice = "The agent is still working on an earlier message in this conversation, so this message was not delivered. Send it again once the agent has replied."
+
+// midTurnRejectedType is the ApplicationError type sendAgentMessage's failure carries when
+// the target handler refuses messages while a turn is open.
+const midTurnRejectedType = "MidTurnRejected"
+
+func isMidTurnRejected(err error) bool {
+	var appErr *temporal.ApplicationError
+	return errors.As(err, &appErr) && appErr.Type() == midTurnRejectedType
+}
+
 func reply(text string) router.Start {
 	return router.Start{Events: []protocol.Event{{Chunk: &protocol.Chunk{Text: text}}}}
 }
@@ -276,7 +290,7 @@ func (d *Driver) startMessage(ctx workflow.Context, c workflow.NexusClient, sess
 		// Deliver a message without a mention only to an existing session.
 		var statusOut harnessgen.AgentStatusOutput
 		if err := c.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentStatus,
-			harnessgen.QuerySessionInput{SessionId: sessionID},
+			harnessgen.QuerySessionInput{SessionID: sessionID},
 			workflow.NexusOperationOptions{ScheduleToCloseTimeout: d.existingSessionQueryTimeout()},
 		).Get(ctx, &statusOut); err != nil {
 			return router.Start{}, nil
@@ -359,7 +373,7 @@ func findHandler(handlers []protocol.Handler, name string) *protocol.Handler {
 func queryHandlers(ctx workflow.Context, c workflow.NexusClient, sessionID string) ([]protocol.Handler, error) {
 	var out harnessgen.AgentInterfaceOutput
 	if err := c.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentInterface,
-		harnessgen.QuerySessionInput{SessionId: sessionID},
+		harnessgen.QuerySessionInput{SessionID: sessionID},
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 10 * time.Second},
 	).Get(ctx, &out); err != nil {
 		return nil, err
@@ -369,9 +383,13 @@ func queryHandlers(ctx workflow.Context, c workflow.NexusClient, sessionID strin
 		handlers[i] = protocol.Handler{
 			Name:        h.Name,
 			Description: h.Description,
-			MidTurn:     string(derefOrZero(h.MidTurn)),
+			MidTurn:     string(h.MidTurn),
 		}
-		if fields, err := planFields(h.Parameters); err == nil {
+		schema, err := json.Marshal(h.Parameters.AdditionalProperties)
+		if err != nil {
+			continue
+		}
+		if fields, err := planFields(string(schema)); err == nil {
 			handlers[i].Fields = fields
 		}
 	}
@@ -379,19 +397,31 @@ func queryHandlers(ctx workflow.Context, c workflow.NexusClient, sessionID strin
 }
 
 // startHandler sends one message to a handler and returns the handle of its turn.
+// payload is the handler's input as a JSON object.
 func startHandler(ctx workflow.Context, c workflow.NexusClient, sessionID, msgType, payload string) (router.Start, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &members); err != nil {
+		return router.Start{}, fmt.Errorf("handler payload is not a JSON object: %w", err)
+	}
 	var sendOut harnessgen.SendMessageOutput
 	if err := c.ExecuteOperation(ctx, harnessgen.AgentService.SendAgentMessage,
-		harnessgen.SendAgentMessageInput{SessionId: sessionID, MsgType: msgType, Payload: payload},
+		harnessgen.SendAgentMessageInput{
+			SessionID: sessionID,
+			MsgType:   msgType,
+			Payload:   harnessgen.SendAgentMessageInputPayload{AdditionalProperties: members},
+		},
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 60 * time.Second},
 	).Get(ctx, &sendOut); err != nil {
+		if isMidTurnRejected(err) {
+			return router.Start{Events: []protocol.Event{{Notice: busyNotice}}}, nil
+		}
 		return router.Start{}, err
 	}
 	handle, err := json.Marshal(turnHandle{
 		SessionID:  sessionID,
 		TurnNumber: sendOut.TurnNumber,
-		MessageID:  derefOrZero(sendOut.MessageId),
-		Cursor:     derefOrZero(sendOut.StreamHeadOffset),
+		MessageID:  sendOut.MessageID,
+		Cursor:     sendOut.StreamHeadOffset,
 	})
 	if err != nil {
 		return router.Start{}, err
@@ -402,7 +432,7 @@ func startHandler(ctx workflow.Context, c workflow.NexusClient, sessionID, msgTy
 // resolveApproval sends the decision and returns it as an event, so the outbound
 // driver can update the prompt that was clicked.
 func resolveApproval(ctx workflow.Context, c workflow.NexusClient, sessionID string, a *protocol.ApprovalDecision) router.Start {
-	in := harnessgen.ApproveToolCallInput{SessionId: sessionID, ToolId: a.ToolID, Approved: a.Approved}
+	in := harnessgen.ApproveToolCallInput{SessionID: sessionID, ToolID: a.ToolID, Approved: a.Approved}
 	if a.Remember && a.Approved {
 		in.Remember = ptr(true)
 	}
@@ -429,11 +459,7 @@ func (d *Driver) Poll(ctx workflow.Context, handle router.Handle) (router.Poll, 
 	}
 	var pollOut harnessgen.PollMessagesOutput
 	if err := d.client().ExecuteOperation(ctx, harnessgen.AgentService.PollMessages,
-		harnessgen.PollMessagesInput{
-			SessionId:      h.SessionID,
-			Cursor:         h.Cursor,
-			TimeoutSeconds: ptr(5.0),
-		},
+		harnessgen.PollMessagesInput{SessionID: h.SessionID, Cursor: h.Cursor},
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 120 * time.Second},
 	).Get(ctx, &pollOut); err != nil {
 		return router.Poll{}, err

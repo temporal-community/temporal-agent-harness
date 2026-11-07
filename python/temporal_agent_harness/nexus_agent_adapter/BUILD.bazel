@@ -1,0 +1,36 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "handler",
+    srcs = ["handler.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/nexus_agent_adapter/generated:__init__",
+        "@pypi//nexus_rpc",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":handler",
+        "//python/temporal_agent_harness/web:client",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+)

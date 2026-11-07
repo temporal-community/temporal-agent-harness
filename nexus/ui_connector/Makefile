@@ -1,6 +1,6 @@
 .PHONY: generate generate-from-local install-nexgen build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker require-temporal-cli start-dev-server
 
-CONTRACT_URL := https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml
+CONTRACT_URL := https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/python/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml
 
 # Installs the newest nex-gen release into `go env GOPATH`/bin, replacing whatever's
 # there if a newer tag exists. We're deliberately tracking latest (not pinning) while
@@ -32,7 +32,7 @@ generate: install-nexgen
 
 # Gets the contract from the local checkout. Use this in this monorepo.
 generate-from-local: install-nexgen
-	$$(go env GOPATH)/bin/nexgen go ../../temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml --output agent/generated
+	$$(go env GOPATH)/bin/nexgen go ../../python/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml --output agent/generated
 
 build:
 	go build ./...

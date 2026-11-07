@@ -34,6 +34,8 @@ type Sink interface {
 	Guide(handlers []protocol.Handler) error
 	Form(h protocol.Handler) error
 	Error(msg string) error
+	// Notice posts a message from the connector itself, labeled as a system message.
+	Notice(msg string) error
 	Warn(msg string, err error)
 }
 
@@ -181,6 +183,8 @@ func (t *timeline) event(ev protocol.Event) {
 		t.standalone(func() error { return t.sink.Form(*ev.Form) }, "Form")
 	case ev.Error != "":
 		t.standalone(func() error { return t.sink.Error(ev.Error) }, "Error")
+	case ev.Notice != "":
+		t.standalone(func() error { return t.sink.Notice(ev.Notice) }, "Notice")
 	}
 }
 

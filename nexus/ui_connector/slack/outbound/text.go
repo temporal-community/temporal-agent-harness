@@ -45,3 +45,7 @@ func allowListedNote(toolName, reason string) string {
 func errorText(msg string) string {
 	return "_Something went wrong handling that: " + msg + "_"
 }
+
+func noticeText(msg string) string {
+	return ":information_source: *System message:* " + msg
+}
