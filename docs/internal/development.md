@@ -116,7 +116,7 @@ What ships is what `//python/temporal_agent_harness` reaches under
 else in the package imports), and their sources and data (the UI) make up the archives. A new
 entry point, such as an SDK integration nothing imports, must be added to those deps;
 `scripts/check-python-package-entry-points.sh` fails in CI until it is. Modules Bazel does not
-build, like `nexus_agent_adapter/`, are not published. A package installed from a git checkout
+build are not published. A package installed from a git checkout
 (`pip install git+https://...`) has no UI, and `serve` says so.
 
 ## Bazel
@@ -125,6 +125,10 @@ Bazel (9.x, via [bazelisk](https://github.com/bazelbuild/bazelisk); `.bazelversi
 release) builds and tests the Python package, the examples, and the TypeScript generated from
 them. It sits beside the uv/just workflow above; `python/pyproject.toml` and `python/uv.lock` stay
 the source of truth for Python dependencies. Nexus (`nexus/`, nexgen) is not built by Bazel.
+`python/temporal_agent_harness/nexus_agent_adapter/generated/` is committed nexgen output; after
+changing `agent.nexusrpc.yaml` beside it, regenerate it with the latest
+[nexgen](https://github.com/temporalio/nex-gen/releases):
+`nexgen python python/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml --output python/temporal_agent_harness/nexus_agent_adapter/generated`.
 
 ```bash
 bazel test //...                          # every test on Python 3.13

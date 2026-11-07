@@ -63,6 +63,9 @@ type Event struct {
 	HandlerHelp *HandlerHelp `json:",omitempty"`
 	// Error tells that the request failed.
 	Error string `json:",omitempty"`
+	// Notice is a message from the connector itself, not the agent. Drivers label it as a
+	// system message.
+	Notice string `json:",omitempty"`
 }
 
 // Chunk is one piece of reply content. Exactly one field is set.

@@ -1,0 +1,68 @@
+# Manual check: a Temporal workflow drives the Monty travel agent through the AgentService Nexus
+# adapter. Run from this directory, each recipe in its own terminal, in order (see README.md).
+#
+#   just temporal        # 1. local dev server
+#   just endpoint        # 2. the Nexus endpoint, once per dev server
+#   just agent-worker    # 3. the Monty travel agent
+#   just adapter-worker  # 4. the AgentService Nexus handler for that agent
+#   just caller          # 5. the caller workflow: three turns with mid-turn messages
+#
+# GEMINI_API_KEY comes from the repo-root .env.local. Every recipe connects to the local dev
+# server through the repo's temporal.local.toml, whatever Temporal profile .env.local selects,
+# and uses its own task queues, so TASK_QUEUE_PREFIX doesn't apply.
+
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".." / ".."
+local := "TEMPORAL_CONFIG_FILE=" + root / "temporal.local.toml" + " TEMPORAL_PROFILE=default"
+endpoint := "nexus-travel-agent"
+agent_queue := "nexus-demo-monty"
+nexus_queue := "nexus-travel-agent"
+
+default:
+    @just --list
+
+# Update callbacks carry pollMessages' async completion; endpoint changes apply at once.
+
+# Local dev server with the settings the Nexus adapter needs.
+temporal:
+    {{local}} temporal server start-dev \
+      --dynamic-config-value history.enableUpdateCallbacks=true \
+      --dynamic-config-value 'system.refreshNexusEndpointsMinWait="0s"'
+
+# The Nexus endpoint the caller targets, routed to the adapter worker's task queue.
+endpoint:
+    {{local}} temporal operator nexus endpoint create --name {{endpoint}} \
+      --target-namespace default --target-task-queue {{nexus_queue}}
+
+# The Monty conversational travel agent (needs GEMINI_API_KEY).
+agent-worker:
+    {{local}} MONTY_AGENT_TASK_QUEUE={{agent_queue}} bazel run //python/examples/monty:worker
+
+# The packaged standalone adapter worker, serving MontyChatAgent sessions over Nexus.
+adapter-worker:
+    {{local}} AGENT_WORKFLOW_NAME=MontyChatAgent AGENT_TASK_QUEUE={{agent_queue}} \
+      AGENT_WORKFLOW_ID_PREFIX=nexus-travel- NEXUS_AGENT_TASK_QUEUE={{nexus_queue}} \
+      bazel run //python/temporal_agent_harness/nexus_agent_adapter:worker
+
+# Optional, to watch the session in the harness console: the session manager the console needs.
+session-manager:
+    {{local}} bazel run //python/temporal_agent_harness/web:cli -- session-manager
+
+# Serving Monty's registry, the console lists running MontyChatAgent sessions it didn't start,
+# including the caller's, as discovered.
+
+# Optional: the harness console on http://localhost:8000, to watch the caller's session.
+console:
+    {{local}} bazel run //python/temporal_agent_harness/web:cli -- serve \
+      "{{root}}/python/examples/monty/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the caller workflow and print its transcript. It switches Monty to skip approvals first.
+caller:
+    {{local}} NEXUS_ENDPOINT={{endpoint}} bazel run //python/examples/nexus_travel_demo:caller
+
+# The same, but keeping Monty's approval policy: the caller approves each gated call itself.
+caller-with-approvals:
+    {{local}} NEXUS_ENDPOINT={{endpoint}} NEXUS_DEMO_APPROVE_EACH_TOOL=1 \
+      bazel run //python/examples/nexus_travel_demo:caller

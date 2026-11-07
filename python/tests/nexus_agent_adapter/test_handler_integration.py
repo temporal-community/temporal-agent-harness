@@ -1,14 +1,13 @@
 # ABOUTME: End-to-end integration tests for AgentServiceHandler against a real dev server.
 #
-# Needs a real dev server, not the time-skipping test server — update-with-callback requires
+# Needs a real dev server, not the time-skipping test server: update-with-callback requires
 # dynamic config the time-skipping server doesn't have (see _DEV_SERVER_ARGS below).
 #
-# Run with: uv run pytest tests/nexus_agent_adapter/test_handler_integration.py -v
+# Run with: bazel test //python/tests/nexus_agent_adapter:test_handler_integration
 
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -21,8 +20,19 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+with workflow.unsafe.imports_passed_through():
+    import base64
+    import json
+
+    from temporalio.api.common.v1 import Payload
+
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_protocol import AgentConfig, ToolApprovalPolicy
+from temporal_agent_harness.harness.agent_protocol import (
+    AGENT_ID_LENGTH,
+    AgentConfig,
+    MidTurn,
+    ToolApprovalPolicy,
+)
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     AgentService as AgentServiceDefinition,
 )
@@ -31,18 +41,15 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
     PollMessagesInput,
     QuerySessionInput,
     SendAgentMessageInput,
+    SendAgentMessageInputPayload,
+    SendAgentMessageInputStartData,
+    StartConfig,
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import AgentServiceHandler, Config
 
-# The time-skipping test server has no dynamic config, so these run on a real dev server.
-# A stock `temporal` CLI release carries the features; only the flags below need enabling.
 _DEV_SERVER_ARGS = [
     "--dynamic-config-value",
     "history.enableUpdateCallbacks=true",
-    "--dynamic-config-value",
-    "nexusoperation.enableStandalone=true",
-    "--dynamic-config-value",
-    "activity.enableStandalone=true",
     # Endpoint registration is cached; 0s keeps create_nexus_endpoint visible immediately.
     "--dynamic-config-value",
     'system.system.refreshNexusEndpointsMinWait="0s"',
@@ -66,7 +73,8 @@ class AskReply(BaseModel):
 
 @agent.defn
 class ProbeAgent:
-    """2s reply delay so pollMessages is provably still pending (async path, not sync)."""
+    """2s reply delay, so pollMessages is still pending when it starts (the async path).
+    ``ask`` queues mid-turn, so a second message during that delay opens the next turn."""
 
     @agent.init
     def __init__(self, config: AgentConfig) -> None:
@@ -76,7 +84,7 @@ class ProbeAgent:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: AskMessage) -> AskReply:
         """Reply to a user message."""
         await workflow.sleep(2)
@@ -89,15 +97,19 @@ class CallerInput(BaseModel):
 
 
 class CallerOutput(BaseModel):
-    turn_id: str
     turn_number: int
-    poll_closed: bool
-    poll_item_count: int
+    polls: int
+    reply: dict[str, str]
+
+
+def _decode_event(data: str) -> dict:
+    """A stream item's data: base64 of a serialized Payload whose data is the event's JSON."""
+    return json.loads(Payload.FromString(base64.b64decode(data)).data)
 
 
 @workflow.defn
 class CallerWorkflow:
-    """Stands in for ui_connector — calls AgentService purely over the Nexus wire."""
+    """Stands in for ui_connector: sends a message, then polls until its reply arrives."""
 
     @workflow.run
     async def run(self, input: CallerInput) -> CallerOutput:
@@ -109,23 +121,29 @@ class CallerWorkflow:
             SendAgentMessageInput(
                 session_id=input.session_id,
                 msg_type="ask",
-                payload=json.dumps({"text": "hi"}),
+                payload=SendAgentMessageInputPayload(additional_properties={"text": "hi"}),
             ),
         )
-        poll_out = await client.execute_operation(
-            AgentServiceDefinition.poll_messages,
-            PollMessagesInput(
-                session_id=input.session_id,
-                cursor=send_out.stream_head_offset or 0,
-                timeout_seconds=20,
-            ),
-        )
-        return CallerOutput(
-            turn_id=send_out.turn_id,
-            turn_number=send_out.turn_number,
-            poll_closed=bool(poll_out.closed),
-            poll_item_count=len(poll_out.items),
-        )
+        cursor, polls = send_out.stream_head_offset, 0
+        while True:
+            polls += 1
+            poll_out = await client.execute_operation(
+                AgentServiceDefinition.poll_messages,
+                PollMessagesInput(session_id=input.session_id, cursor=cursor),
+            )
+            assert not poll_out.closed
+            cursor = poll_out.next_offset
+            for item in poll_out.items:
+                envelope = _decode_event(item.data)
+                if (
+                    envelope["message_id"] == send_out.message_id
+                    and envelope["event"]["type"] == "message_handler_end"
+                ):
+                    return CallerOutput(
+                        turn_number=send_out.turn_number,
+                        polls=polls,
+                        reply=envelope["event"]["output"],
+                    )
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -138,7 +156,7 @@ async def env() -> AsyncGenerator[WorkflowEnvironment, None]:
     await env.shutdown()
 
 
-async def test_poll_messages_delivers_via_async_callback(env: WorkflowEnvironment) -> None:
+async def test_poll_messages_delivers_the_reply_via_async_callback(env: WorkflowEnvironment) -> None:
     client = env.client
     endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
     agent_task_queue = f"agent-{uuid.uuid4()}"
@@ -176,12 +194,9 @@ async def test_poll_messages_delivers_via_async_callback(env: WorkflowEnvironmen
         result = await asyncio.wait_for(handle.result(), _RESULT_TIMEOUT_SECONDS)
 
         assert result.turn_number == 1
-        assert not result.poll_closed
-        assert result.poll_item_count > 0, (
-            "pollMessages must deliver the reply's stream items"
-        )
+        assert result.reply == {"text": "echo: hi"}
 
-        # Proves the async callback path was taken, not a sync completion.
+        # Proves pollMessages completed asynchronously, through its callback.
         history = await handle.fetch_history()
         op_types = {e.event_type for e in history.events}
         assert EventType.EVENT_TYPE_NEXUS_OPERATION_STARTED in op_types
@@ -206,7 +221,7 @@ class SendOnlyCallerWorkflow:
             SendAgentMessageInput(
                 session_id=input.session_id,
                 msg_type="ask",
-                payload=json.dumps({"text": "hi"}),
+                payload=SendAgentMessageInputPayload(additional_properties={"text": "hi"}),
             ),
         )
         return SendOnlyOutput(turn_number=send_out.turn_number)
@@ -352,11 +367,11 @@ async def test_poll_messages_closed_when_workflow_already_completed(
 
 
 # ---------------------------------------------------------------------------
-# Full operation surface — sendAgentMessage, queryAgentInterface, queryAgentStatus,
-# approveToolCall, pollMessages. (executeOperatorCommand / queryOperatorInterface are
-# NOT exercised: operator commands are gone from the harness and those two operations now
-# answer NOT_IMPLEMENTED until the contract is regenerated without them.)
+# Full operation surface: sendAgentMessage, queryAgentInterface, queryAgentStatus,
+# approveToolCall, pollMessages, closeSession.
 # ---------------------------------------------------------------------------
+
+_AGENT_ID = "b" * AGENT_ID_LENGTH
 
 
 @agent.tool_defn()
@@ -386,17 +401,20 @@ class GatedProbeAgent:
 
 class FullSurfaceOutput(BaseModel):
     handler_names: list[str]
-    handler_mid_turns: list[str | None]
-    message_id: str | None
+    handler_mid_turns: list[str]
+    message_id: str
+    disposition: str
+    status_agent_id: str
     pending_tool_id: str
+    pending_short_id: str
     approve_accepted: bool
     poll_item_count: int
+    already_closed: bool
 
 
 @workflow.defn
 class FullSurfaceCallerWorkflow:
-    """Exercises the remaining operations: interface/status queries, approveToolCall,
-    pollMessages."""
+    """Exercises every operation over the Nexus wire."""
 
     @workflow.run
     async def run(self, input: CallerInput) -> FullSurfaceOutput:
@@ -410,7 +428,8 @@ class FullSurfaceCallerWorkflow:
             SendAgentMessageInput(
                 session_id=input.session_id,
                 msg_type="use_tool",
-                payload=json.dumps({"text": "hi"}),
+                payload=SendAgentMessageInputPayload(additional_properties={"text": "hi"}),
+                start_config=StartConfig(agent_id=_AGENT_ID),
             ),
         )
 
@@ -431,6 +450,7 @@ class FullSurfaceCallerWorkflow:
             await workflow.sleep(0.1)
         assert status is not None and status.pending_approvals
         tool_id = status.pending_approvals[0].tool_id
+        short_id = status.pending_approvals[0].short_id
 
         approve_out = await client.execute_operation(
             AgentServiceDefinition.approve_tool_call,
@@ -444,17 +464,25 @@ class FullSurfaceCallerWorkflow:
             PollMessagesInput(
                 session_id=input.session_id,
                 cursor=send_out.stream_head_offset or 0,
-                timeout_seconds=20,
             ),
+        )
+
+        close_out = await client.execute_operation(
+            AgentServiceDefinition.close_session,
+            QuerySessionInput(session_id=input.session_id),
         )
 
         return FullSurfaceOutput(
             handler_names=sorted(h.name for h in iface.handlers),
             handler_mid_turns=[h.mid_turn for h in sorted(iface.handlers, key=lambda h: h.name)],
             message_id=send_out.message_id,
+            disposition=send_out.disposition,
+            status_agent_id=status.agent_id,
             pending_tool_id=tool_id,
+            pending_short_id=short_id,
             approve_accepted=approve_out.accepted,
             poll_item_count=len(poll_out.items),
+            already_closed=close_out.already_closed,
         )
 
 
@@ -465,24 +493,16 @@ class MalformedCallOutput(BaseModel):
 
 @workflow.defn
 class MalformedInputCallerWorkflow:
-    """Sends session_id=None for a required str field. The generated dataclass has no
-    constructor-time validation (unlike the old pydantic models), so this only gets
-    caught by TransferTypeConverter.from_transfer_type on the handler side, once the
-    value crosses the wire. Proves that boundary still rejects malformed input."""
+    """Sends sendAgentMessage input without its required sessionId, untyped, the way a
+    caller in another language could. The generated Python types would refuse to send it, so
+    this reaches the handler's own input validation."""
 
     @workflow.run
     async def run(self, input: CallerInput) -> MalformedCallOutput:
-        client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
-        )
+        client = workflow.create_nexus_client(service="AgentService", endpoint=input.endpoint)
         try:
             await client.execute_operation(
-                AgentServiceDefinition.send_agent_message,
-                SendAgentMessageInput(
-                    session_id=None,  # type: ignore[arg-type]
-                    msg_type="ask",
-                    payload=json.dumps({"text": "hi"}),
-                ),
+                "SendAgentMessage", {"msgType": "ask", "payload": {"text": "hi"}}
             )
         except Exception as e:
             chain = [f"{type(e).__name__}: {e}"]
@@ -492,6 +512,9 @@ class MalformedInputCallerWorkflow:
             while failure is not None and failure.HasField("cause"):
                 failure = failure.cause
                 chain.append(f"failure.cause: {failure.message}")
+                # A payload validation failure lists its violations in its details.
+                for detail in failure.application_failure_info.details.payloads:
+                    chain.append(f"detail: {detail.data.decode()}")
             return MalformedCallOutput(
                 error_type=type(e).__name__, error_message=" | ".join(chain)
             )
@@ -582,6 +605,111 @@ async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
         assert result.handler_names == ["use_tool"]
         assert result.handler_mid_turns == ["reject"]
         assert result.message_id
+        assert result.disposition == "opened"
+        assert result.status_agent_id == _AGENT_ID
         assert result.pending_tool_id == "fixed-tool-id"
+        assert result.pending_short_id
         assert result.approve_accepted
         assert result.poll_item_count > 0
+        assert not result.already_closed
+
+        agent_handle = client.get_workflow_handle(f"gated-probe-{session_id}")
+        await asyncio.wait_for(agent_handle.result(), _RESULT_TIMEOUT_SECONDS)
+
+
+class Greeting(BaseModel):
+    """The init data GreetingProbeAgent requires."""
+
+    prefix: str
+
+
+@agent.defn
+class GreetingProbeAgent:
+    """Requires init data, so it only starts when sendAgentMessage carries startData."""
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: Greeting) -> None:
+        self._prefix = data.prefix
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+
+    @agent.accepts
+    async def ask(self, message: AskMessage) -> AskReply:
+        """Reply to a user message."""
+        return AskReply(text=f"{self._prefix}{message.text}")
+
+
+@workflow.defn
+class StartDataCallerWorkflow:
+    """Sends one message that starts GreetingProbeAgent with a config and init data."""
+
+    @workflow.run
+    async def run(self, input: CallerInput) -> SendOnlyOutput:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        send_out = await client.execute_operation(
+            AgentServiceDefinition.send_agent_message,
+            SendAgentMessageInput(
+                session_id=input.session_id,
+                msg_type="ask",
+                payload=SendAgentMessageInputPayload(additional_properties={"text": "hi"}),
+                start_config=StartConfig(agent_id=_AGENT_ID, close_after_idle_seconds=30),
+                start_data=SendAgentMessageInputStartData(
+                    additional_properties={"prefix": "hello, "}
+                ),
+            ),
+        )
+        return SendOnlyOutput(turn_number=send_out.turn_number)
+
+
+async def test_send_agent_message_starts_the_agent_with_start_config_and_data(
+    env: WorkflowEnvironment,
+) -> None:
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    agent_task_queue = f"agent-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+
+    config = Config(
+        agent_task_queue=agent_task_queue,
+        workflow_name="GreetingProbeAgent",
+        workflow_id_prefix="greeting-probe-",
+    )
+
+    async with Worker(
+        client, task_queue=agent_task_queue, workflows=[GreetingProbeAgent]
+    ), Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client, task_queue=caller_task_queue, workflows=[StartDataCallerWorkflow]
+    ):
+        session_id = str(uuid.uuid4())
+        handle = await client.start_workflow(
+            StartDataCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"start-data-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        result = await asyncio.wait_for(handle.result(), _RESULT_TIMEOUT_SECONDS)
+        assert result.turn_number == 1
+
+        agent_history = await client.get_workflow_handle(
+            f"greeting-probe-{session_id}"
+        ).fetch_history()
+        started = agent_history.events[0].workflow_execution_started_event_attributes
+        start_config, start_data = client.data_converter.payload_converter.from_payloads(
+            list(started.input.payloads), [AgentConfig, Greeting]
+        )
+        assert start_config.agent_id == _AGENT_ID
+        assert start_config.close_after_idle is not None
+        assert start_config.close_after_idle.total_seconds() == 30
+        assert start_data == Greeting(prefix="hello, ")

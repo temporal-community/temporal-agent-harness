@@ -1,0 +1,35 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_handler_integration",
+    srcs = ["test_handler_integration.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/nexus_agent_adapter:handler",
+        "//python/temporal_agent_harness/nexus_agent_adapter/generated:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_handler_unit",
+    srcs = ["test_handler_unit.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:agent_interface",
+        "//python/temporal_agent_harness/nexus_agent_adapter:handler",
+        "//python/temporal_agent_harness/nexus_agent_adapter/generated:__init__",
+        "//python/tests:conftest",
+        "@pypi//nexus_rpc",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)

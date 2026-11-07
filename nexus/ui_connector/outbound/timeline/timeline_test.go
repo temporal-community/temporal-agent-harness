@@ -37,10 +37,11 @@ func next(errs *[]error) error {
 	return err
 }
 
-func (f *fakeSink) Now() time.Time         { return time.Unix(0, 0) }
-func (f *fakeSink) Warn(string, error)     {}
-func (f *fakeSink) record(call string)     { f.calls = append(f.calls, call) }
-func (f *fakeSink) Error(msg string) error { f.record("Error:" + msg); return nil }
+func (f *fakeSink) Now() time.Time          { return time.Unix(0, 0) }
+func (f *fakeSink) Warn(string, error)      {}
+func (f *fakeSink) record(call string)      { f.calls = append(f.calls, call) }
+func (f *fakeSink) Error(msg string) error  { f.record("Error:" + msg); return nil }
+func (f *fakeSink) Notice(msg string) error { f.record("Notice:" + msg); return nil }
 
 func (f *fakeSink) Open(chunks []protocol.Chunk) (string, error) {
 	f.record("Open:" + markdown.RenderChunks(chunks))
@@ -343,16 +344,18 @@ func TestSizeReplacesCardSizesAndDrivesMaxChars(t *testing.T) {
 	assert.Equal(t, "next", s.finishes[1].Text)
 }
 
-func TestGuideFormAndErrorAreOwnMessages(t *testing.T) {
+func TestGuideFormErrorAndNoticeAreOwnMessages(t *testing.T) {
 	s := &fakeSink{}
 	var st State
 	Apply(streaming, s, &st, []protocol.Event{
 		{Guide: &protocol.Guide{Handlers: []protocol.Handler{{Name: "ask"}, {Name: "set_model"}}}},
 		{TurnStarted: true},
 	})
-	Apply(streaming, s, &st, []protocol.Event{text("hi"), {Form: &protocol.Handler{Name: "set_model"}}, {Error: "boom"}})
+	Apply(streaming, s, &st, []protocol.Event{
+		text("hi"), {Form: &protocol.Handler{Name: "set_model"}}, {Error: "boom"}, {Notice: "busy"},
+	})
 	End(streaming, s, &st)
-	assert.Equal(t, []string{"Guide:2", "Open:hi", "Finish:hi", "Form:set_model", "Error:boom"}, withoutStatus(s.calls))
+	assert.Equal(t, []string{"Guide:2", "Open:hi", "Finish:hi", "Form:set_model", "Error:boom", "Notice:busy"}, withoutStatus(s.calls))
 }
 
 func TestNoStatusWithoutATurn(t *testing.T) {
