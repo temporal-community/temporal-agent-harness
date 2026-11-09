@@ -1,19 +1,53 @@
 # Agent CLI
 
-Install the Temporal CLI separately, then install the Harness extension with Python 3.11+:
+`temporal agent` runs agents built with the Temporal Agent Harness from your terminal.
+Run it in the directory that holds the agents: your project, or an example under
+`python/examples/` in this repository. It works the same everywhere.
 
-```sh
-uv tool install 'temporal-agent-harness[cli]'
-uv tool update-shell
-```
+## Set up
 
-From a repository checkout, use `uv tool install --editable './python[cli]'` instead.
-The extension must be on `PATH` for `temporal agent` to work.
-Temporal and the agent's worker must already be running.
+1. Install the [Temporal CLI](https://docs.temporal.io/cli) and the Harness extension
+   (Python 3.11+), and put both on `PATH`:
 
-The CLI reads `./agents.toml` or `~/.config/temporal-agent/agents.toml`
-(under `$XDG_CONFIG_HOME` when set). Use `--registry PATH` to select another registry.
-Each agent needs a generated `schema` reference; see [agent registration](../README.md#build-with-it--install-from-pypi).
+   ```sh
+   uv tool install 'temporal-agent-harness[cli]'
+   uv tool update-shell
+   ```
+
+   From a Harness checkout, use `uv tool install --editable './python[cli]'`.
+
+2. Give the CLI an `agents.toml` registry with a generated schema for each agent
+   (see [agent registration](../README.md#build-with-it--install-from-pypi)).
+   Generate a schema from the agent's workflow class and reference it from the registry:
+
+   ```sh
+   temporal-agent-harness schema my_app.workflow:MyAgentWorkflow -o MyAgent.schema.json
+   ```
+
+   ```toml
+   [[agents]]
+   key = "my-agent"
+   workflow_type = "MyAgent"
+   task_queue = "my-agent-task-queue"
+   schema = "MyAgent.schema.json"   # relative to agents.toml
+   ```
+
+   Regenerate the schema when the agent's inputs change. The examples here already
+   include theirs.
+
+3. Start Temporal and the agent's worker. The CLI talks to the agent's workflow
+   directly, so it needs no session manager or web server.
+
+4. Run the agent from the directory containing `agents.toml`:
+
+   ```sh
+   temporal agent my-agent --interactive
+   ```
+
+   The CLI reads `./agents.toml`, else `~/.config/temporal-agent/agents.toml` (under
+   `$XDG_CONFIG_HOME` when set). Use `--registry PATH` to select another registry.
+   It connects with your Temporal SDK configuration (a `temporal.toml` profile and
+   `TEMPORAL_*` variables); `--profile`, `--address` and `--namespace` override it.
 
 Discover commands and agent inputs through help:
 
