@@ -31,7 +31,7 @@ func TestTurnEventToEvent_Chunks(t *testing.T) {
 			protocol.Chunk{Thought: &protocol.ThoughtChunk{Delta: "hmm"}}},
 		{"tool_start", turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "search", ToolInput: map[string]any{"q": "x"}},
 			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolRunning, Input: `{"q":"x"}`}}},
-		{"tool_end", turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: "3 hits"},
+		{"tool_end", turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: json.RawMessage(`"3 hits"`)},
 			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolComplete, Output: "3 hits"}}},
 		{"tool_error", turnEvent{Type: "tool_error", ToolID: "t1", ToolName: "search", Message: "oops"},
 			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolErrored, Error: "oops"}}},
@@ -130,6 +130,31 @@ func TestDecodeTurnEvent_RoundTrip(t *testing.T) {
 	assert.Equal(t, 3, got.TurnNumber)
 	assert.Equal(t, "msg-1", got.MessageID)
 	assert.Equal(t, "hello", got.Event.Text)
+}
+
+// The Python harness writes tool_output as any JSON value.
+func TestDecodeTurnEvent_ToolOutputJSON(t *testing.T) {
+	cases := map[string]string{
+		`"3 hits"`:                "3 hits",
+		`[{"id": 1}, {"id": 2}]`:  `[{"id":1},{"id":2}]`,
+		`{"results": [], "n": 0}`: `{"results":[],"n":0}`,
+		`42`:                      "42",
+		`null`:                    "",
+	}
+	for raw, want := range cases {
+		t.Run(raw, func(t *testing.T) {
+			si := streamItem{TurnNumber: 1, Event: turnEvent{
+				Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: json.RawMessage(raw)}}
+			got, err := decodeTurnEvent(makeTestStreamItem(t, si, 0, turnEventsTopic))
+			require.NoError(t, err)
+			ev, _ := turnEventToEvent(got.Event, false)
+			require.NotNil(t, ev)
+			require.NotNil(t, ev.Chunk)
+			require.NotNil(t, ev.Chunk.Tool)
+			assert.Equal(t, protocol.ToolComplete, ev.Chunk.Tool.Phase)
+			assert.Equal(t, want, ev.Chunk.Tool.Output)
+		})
+	}
 }
 
 func runStart(ctx workflow.Context, req protocol.Request) (router.Start, error) {

@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,20 +50,20 @@ type streamItem struct {
 }
 
 type turnEvent struct {
-	Type       string         `json:"type"`
-	Model      string         `json:"model"`
-	Usage      *modelUsage    `json:"usage"`
-	Text       string         `json:"text"`
-	ToolID     string         `json:"tool_id"`
-	ToolName   string         `json:"tool_name"`
-	ToolInput  map[string]any `json:"tool_input"`
-	ToolOutput string         `json:"tool_output"`
-	Message    string         `json:"message"`
-	Delta      map[string]any `json:"delta"`
-	Output     map[string]any `json:"output"`
-	Approved   bool           `json:"approved"`
-	Remember   bool           `json:"remember"`
-	Reason     string         `json:"reason"`
+	Type       string          `json:"type"`
+	Model      string          `json:"model"`
+	Usage      *modelUsage     `json:"usage"`
+	Text       string          `json:"text"`
+	ToolID     string          `json:"tool_id"`
+	ToolName   string          `json:"tool_name"`
+	ToolInput  map[string]any  `json:"tool_input"`
+	ToolOutput json.RawMessage `json:"tool_output"` // any JSON value; see toolOutputText
+	Message    string          `json:"message"`
+	Delta      map[string]any  `json:"delta"`
+	Output     map[string]any  `json:"output"`
+	Approved   bool            `json:"approved"`
+	Remember   bool            `json:"remember"`
+	Reason     string          `json:"reason"`
 }
 
 type modelUsage struct {
@@ -117,7 +118,7 @@ func turnEventToEvent(e turnEvent, messageScoped bool) (ev *protocol.Event, fina
 	case "tool_start":
 		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolRunning, Input: toolInputJSON(e.ToolInput)}}), false
 	case "tool_end":
-		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolComplete, Output: e.ToolOutput}}), false
+		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolComplete, Output: toolOutputText(e.ToolOutput)}}), false
 	case "tool_error":
 		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolErrored, Error: e.Message}}), false
 	case "text_annotation":
@@ -146,6 +147,24 @@ func turnEventToEvent(e turnEvent, messageScoped bool) (ev *protocol.Event, fina
 		}}, false
 	}
 	return nil, false
+}
+
+// toolOutputText returns tool_end's tool_output as display text.
+// A JSON string returns its value. Other JSON values return their compact JSON.
+// Null or absent returns "".
+func toolOutputText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return string(raw)
+	}
+	return buf.String()
 }
 
 // toolInputJSON returns the tool arguments as JSON, or "" when there are none.
