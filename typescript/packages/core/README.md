@@ -422,10 +422,10 @@ Run one command per terminal, all from `my-agent/`:
 temporal server start-dev
 
 # 2. Session-manager worker: starts agents and tracks sessions.
-uvx --from 'temporal-agent-harness[ui]==0.10.0' temporal-agent-harness session-manager
+uvx --from 'temporal-agent-harness[ui]==0.11.0' temporal-agent-harness session-manager
 
 # 3. Harness console + JSON API: http://localhost:8000.
-uvx --from 'temporal-agent-harness[ui]==0.10.0' temporal-agent-harness serve ./agents.toml
+uvx --from 'temporal-agent-harness[ui]==0.11.0' temporal-agent-harness serve ./agents.toml
 
 # 4. Your TypeScript agent worker; loads .env.local.
 npm start
