@@ -1,0 +1,48 @@
+{
+  "agent": "StrandsHelloAgent",
+  "source": "examples.strands_hello.workflow:StrandsHelloAgentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the assistant. Ask about the weather or the time somewhere, or ask it to run\nsomething in its scratch workspace; it may ask you a question back. Sent while it is\nworking, the message steers it instead: the text reaches the model with the next tool\nresult.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}

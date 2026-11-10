@@ -50,6 +50,11 @@ For OpenAI, import `asOpenAIAgentTool` and `runStreamed` from
 `@temporalio/agent-harness/ai-sdks/openai-agents-harness`. Consume the stream and await completion.
 Keep conversation history inside the agent instance. The worker's `OpenAIAgentsPlugin` comes from
 `@temporalio/agent-harness-worker/ai-sdks/openai-agents`, followed by `AgentHarnessPlugin`.
+For Strands Agents, build the agent in `create` with `harnessStrandsAgent(runner, ...)` from
+`@temporalio/agent-harness/ai-sdks/strands-agents-harness`, passing tools through
+`asStrandsTool(runner, ...)` and MCP servers as `new TemporalMCPClient({ server })`. Its worker
+plugin is `StrandsPlugin({ models, observerFactory: harnessObserverFactory })` from
+`@temporalio/agent-harness-worker/ai-sdks/strands-agents`.
 Activity tool implementations are registered using `toolActivity` on the harness plugin.
 
 Point `workflowsPath` at the compiled agent module. Generate its schema with

@@ -54,3 +54,20 @@ py_library(
         "@pypi//typesafe_sdk",
     ],
 )
+
+py_library(
+    name = "strands_agents_harness",
+    srcs = ["strands_agents_harness.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks/integration_helpers:__init__",
+        "//python/temporal_agent_harness/ai_sdks/strands_agents:__init__",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)

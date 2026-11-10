@@ -75,6 +75,17 @@ openai-agents = [
 pydantic-ai = [
     "pydantic-ai-slim[temporal]>=2.53",
 ]
+# The Strands Agents integration: temporal_agent_harness.ai_sdks.strands_agents, vendored from
+# temporalio/ai-integrations python/strands_agents @ a18192838b2390ed2186d68018ff6adea657461a
+# (temporalio-strands-agents 0.1.0), with the harness glue in ai_sdks.strands_agents_harness.
+# Carries upstream's MCP extra too (mcp-types, temporalio-mcp), so TemporalMCPClient works.
+strands-agents = [
+    "strands-agents>=1.64.0",
+    "botocore>=1.40.61,<2",
+    "mcp>=2.1.1,<3",
+    "mcp-types>=2.2.0,<3",
+    "temporalio-mcp>=0.2.0,<0.3",
+]
 # Packaged FastAPI server and browser UI assets.
 ui = [
     "fastapi[standard]>=0.136.3",
@@ -120,6 +131,10 @@ examples = [
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
     "pydantic-ai-slim[temporal]>=2.53",  # the Pydantic AI example (examples/pydantic_ai_hello)
+    "strands-agents>=1.64.0",  # the Strands Agents example (examples/strands_hello)
+    "botocore>=1.40.61,<2",
+    "mcp-types>=2.2.0,<3",
+    "temporalio-mcp>=0.2.0,<0.3",
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
     "typesafe-sdk>=0.6.0",
     "temporalio-typesafe>=0.0.1,<0.1",  # TypeSafePlugin for the auto_mode and typesafe_hello workers
@@ -147,6 +162,11 @@ dev = [
     "temporalio[opentelemetry]>=1.35.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.53",
+    # Strands Agents integration (vendored plugin + glue + tests) — mirrors the `strands-agents` extra.
+    "strands-agents>=1.64.0",
+    "botocore>=1.40.61,<2",
+    "mcp-types>=2.2.0,<3",
+    "temporalio-mcp>=0.2.0,<0.3",
     # Nexus-brokered MCP server tests. No version marker: temporal-nexus-mcp runs on every
     # Python this project supports, so `uv run pytest` collects the same suite on all of them.
     "temporal-nexus-mcp",

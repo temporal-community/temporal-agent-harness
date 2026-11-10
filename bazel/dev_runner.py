@@ -38,7 +38,10 @@ class Program:
     def from_json(blob: dict[str, object]) -> Program:
         env = blob["env"]
         assert isinstance(env, dict)
-        return Program(path=Path(str(blob["path"])).resolve(), env={str(k): str(v) for k, v in env.items()})
+        # Absolute but not resolved: a js_binary launcher finds its runfiles from its own path, which
+        # must stay inside this runfiles tree rather than follow the symlink out to bazel-out.
+        path = Path(str(blob["path"])).absolute()
+        return Program(path=path, env={str(k): str(v) for k, v in env.items()})
 
 
 @dataclass(frozen=True)

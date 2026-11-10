@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": ["node"],
+    "declaration": true,
+
+    // Imports carry `.ts` extensions and are rewritten to `.js` on emit, so Bazel's compiled
+    // output runs under plain Node ESM.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["*.ts"]
+}

@@ -133,6 +133,7 @@ harness_pytest_test(
         "//python/examples/openai_hello:agents_files",
         "//python/examples/pydantic_ai_hello:agents_files",
         "//python/examples/react_agent:agents_files",
+        "//python/examples/strands_hello:agents_files",
         "//python/examples/tictactoe:agents_files",
     ],
     imports = ["../.."],

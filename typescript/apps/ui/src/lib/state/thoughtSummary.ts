@@ -45,7 +45,7 @@ export function thoughtDeltaText(delta: JsonRecord): string {
   if (typeof content === "object" && content != null && "text" in content) {
     return asText((content as { text?: unknown }).text);
   }
-  return asText(content) || asText(delta.content_delta) || asText(delta.delta);
+  return asText(content) || asText(delta.content_delta) || asText(delta.delta) || asText(delta.text);
 }
 
 /** A turn's reasoning, folded into the one row the chat shows for it. */

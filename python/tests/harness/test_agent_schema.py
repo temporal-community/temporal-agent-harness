@@ -42,6 +42,7 @@ EXAMPLE_AGENTS = [
     "examples.openai_hello.workflow:OpenAIHelloAgentWorkflow",
     "examples.pydantic_ai_hello.workflow:PydanticAIHelloAgentWorkflow",
     "examples.react_agent.workflow:ReactAgentWorkflow",
+    "examples.strands_hello.workflow:StrandsHelloAgentWorkflow",
     "examples.tictactoe.workflow:TicTacToeAgentWorkflow",
 ]
 

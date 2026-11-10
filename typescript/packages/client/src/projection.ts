@@ -705,7 +705,7 @@ export class SessionProjection {
 /**
  * One fragment of a `thought_summary` delta's text. The delta is whatever the model provider
  * dumped, so its shape is the provider's: Gemini `{content: {text}}`, OpenAI `{delta}`,
- * Pydantic AI `{content}` or `{content_delta}`.
+ * Pydantic AI `{content}` or `{content_delta}`, Strands `{text}`.
  */
 export function thoughtDeltaText(delta: JsonRecord): string {
   const asText = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -713,7 +713,7 @@ export function thoughtDeltaText(delta: JsonRecord): string {
   if (typeof content === "object" && content !== null && "text" in content) {
     return asText((content as { text?: unknown }).text);
   }
-  return asText(content) || asText(delta.content_delta) || asText(delta.delta);
+  return asText(content) || asText(delta.content_delta) || asText(delta.delta) || asText(delta.text);
 }
 
 function clone(value: JsonValue): JsonValue {

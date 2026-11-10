@@ -1,0 +1,153 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# The workflow half of the vendored Strands Agents integration. One target per file, depending on
+# the files it imports, so a change reruns only the tests that reach it.
+
+ts_project(
+    name = "index",
+    srcs = ["index.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":load-polyfills",
+        ":model-activity",
+        ":strands-errors",
+        ":temporal-activity-tool",
+        ":temporal-agent",
+        ":temporal-mcp",
+        ":temporal-model",
+        ":workflow",
+    ],
+)
+
+ts_project(
+    name = "json-schema",
+    srcs = ["json-schema.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "load-polyfills",
+    srcs = ["load-polyfills.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core:node_modules/@types/ungap__structured-clone",
+        "//typescript/packages/core:node_modules/@ungap/structured-clone",
+        "//typescript/packages/core:node_modules/headers-polyfill",
+        "//typescript/packages/core:node_modules/web-streams-polyfill",
+    ],
+)
+
+ts_project(
+    name = "model-activity",
+    srcs = ["model-activity.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+    ],
+)
+
+ts_project(
+    name = "strands-errors",
+    srcs = ["strands-errors.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+    ],
+)
+
+ts_project(
+    name = "temporal-activity-tool",
+    srcs = ["temporal-activity-tool.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":json-schema",
+        ":strands-errors",
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "temporal-agent",
+    srcs = ["temporal-agent.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":strands-errors",
+        ":temporal-mcp",
+        ":temporal-model",
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+    ],
+)
+
+# temporal-mcp-client.ts and temporal-mcp-tool.ts import each other (the client builds the tools,
+# and each tool names its client's call-tool activity), so they compile as one target.
+ts_project(
+    name = "temporal-mcp",
+    srcs = [
+        "temporal-mcp-client.ts",
+        "temporal-mcp-tool.ts",
+    ],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":json-schema",
+        ":temporal-activity-tool",
+        "//typescript/packages/core:node_modules/@modelcontextprotocol/client",
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+    ],
+)
+
+ts_project(
+    name = "temporal-model",
+    srcs = ["temporal-model.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":model-activity",
+        ":strands-errors",
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+    ],
+)
+
+ts_project(
+    name = "workflow",
+    srcs = ["workflow.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":temporal-activity-tool",
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+    ],
+)

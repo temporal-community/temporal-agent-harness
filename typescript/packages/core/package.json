@@ -8,7 +8,10 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/src/ai-sdks/strands-agents/index.js",
+    "./dist/src/ai-sdks/strands-agents/load-polyfills.js"
+  ],
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -50,6 +53,14 @@
       "types": "./dist/src/ai-sdks/openai-agents-harness.d.ts",
       "default": "./dist/src/ai-sdks/openai-agents-harness.js"
     },
+    "./ai-sdks/strands-agents": {
+      "types": "./dist/src/ai-sdks/strands-agents/index.d.ts",
+      "default": "./dist/src/ai-sdks/strands-agents/index.js"
+    },
+    "./ai-sdks/strands-agents-harness": {
+      "types": "./dist/src/ai-sdks/strands-agents-harness.d.ts",
+      "default": "./dist/src/ai-sdks/strands-agents-harness.js"
+    },
     "./skill": "./skills/temporal-harness-typescript/SKILL.md"
   },
   "files": [
@@ -66,12 +77,16 @@
     "@temporalio/common": "^1.24.0",
     "@temporalio/workflow": "^1.24.0",
     "@temporalio/workflow-streams": "^1.24.0",
+    "@ungap/structured-clone": "^1.4.0",
+    "headers-polyfill": "^4.0.3",
     "immer": "^11.1.18",
+    "web-streams-polyfill": "^4.3.0",
     "zod": "^4.6.5"
   },
   "peerDependencies": {
     "@google/genai": "^2.31.0",
     "@openai/agents-core": "~0.14.3",
+    "@strands-agents/sdk": "^1.24.0",
     "@temporalio/openai-agents": "^1.24.0"
   },
   "peerDependenciesMeta": {
@@ -81,15 +96,22 @@
     "@openai/agents-core": {
       "optional": true
     },
+    "@strands-agents/sdk": {
+      "optional": true
+    },
     "@temporalio/openai-agents": {
       "optional": true
     }
   },
   "devDependencies": {
     "@google/genai": "^2.31.0",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@openai/agents-core": "~0.14.3",
+    "@opentelemetry/api": "^1.10.0",
+    "@strands-agents/sdk": "^1.24.0",
     "@temporalio/openai-agents": "^1.24.0",
     "@types/node": "^22.20.4",
+    "@types/ungap__structured-clone": "^1.2.0",
     "typescript": "^7.0.2"
   },
   "repository": {
