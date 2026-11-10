@@ -66,10 +66,10 @@ ts_project(
 # The OpenAIHelloAgentTs worker; reads OPENAI_API_KEY and the Temporal connection from the env.
 js_binary(
     name = "worker",
-    # //typescript/examples:dev runs it, from inside its symbolic macro.
-    visibility = ["//:__subpackages__"],
     data = [":worker_main"],
     entry_point = "worker.js",
+    # //typescript/examples:dev runs it, from inside its symbolic macro.
+    visibility = ["//:__subpackages__"],
 )
 
 ts_project(
