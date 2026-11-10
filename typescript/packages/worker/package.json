@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-harness-worker",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "description": "Worker side of the Temporal agent harness: the harness plugin and activities, the agent client and the Code Mode sandbox.",
@@ -62,8 +62,8 @@
   },
   "dependencies": {
     "@temporalio/activity": "^1.24.0",
-    "@temporalio/agent-harness": "^0.4.0",
-    "@temporalio/agent-harness-client": "^0.4.0",
+    "@temporalio/agent-harness": "^0.5.0",
+    "@temporalio/agent-harness-client": "^0.5.0",
     "@temporalio/client": "^1.24.0",
     "@temporalio/common": "^1.24.0",
     "@temporalio/plugin": "^1.24.0",
