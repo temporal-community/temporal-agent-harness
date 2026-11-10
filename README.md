@@ -119,7 +119,7 @@ To add the SDK to an existing project:
 uv add 'temporal-agent-harness[ui]==0.11.0'
 
 # TypeScript
-npm install --save-exact @temporalio/agent-harness@0.4.0 @temporalio/agent-harness-worker@0.4.0
+npm install --save-exact @temporalio/agent-harness@0.5.0 @temporalio/agent-harness-worker@0.5.0
 ```
 
 The [Python manual setup](python/README.md#build-with-it--install-from-pypi) covers model
