@@ -13,6 +13,7 @@ harness_pytest_test(
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/tests:conftest",
         "@pypi//mcp",
+        "@pypi//mcp_types",
         "@pypi//pytest",
         "@pypi//strands_agents",
         "@pypi//temporalio",
