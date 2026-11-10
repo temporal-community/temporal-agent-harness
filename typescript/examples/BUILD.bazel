@@ -1,0 +1,20 @@
+load("//bazel:dev.bzl", "harness_dev")
+
+EXAMPLES = [
+    "monty",
+    "openai_hello",
+    "strands_hello",
+]
+
+# `bazel run //typescript/examples:dev -- [example ...]`, every example when none are named: the
+# session manager, the server over the chosen examples' registries, and their workers. The server
+# and session manager are the one Python CLI, which serves agents written with either SDK. Output
+# lines carry their program's label; Ctrl-C stops them all.
+harness_dev(
+    name = "dev",
+    cli = "//python/temporal_agent_harness/web:cli",
+    examples = EXAMPLES,
+    server = True,
+    session_manager = True,
+    workers = True,
+)

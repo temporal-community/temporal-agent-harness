@@ -6,6 +6,9 @@ observability. One subpackage per SDK; more are expected over time.
 
   * :mod:`temporal_agent_harness.ai_sdks.google_genai_plugin` — the Google Gemini SDK.
   * :mod:`temporal_agent_harness.ai_sdks.openai_agents` — the OpenAI Agents SDK.
+  * :mod:`temporal_agent_harness.ai_sdks.strands_agents` — the Strands Agents SDK (vendored
+    from ``temporalio/ai-integrations``), with the harness glue in
+    :mod:`temporal_agent_harness.ai_sdks.strands_agents_harness`.
   * :mod:`temporal_agent_harness.ai_sdks.pydantic_ai_harness` — Pydantic AI (glue for the
     unmodified upstream ``pydantic_ai.durable_exec.temporal`` plugin).
   * :mod:`temporal_agent_harness.ai_sdks.typesafe_harness` — typed decisions through

@@ -179,6 +179,8 @@ js_binary(
     name = "worker",
     data = [":worker_main"],
     entry_point = "worker.js",
+    # //typescript/examples:dev runs it, from inside its symbolic macro.
+    visibility = ["//:__subpackages__"],
 )
 
 ts_project(

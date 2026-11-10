@@ -32,6 +32,7 @@ manifest:
     distro: distro
     dns: dnspython
     docker: docker
+    docstring_parser: docstring_parser
     dotenv: python_dotenv
     email_validator: email_validator
     fastapi: fastapi
@@ -92,6 +93,20 @@ manifest:
     opentelemetry.baggage: opentelemetry_api
     opentelemetry.context: opentelemetry_api
     opentelemetry.environment_variables: opentelemetry_api
+    opentelemetry.instrumentation.auto_instrumentation: opentelemetry_instrumentation
+    opentelemetry.instrumentation.bootstrap: opentelemetry_instrumentation
+    opentelemetry.instrumentation.bootstrap_gen: opentelemetry_instrumentation
+    opentelemetry.instrumentation.cidict: opentelemetry_instrumentation
+    opentelemetry.instrumentation.dependencies: opentelemetry_instrumentation
+    opentelemetry.instrumentation.distro: opentelemetry_instrumentation
+    opentelemetry.instrumentation.environment_variables: opentelemetry_instrumentation
+    opentelemetry.instrumentation.instrumentor: opentelemetry_instrumentation
+    opentelemetry.instrumentation.log_utils: opentelemetry_instrumentation
+    opentelemetry.instrumentation.propagators: opentelemetry_instrumentation
+    opentelemetry.instrumentation.sqlcommenter_utils: opentelemetry_instrumentation
+    opentelemetry.instrumentation.threading: opentelemetry_instrumentation_threading
+    opentelemetry.instrumentation.utils: opentelemetry_instrumentation
+    opentelemetry.instrumentation.version: opentelemetry_instrumentation
     opentelemetry.metrics: opentelemetry_api
     opentelemetry.propagate: opentelemetry_api
     opentelemetry.propagators: opentelemetry_api
@@ -141,6 +156,7 @@ manifest:
     sortedcontainers: sortedcontainers
     sse_starlette: sse_starlette
     starlette: starlette
+    strands: strands_agents
     sympy: sympy
     temporalio.activity: temporalio
     temporalio.api: temporalio
@@ -151,6 +167,7 @@ manifest:
     temporalio.converter: temporalio
     temporalio.envconfig: temporalio
     temporalio.exceptions: temporalio
+    temporalio.mcp: temporalio_mcp
     temporalio.nexus: temporalio
     temporalio.plugin: temporalio
     temporalio.runtime: temporalio
@@ -170,6 +187,7 @@ manifest:
     urllib3: urllib3
     uvicorn: uvicorn
     uvloop: uvloop
+    watchdog: watchdog
     watchfiles: watchfiles
     websockets: websockets
     werkzeug: werkzeug

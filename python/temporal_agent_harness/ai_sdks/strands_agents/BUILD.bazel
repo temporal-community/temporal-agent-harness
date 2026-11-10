@@ -1,0 +1,201 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_plugin",
+        ":_sandbox_activity",
+        ":_temporal_agent",
+        ":_temporal_mcp_client",
+        ":_temporal_sandbox",
+        ":_worker_env_ref",
+        ":workflow",
+    ],
+)
+
+py_library(
+    name = "_bytes_values",
+    srcs = ["_bytes_values.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+)
+
+py_library(
+    name = "_failure_converter",
+    srcs = ["_failure_converter.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_heartbeat_decorator",
+    srcs = ["_heartbeat_decorator.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "_model_activity",
+    srcs = ["_model_activity.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_bytes_values",
+        ":_heartbeat_decorator",
+        "//python/temporal_agent_harness/ai_sdks/integration_helpers:__init__",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_plugin",
+    srcs = ["_plugin.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_failure_converter",
+        ":_model_activity",
+        ":_sandbox_activity",
+        ":_sync_calls",
+        ":_worker_env_ref",
+        "//python/temporal_agent_harness/ai_sdks/integration_helpers:__init__",
+        "@pypi//botocore",
+        "@pypi//mcp",
+        "@pypi//mcp_types",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+        "@pypi//temporalio_mcp",
+    ],
+)
+
+py_library(
+    name = "_sandbox_activity",
+    srcs = ["_sandbox_activity.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_heartbeat_decorator",
+        ":_worker_env_ref",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_sync_calls",
+    srcs = ["_sync_calls.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_activity_tool",
+    srcs = ["_temporal_activity_tool.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_failure_converter",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_agent",
+    srcs = ["_temporal_agent.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_temporal_mcp_client",
+        ":_temporal_mcp_tool",
+        ":_temporal_model",
+        ":_temporal_sandbox",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_mcp_client",
+    srcs = ["_temporal_mcp_client.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_temporal_mcp_tool",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+        "@pypi//temporalio_mcp",
+    ],
+)
+
+py_library(
+    name = "_temporal_mcp_tool",
+    srcs = ["_temporal_mcp_tool.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_temporal_activity_tool",
+        "@pypi//mcp",
+        "@pypi//mcp_types",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+        "@pypi//temporalio_mcp",
+    ],
+)
+
+py_library(
+    name = "_temporal_model",
+    srcs = ["_temporal_model.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_bytes_values",
+        ":_model_activity",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_temporal_sandbox",
+    srcs = ["_temporal_sandbox.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_sandbox_activity",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_worker_env_ref",
+    srcs = ["_worker_env_ref.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_temporal_activity_tool",
+        "@pypi//strands_agents",
+        "@pypi//temporalio",
+    ],
+)

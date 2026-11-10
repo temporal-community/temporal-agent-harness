@@ -41,15 +41,15 @@ edit mid-session: see [Auto mode](approvals.md#auto-mode--letting-code-or-a-mode
 ### 🔌 Bring your own AI SDK
 Write turn logic with the SDK you already know. The harness's integrations turn each SDK call into
 a durable Temporal activity — so retries and credentials never leak into your workflow code.
-Support is growing across the Python AI SDKs and agent frameworks Temporal integrates with:
+Support is growing across the AI SDKs and agent frameworks Temporal integrates with:
 
 | AI SDK | Status | Notes |
 | --- | --- | --- |
 | [Google Gemini](../../python/temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [OpenAI Agents SDK](../../python/temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [Pydantic AI](../../python/temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [Strands Agents](../../python/temporal_agent_harness/ai_sdks/strands_agents) | ✅ Available now | Python and [TypeScript](../../typescript/packages/core/src/ai-sdks/strands-agents); ships in this repo and is **experimental** - vendored from Temporal's [Strands Agents integration](https://docs.temporal.io/develop/python/integrations/strands-agents), with MCP and sandbox tools under harness approvals. |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
-| [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
 
 ### 📡 Durable and inline tools

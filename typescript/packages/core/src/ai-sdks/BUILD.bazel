@@ -19,3 +19,22 @@ ts_project(
         "//typescript/packages/core/src/harness/agent-workflow:types",
     ],
 )
+
+ts_project(
+    name = "strands-agents-harness",
+    srcs = ["strands-agents-harness.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core:node_modules/zod",
+        "//typescript/packages/core/src/ai-sdks/strands-agents:index",
+        "//typescript/packages/core/src/harness:agent",
+        "//typescript/packages/core/src/harness:agent-workflow",
+        "//typescript/packages/core/src/harness/agent-protocol:index",
+        "//typescript/packages/core/src/harness/agent-workflow:errors",
+        "//typescript/packages/core/src/harness/agent-workflow:types",
+    ],
+)

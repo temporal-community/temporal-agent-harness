@@ -1,0 +1,105 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+# Tests of the Strands Agents integration (core's src/ai-sdks/strands-agents-harness.ts and
+# strands-agents/, worker's src/ai-sdks/strands-agents-harness.ts and strands-agents/). One target
+# per file.
+
+ts_project(
+    name = "strands-agents-harness.test",
+    testonly = True,
+    srcs = ["strands-agents-harness.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        # The hoisted copy core's Strands modules load, as an optional peer of core.
+        "//typescript:node_modules/@strands-agents/sdk",
+        "//typescript/packages/worker:node_modules/@strands-agents/sdk",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/common",
+        "//typescript/packages/worker:node_modules/zod",
+        "//typescript/packages/worker/src/ai-sdks:strands-agents-harness",
+        "//typescript/packages/worker/src/ai-sdks/integration-helpers:stream-observer",
+        "//typescript/packages/worker/src/harness:agent-workflow",
+    ],
+)
+
+ts_project(
+    name = "strands-agents.test",
+    testonly = True,
+    srcs = ["strands-agents.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        # The hoisted copy core's Strands modules load, as an optional peer of core.
+        "//typescript:node_modules/@strands-agents/sdk",
+        ":scripted-model",
+        ":tools",
+        ":workflows",
+        "//typescript/packages/worker:node_modules/@strands-agents/sdk",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/client",
+        "//typescript/packages/worker:node_modules/@temporalio/worker",
+        "//typescript/packages/worker/src:index",
+        "//typescript/packages/worker/src/ai-sdks:strands-agents-harness",
+        "//typescript/packages/worker/src/ai-sdks/openai-agents:index",
+        "//typescript/packages/worker/src/ai-sdks/strands-agents:index",
+        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/test:match",
+        "//typescript/packages/worker/test:support",
+        "//typescript/packages/worker/test/ai-sdks/openai-agents:scripted-model",
+    ],
+)
+
+ts_project(
+    name = "scripted-model",
+    testonly = True,
+    srcs = ["scripted-model.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = ["//typescript/packages/worker:node_modules/@strands-agents/sdk"],
+)
+
+ts_project(
+    name = "tools",
+    testonly = True,
+    srcs = ["tools.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+    ],
+)
+
+# The probe agents, with the OpenAI Agents ones beside them. The worker bundles the compiled
+# workflows.js at test time, so it and the node_modules it imports are runfiles of the test.
+ts_project(
+    name = "workflows",
+    testonly = True,
+    srcs = ["workflows.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/worker:tsconfig",
+    deps = [
+        ":tools",
+        "//typescript/packages/worker:node_modules/@strands-agents/sdk",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/zod",
+        "//typescript/packages/worker/test/ai-sdks/openai-agents:workflows",
+    ],
+)
+
+js_test(
+    name = "strands-agents-harness_test",
+    data = [":strands-agents-harness.test"],
+    entry_point = "strands-agents-harness.test.js",
+)
+
+harness_js_test(
+    name = "strands-agents_test",
+    data = [":strands-agents.test"],
+    entry_point = "strands-agents.test.js",
+    # agents-core would export traces to OpenAI from the worker.
+    env = {"OPENAI_AGENTS_DISABLE_TRACING": "1"},
+)

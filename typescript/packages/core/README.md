@@ -176,7 +176,9 @@ the same console, registry format, and session API.
 Model integrations are opt-in imports and optional peer dependencies. The walkthrough below
 installs the OpenAI Agents integration. The
 [Monty example](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples/monty)
-shows Gemini and Code Mode.
+shows Gemini and Code Mode, and the
+[Strands Hello example](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples/strands_hello)
+shows Strands Agents.
 
 ### Try the example agent
 

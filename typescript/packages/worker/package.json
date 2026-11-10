@@ -26,6 +26,14 @@
       "types": "./dist/src/ai-sdks/openai-agents-harness.d.ts",
       "default": "./dist/src/ai-sdks/openai-agents-harness.js"
     },
+    "./ai-sdks/strands-agents": {
+      "types": "./dist/src/ai-sdks/strands-agents/index.d.ts",
+      "default": "./dist/src/ai-sdks/strands-agents/index.js"
+    },
+    "./ai-sdks/strands-agents-harness": {
+      "types": "./dist/src/ai-sdks/strands-agents-harness.d.ts",
+      "default": "./dist/src/ai-sdks/strands-agents-harness.js"
+    },
     "./harness/agent-client": {
       "types": "./dist/src/harness/agent-client.d.ts",
       "default": "./dist/src/harness/agent-client.js"
@@ -70,6 +78,7 @@
     "@openai/agents-core": "~0.14.3",
     "@openai/agents-openai": "~0.14.3",
     "@pydantic/monty": "1.0.0",
+    "@strands-agents/sdk": "^1.24.0",
     "@temporalio/external-storage-s3": "^1.24.0",
     "@temporalio/external-storage-s3-aws-sdk": "^1.24.0",
     "@temporalio/openai-agents": "^1.24.0",
@@ -91,6 +100,9 @@
     "@pydantic/monty": {
       "optional": true
     },
+    "@strands-agents/sdk": {
+      "optional": true
+    },
     "@temporalio/external-storage-s3": {
       "optional": true
     },
@@ -107,9 +119,12 @@
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
     "@google/genai": "^2.31.0",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@openai/agents-core": "~0.14.3",
     "@openai/agents-openai": "~0.14.3",
+    "@opentelemetry/api": "^1.10.0",
     "@pydantic/monty": "1.0.0",
+    "@strands-agents/sdk": "^1.24.0",
     "@temporalio/external-storage-s3": "^1.24.0",
     "@temporalio/external-storage-s3-aws-sdk": "^1.24.0",
     "@temporalio/openai-agents": "^1.24.0",

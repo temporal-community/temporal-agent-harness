@@ -215,13 +215,14 @@ test("steps bracket model calls, and reasoning accumulates", () => {
     f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, a),
     f.make("model_interaction_started", { model: "m" }, a),
     f.make("thought_summary", { delta: { content: { type: "text", text: "Let me " } } }, a),
-    f.make("thought_summary", { delta: { delta: "think." } }, a),
+    f.make("thought_summary", { delta: { delta: "think" } }, a),
+    f.make("thought_summary", { delta: { text: " hard.", signature: "sig" } }, a),
     f.make("reply_delta", { text: "Hi" }, a),
     f.make("model_interaction_ended", { model: "m", usage: { input_tokens: 3 } }, a)
   ]);
   assert.deepEqual(p.root!.messages[0]!.parts, [
     { type: "model_interaction", model: "m", status: "done", usage: { input_tokens: 3 } },
-    { type: "thought_summary", text: "Let me think." },
+    { type: "thought_summary", text: "Let me think hard." },
     { type: "reply_delta", text: "Hi" }
   ]);
 });

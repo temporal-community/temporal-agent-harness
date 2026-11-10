@@ -1,0 +1,121 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:agents.bzl", "harness_agent_registry", "harness_ts_agent")
+load("//bazel:js_test.bzl", "harness_js_test")
+
+npm_link_all_packages(name = "node_modules")
+
+# package.json's "type": "module" makes tsc emit ES modules (module: NodeNext) and Node load them.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+)
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
+    ],
+)
+
+# The SDK packages' optional peer this example uses, as MODULE.bazel hoists it: the SDKs load it
+# from Node (the schema tool imports agents.js, the worker its Strands plugin).
+js_library(
+    name = "sdk_peers",
+    deps = ["//typescript:node_modules/@strands-agents/sdk"],
+)
+
+# The worker bundles the compiled agents.js, so it and the node_modules it imports are runfiles of
+# :worker.
+ts_project(
+    name = "agents",
+    srcs = ["agents.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":node_modules/@strands-agents/sdk",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/workflow",
+        ":node_modules/zod",
+        ":sdk_peers",
+    ],
+)
+
+ts_project(
+    name = "worker_main",
+    srcs = ["worker.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":agents",
+        ":node_modules/@strands-agents/sdk",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/envconfig",
+        ":node_modules/@temporalio/worker",
+        ":node_modules/openai",
+        ":sdk_peers",
+    ],
+)
+
+# The StrandsHelloAgentTs worker; reads OPENAI_API_KEY and the Temporal connection from the env.
+js_binary(
+    name = "worker",
+    data = [":worker_main"],
+    entry_point = "worker.js",
+    # //typescript/examples:dev runs it, from inside its symbolic macro.
+    visibility = ["//:__subpackages__"],
+)
+
+ts_project(
+    name = "agents.test",
+    testonly = True,
+    srcs = ["agents.test.ts"],
+    declaration = True,
+    tsconfig = ":tsconfig",
+    deps = [
+        ":agents",
+        ":node_modules/@strands-agents/sdk",
+        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/client",
+        ":node_modules/@temporalio/testing",
+        ":node_modules/@temporalio/worker",
+        ":sdk_peers",
+    ],
+)
+
+harness_js_test(
+    name = "message_sent_mid_turn_steers_the_agent_test",
+    data = [":agents.test"],
+    entry_point = "agents.test.js",
+)
+
+harness_ts_agent(
+    name = "StrandsHelloAgentTs",
+    description = """
+A hello-world Strands Agents agent, in TypeScript. Chat in plain text; it replies in prose and uses
+every kind of tool a harness Strands agent takes: get_weather (inline), get_local_time (activity)
+and ask_user (callback: it asks you and waits). A message sent while it works steers it. Shows the
+harness streaming path for the Strands integration end to end — model call → observer in the
+Strands model activity → live turn stream.""",
+    export = "StrandsHelloAgentTs",
+    key = "strands-hello-ts",
+    label = "Strands Hello (TypeScript)",
+    module = "agents.js",
+    task_queue = "strands-hello-ts",
+    deps = [":agents"],
+)
+
+# agents.toml and its agent's schema document. `bazel test` fails when one is out of date;
+# `bazel run //typescript/examples/strands_hello:registry_update` rewrites them.
+harness_agent_registry(
+    name = "registry",
+    srcs = [
+        "StrandsHelloAgentTs.schema.json",
+        "agents.toml",
+    ],
+    agents = [":StrandsHelloAgentTs"],
+)
