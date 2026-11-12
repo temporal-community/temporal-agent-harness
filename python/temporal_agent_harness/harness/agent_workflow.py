@@ -3800,9 +3800,12 @@ def _tool_signatures(user_fn: Callable[..., Any]) -> _ToolSig:
     has_self = bool(user_params) and user_params[0].name == "self"
     hidden = set(inject_names) | ({"self"} if has_self else set())
     model_sig = user_sig.replace(parameters=[p for p in user_params if p.name not in hidden])
-    model_annotations = {
-        k: v for k, v in getattr(user_fn, "__annotations__", {}).items() if k not in hidden
-    }
+    # Resolved, so an SDK building a tool schema from the wrapper finds the user's types.
+    try:
+        hints = get_type_hints(user_fn, include_extras=True)
+    except Exception:
+        hints = dict(getattr(user_fn, "__annotations__", {}))
+    model_annotations = {k: v for k, v in hints.items() if k not in hidden}
     # Resolve the declared return type so an activity tool's dispatcher can ask
     # ``execute_activity`` to reconstruct the typed result. Dispatching by activity NAME
     # otherwise yields a raw dict for a model/dataclass return; this keeps the dispatcher
