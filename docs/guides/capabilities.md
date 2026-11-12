@@ -50,7 +50,7 @@ Support is growing across the AI SDKs and agent frameworks Temporal integrates w
 | [Pydantic AI](../../python/temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
 | [Strands Agents](../../python/temporal_agent_harness/ai_sdks/strands_agents) | ✅ Available now | Python and [TypeScript](../../typescript/packages/core/src/ai-sdks/strands-agents); ships in this repo and is **experimental** - vendored from Temporal's [Strands Agents integration](https://docs.temporal.io/develop/python/integrations/strands-agents), with MCP and sandbox tools under harness approvals. |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
-| [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
+| [LangGraph](../../python/temporal_agent_harness/ai_sdks/langgraph) | ✅ Available now | Python only; ships in this repo and is **experimental** - vendored from Temporal's [LangGraph integration](https://docs.temporal.io/develop/python/integrations/langgraph), with every `ToolNode` call under harness approvals. |
 
 ### 📡 Durable and inline tools
 Tools come in two on-worker flavors — durable, activity-backed tools (`@agent.activity_tool_defn`)
