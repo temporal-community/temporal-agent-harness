@@ -290,8 +290,9 @@
     min-width: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    border: 1px solid color-mix(in srgb, var(--live) 40%, var(--border));
-    background: var(--surface-0);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 4px;
+    background: var(--color-surface-primary);
     transform: translateY(calc(var(--depth) * var(--step) * -1)) scale(calc(1 - var(--depth) * var(--step-shrink)));
     filter: blur(0);
     will-change: transform, opacity, filter;
