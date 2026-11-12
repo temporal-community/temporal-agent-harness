@@ -224,6 +224,12 @@ Bodies are not returned. A body is read through the mount (scripts) or `view` (c
   bundle-relative; anything else is relative to the linking file. A target outside the bundle
   is dropped. A self-link is dropped. Duplicate links are merged. A target that isn't a concept
   is kept, marked `dangling`.
+- **Wikilinks:** `[[target]]`, `[[target#heading]]`, `[[target|alias]]` and `![[target]]` are
+  links too, so a bundle whose notes link with wikilinks has a graph. The target is a path
+  from the bundle root, with or without `.md`. When no concept has that id, the target is the
+  one concept whose path ends with it (`[[ana]]` is `people/ana`). If more than one path ends
+  with it, the target stays a path from the root, and is `dangling`. The agent is still told
+  to write markdown links.
 - **Failures:** a directory whose `list` fails, or an entry whose `stat` fails, is skipped and
   the walk goes on; a concept whose `read` fails is listed with the problem. Only a rejected
   config fails the walk.
@@ -347,6 +353,8 @@ rules as the viewer apply:
     type `Unknown` with `problem` set; nothing is dropped;
   - links: relative, bundle-absolute, `#anchors`, URLs ignored, links inside code fences
     ignored, out-of-bundle and self-links dropped, duplicates merged, dangling links;
+  - wikilinks: headings and aliases dropped, a path from the root, the end of one concept's
+    path, the end of more than one;
   - head-only reads without links; truncation at each limit; deterministic order; `prefix`.
 - **Activity:** `vfs.<name>.okf_graph` is generated and registered for every
   `ActivityFileSystem`, and refuses a bad config as `view` does.

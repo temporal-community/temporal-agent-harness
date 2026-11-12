@@ -10,6 +10,7 @@ import {
   OKF_HEAD_BYTES,
   RESERVED_NAMES,
   UNCLOSED_FRONTMATTER,
+  byPathEnding,
   linkTargets,
   splitFrontmatter,
   type OKFConcept,
@@ -114,8 +115,9 @@ export async function buildOkfGraph(
   const links: OKFLink[] = [];
   if (options.links) {
     const known = new Set(concepts.map((concept) => concept.id));
+    const byEnding = byPathEnding(known);
     for (const concept of concepts) {
-      for (const target of linkTargets(bodies.get(concept.id) ?? "", concept.path))
+      for (const target of linkTargets(bodies.get(concept.id) ?? "", concept.path, byEnding))
         links.push({ source: concept.id, target, dangling: !known.has(target) });
     }
   }
