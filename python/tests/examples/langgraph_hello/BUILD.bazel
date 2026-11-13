@@ -1,0 +1,17 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_langgraph_hello",
+    srcs = ["test_langgraph_hello.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/langgraph_hello:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//langchain_core",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)

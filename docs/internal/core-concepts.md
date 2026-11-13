@@ -251,6 +251,10 @@ The vendored and harness-authored integrations:
   TypeScript `ai-sdks/strands-agents/` in core and worker) — a **vendored copy** of
   `temporalio/ai-integrations` Strands Agents with a `stream_route` / `observer_factory` seam,
   harness specifics in the sibling module.
+- **LangGraph** (`ai_sdks/langgraph/`, Python only) — a **vendored copy** of
+  `temporalio/ai-integrations` LangGraph with an `awrap_tool_call` / `stream_route` /
+  `observer_factory` seam; harness specifics in `_harness.py` inside the package, which the plugin
+  modules never import, and `graph(name, runner)` keeps the plugin's interface.
 
 ## Model output is not one blob — it's typed parts
 

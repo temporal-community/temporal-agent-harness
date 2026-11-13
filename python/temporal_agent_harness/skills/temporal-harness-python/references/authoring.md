@@ -1,7 +1,7 @@
 # Python authoring
 
 Install `temporal-agent-harness` with the integration extra you use: `openai-agents`, `genai`,
-`pydantic-ai`, `strands-agents`, or `typesafe`. `ui` adds the web server dependencies; `code-mode` adds the sandbox.
+`pydantic-ai`, `strands-agents`, `langgraph`, or `typesafe`. `ui` adds the web server dependencies; `code-mode` adds the sandbox.
 Pin the package and lock dependencies. Use `temporal-agent-harness init ./my-agent` for the bundled
 OpenAI example, then follow its README. To keep an existing project, adapt only the needed files.
 The same starter is installed with this skill under `assets/starter/`; read
@@ -65,6 +65,13 @@ For Strands Agents, build the agent in `@agent.init` with `harness_strands_agent
 MCP servers as `TemporalMCPClient(name)`; every call runs under the approval policy. On the worker,
 register `StrandsPlugin(models=..., observer_factory=harness_observer_factory)` before
 `AgentHarnessPlugin`. Strands interrupts are refused: use a callback tool to ask a person.
+
+For LangGraph, set `"execute_in"` on every node, compile the graph once in `@agent.init` with
+`graph(name, runner, injections=...)` from `ai_sdks.langgraph`, and `ainvoke` it per
+message with your own `thread_id`. Every `ToolNode` runs its harness tools under the approval
+policy, and activity nodes stream their model calls. On the worker, register
+`LangGraphPlugin(graphs=..., awrap_tool_call=harness_tool_call, observer_factory=harness_observer_factory)`
+before `AgentHarnessPlugin`. `interrupt()` is refused: use a callback tool to ask a person.
 
 Generate schemas with `temporal-agent-harness schema module:Class -o Agent.schema.json`.
 An application module must be installed or importable from the current project. Required init
