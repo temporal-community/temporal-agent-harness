@@ -200,6 +200,15 @@ During a tool call, `RegistryService` reads the URL and starts
 `mcp_proxy_activity`. The activity sends `tools/call` to the external server.
 The activity does not retry because the tool might not be idempotent.
 
+A registration can name a credential for its server. The registry stores the
+name, never the secret. The gateway worker declares its credentials in
+`GATEWAY_CREDENTIALS`, each with the URL it is for and the environment variable
+that holds the token. The activity reads the token from the worker's
+environment and sends it as a bearer token. It refuses a server URL that is not
+under the credential's URL, so a registration can't send a token to another
+server. The token does not enter workflow history, a signal, a query result or
+a Nexus payload.
+
 Every handler uses `@nexus.temporal_operation`. Registration and deregistration
 return synchronous results. Discovery and tool calls return activity-backed
 operation results; the activities deliver completion through Nexus callbacks.

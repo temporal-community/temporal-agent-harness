@@ -30,7 +30,7 @@ _LIST_AGENT_ENTRIES_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id"})
 _LIST_AGENT_ENTRIES_OUTPUT_DECLARED: frozenset[str] = frozenset({"remote_tools"})
 
 
-_REGISTER_EXTERNAL_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "name", "url"})
+_REGISTER_EXTERNAL_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "name", "url", "credential"})
 
 
 class _CallToolInputTransferTypeConverter(
@@ -611,6 +611,17 @@ class _RegisterExternalInputTransferTypeConverter(
                 else:
                     url_value = url_value_raw
 
+        credential_value: str | None = None
+        if "credential" in raw:
+            credential_value_raw = raw["credential"]
+            if credential_value_raw is None:
+                violations.append(Violation(path="credential", reason="explicit null not allowed"))
+            else:
+                if not isinstance(credential_value_raw, str):
+                    violations.append(Violation(path="credential", reason="expected string"))
+                else:
+                    credential_value = credential_value_raw
+
         additional_properties: dict[str, typing.Any] = {}
         for key in raw:
             if key not in _REGISTER_EXTERNAL_INPUT_DECLARED:
@@ -621,6 +632,7 @@ class _RegisterExternalInputTransferTypeConverter(
             agent_id=agent_id_value,
             name=name_value,
             url=url_value,
+            credential=credential_value,
             additional_properties=additional_properties,
         )
 
@@ -634,6 +646,8 @@ class _RegisterExternalInputTransferTypeConverter(
             out["name"] = value.name
         if value.url is not None:
             out["url"] = value.url
+        if value.credential is not None:
+            out["credential"] = value.credential
         for key, entry in value.additional_properties.items():
             if key in _REGISTER_EXTERNAL_INPUT_DECLARED:
                 violations.append(Violation(path=key, reason="additional property collides with declared property"))
@@ -654,5 +668,10 @@ class RegisterExternalInput:
     name: str | None = None
 
     url: str | None = None
+
+    credential: str | None = None
+    """Name of a credential the gateway worker holds, sent to this server with every
+    request. Never the secret itself.
+    """
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)

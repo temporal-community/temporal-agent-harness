@@ -11,9 +11,11 @@ with workflow.unsafe.imports_passed_through():
         RegisterExternalInput,
         RegistryService,
     )
+    from .credentials import CREDENTIALS_ENV, Credential, load_credentials
     from .registry import (
         REGISTRY_TASK_QUEUE,
         REGISTRY_WORKFLOW_ID,
+        RemoteServer,
         ToolRegistryWorkflow,
         fetch_external_tools,
     )
@@ -38,8 +40,10 @@ __all__ = [
     "REGISTRY_SERVICE_NAME",
     "REGISTRY_TASK_QUEUE",
     "REGISTRY_WORKFLOW_ID",
+    "CREDENTIALS_ENV",
     "CallToolInput",
     "CallToolOutput",
+    "Credential",
     "DeregisterInput",
     "ExternalMCPCallInput",
     "ListAgentEntriesInput",
@@ -47,8 +51,10 @@ __all__ = [
     "RegisterExternalInput",
     "RegistryService",
     "RegistryServiceHandler",
+    "RemoteServer",
     "ToolRegistryWorkflow",
     "fetch_external_tools",
     "list_external_tools",
+    "load_credentials",
     "mcp_proxy_activity",
 ]

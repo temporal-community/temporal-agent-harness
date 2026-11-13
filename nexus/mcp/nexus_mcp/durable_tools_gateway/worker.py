@@ -8,7 +8,10 @@ Usage (from repo root):
     uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 
 Env vars:
-    GATEWAY_SEED_EXTERNAL_SERVERS   JSON {"name": "url", ...} to register on startup.
+    GATEWAY_SEED_EXTERNAL_SERVERS   JSON {"name": "url", ...} to register on startup. A value
+                                     can also be {"url": "...", "credential": "..."}.
+    GATEWAY_CREDENTIALS             JSON {"name": {"url": "...", "token_env": "..."}}: the
+                                     credentials a registration can name. See credentials.py.
     GATEWAY_SEED_AGENT_ID           agent_id to register seeded servers under. Required
                                      if GATEWAY_SEED_EXTERNAL_SERVERS is set.
 """
@@ -31,6 +34,7 @@ from temporal_agent_harness.utils.large_payload import (
     with_large_payload_offload,
 )
 
+from .credentials import load_credentials
 from .registry import (
     REGISTRY_TASK_QUEUE,
     REGISTRY_WORKFLOW_ID,
@@ -47,14 +51,16 @@ logger = logging.getLogger(__name__)
 
 
 async def _seed_external_servers(
-    client: Client, seed: dict[str, str], agent_id: str
+    client: Client, seed: dict[str, str | dict[str, str]], agent_id: str
 ) -> None:
-    """Signal each {name: url} pair to ToolRegistryWorkflow.register_external, under
-    one agent_id."""
+    """Signal each seeded server to ToolRegistryWorkflow.register_external, under one
+    agent_id. A server is a URL, or {"url": ..., "credential": ...}."""
     registry_handle = client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-    for name, url in seed.items():
+    for name, server in seed.items():
+        url = server if isinstance(server, str) else server["url"]
+        credential = None if isinstance(server, str) else server.get("credential")
         await registry_handle.signal(
-            ToolRegistryWorkflow.register_external, args=[agent_id, name, url]
+            ToolRegistryWorkflow.register_external, args=[agent_id, name, url, credential]
         )
         logger.info(
             "Seeded external server %r -> %s (agent_id=%r)", name, url, agent_id
@@ -62,7 +68,7 @@ async def _seed_external_servers(
 
 
 async def main(
-    seed_external_servers: dict[str, str] | None = None,
+    seed_external_servers: dict[str, str | dict[str, str]] | None = None,
     seed_agent_id: str | None = None,
 ) -> None:
     logging.basicConfig(
@@ -73,6 +79,9 @@ async def main(
         raise SystemExit(
             "GATEWAY_SEED_AGENT_ID is required when GATEWAY_SEED_EXTERNAL_SERVERS is set"
         )
+
+    # A malformed GATEWAY_CREDENTIALS stops the worker here, not on the first tool call.
+    logger.info("Credentials declared: %s", sorted(load_credentials()) or "none")
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(

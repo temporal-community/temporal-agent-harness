@@ -338,6 +338,26 @@ agent = Agent(
 )
 ```
 
+A server that needs a token gets it from the gateway worker. Declare the
+credential in the worker's environment, with the URL it may be sent to and the
+variable that holds the token:
+
+```bash
+export NOTES_TOKEN=...
+export GATEWAY_CREDENTIALS='{"notes": {"url": "https://notes.example/mcp", "token_env": "NOTES_TOKEN"}}'
+```
+
+Then name it in the registration:
+
+```python
+RegisterExternalInput(
+    agent_id="notes-agent", name="notes", url="https://notes.example/mcp", credential="notes"
+)
+```
+
+The registry stores the name only. The worker sends the token as a bearer token,
+and only to a server under the credential's URL.
+
 The gateway path is separate from the native Nexus tool path. See the
 [Nexus hello example](../../examples/nexus_hello/README.md) and the
 [gateway architecture](ARCHITECTURE.md#durable-tools-gateway).
