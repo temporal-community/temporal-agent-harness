@@ -26,7 +26,10 @@ const (
 	defaultIdentity = "default"
 )
 
-var errInvalidLinearSignature = errors.New("invalid Linear signature")
+var (
+	errInvalidLinearSignature = errors.New("invalid Linear signature")
+	errInvalidLinearTimestamp = errors.New("invalid Linear timestamp")
+)
 
 type Options struct {
 	Identity string
@@ -36,13 +39,12 @@ type Options struct {
 // https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql
 // https://linear.app/developers/agent-interaction#activity-content-payload
 type agentSessionEvent struct {
-	Type             string    `json:"type"`
-	Action           string    `json:"action"`
-	OrganizationID   string    `json:"organizationId"`
-	WebhookTimestamp int64     `json:"webhookTimestamp"`
-	PromptContext    string    `json:"promptContext"`
-	AgentSession     session   `json:"agentSession"`
-	AgentActivity    *activity `json:"agentActivity"`
+	Type           string    `json:"type"`
+	Action         string    `json:"action"`
+	OrganizationID string    `json:"organizationId"`
+	PromptContext  string    `json:"promptContext"`
+	AgentSession   session   `json:"agentSession"`
+	AgentActivity  *activity `json:"agentActivity"`
 }
 
 type session struct {
@@ -85,10 +87,10 @@ func NewServer(tc client.Client, taskQueue, signingSecret string, opts Options) 
 
 func (s *webhookServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := s.verifyLinearRequest(r); err != nil {
-		if errors.Is(err, errInvalidLinearSignature) {
+		if errors.Is(err, errInvalidLinearSignature) || errors.Is(err, errInvalidLinearTimestamp) {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 		} else {
-			http.Error(w, "failed to read body", http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 		return
 	}
@@ -107,6 +109,18 @@ func (s *webhookServer) verifyLinearRequest(r *http.Request) error {
 		return errInvalidLinearSignature
 	}
 
+	var event struct {
+		WebhookTimestamp int64 `json:"webhookTimestamp"`
+	}
+	if err := json.Unmarshal(body, &event); err != nil {
+		return fmt.Errorf("parse Linear request body: %w", err)
+	}
+	// https://linear.app/developers/webhooks#securing-webhooks
+	age := time.Since(time.UnixMilli(event.WebhookTimestamp))
+	if age > time.Minute || age < -time.Minute {
+		return errInvalidLinearTimestamp
+	}
+
 	// Restore the exact raw body so the route handler can parse it normally.
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return nil
@@ -123,14 +137,7 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to parse event", http.StatusBadRequest)
 		return
 	}
-	
-	// https://linear.app/developers/webhooks#securing-webhooks
-	age := time.Since(time.UnixMilli(event.WebhookTimestamp))
-	if age > time.Minute || age < -time.Minute {
-		http.Error(w, "invalid Linear timestamp", http.StatusUnauthorized)
-		return
-	}
-	
+
 	if event.Type != "AgentSessionEvent" || (event.Action != "created" && event.Action != "prompted") {
 		w.WriteHeader(http.StatusOK)
 		return

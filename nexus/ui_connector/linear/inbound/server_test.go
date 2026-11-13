@@ -287,7 +287,53 @@ func TestInvalidSignaturesAreRejected(t *testing.T) {
 	}
 }
 
+func TestRequestVerificationChecksTimestampBeforeRouting(t *testing.T) {
+	for _, kind := range []string{"valid", "missing", "old", "future", "malformed"} {
+		t.Run(kind, func(t *testing.T) {
+			event := createdEvent()
+			status := http.StatusUnauthorized
+			switch kind {
+			case "valid":
+				status = http.StatusOK
+			case "missing":
+				delete(event, "webhookTimestamp")
+			case "old":
+				event["webhookTimestamp"] = time.Now().Add(-2 * time.Minute).UnixMilli()
+			case "future":
+				event["webhookTimestamp"] = time.Now().Add(2 * time.Minute).UnixMilli()
+			case "malformed":
+				event["webhookTimestamp"] = "not a timestamp"
+				status = http.StatusBadRequest
+			}
+			body, err := json.Marshal(event)
+			require.NoError(t, err)
+			server := NewServer(mocks.NewClient(t), "linear-task-queue", testSigningSecret, Options{})
+			server.mux = http.NewServeMux()
+			called := false
+			server.mux.HandleFunc("POST "+routeEvents, func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				restored, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				assert.Equal(t, body, restored)
+				w.WriteHeader(http.StatusOK)
+			})
+
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, signedRequest(string(body), testSigningSecret))
+
+			assert.Equal(t, status, response.Code)
+			assert.Equal(t, kind == "valid", called)
+		})
+	}
+}
+
 func TestRoutes(t *testing.T) {
+	body, err := json.Marshal(createdEvent())
+	require.NoError(t, err)
+	missingType := createdEvent()
+	delete(missingType, "type")
+	bodyWithoutType, err := json.Marshal(missingType)
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name   string
 		method string
@@ -295,10 +341,10 @@ func TestRoutes(t *testing.T) {
 		body   string
 		status int
 	}{
-		{"method", http.MethodGet, routeEvents, "", http.StatusMethodNotAllowed},
-		{"path", http.MethodPost, "/other", "", http.StatusNotFound},
+		{"method", http.MethodGet, routeEvents, string(body), http.StatusMethodNotAllowed},
+		{"path", http.MethodPost, "/other", string(body), http.StatusNotFound},
 		{"json", http.MethodPost, routeEvents, "{", http.StatusBadRequest},
-		{"type", http.MethodPost, routeEvents, "{}", http.StatusBadRequest},
+		{"type", http.MethodPost, routeEvents, string(bodyWithoutType), http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := mocks.NewClient(t)
