@@ -18,10 +18,23 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":agent_workflow",
+        ":data_source",
         ":subagent_toolset",
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/temporal_agent_harness/harness/code_mode:__init__",
         "//python/temporal_agent_harness/harness/state:decl",
+    ],
+)
+
+py_library(
+    name = "data_source",
+    srcs = ["data_source.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
     ],
 )
 

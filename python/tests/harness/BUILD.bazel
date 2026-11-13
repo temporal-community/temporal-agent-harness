@@ -311,6 +311,25 @@ harness_pytest_test(
 )
 
 harness_pytest_test(
+    name = "test_data_source",
+    srcs = ["test_data_source.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/data_sources:__init__",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:data_source",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
     name = "test_close_after_idle",
     srcs = ["test_close_after_idle.py"],
     imports = ["../.."],
