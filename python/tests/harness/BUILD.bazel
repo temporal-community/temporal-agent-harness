@@ -317,7 +317,6 @@ harness_pytest_test(
     deps = [
         "//python/temporal_agent_harness/harness:agent",
         "//python/temporal_agent_harness/harness/code_mode:activity_fs",
-        "//python/temporal_agent_harness/harness/code_mode:git_fs",
         "//python/tests:conftest",
         "@pypi//pytest",
         "@pypi//temporalio",
