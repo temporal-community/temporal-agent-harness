@@ -138,7 +138,7 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if event.Type != "AgentSessionEvent" || (event.Action != "created" && event.Action != "prompted") {
+	if event.Type != "AgentSessionEvent" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -162,6 +162,10 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		text, sender, interactionID = a.Content.Body, a.UserID, "prompt-"+a.ID
+	default:
+		log.Printf("Unsupported Linear agent session action %q", event.Action)
+		http.Error(w, "unsupported Linear agent session action", http.StatusBadRequest)
+		return
 	}
 	if strings.TrimSpace(text) == "" {
 		http.Error(w, "missing Linear prompt text", http.StatusBadRequest)

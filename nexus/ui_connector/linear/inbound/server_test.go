@@ -192,15 +192,13 @@ func TestWorkflowStartFailureIsAcknowledged(t *testing.T) {
 }
 
 func TestIgnoredEventsDoNotStartWorkflows(t *testing.T) {
-	for _, kind := range []string{"other type", "other action", "stop", "agent response"} {
+	for _, kind := range []string{"other type", "stop", "agent response"} {
 		t.Run(kind, func(t *testing.T) {
 			event := promptedEvent()
 			activity := event["agentActivity"].(map[string]any)
 			switch kind {
 			case "other type":
 				event["type"] = "Comment"
-			case "other action":
-				event["action"] = "updated"
 			case "stop":
 				activity["signal"] = "stop"
 			case "agent response":
@@ -209,6 +207,28 @@ func TestIgnoredEventsDoNotStartWorkflows(t *testing.T) {
 			tc := mocks.NewClient(t)
 			response := postEvent(t, NewServer(tc, "linear-task-queue", testSigningSecret, Options{}), event)
 			assert.Equal(t, http.StatusOK, response.Code)
+			tc.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
+func TestUnsupportedActionsAreLoggedAndRejected(t *testing.T) {
+	for _, action := range []string{"updated", ""} {
+		t.Run(action, func(t *testing.T) {
+			var logs bytes.Buffer
+			originalOutput := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(originalOutput) })
+
+			tc := mocks.NewClient(t)
+			event := createdEvent()
+			event["action"] = action
+
+			response := postEvent(t, NewServer(tc, "linear-task-queue", testSigningSecret, Options{}), event)
+
+			assert.Equal(t, http.StatusBadRequest, response.Code)
+			assert.Contains(t, response.Body.String(), "unsupported Linear agent session action")
+			assert.Contains(t, logs.String(), "Unsupported Linear agent session action \""+action+"\"")
 			tc.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
