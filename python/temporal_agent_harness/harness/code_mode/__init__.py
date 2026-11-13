@@ -15,7 +15,8 @@ as ``InMemoryFileSystem``, read and written with ``open()`` and ``pathlib`` (see
 activities (see :mod:`.activity_fs`). ``vfs_mount(...)`` declares a mount on the agent class so
 the console can show it (see :mod:`.mount_decl`): a ``FileTree`` state holds an
 ``InMemoryFileSystem``'s files, contents included, and a ``FileIndex`` state tracks an
-``ActivityFileSystem``'s tree.
+``ActivityFileSystem``'s tree. ``git_repository_filesystem(...)`` is a ready-made read-only
+``ActivityFileSystem`` over git repositories (see :mod:`.git_fs`).
 
 Importing the package never requires the sandbox engine (the optional ``code-mode`` extra):
 
@@ -29,6 +30,10 @@ Importing the package never requires the sandbox engine (the optional ``code-mod
 """
 
 from temporal_agent_harness.harness.code_mode.activity_fs import ActivityFileSystem, FileChunk
+from temporal_agent_harness.harness.code_mode.git_fs import (
+    GitRepositoryConfig,
+    git_repository_filesystem,
+)
 from temporal_agent_harness.harness.code_mode.mount_decl import (
     ActivityVFSMountDecl,
     InMemoryVFSMountDecl,
@@ -63,6 +68,7 @@ __all__ = [
     "FileStat",
     "FileSystem",
     "FileTree",
+    "GitRepositoryConfig",
     "InMemoryFileSystem",
     "IndexEntry",
     "InMemoryVFSMountDecl",
@@ -76,6 +82,7 @@ __all__ = [
     "VFSMount",
     "code_mode_tool",
     "code_mode_type_check",
+    "git_repository_filesystem",
     "okf_bundle_vfs_mount",
     "okf_code_mode_tool",
     "vfs_mount",

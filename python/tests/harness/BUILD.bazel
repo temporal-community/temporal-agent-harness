@@ -311,6 +311,20 @@ harness_pytest_test(
 )
 
 harness_pytest_test(
+    name = "test_git_filesystem",
+    srcs = ["test_git_filesystem.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:activity_fs",
+        "//python/temporal_agent_harness/harness/code_mode:git_fs",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
     name = "test_close_after_idle",
     srcs = ["test_close_after_idle.py"],
     imports = ["../.."],
