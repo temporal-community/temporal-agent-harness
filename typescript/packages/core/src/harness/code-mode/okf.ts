@@ -1,4 +1,5 @@
 // Open Knowledge Format (OKF v0.2) as workflow-safe models and text.
+// Some bundles link with `[[wikilinks]]`, and those are read as links too.
 // Parsing YAML and walking a bundle need a YAML library and a filesystem, so both stay in
 // worker activities. Rendering a concept runs in the workflow, with a small block-style emitter
 // instead of a Node YAML package.
@@ -125,12 +126,52 @@ function linkTargetsIn(line: string): string[] {
   return found;
 }
 
+/** The text between the brackets of each `[[target#heading|alias]]` in `line`, in one pass. */
+function wikilinkTargetsIn(line: string): string[] {
+  const found: string[] = [];
+  for (let open = line.indexOf("[["); open >= 0; ) {
+    const close = line.indexOf("]]", open + 2);
+    if (close < 0) break;
+    const inner = line.slice(open + 2, close);
+    const nested = inner.lastIndexOf("[[");
+    found.push(nested >= 0 ? inner.slice(nested + 2) : inner);
+    open = line.indexOf("[[", close + 2);
+  }
+  return found;
+}
+
 /**
- * Concept ids `body` links to, in order, without repeats. Relative targets resolve against
- * `conceptPath`; a target starting with `/` is relative to the bundle root. Links inside
- * fenced code blocks, and links to the concept itself, are left out.
+ * Each concept id, and each ending of one that starts after a `/`, to the concept it belongs
+ * to: `null` when it is the ending of more than one.
  */
-export function linkTargets(body: string, conceptPath: string): string[] {
+export function byPathEnding(concepts: Iterable<string>): Map<string, string | null> {
+  const ids = [...concepts];
+  const byEnding = new Map<string, string | null>();
+  for (const id of ids) {
+    for (let at = id.indexOf("/"); at >= 0; at = id.indexOf("/", at + 1)) {
+      const ending = id.slice(at + 1);
+      byEnding.set(ending, byEnding.has(ending) ? null : id);
+    }
+  }
+  // A full id is that concept, also when it is the ending of another one.
+  for (const id of ids) byEnding.set(id, id);
+  return byEnding;
+}
+
+/**
+ * Concept ids `body` links to, without repeats, in line order: markdown links and
+ * `[[wikilinks]]`. Relative targets resolve against `conceptPath`; a target starting with `/`
+ * is relative to the bundle root. Links inside fenced code blocks, and links to the concept
+ * itself, are left out.
+ *
+ * A wikilink is a path from the bundle root. When no concept has that id, it is the one
+ * concept in `byEnding` (see `byPathEnding`) whose path ends with it.
+ */
+export function linkTargets(
+  body: string,
+  conceptPath: string,
+  byEnding: ReadonlyMap<string, string | null> = new Map(),
+): string[] {
   const found: string[] = [];
   const here = parentPosix(conceptPath);
   let fence: string | null = null;
@@ -142,8 +183,11 @@ export function linkTargets(body: string, conceptPath: string): string[] {
       continue;
     }
     if (fence) continue;
-    for (const raw of linkTargetsIn(line)) {
-      const target = resolveLink(decodePercent(raw), here);
+    const targets = [
+      ...linkTargetsIn(line).map((raw) => resolveLink(decodePercent(raw), here)),
+      ...wikilinkTargetsIn(line).map((raw) => resolveWikilink(raw, byEnding)),
+    ];
+    for (const target of targets) {
       if (target !== null && !found.includes(target)) found.push(target);
     }
   }
@@ -213,16 +257,34 @@ function resolveLink(target: string, here: string): string | null {
   const hash = target.indexOf("#");
   const bare = hash === -1 ? target : target.slice(0, hash);
   if (!bare || SCHEME.test(bare) || !bare.endsWith(".md")) return null;
-  const joined = bare.startsWith("/")
-    ? bare.replace(/^\/+/, "")
-    : here === "."
-      ? bare
-      : `${here}/${bare}`;
-  const normal = posixNorm(joined);
+  return conceptId(
+    bare.startsWith("/") ? bare.replace(/^\/+/, "") : here === "." ? bare : `${here}/${bare}`,
+  );
+}
+
+function conceptId(path: string): string | null {
+  const normal = posixNorm(path);
   if (normal === "." || normal === "" || normal === ".." || normal.startsWith("../")) return null;
   const name = normal.slice(normal.lastIndexOf("/") + 1);
   if (RESERVED_NAMES.has(name)) return null;
   return normal.slice(0, -3);
+}
+
+function resolveWikilink(
+  inner: string,
+  byEnding: ReadonlyMap<string, string | null>,
+): string | null {
+  // In a table the `|` before the alias is written `\|`.
+  const target = inner
+    .split("|", 1)[0]!
+    .split("#", 1)[0]!
+    .trim()
+    .replace(/\\$/, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (!target) return null;
+  const wanted = conceptId(target.endsWith(".md") ? target : `${target}.md`);
+  if (wanted === null) return null;
+  return byEnding.get(wanted) ?? wanted;
 }
 
 function posixNorm(path: string): string {

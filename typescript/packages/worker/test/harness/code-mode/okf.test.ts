@@ -15,6 +15,7 @@ import {
   type FileIndex,
 } from "@temporalio/agent-harness";
 import {
+  byPathEnding,
   linkTargets,
   renderConcept,
   splitFrontmatter,
@@ -152,9 +153,62 @@ describe("links", () => {
       "```\n[no](a.md)\n```\n[yes](b.md)\n~~~python\n[no](c.md)\n```\nstill fenced\n~~~\n";
     assert.deepStrictEqual(linkTargets(body, "x.md"), ["b"]);
   });
+
+  it("reads wikilinks as paths from the bundle root", () => {
+    const body = [
+      "See [[people/ana]], [[trips/denver#Dates|the trip]] and [[/projects/x.md]].",
+      "Again [[people/ana|Ana]], [[#Dates]], [[]], [[index]] and [[../outside]].",
+      "| [[people/bo\\|Bo]] | ![[prefs/coffee]] | [[trips/trip]] | [[ not closed |",
+      "```",
+      "[[no]]",
+      "```",
+    ].join("\n");
+    assert.deepStrictEqual(linkTargets(body, "trips/trip.md"), [
+      "people/ana",
+      "trips/denver",
+      "projects/x",
+      "people/bo",
+      "prefs/coffee",
+    ]);
+  });
+
+  it("lets a wikilink be the end of one concept's path", () => {
+    const concepts = [
+      "people/ana",
+      "team/people/bo",
+      "work/notes",
+      "home/notes",
+      "todo",
+      "work/todo",
+    ];
+    const body = "[[ana]] [[people/bo]] [[notes]] [[todo]] [[cy]]";
+    assert.deepStrictEqual(linkTargets(body, "x.md", byPathEnding(concepts)), [
+      "people/ana",
+      "team/people/bo",
+      "notes", // the end of two paths, so it stays a path from the root
+      "todo", // a concept's own id comes before the end of another path
+      "cy",
+    ]);
+  });
 });
 
 describe("a walk", () => {
+  it("resolves wikilinks against the concepts it found", async () => {
+    const fs = new Bundle({
+      "people/ana.md": concept("type: Person", "Likes [[coffee]] and [[tea]]."),
+      "prefs/coffee.md": concept("type: Preference", "Goes with [[people/ana|Ana]]."),
+    });
+    const graph = await buildOkfGraph(fs, { prefix: ".", links: true, now: NOW });
+    assert.deepStrictEqual(
+      graph.links.map((link) => [link.source, link.target, link.dangling]),
+      [
+        ["people/ana", "prefs/coffee", false],
+        ["people/ana", "tea", true],
+        ["prefs/coffee", "people/ana", false],
+      ],
+    );
+  });
+
   it("lists concepts and the links between them", async () => {
     const fs = new Bundle({
       "index.md": "# Memory\n* [Coffee](prefs/coffee.md)\n",
