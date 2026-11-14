@@ -15,6 +15,7 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":activity_fs",
+        ":git_fs",
         ":mount_decl",
         ":okf",
         ":okf_tool",
@@ -34,6 +35,18 @@ py_library(
         ":vfs",
         "@pypi//pydantic",
         "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "git_fs",
+    srcs = ["git_fs.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":activity_fs",
+        ":vfs",
+        "@pypi//pydantic",
     ],
 )
 

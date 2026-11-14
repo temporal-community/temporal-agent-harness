@@ -122,6 +122,39 @@ class Bucket(agent.ActivityFileSystem[BucketConfig], name="bucket"):
 Viewing an `ActivityFileSystem` file in the console needs a Temporal server that runs
 standalone activities (the local dev server does; the time-skipping test server does not).
 
+#### A git repository as a mount
+
+`agent.git_repository_filesystem` is a ready-made, read-only `ActivityFileSystem` for files that
+are kept in git, such as documentation, skills or a shared knowledge base:
+
+```python
+KnowledgeBase = agent.git_repository_filesystem(
+    "knowledge-base",
+    repositories={"kb": "https://github.com/acme/knowledge-base.git"},
+)
+
+# workflow
+kb = agent.vfs_mount("/kb", KnowledgeBase, read_only=True, description="The team's knowledge base.")
+...
+self.kb.bind(agent.GitRepositoryConfig(repository="kb", ref="main", subdirectory="wiki"))
+
+# worker
+AgentHarnessPlugin(filesystems=[KnowledgeBase])
+```
+
+- **The worker lists the repositories.** A config picks one by its key and can't give a URL, so
+  a caller of the file viewer can't make a worker clone something else.
+- **`ref`** is a branch, a tag or a full commit id. A branch follows new commits: the worker
+  fetches again when its last fetch is older than `refresh_after` (5 minutes by default). Give a
+  commit id when every read of a session must see the same files.
+- **No checkout.** Each worker keeps a bare clone in `cache_dir` and reads files from git's
+  object store. Symlinks and submodules are not shown.
+- **Credentials** for a private repository come from the worker's own git configuration (a
+  credential helper, or an SSH key). They never go into a config or into workflow history.
+- It works with `okf_bundle_vfs_mount` too, for an OKF bundle that is kept in git.
+
+The worker needs `git` on its `PATH`.
+
 #### OKF bundles
 
 Agent memory, notes or any other knowledge can be kept as an OKF bundle over any
