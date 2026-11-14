@@ -1,0 +1,42 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":jira",
+        ":notion",
+    ],
+)
+
+py_library(
+    name = "_http",
+    srcs = ["_http.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "jira",
+    srcs = ["jira.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_http",
+        "//python/temporal_agent_harness/harness:data_source",
+    ],
+)
+
+py_library(
+    name = "notion",
+    srcs = ["notion.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_http",
+        "//python/temporal_agent_harness/harness:data_source",
+    ],
+)

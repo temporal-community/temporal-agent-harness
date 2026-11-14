@@ -119,6 +119,12 @@ from temporal_agent_harness.harness.code_mode import (
     okf_code_mode_tool,
     vfs_mount,
 )
+from temporal_agent_harness.harness.data_source import (
+    DataSource,
+    Document,
+    SearchResult,
+    data_source_tools,
+)
 from temporal_agent_harness.harness.state.decl import StateDecl, state
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
@@ -146,13 +152,17 @@ __all__ = [
     "code_mode_tool",
     "code_mode_type_check",
     "ActivityFileSystem",
+    "DataSource",
+    "Document",
     "FileEntry",
     "FileIndex",
     "FileStat",
     "FileSystem",
     "FileTree",
     "InMemoryFileSystem",
+    "SearchResult",
     "VFSMount",
+    "data_source_tools",
     "defn",
     "init",
     "StateDecl",
