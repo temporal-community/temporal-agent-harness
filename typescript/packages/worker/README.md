@@ -61,6 +61,12 @@ compute while it waits, so leave this out for agents you want to keep. A caller 
 `close_after_idle` (seconds, `0` for never) on the `AgentConfig`. Subagents never close on idle:
 their parent decides when they end.
 
+A Temporal Schedule can start a workflow but can't send it a message. To start a session on a
+Schedule, put the first message in the `AgentConfig` as `initial_message`
+(`{ type: "ask", payload: { text: "..." } }`). The runner admits it when the agent starts, as
+turn 1. Set `close_after_idle` with it, so that the session closes after its turn. A message the
+agent refuses fails the workflow.
+
 Its worker, in `worker.ts` (compile both files before running):
 
 ```ts

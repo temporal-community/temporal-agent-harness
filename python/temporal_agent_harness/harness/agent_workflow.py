@@ -2148,15 +2148,22 @@ class AgentWorkflowRunner:
         workflow.set_signal_handler("close", self._handle_close)
         if instance is not None:
             self._register_declared_states(instance)
+        # Admitted here so that it is ahead of an update that came with the start.
+        if config.initial_message is not None:
+            self._validate_send_agent_message(config.initial_message)
+            self._admit(config.initial_message)
 
     # -- Protocol handlers --------------------------------------------------
 
     async def _handle_send_agent_message(self, message: AgentMessage) -> AgentMessageReply:
+        return self._admit(message)
+
+    def _admit(self, message: AgentMessage) -> AgentMessageReply:
         """Admit one message and return immediately — the ADMISSION half of dispatch.
 
-        This body is deliberately synchronous (declared ``async`` only because Temporal
-        requires it): it contains no ``await`` that yields, so it completes inside a single
-        workflow task. Two invariants ride on that:
+        This body is deliberately synchronous (the update handler that calls it is ``async``
+        only because Temporal requires it): it contains no ``await``, so it completes inside a
+        single workflow task. Two invariants ride on that:
 
           * ``accepted_offset`` is captured before anything for this message is published,
             guaranteeing ``accepted_offset <= turn_started`` — all the client stream-merge
@@ -2213,7 +2220,7 @@ class AgentWorkflowRunner:
         # Published for EVERY admitted message, not only a queued one: it is the only event
         # carrying what was sent, and a joining message gets no ``turn_started`` of its own to
         # be inferred from. Explicit ``message_id`` because there is no ambient one — this
-        # runs in the update handler's task, not the participant's.
+        # runs at admission, not in the participant's task.
         self._pub(
             turn_id,
             turn_number,

@@ -292,6 +292,20 @@ export type AutoModeEvaluator = ((ctx: AutoApprovalContext) => Promise<AutoAppro
 // Standardized agent input and messages
 // ---------------------------------------------------------------------------------------------
 
+// Not z.record, which rebuilds the object and drops a "__proto__" key.
+export const messagePayload = z
+  .custom<Record<string, unknown>>(
+    (v) => typeof v === "object" && v !== null && !Array.isArray(v),
+    "Expected an object",
+  )
+  .default({});
+
+export const AgentMessageSchema = z.object({
+  type: z.string(),
+  payload: messagePayload,
+});
+export type AgentMessage = z.output<typeof AgentMessageSchema>;
+
 export const AgentConfigSchema = z.object({
   approval_policy: ToolApprovalPolicySchema.nullish().transform((v) => v ?? null),
   auto_approval_criteria: AutoApprovalCriteriaSchema.nullish().transform((v) => v ?? null),
@@ -307,23 +321,12 @@ export const AgentConfigSchema = z.object({
     .nonnegative()
     .nullish()
     .transform((v) => v ?? null),
+  // Admitted when the agent starts, as its first message. For a starter that can only start a
+  // workflow, such as a Temporal Schedule.
+  initial_message: AgentMessageSchema.nullish().transform((v) => v ?? null),
 });
 export type AgentConfig = z.output<typeof AgentConfigSchema>;
 export type AgentConfigInput = z.input<typeof AgentConfigSchema>;
-
-// Not z.record, which rebuilds the object and drops a "__proto__" key.
-export const messagePayload = z
-  .custom<Record<string, unknown>>(
-    (v) => typeof v === "object" && v !== null && !Array.isArray(v),
-    "Expected an object",
-  )
-  .default({});
-
-export const AgentMessageSchema = z.object({
-  type: z.string(),
-  payload: messagePayload,
-});
-export type AgentMessage = z.output<typeof AgentMessageSchema>;
 
 // Schemas as Python's pydantic models publish them (field titles included), for wire parity.
 export const TextMessage = z.object({ text: z.string().meta({ title: "Text" }) }).meta({

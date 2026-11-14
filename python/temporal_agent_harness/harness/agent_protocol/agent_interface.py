@@ -630,6 +630,44 @@ class ToolApprovalPolicy(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Typed message base
+# ---------------------------------------------------------------------------
+
+
+class AgentMessage(BaseModel):
+    """The payload of the ``send_agent_message`` update — a tool-call envelope.
+
+    ``type`` names the target ``@agent.accepts`` handler (its function name, also the
+    handler's tool name in :class:`AcceptedFunction`); ``payload`` is the JSON of that
+    handler's declared input model. The runner resolves the handler by ``type`` and
+    ``model_validate``s ``payload`` into the handler's input model (coercing it, or
+    rejecting a bad shape) before dispatching::
+
+        AgentMessage(type="set_model",
+                     payload={"model": "gemini-3.1-flash-lite"})
+
+    Routing is **by name**, not by a discriminator on the payload type — so two handlers
+    may accept the *same* input model.
+
+    The envelope carries nothing about what the sender has observed. Admission is FIFO and
+    every admitted message is visible on the stream (``message_accepted``), so a message that
+    arrives after work the sender has not seen simply runs after it — the same outcome as
+    sending a moment later. A sender learns what became of its message from the reply
+    (``turn_number`` / ``disposition``); one that wants to act only on an idle agent reads
+    ``agent_status`` first, which is a UX choice rather than part of the protocol.
+
+    Two submits of an identical envelope are two messages. A client could make their sends
+    idempotent with a Temporal update id.
+
+    It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
+    :class:`AgentMessage`, with no separate wrapper.
+    """
+
+    type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # Standardized agent input
 # ---------------------------------------------------------------------------
 
@@ -703,6 +741,11 @@ class AgentConfig(BaseModel):
     caller switches off an agent's default. Crosses the wire as a number of seconds. A
     subagent never closes on idle: its parent starts it with ``timedelta(0)``, so a child never
     closes under a parent still holding its handle.
+
+    ``initial_message`` — a message the runner admits when the agent starts, as if it were the
+    first ``send_agent_message``: it opens turn 1 and goes through the same checks. This is for
+    a starter that can only start a workflow, such as a Temporal Schedule. A message that the
+    agent refuses fails the workflow, since there is no sender to give the refusal to.
     """
 
     model_config = ConfigDict(ser_json_temporal="seconds")
@@ -711,6 +754,7 @@ class AgentConfig(BaseModel):
     auto_approval_criteria: AutoApprovalCriteria | None = None
     agent_id: AgentId | None = None
     close_after_idle: timedelta | None = None
+    initial_message: AgentMessage | None = None
 
     @field_validator("close_after_idle")
     @classmethod
@@ -728,44 +772,6 @@ class CloseReason(StrEnum):
 
     IDLE_TIMEOUT_EXPIRED = "idle_timeout_expired"
     """The agent sat idle for its whole ``close_after_idle`` and the runner closed it."""
-
-
-# ---------------------------------------------------------------------------
-# Typed message base
-# ---------------------------------------------------------------------------
-
-
-class AgentMessage(BaseModel):
-    """The payload of the ``send_agent_message`` update — a tool-call envelope.
-
-    ``type`` names the target ``@agent.accepts`` handler (its function name, also the
-    handler's tool name in :class:`AcceptedFunction`); ``payload`` is the JSON of that
-    handler's declared input model. The runner resolves the handler by ``type`` and
-    ``model_validate``s ``payload`` into the handler's input model (coercing it, or
-    rejecting a bad shape) before dispatching::
-
-        AgentMessage(type="set_model",
-                     payload={"model": "gemini-3.1-flash-lite"})
-
-    Routing is **by name**, not by a discriminator on the payload type — so two handlers
-    may accept the *same* input model.
-
-    The envelope carries nothing about what the sender has observed. Admission is FIFO and
-    every admitted message is visible on the stream (``message_accepted``), so a message that
-    arrives after work the sender has not seen simply runs after it — the same outcome as
-    sending a moment later. A sender learns what became of its message from the reply
-    (``turn_number`` / ``disposition``); one that wants to act only on an idle agent reads
-    ``agent_status`` first, which is a UX choice rather than part of the protocol.
-
-    Two submits of an identical envelope are two messages. A client could make their sends
-    idempotent with a Temporal update id.
-
-    It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
-    :class:`AgentMessage`, with no separate wrapper.
-    """
-
-    type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

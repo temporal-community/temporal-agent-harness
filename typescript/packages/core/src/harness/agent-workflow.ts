@@ -216,6 +216,11 @@ export class AgentWorkflowRunner {
           "will never be consulted and every gated call goes to the human gate.",
       );
     }
+    // Before the update handler is installed, so that it is ahead of a buffered first message.
+    if (config.initial_message !== null) {
+      this.#validateSendAgentMessage(config.initial_message);
+      this.#handleSendAgentMessage(config.initial_message);
+    }
     setHandler(sendAgentMessageUpdate, (m) => this.#handleSendAgentMessage(m), {
       validator: (m) => this.#validateSendAgentMessage(m),
     });

@@ -1,0 +1,39 @@
+{
+  "description": "An agent started with an initial_message runs it as its first turn, and a message sent afterwards gets the next turn.",
+  "config": {
+    "initial_message": {
+      "type": "run_enqueue",
+      "payload": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Started."
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "actions": [
+    {
+      "action": "await",
+      "event": "turn_end",
+      "turn_number": 1
+    },
+    {
+      "action": "send",
+      "handler": "run_enqueue",
+      "script": {
+        "steps": [
+          {
+            "step": "model",
+            "reply": [
+              "Sent."
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

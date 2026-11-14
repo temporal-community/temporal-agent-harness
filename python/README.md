@@ -440,6 +440,45 @@ session under the same workflow id. It starts fresh, without the closed session'
 > subagent, the harness turns the subagent's idle timeout off, overriding any default the
 > subagent's own agent sets.
 
+### Starting an agent on a Schedule
+
+A client starts a session and sends its first message in one call. A Temporal Schedule can
+only start a workflow, so it has no way to send that message. Give it the message in the
+`AgentConfig` instead:
+
+```python
+await client.create_schedule(
+    "weekly-report",
+    Schedule(
+        action=ScheduleActionStartWorkflow(
+            "ReportAgent",
+            AgentConfig(
+                initial_message=AgentMessage(type="ask", payload={"text": "Write the report."}),
+                close_after_idle=timedelta(minutes=5),
+            ),
+            id="weekly-report",
+            task_queue="reports",
+        ),
+        spec=ScheduleSpec(cron_expressions=["0 9 * * 1"]),
+    ),
+)
+```
+
+The runner admits `initial_message` when the agent starts, as if it were the first
+`send_agent_message`. It opens turn 1, and a client that attaches to the session sees it on the
+stream like any other message. If the agent refuses the message (an unknown handler, or a
+payload that does not match the handler's input), the workflow fails, because there is no
+sender to tell.
+
+Set `close_after_idle` too. Without it the session stays open after its turn, and the
+Schedule's overlap policy then decides what the next run does. The client must use the
+harness's data converter (`AgentHarnessPlugin` sets it), as for any other start. Every worker on
+the task queue needs a harness version that knows `initial_message`. An older one ignores the
+field, and the session then runs no turn.
+
+In TypeScript the same `AgentConfig` is the first workflow argument:
+`{ initial_message: { type: "ask", payload: { text: "Write the report." } }, close_after_idle: 300 }`.
+
 ## Running a worker — one plugin
 
 An agent is a Temporal workflow, so it runs on a Temporal worker. `AgentHarnessPlugin` is the
