@@ -21,16 +21,6 @@ export function requiresInitData(agent: AgentDescriptor): boolean {
   return agent.init_data?.required === true;
 }
 
-/**
- * The agent the console starts a session for on boot, when there is no session to reopen: the
- * `qa` agent, else the first registered one — skipping any that require init data, since boot
- * has nobody to ask for it. `null` when every agent requires it.
- */
-export function defaultBootAgent(agents: AgentDescriptor[]): AgentDescriptor | null {
-  const startable = agents.filter((agent) => !requiresInitData(agent));
-  return startable.find((agent) => agent.key === "qa") ?? startable[0] ?? null;
-}
-
 export interface InitDataForm {
   fields: SchemaField[];
   values: Record<string, unknown>;

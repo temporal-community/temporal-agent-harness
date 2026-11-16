@@ -1,12 +1,15 @@
 // ABOUTME: Keeps the AGENTS.md files under typescript/ and this app's README pointing at things that
 // exist: every relative link and backticked file path resolves, every `just <recipe>` is in the
 // justfile, every `pnpm ... run <script>` is in the package.json it runs in, and every `//package`
-// label names a Bazel package. A rename fails here instead of leaving the docs quietly wrong.
+// label names a Bazel package. A rename fails here instead of leaving the docs quietly wrong. The
+// console's Setup pane runs each SDK's services with the commands its README's quickstart gives.
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { describe, it } from "vitest";
+
+import { FEATURES, SDKS } from "../src/lib/components/chat/HomeView.svelte";
 
 const repo = new URL("../../../../", import.meta.url).pathname;
 const docs = ["typescript/AGENTS.md", "typescript/apps/ui/AGENTS.md", "typescript/apps/ui/README.md"];
@@ -46,5 +49,28 @@ describe.each(docs)("%s", (doc) => {
       [...snippet.matchAll(/(?<![\w:/])\/\/([\w./-]*)/g)].map(([, pkg]) => pkg.replace(/\/?\.\.\.$/, "").replace(/\/$/, ""))
     );
     assert.deepEqual(packages.filter((pkg) => !existsSync(resolve(repo, pkg, "BUILD.bazel"))).map((pkg) => `//${pkg}`), [], "Bazel packages that no longer exist: update the doc");
+  });
+});
+
+/* The console's Setup pane tells a reader to start the three services, and the SDK's README is
+   where those commands are maintained: a change to one without the other fails here. */
+describe.each(SDKS)("the console's $label quickstart", (sdk) => {
+  it("starts the three services with the README's commands, in its order", () => {
+    const readme = readFileSync(resolve(repo, sdk.quickstart.replace(/^.*\/blob\/main\//, "").replace(/#.*$/, "")), "utf8");
+    const section = readme.match(/### 3\. Start the three services\n([\s\S]*?)\n### /)?.[1];
+    assert.ok(section, "the README has no \"### 3. Start the three services\" step: update the console's Setup pane with it");
+    const commands = [...section.matchAll(/```bash\n([\s\S]*?)\n```/g)].map(([, block]) => block.trim());
+    assert.deepEqual(sdk.services.map((service) => service.command), commands);
+  });
+});
+
+/* A feature card links the guide section that explains it. GitHub makes the anchor from the heading,
+   keeping an emoji's invisible joiners, so both are compared on their ASCII letters alone. */
+describe("the console's feature cards", () => {
+  const ascii = (text) => text.replace(/[^a-z0-9]+/gi, "").toLowerCase();
+  it.each(FEATURES)("$title links a section its guide still has", ({ href }) => {
+    const [path, anchor] = href.replace(/^.*\/blob\/main\//, "").split("#");
+    const headings = [...readFileSync(resolve(repo, path), "utf8").matchAll(/^#{1,6} (.+)$/gm)].map(([, heading]) => ascii(heading));
+    assert.ok(headings.includes(ascii(decodeURIComponent(anchor))), `${path} has no heading for #${anchor}: update the card's link`);
   });
 });

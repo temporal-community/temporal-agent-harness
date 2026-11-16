@@ -22,16 +22,7 @@ import type {
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi, workflowGone } from "$lib/api/httpClient";
 import { contextWindowUsage, summarizeCost, usagePointAt, usageTimelineBuilder } from "$lib/cost/pricing";
-import { chooseBootSession } from "./bootSession";
-import { defaultBootAgent } from "./initData";
-import {
-  readOperatorPrefs,
-  readStoredActiveSessionId,
-  readUrlSessionId,
-  writeOperatorPrefs,
-  writeStoredActiveSessionId,
-  writeUrlSessionId
-} from "./agentRunStorage";
+import { clearUrlSessionId, readOperatorPrefs, readUrlSessionId, writeOperatorPrefs, writeUrlSessionId } from "./agentRunStorage";
 import {
   agentTreeGraphBuilder,
   heldIdsFromFrame,
@@ -307,6 +298,9 @@ export class AgentRunController {
   agents = $state<AgentDescriptor[]>([]);
   sessions = $state<Session[]>([]);
   session = $state<Session | null>(null);
+  /** The session the address bar named at load that the session manager doesn't list, until a
+   *  session opens or the reader dismisses it. */
+  missingLinkedSession = $state<string | null>(null);
   lastResumeOffset = $state(0);
   #streamVersion = 0;
   #connectionVersion = 0;
@@ -1028,22 +1022,34 @@ export class AgentRunController {
     this.connectionError = null;
 
     let streaming = false;
+    /* Read before anything opens: opening a session writes its id into the address bar. */
+    const linkedSessionId = readUrlSessionId();
     try {
-      await this.#paintSnapshot();
+      if (linkedSessionId) await this.#paintSnapshot(linkedSessionId);
       const painted = this.session;
-      if (painted) {
+      if (painted && linkedSessionId) {
         /* Opened before the lists load: its frames are in IndexedDB and its stream is its own
            workflow's, while the lists are Session Manager queries that hang for as long as
            that worker does. The lists load even if opening it fails. */
         try {
           streaming = await this.#openSession(painted, connectionVersion, "Failed to initialize agent session.");
         } finally {
-          void this.#confirmBootSession(painted, connectionVersion);
+          void this.#confirmBootSession(painted, linkedSessionId, connectionVersion);
         }
         return;
       }
-      this.session = await this.#bootSession();
-      streaming = await this.#openSession(this.session, connectionVersion, "Failed to initialize agent session.");
+      const session = await this.#bootSession(linkedSessionId);
+      if (!session) {
+        /* A link to a session the session manager doesn't list, mistyped or purged: say so,
+           and drop it so a reload doesn't land here again. */
+        if (linkedSessionId && this.#isCurrentConnection(connectionVersion)) {
+          this.missingLinkedSession = linkedSessionId;
+          clearUrlSessionId();
+        }
+        return;
+      }
+      this.session = session;
+      streaming = await this.#openSession(session, connectionVersion, "Failed to initialize agent session.");
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -1054,50 +1060,25 @@ export class AgentRunController {
     }
   }
 
-  /** The session boot opens: the address bar's, else the remembered one, else a new one. */
-  async #bootSession(): Promise<Session> {
-    const agents = await this.#loadAgents();
-    if (agents.length === 0) throw new Error("No agent is registered.");
-    /* Boot has nobody to ask for init data, so it never picks an agent that requires it. */
-    const defaultAgent = defaultBootAgent(agents);
-
-    await this.#loadSessions();
-    /* An address-bar id is a request, so it skips chooseBootSession's rule for leaving an
-       empty remembered session behind. */
-    const linkedSessionId = readUrlSessionId();
-    const storedSessionId = readStoredActiveSessionId();
-    let openable = linkedSessionId ? await this.#resolveSessionById(linkedSessionId) : null;
-    openable ??= chooseBootSession(
-      this.sessions,
-      storedSessionId,
-      defaultAgent?.workflow_type ?? agents[0]!.workflow_type
-    );
-
-    if (!openable && storedSessionId) {
-      openable = await this.#resolveSessionById(storedSessionId);
-    }
-    if (openable) return openable;
-    if (!defaultAgent) {
-      throw new Error(
-        "Every registered agent needs init data to start. Start one from New session."
-      );
-    }
-    const created = await this.#api.createSession({
-      agent_workflow_type: defaultAgent.workflow_type
-    });
-    this.sessions = [...this.sessions, created];
-    return created;
+  /**
+   * Load the agents and sessions the console lists, and return the session the address bar
+   * names, closed or not. Null without one: the console opens on its list of sessions and
+   * agents, and boot never starts a workflow itself.
+   */
+  async #bootSession(linkedSessionId: string | null): Promise<Session | null> {
+    await Promise.all([this.#loadAgents(), this.#loadSessions()]);
+    return linkedSessionId ? this.#resolveSessionById(linkedSessionId) : null;
   }
 
   /**
    * Check the painted session against what boot would have opened, once the lists answer.
-   * It stays open unless that is another run (purged, or its id reused); a list that fails
-   * is the picker's error, not the open session's.
+   * It stays open unless its id now names another run; a list that fails is the picker's
+   * error, not the open session's.
    */
-  async #confirmBootSession(painted: Session, connectionVersion: number): Promise<void> {
+  async #confirmBootSession(painted: Session, linkedSessionId: string, connectionVersion: number): Promise<void> {
     try {
-      const session = await this.#bootSession();
-      if (!this.#isCurrentConnection(connectionVersion)) return;
+      const session = await this.#bootSession(linkedSessionId);
+      if (!session || !this.#isCurrentConnection(connectionVersion)) return;
       if (runKeyOf(session) === runKeyOf(painted)) {
         /* Same run. A row synthesized from the frame store has no agent type yet;
            take the list's copy and leave the frames that are already projected. */
@@ -1119,6 +1100,7 @@ export class AgentRunController {
    * False when no stream was started: the workflow is closed or the session was switched.
    */
   async #openSession(session: Session, connectionVersion: number, message: string): Promise<boolean> {
+    this.missingLinkedSession = null;
     this.#rememberActiveSession(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
     /* Awaited so the cache lands before the live stream opens: interleaving
@@ -1132,7 +1114,6 @@ export class AgentRunController {
   }
 
   #rememberActiveSession(sessionId: string): void {
-    writeStoredActiveSessionId(sessionId);
     writeUrlSessionId(sessionId);
   }
 
@@ -1141,11 +1122,8 @@ export class AgentRunController {
    * Main has no per-session GET, so an id that never appears in ``listSessions`` cannot
    * be opened.
    *
-   * NOT_FOUND is excluded on the same terms chooseBootSession excludes it, and for the
-   * same reason: Temporal has purged the workflow and /api/attach answers 500, so the
-   * row can only open an empty console. Without this the exclusion does not survive
-   * boot — initialize() asks chooseBootSession, which declines the purged id, and then
-   * asks here for the very id it just declined.
+   * NOT_FOUND is excluded: Temporal has purged the workflow and /api/attach answers 500,
+   * so the row can only open an empty console.
    */
   async #resolveSessionById(sessionId: string): Promise<Session | null> {
     const openable = (): Session | null =>
@@ -1334,6 +1312,21 @@ export class AgentRunController {
       return;
     }
     await this.#switchSession(session);
+  }
+
+  /**
+   * Close the open session's view and return to the console's lists. Its workflow is left as
+   * it is: ending it is `endSession`.
+   */
+  closeSessionView(): void {
+    if (!this.session) return;
+    this.#beginConnection();
+    this.#resetSessionView();
+    this.session = null;
+    this.connecting = false;
+    this.sending = false;
+    this.connectionError = null;
+    clearUrlSessionId();
   }
 
   async #switchSession(session: Session): Promise<void> {
@@ -2055,16 +2048,15 @@ export class AgentRunController {
   }
 
   /**
-   * Open the session the URL or storage asks for from what this browser already
+   * Open the session the address bar names from what this browser already
    * stored, before `/api/agents` or the session list. A view paints the chat at
    * once; the run's frames are enough on their own to project the graph, chat
    * and timeline. Names and worker status fill in when the catalog answers.
    * The run the view belonged to is checked once the session list says which
    * run that is.
    */
-  async #paintSnapshot(): Promise<void> {
-    const sessionId = readUrlSessionId() ?? readStoredActiveSessionId();
-    if (!sessionId || this.session) return;
+  async #paintSnapshot(sessionId: string): Promise<void> {
+    if (this.session) return;
     const view = await readLatestView<ViewSnapshot>(sessionId);
     if (this.session) return;
     if (view?.session) {

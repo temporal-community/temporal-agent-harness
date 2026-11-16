@@ -10,7 +10,6 @@ import {
   waitFor
 } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
-import { writeStoredActiveSessionId } from "./agentRunStorage.ts";
 import { appendRunFrames, readLatestView, runKeyOf, writeView } from "./frameStore.ts";
 
 const { listeners } = installBrowserSurface();
@@ -71,12 +70,17 @@ describe("the reload snapshot", () => {
 
   it("keeps its opened session up when the lists fail, and leaves the failure to the picker", async () => {
     await writeView(view("wf-painted"));
-    writeStoredActiveSessionId("wf-painted");
-    const controller = new AgentRunController(api([]));
+    window.location.search = "?s=wf-painted";
+    const controller = new AgentRunController({
+      ...api([]),
+      async listSessions() {
+        throw new Error("The Session Manager did not answer.");
+      }
+    });
     await controller.initialize();
     await waitFor("the list failure", () => controller.sessionsError !== null);
 
-    assert.equal(controller.sessionsError, "No agent is registered.");
+    assert.equal(controller.sessionsError, "The Session Manager did not answer.");
     assert.equal(controller.connectionError, null, "the open session did not fail");
     assert.equal(controller.session?.workflow_id, "wf-painted");
   });
@@ -110,7 +114,7 @@ describe("the reload snapshot", () => {
     };
     await appendRunFrames(record, 0, frames);
     await writeView({ ...view("wf-reloaded"), runKey: runKeyOf(stored), session: stored, total: 3 });
-    writeStoredActiveSessionId("wf-reloaded");
+    window.location.search = "?s=wf-reloaded";
 
     const attachedFrom = [];
     const hang = () => new Promise(() => {});
@@ -140,7 +144,7 @@ describe("the reload snapshot", () => {
     assert.equal(controller.connectingSince, null);
   });
 
-  /* A view is optional. The frames and the active session id are what a reload
+  /* A view is optional. The frames and the linked session id are what a reload
      has whenever the run was written; waiting on /api/agents before folding them
      left the console empty until a session click took the switch path. */
   it("projects a stored run on reload without a session switch, then switches", async () => {
@@ -177,7 +181,7 @@ describe("the reload snapshot", () => {
     };
     await store(cached, "cached reply");
     await store(other, "other reply");
-    writeStoredActiveSessionId("wf-cached");
+    window.location.search = "?s=wf-cached";
 
     const switched = [];
     const controller = new AgentRunController({

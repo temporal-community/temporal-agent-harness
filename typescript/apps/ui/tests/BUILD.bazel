@@ -77,6 +77,19 @@ vitest_test(
     name = "docs-drift_test",
     src = "docs-drift.test.mjs",
     tags = ["manual"],
+    deps = ["//typescript/apps/ui/src/lib/components/chat:HomeView"],
+)
+
+vitest_test(
+    name = "home-view_test",
+    src = "home-view.test.mjs",
+    deps = [
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/chat:HomeView",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
 )
 
 vitest_test(

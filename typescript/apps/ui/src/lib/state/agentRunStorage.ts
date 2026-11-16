@@ -1,7 +1,7 @@
 /**
- * What a run remembers across a reload: which session was on screen
- * (localStorage + URL `s=`), per-session desks and operator prefs. The frames
- * already seen are in IndexedDB (frameStore.ts).
+ * What a run remembers across a reload: which session was on screen (URL `s=`),
+ * per-session desks and operator prefs. The frames already seen are in
+ * IndexedDB (frameStore.ts).
  *
  * Every function here guards `typeof window`, for the server-render and
  * self-check paths where there is no storage at all, and swallows its own
@@ -9,7 +9,6 @@
  * and none of that is worth failing a session over. Each fallback means
  * "nothing stored", which every caller already has to handle.
  */
-const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
 /* Bumped when the default desk changes: a desk saved against the old default brings
    back its widths, which push the new default's columns off the right edge. */
 const desksStorageKey = "temporal-agent-ui.desks.v2";
@@ -117,6 +116,19 @@ export function readUrlSessionId(): string | null {
   }
 }
 
+/** Drop the session from the address bar, so a reload opens the console's lists. */
+export function clearUrlSessionId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("s")) return;
+    url.searchParams.delete("s");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+  } catch {
+    // Ignore URL write failures.
+  }
+}
+
 export function writeUrlSessionId(sessionId: string): void {
   if (typeof window === "undefined") return;
   try {
@@ -129,25 +141,6 @@ export function writeUrlSessionId(sessionId: string): void {
     }
   } catch {
     // Ignore URL write failures.
-  }
-}
-
-export function readStoredActiveSessionId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const value = window.localStorage.getItem(activeSessionStorageKey);
-    return value && value.trim() ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeStoredActiveSessionId(sessionId: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(activeSessionStorageKey, sessionId);
-  } catch {
-    // Ignore storage failures; active session persistence is a UI convenience.
   }
 }
 

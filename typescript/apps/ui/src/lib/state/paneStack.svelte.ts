@@ -119,7 +119,7 @@ const PANE_JOIN = /[|+ ]/;
 
 let touchCounter = 0;
 
-function makePane(descriptor: PaneDescriptor): Pane {
+export function makePane(descriptor: PaneDescriptor): Pane {
   return {
     id: paneIdFor(descriptor.kind, descriptor.key),
     kind: descriptor.kind,
@@ -226,6 +226,9 @@ export interface PaneStackOptions {
   single?: boolean;
   /** The other stack on the same desk. A pane id is open in one of the two, never both. */
   peer?: PaneStack;
+  /** A set of panes that stays whole: rearranged, resized and folded, never pinned or
+      closed. */
+  fixed?: boolean;
 }
 
 export function createPaneStack(options?: PaneStackOptions) {
@@ -255,10 +258,12 @@ export class PaneStack {
   readonly #defaults: () => Pane[][];
   readonly #keys: { panes: string; collapsed: string; cursor: string; bleed: string };
   readonly single: boolean;
+  readonly fixed: boolean;
   peer: PaneStack | null = null;
 
   constructor(options?: PaneStackOptions) {
     this.single = options?.single ?? false;
+    this.fixed = options?.fixed ?? false;
     if (options?.peer) {
       this.peer = options.peer;
       options.peer.peer = this;
@@ -347,16 +352,49 @@ export class PaneStack {
    */
   #fill = $derived.by(() => {
     if (!(this.#railWidth > 0)) return null;
-    const open = this.groups.filter((group) => !group.every((pane) => pane.collapsed));
-    const group = open.find((item) => item.some((pane) => PANE_META[pane.kind].flexible)) ?? open.at(-1);
+    const open = this.#openGroups();
+    const group = this.#fillGroup(open);
     if (!group) return null;
-    const room = this.#railWidth - (this.#deskWidth() - this.#ownSize(group));
+    const given = [...this.#given.values()].reduce((sum, px) => sum + px, 0);
+    const room = this.#railWidth - (this.#deskWidth() - this.#ownSize(group)) + given;
     const floor = group.some((pane) => pane.size != null) ? this.#ownSize(group) : this.minOfGroup(group);
     const last = open.at(-1);
     const owed = this.#lent?.id === last?.[0].id && last !== group ? this.#lent?.px ?? 0 : 0;
     const lent = Math.max(0, Math.min(owed, room - floor));
     return { id: group[0].id, group, width: Math.max(floor, room - lent), lent: lent ? { id: last![0].id, px: lent } : null };
   });
+  /**
+   * Width columns give up, by column id, on a window too narrow for the stretching
+   * column's own width: each column whose kinds all name a `narrowSize`, and whose width
+   * the reader hasn't set, narrows toward it, in order, until that column fits.
+   */
+  #given = $derived.by(() => {
+    const given = new Map<string, number>();
+    if (!(this.#railWidth > 0)) return given;
+    const open = this.#openGroups();
+    const fill = this.#fillGroup(open);
+    let short = this.#deskWidth() - this.#railWidth;
+    for (const group of open) {
+      if (short <= 0) break;
+      if (group === fill || group.some((pane) => pane.size != null)) continue;
+      const narrow = group.map((pane) => PANE_META[pane.kind].narrowSize);
+      if (narrow.some((size) => size == null)) continue;
+      const px = Math.min(short, this.#ownSize(group) - Math.max(...(narrow as number[])));
+      if (px <= 0) continue;
+      given.set(group[0].id, px);
+      short -= px;
+    }
+    return given;
+  });
+
+  #openGroups(): Pane[][] {
+    return this.groups.filter((group) => !group.every((pane) => pane.collapsed));
+  }
+
+  #fillGroup(open: Pane[][]): Pane[] | undefined {
+    return open.find((item) => item.some((pane) => PANE_META[pane.kind].flexible)) ?? open.at(-1);
+  }
+
   /** Width lent to the last open column by a drag; see `setGroupSize`. */
   #lent = $state<{ id: string; px: number } | null>(null);
   /** Whether the address bar named this stack's desk on load. */
@@ -378,11 +416,15 @@ export class PaneStack {
     return pane.size ?? PANE_META[pane.kind].defaultSize;
   }
 
-  /** A column's width, and the width it is drawn at: its own, plus any slack `#fill` gives it. */
+  /**
+   * A column's width, and the width it is drawn at: its own, plus any slack `#fill` gives
+   * it, less any it gives up to a narrow window.
+   */
   sizeOfGroup(group: Pane[]): number {
     const fill = this.#fill;
     if (fill && group[0]?.id === fill.id) return fill.width;
-    return this.#ownSize(group) + (fill?.lent?.id === group[0]?.id ? fill.lent.px : 0);
+    const id = group[0]?.id;
+    return this.#ownSize(group) + (fill?.lent?.id === id ? fill.lent.px : 0) - ((id && this.#given.get(id)) || 0);
   }
 
   /**
@@ -593,7 +635,9 @@ export class PaneStack {
   /** The one close rule: a pinned pane stays until it is unpinned. */
   canClose(id: string): boolean {
     const loc = this.locate(id);
-    return loc != null && !this.groups[loc.group][loc.index].pinned;
+    if (loc == null) return false;
+    const pane = this.groups[loc.group][loc.index];
+    return !this.fixed && !pane.pinned;
   }
 
   closePane(id: string): void {
@@ -763,6 +807,9 @@ export class PaneStack {
     if (!from) return;
     /* Alone in its column, a pane is already where these would put it. */
     if (id === targetId && this.groups[from.group].length === 1) return;
+    /* Dropped on its own column's edge, it lands beside that column, so it is measured from a
+       pane that stays there rather than from itself, which leaves before it lands. */
+    if (id === targetId && !edgeShares(edge)) targetId = this.groups[from.group].find((pane) => pane.id !== id)!.id;
 
     /* A stacked column is moved by any of its headers, because it has no handle
        of its own: beside another column, the whole stack goes, as it stands.
@@ -898,11 +945,19 @@ export class PaneStack {
     if (!split) this.focusPane(id);
   }
 
-  /** A pane's height inside a split column. Null shares the column evenly. */
+  /** A pane's height inside a split column. Null shares the column evenly. A column keeps
+      one pane unsized, so something always takes the rest of its height: sizing the last
+      unsized pane frees another. */
   setShare(id: string, share: number | null): void {
-    const pane = this.panes.find((item) => item.id === id);
-    if (!pane) return;
+    const loc = this.locate(id);
+    if (!loc) return;
+    const group = this.groups[loc.group];
+    const pane = group[loc.index];
     pane.share = share == null ? null : Math.max(SPLIT_MIN, Math.round(share));
+    if (group.every((item) => item.share != null)) {
+      const filler = group.findLast((item) => item.id !== id);
+      if (filler) filler.share = null;
+    }
   }
 
   /**
@@ -1129,7 +1184,7 @@ export class PaneStack {
              asking for something that is not there. */
           if (!id || seen.has(id)) continue;
           const parsed = parsePaneId(id);
-          if (!parsed) {
+          if (!parsed || PANE_META[parsed.kind].home) {
             unknown.push(id);
             continue;
           }

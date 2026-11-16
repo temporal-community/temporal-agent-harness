@@ -18,6 +18,8 @@
     "@tanstack/highlight": "^1.1.0",
     "@tanstack/markdown": "1.0.0",
     "@tanstack/pacer": "0.23.1",
+    "@tanstack/svelte-store": "0.12.3",
+    "@tanstack/svelte-table": "9.3.1",
     "@tanstack/svelte-virtual": "3.13.47",
     "@temporalio/agent-harness-client": "workspace:^",
     "@xyflow/svelte": "^1.6.0",

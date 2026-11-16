@@ -11,6 +11,8 @@
   import type { AgentApi } from "$lib/api/client";
   import type { JsonRecord } from "$lib/api/types";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
+  import SessionsFooter from "$lib/components/chat/SessionsFooter.svelte";
+  import HomeView, { BAY_DENSITIES, agentsWithoutWorker, bayDensityAt, cycleBayDensity } from "$lib/components/chat/HomeView.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
@@ -28,9 +30,10 @@
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
   import { chatPaneTitle, PANE_META } from "$lib/panes/registry";
   import { AgentRunController } from "$lib/state/agentRun.svelte";
-  import { createPaneStack, dockFocusedPane, openDefaultDrawer, type Pane } from "$lib/state/paneStack.svelte";
+  import { createPaneStack, dockFocusedPane, makePane, openDefaultDrawer, type Pane } from "$lib/state/paneStack.svelte";
   import {
     readOperatorPrefs,
+    readUrlSessionId,
     writeOperatorPrefs
   } from "$lib/state/agentRunStorage";
   import { catchUpCeilingMs } from "$lib/state/hydration";
@@ -71,6 +74,28 @@
   openDefaultDrawer(drawer, window.location.search);
   let paneDrag = $state<PaneDragState>({ id: null, source: null });
 
+  /* The desk with no session open, drawn by the very rail, drawer and transport row a
+     session's desk uses (`deskStack`): setup over releases, to get an agent running; and the
+     bay over features beside it, stretching over the room the way the state flow does, with
+     an empty drawer. The sessions there are to open are the Sessions sidebar's.
+     Fixed, so nothing closes or pins. Kept like a session's layout, under its own key, and
+     never written into the address bar. */
+  const homeStack = createPaneStack({
+    initial: [
+      [{ ...makePane({ kind: "setup" }), split: true }, { ...makePane({ kind: "releases" }), split: true }],
+      [{ ...makePane({ kind: "bay" }), split: true }, { ...makePane({ kind: "capabilities" }), split: true }]
+    ],
+    fixed: true
+  });
+  const homeDrawer = createPaneStack({ initial: [], single: true, fixed: true, peer: homeStack });
+  homeStack.enterSession("home-desk");
+  homeDrawer.enterSession("home-desk-drawer");
+  /* The home panes that never close, but a layout saved by an older build can still be
+     missing one: each one absent from both stacks comes back. */
+  for (const kind of ["capabilities", "bay", "releases", "setup"] as const) {
+    if (!homeStack.has(kind) && !homeDrawer.has(kind)) homeStack.openPane({ kind });
+  }
+
   /* Both the smallest drawer worth drawing and the point below which it shuts, which
      is one constant on purpose: the drawer is either shut or tall enough for a trace,
      with no range in between where a header and a scale note are the only things that
@@ -95,11 +120,32 @@
   /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
      grid — so a drawer is never set larger than it can be drawn. */
   const DRAWER_MAX_FRACTION = 0.6;
+  $effect(() => {
+    void homeStack.groups;
+    void homeDrawer.groups;
+    homeStack.persistActiveDesk();
+    homeDrawer.persistActiveDesk();
+  });
 
   let rail = $state<PaneRail | null>(null);
   let drawerRail = $state<PaneRail | null>(null);
   let drawerElement = $state<HTMLElement | null>(null);
   let booting = $state(true);
+  /* With no session open the console lists what there is to open and start, the way
+     Temporal's UI lists workflows before one is opened. A link names its session, so
+     while boot opens one the desk waits for it instead. */
+  const linkedAtLoad = readUrlSessionId() != null;
+  const home = $derived(!run.session && !(booting && linkedAtLoad));
+  /* What every home pane is drawn from: the server's lists, and the console's own start path. */
+  const homeProps = $derived({
+    agents: run.agents,
+    sessions: run.sessions,
+    starting: run.creatingSession,
+    refreshingAgents: run.refreshingAgents || (booting && run.agents.length === 0),
+    agentsError: run.agentsError ?? run.connectionError,
+    onStart: startSession,
+    onRefreshAgents: () => run.refreshAgents()
+  });
   let motionReady = $state(false);
   let motionReadyFrame = 0;
   /* The height the reader last dragged or stepped the drawer to, which outranks every
@@ -131,9 +177,11 @@
   let hotkeyHelpOpen = $state(false);
   const SESSION_DRAWER_DEFAULT_W = 420;
   const SESSION_DRAWER_MIN_W = 240;
-  let sessionManagerHeld = $state(
-    new URLSearchParams(window.location.search).get("sm") === "1"
-  );
+  /* Open by default with no session to show: the sidebar is the console's one list of sessions
+     there are to open. A link carries `sm` only where it differs from that default for the desk
+     it names, so a reload keeps the sidebar as it was left. */
+  const sessionManagerParam = new URLSearchParams(window.location.search).get("sm");
+  let sessionManagerHeld = $state(sessionManagerParam == null ? readUrlSessionId() == null : sessionManagerParam === "1");
   let sessionDrawerWidth = $state(
     typeof savedPrefs.sessionDrawerWidth === "number"
       ? savedPrefs.sessionDrawerWidth
@@ -144,11 +192,35 @@
     run.following = false;
   }
 
-  const activeStack = $derived(drawerActive && drawer.groups.length > 0 ? drawer : stack);
-  const activeRail = $derived(drawerActive && drawer.groups.length > 0 ? drawerRail : rail);
+  /* The rail and drawer on screen: the home desk's with no session open, the session's
+     otherwise. One rail, one drawer and one transport row draw either, so the home desk
+     gets every behavior a session's desk has, not a copy of it. */
+  const deskStack = $derived(home ? homeStack : stack);
+  const deskDrawer = $derived(home ? homeDrawer : drawer);
+  const activeStack = $derived(drawerActive && deskDrawer.groups.length > 0 ? deskDrawer : deskStack);
+  const activeRail = $derived(drawerActive && deskDrawer.groups.length > 0 ? drawerRail : rail);
 
   $effect(() => {
-    void run.initialize().finally(() => (booting = false));
+    void run.initialize().finally(() => {
+      booting = false;
+      /* A link whose session wasn't found lands on the lists, where the sidebar says why. */
+      if (linkedAtLoad && !run.session) sessionManagerHeld = true;
+    });
+  });
+
+  /* The lists are the page while no session is open, so keep the sessions one current: a
+     session started from another tab or the CLI turns up without a refresh. */
+  $effect(() => {
+    if (!home || booting) return;
+    const refresh = () => {
+      if (!document.hidden) void run.ensureSessionsEnriched();
+    };
+    const timer = window.setInterval(refresh, 15_000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
   });
 
   /* Snapshot paint and stream catch-up are one load, not changes the reader
@@ -372,6 +444,21 @@
               : null,
           statusTone: null
         };
+      case "bay": {
+        const idle = agentsWithoutWorker(run.agents);
+        return {
+          title: PANE_META.bay.kindLabel,
+          statusLabel: idle > 0 ? `${idle} without a worker` : null,
+          statusTone: idle > 0 ? "--live" : null,
+          controls: bayControls
+        };
+      }
+      case "setup":
+        return { title: PANE_META.setup.kindLabel };
+      case "releases":
+        return { title: PANE_META.releases.kindLabel };
+      case "capabilities":
+        return { title: PANE_META.capabilities.kindLabel };
       default: {
         const _exhaustive: never = pane.kind;
         throw new Error(`unhandled pane kind: ${_exhaustive}`);
@@ -428,8 +515,8 @@
          back to a stack that is not the one holding the screen. Escaping the
          rail you are not looking at is a way to be stuck full-screen. */
       exitBleed: () => {
-        stack.exitBleed();
-        drawer.exitBleed();
+        deskStack.exitBleed();
+        deskDrawer.exitBleed();
       }
     },
     /* The same box the transport's switch opens, so the key and the control cannot
@@ -441,7 +528,7 @@
 
   /* Same reason: whether Escape has anything to do is asked of the desk, not of
      whichever rail the reader last touched. */
-  const bleeding = $derived(stack.bleedingPane != null || drawer.bleedingPane != null);
+  const bleeding = $derived(deskStack.bleedingPane != null || deskDrawer.bleedingPane != null);
 
   /* One window handler, because a component may only have one `<svelte:window>`
      — and now one binding table behind it. */
@@ -519,13 +606,13 @@
    * is the only thing left saying whether the drawer is there, so it has to track
    * what a reader can actually see rather than what the stack contains.
    */
-  const drawerOpen = $derived(drawer.groups.length > 0 && drawerHeight > 0);
+  const drawerOpen = $derived(deskDrawer.groups.length > 0 && drawerHeight > 0);
   const traceOverview = $derived(
     drawerOpen &&
-      drawer.groups.length === 1 &&
-      drawer.groups[0]?.length === 1 &&
-      (drawer.groups[0]?.[0]?.kind === "latency" ||
-        drawer.groups[0]?.[0]?.kind === "timeline")
+      deskDrawer.groups.length === 1 &&
+      deskDrawer.groups[0]?.length === 1 &&
+      (deskDrawer.groups[0]?.[0]?.kind === "latency" ||
+        deskDrawer.groups[0]?.[0]?.kind === "timeline")
   );
 
   /* A plain field, not `$state`: bookkeeping about whether a fit is owed, which
@@ -551,7 +638,7 @@
    * what keeps that from meaning "measure once, too early".
    */
   $effect(() => {
-    const holding = drawer.groups.length > 0;
+    const holding = deskDrawer.groups.length > 0;
     void run.session?.workflow_id;
 
     if (!holding) {
@@ -604,7 +691,7 @@
   /* Shut at zero height is the drawer's fold, kept on its panes so `c2` carries it
      through a reload the way `c` carries a folded rail column. */
   $effect(() => {
-    drawer.foldAll(drawerHeight === 0);
+    deskDrawer.foldAll(drawerHeight === 0);
   });
 
   /* The drawer's whole chrome, now that the pane header down there is hidden. One
@@ -631,17 +718,21 @@
       drawerSized = chosen != null;
       if (chosen == null) requestAnimationFrame(() => fitDrawerToContent());
     }
-    if (drawer.groups.length === 0) drawer.openPane({ kind: "timeline" });
+    if (deskDrawer.groups.length === 0 && !home) deskDrawer.openPane({ kind: "timeline" });
   }
 
   const sessionDrawerOpen = $derived(sessionManagerHeld && sessionDrawerWidth > 0);
 
   function persistSessionManager(open: boolean): void {
     const url = new URL(window.location.href);
-    if (open) url.searchParams.set("sm", "1");
-    else url.searchParams.delete("sm");
+    if (open === home) url.searchParams.delete("sm");
+    else url.searchParams.set("sm", open ? "1" : "0");
     history.replaceState(history.state, "", url);
   }
+
+  /* Kept as the desk changes, too: opening a session from the sidebar leaves it open, which the
+     session's own link then has to say. */
+  $effect(() => persistSessionManager(sessionManagerHeld));
 
   /* A plain field, like `drawerSized`: nothing on screen reads it. */
   let focusBeforeSessionManager: HTMLElement | null = null;
@@ -660,7 +751,6 @@
     /* Dragged shut and then asked for again: the width it opens at, like the
        bottom drawer's own height. */
     if (open && sessionDrawerWidth === 0) sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W;
-    persistSessionManager(open);
 
     if (returnFocus) {
       /* `preventScroll`, because the rail scrolls sideways and focus() would slide it. */
@@ -688,11 +778,11 @@
    * that mount has happened.
    */
   function toggleDock(): void {
-    const from = activeStack === drawer ? drawer : stack;
-    const to = from === drawer ? stack : drawer;
+    const from = activeStack === deskDrawer ? deskDrawer : deskStack;
+    const to = from === deskDrawer ? deskStack : deskDrawer;
     dockFocusedPane(from, to);
-    drawerActive = to === drawer;
-    void tick().then(() => (to === drawer ? drawerRail : rail)?.focusCurrent());
+    drawerActive = to === deskDrawer;
+    void tick().then(() => (to === deskDrawer ? drawerRail : rail)?.focusCurrent());
   }
 
   let newSessionOpen = $state(false);
@@ -748,11 +838,12 @@
   class="app"
   class:motion-ready={motionReady}
   class:bleed={bleeding}
-  class:bleed-drawer={drawer.bleedingPane != null}
-  class:has-drawer={drawer.groups.length > 0}
+  class:bleed-drawer={deskDrawer.bleedingPane != null}
+  class:has-drawer={deskDrawer.groups.length > 0}
+  class:home
   class:has-session-drawer={sessionManagerHeld}
   class:drawer-shut={drawerHeight === 0}
-  class:drawer-solo={drawer.groups.length === 1 && drawer.groups[0].length === 1}
+  class:drawer-solo={deskDrawer.groups.length === 1 && deskDrawer.groups[0].length === 1}
   style={`--drawer-h: ${drawerHeight}px; --session-drawer-w: ${sessionDrawerWidth}px`}
 >
   <!-- Two strips, and each answers one question: this one what you are looking
@@ -762,10 +853,13 @@
        screen while the link that opened the desk asked for something missing. -->
   <div class="chrome">
     <PaneMinimap
-      {stack}
-      {drawer}
+      stack={deskStack}
+      drawer={deskDrawer}
       onOpenDrawer={drawerHeight === 0 ? toggleDrawer : undefined}
       describe={describePane}
+      canLaunch={!home}
+      onHome={() => run.closeSessionView()}
+      atHome={home}
     >
       {#snippet lead()}
         <button
@@ -788,7 +882,7 @@
           display="launcher"
           sessions={run.sessions}
           agents={run.agents}
-          sessionId={run.runInfo.sessionId}
+          sessionId={run.session?.workflow_id ?? ""}
           connecting={run.connecting}
           connectingSince={run.connectingSince}
           sending={run.sending}
@@ -814,19 +908,21 @@
              the transport, which is the drawer's top edge and the one strip still
              on screen when the drawer is bled; up here it would be hidden at
              exactly the moment a reader wanted out, and two controls for one box
-             is clutter either way. -->
-        <button
-          type="button"
-          class={["head-button", hotkeyHelpOpen && "on"]}
-          aria-label="Replay keyboard shortcuts"
-          data-tip="Replay keyboard shortcuts&#10;?"
-          aria-expanded={hotkeyHelpOpen}
-          data-tip-below
-          data-tip-align="end"
-          onclick={() => (hotkeyHelpOpen = !hotkeyHelpOpen)}
-        >
-          <Keyboard size={13} aria-hidden="true" />
-        </button>
+             is clutter either way. With no session there is nothing to replay, so no shortcuts. -->
+        {#if !home}
+          <button
+            type="button"
+            class={["head-button", hotkeyHelpOpen && "on"]}
+            aria-label="Replay keyboard shortcuts"
+            data-tip="Replay keyboard shortcuts&#10;?"
+            aria-expanded={hotkeyHelpOpen}
+            data-tip-below
+            data-tip-align="end"
+            onclick={() => (hotkeyHelpOpen = !hotkeyHelpOpen)}
+          >
+            <Keyboard size={13} aria-hidden="true" />
+          </button>
+        {/if}
       {/snippet}
     </PaneMinimap>
 
@@ -850,38 +946,44 @@
         onResize={(width) => (sessionDrawerWidth = width)}
         onFit={() => (sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W)}
       >
-        <SessionControls
-          display="pane"
-          sessions={run.sessions}
-          agents={run.agents}
-          sessionId={run.runInfo.sessionId}
-          connecting={run.connecting}
-          connectingSince={run.connectingSince}
-          sending={run.sending}
-          creatingSession={run.creatingSession}
-          refreshingSessions={run.refreshingSessions}
-          closed={run.sessionClosed}
-          closedWorkflowIds={run.closedWorkflowIds}
-          error={run.connectionError}
-          sessionsError={run.sessionsError}
-          sessionsLoaded={run.sessionsLoaded}
-          {pendingLabel}
-          onSelectSession={(sessionId) => run.selectSession(sessionId)}
-          onRefreshSessions={() => run.refreshSessions()}
-          onEndSession={(sessionId) => run.endSession(sessionId)}
-          onArchiveSession={(sessionId) => run.quiesce(sessionId)}
-          onClose={() => holdSessionManager(false)}
-        />
+        <!-- The list, then the foot the sidebar keeps its links in. -->
+        <div class="session-sidebar">
+          <SessionControls
+            display="pane"
+            sessions={run.sessions}
+            agents={run.agents}
+            sessionId={run.session?.workflow_id ?? ""}
+            connecting={run.connecting}
+            connectingSince={run.connectingSince}
+            sending={run.sending}
+            creatingSession={run.creatingSession}
+            refreshingSessions={run.refreshingSessions}
+            closed={run.sessionClosed}
+            closedWorkflowIds={run.closedWorkflowIds}
+            error={run.connectionError}
+            sessionsError={run.sessionsError}
+            notice={run.missingLinkedSession ? `The linked session ${run.missingLinkedSession} isn't in the session manager: it may have been deleted, or the link is wrong.` : null}
+            onDismissNotice={() => (run.missingLinkedSession = null)}
+            sessionsLoaded={run.sessionsLoaded}
+            {pendingLabel}
+            onSelectSession={(sessionId) => run.selectSession(sessionId)}
+            onRefreshSessions={() => run.refreshSessions()}
+            onEndSession={(sessionId) => run.endSession(sessionId)}
+            onArchiveSession={(sessionId) => run.quiesce(sessionId)}
+            onClose={() => holdSessionManager(false)}
+          />
+          <SessionsFooter resourcesShown={home} />
+        </div>
       </DockedDrawer>
     </aside>
   {/if}
 
   <PaneRail
     bind:this={rail}
-    {stack}
+    stack={deskStack}
     bind:dragState={paneDrag}
     describe={describePane}
-    bleedingId={stack.bleedingPane?.id ?? null}
+    bleedingId={deskStack.bleedingPane?.id ?? null}
     {paneContent}
   />
   <!-- Declared out here rather than inside a rail, because it is parameterised by
@@ -998,6 +1100,14 @@
           onFilterChange={(next) => (transcriptFilter = next)}
           reveal={logReveal}
         />
+      {:else if pane.kind === "bay"}
+        <HomeView part="bay" {...homeProps} />
+      {:else if pane.kind === "setup"}
+        <HomeView part="setup" {...homeProps} />
+      {:else if pane.kind === "releases"}
+        <HomeView part="releases" {...homeProps} />
+      {:else if pane.kind === "capabilities"}
+        <HomeView part="capabilities" {...homeProps} />
       {/if}
     </div>
   {/snippet}
@@ -1007,6 +1117,12 @@
        reads as the same cursor. It stays a row of `.app` rather than a child of the
        drawer, which is what keeps it alive — and last — when the drawer is closed,
        and on screen when a drawer pane is bled. -->
+  {#if home}
+    <!-- No run to step through, so the footer takes the transport's row, the drawer's top
+         edge, and carries the drawer's switch the way the transport does. The home drawer
+         starts empty, so the switch shows once the reader has moved a pane down there. -->
+    <HomeView part="status" {...homeProps} {drawerOpen} onToggleDrawer={homeDrawer.groups.length > 0 ? toggleDrawer : undefined} />
+  {:else}
   <StepController
     viewIndex={run.viewIndex}
     total={run.total}
@@ -1027,12 +1143,13 @@
     onReset={() => run.reset()}
     onScrub={(index) => run.goTo(index)}
   />
+  {/if}
 
   <!-- The second rail. Same component, same snippets — the pane content is already
        parameterised by `pane`, so the drawer renders whatever the rail above can.
        Only rendered when it holds something, so the transport falls back against the
        rail the moment the last drawer pane is closed. -->
-  {#if drawer.groups.length > 0}
+  {#if deskDrawer.groups.length > 0}
     <section class="drawer" bind:this={drawerElement} aria-label="Bottom drawer">
       <DockedDrawer
         edge="bottom"
@@ -1047,16 +1164,34 @@
       >
         <PaneRail
           bind:this={drawerRail}
-          stack={drawer}
+          stack={deskDrawer}
           bind:dragState={paneDrag}
           describe={describePane}
-          bleedingId={drawer.bleedingPane?.id ?? null}
+          bleedingId={deskDrawer.bleedingPane?.id ?? null}
           {paneContent}
         />
       </DockedDrawer>
     </section>
   {/if}
 </main>
+
+<!-- The bay's own header control: its row density, cycled. -->
+{#snippet bayControls()}
+  {@const current = BAY_DENSITIES[bayDensityAt()]}
+  {@const next = BAY_DENSITIES[(bayDensityAt() + 1) % BAY_DENSITIES.length]}
+  {@const Icon = current.icon}
+  <button
+    type="button"
+    class="head-button"
+    aria-label={`${current.label}. Switch to ${next.label.toLowerCase()}`}
+    data-tip={`${current.label}\nClick for ${next.label.toLowerCase()}`}
+    data-tip-below
+    data-tip-align="end"
+    onclick={cycleBayDensity}
+  >
+    <Icon size={13} aria-hidden="true" />
+  </button>
+{/snippet}
 
 <HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
 
@@ -1088,6 +1223,12 @@
     grid-column: 1 / -1;
   }
 
+  .session-sidebar {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
   .app.has-session-drawer .session-drawer {
     grid-column: 1;
     grid-row: 2 / -1;
@@ -1095,7 +1236,8 @@
 
   .app.has-session-drawer > :global(.rail-frame),
   .app.has-session-drawer > :global(.step-controller),
-  .app.has-session-drawer > .drawer {
+  .app.has-session-drawer > .drawer,
+  .app.has-session-drawer > :global(.home-status) {
     grid-column: 2;
   }
 
@@ -1110,7 +1252,6 @@
   .app.has-drawer {
     grid-template-rows: auto minmax(0, 1fr) auto min(60vh, var(--drawer-h));
   }
-
   /* One canvas means one canvas — but either rail may be holding it. `bleeding`
      is a single id per stack, so whichever stack has one takes the screen and the
      other rail stands down with the rest of the chrome. The waterfall is the pane

@@ -19,8 +19,14 @@ describe("Session Manager list errors", () => {
     assert.doesNotMatch(body, /No matching sessions/);
   });
 
+  it("says what a notice says beside the list, with a way to dismiss it and no Retry", () => {
+    const body = markup({ sessions: [], notice: "The linked session wf-nope isn't in the session manager.", onDismissNotice: () => {}, onRefreshSessions: () => {} });
+    assert.match(body, /class="session-error session-notice[^"]*" role="status">\s*<p[^>]*>The linked session wf-nope isn't in the session manager\.<\/p>[\s\S]*?Dismiss/);
+    assert.doesNotMatch(body, /Retry/, "retrying would not bring a missing session back");
+  });
+
   it("explains how to begin when no sessions exist", () => {
     assert.match(markup({ sessions: [] }), /No sessions yet/);
-    assert.match(markup({ sessions: [] }), /Choose New session in the top bar/);
+    assert.match(markup({ sessions: [] }), /Start one with any of your agents\./);
   });
 });

@@ -67,6 +67,18 @@ describe("moving a stacked column", () => {
     assert.ok(reloaded.groups[3].every((pane) => pane.split), "the link reopens it stacked");
   });
 
+  /* Every pane at a fixed height leaves nothing to take the rest: the column runs past the
+     window, or leaves dead space when the window grows. */
+  it("keeps one pane in a stacked column unsized to fill it", () => {
+    const { stack, tokens, approvals } = deskWithStack();
+    tokens.share = null;
+    approvals.share = 260;
+    stack.setShare("usage", 500);
+    assert.deepEqual([tokens.share, approvals.share], [500, null], "sizing the one above frees the one below");
+    stack.setShare("decisions", 300);
+    assert.deepEqual([tokens.share, approvals.share], [null, 300], "and the other way round");
+  });
+
   it("moves by keyboard as one column", () => {
     const { stack } = deskWithStack();
     stack.movePane("usage", -1);
@@ -79,6 +91,15 @@ describe("moving a stacked column", () => {
     const { stack } = deskWithStack();
     stack.placePane("decisions", "usage", "after");
     assert.deepEqual(ids(stack), [["graph"], ["usage"], ["decisions"], ["chat"], ["logs"]]);
+
+    /* The pointer is over the dragged pane itself at its column's edge, the usual case: it
+       lands beside its column, not at the end of the rail. */
+    const self = deskWithStack().stack;
+    self.placePane("decisions", "decisions", "after");
+    assert.deepEqual(ids(self), [["graph"], ["usage"], ["decisions"], ["chat"], ["logs"]]);
+    const before = deskWithStack().stack;
+    before.placePane("decisions", "decisions", "before");
+    assert.deepEqual(ids(before), [["graph"], ["decisions"], ["usage"], ["chat"], ["logs"]]);
 
     const again = deskWithStack().stack;
     again.placePane("decisions", "logs", "tab");

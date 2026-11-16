@@ -68,6 +68,9 @@
     error?: string | null;
     /** List refresh failure — shown in the manager, not as stream "Needs attention". */
     sessionsError?: string | null;
+    /** Something the list should say that isn't a failure of its own, with a way to dismiss it. */
+    notice?: string | null;
+    onDismissNotice?: () => void;
     /** `sessions` came from the server, not just a row painted from cache. */
     sessionsLoaded?: boolean;
     /** What the agent is waiting on the reader for, e.g. "1 response needed". */
@@ -108,6 +111,8 @@
     closedWorkflowIds = [],
     error = null,
     sessionsError = null,
+    notice = null,
+    onDismissNotice,
     sessionsLoaded = false,
     pendingLabel = null,
     onNewSession,
@@ -147,7 +152,8 @@
 
   const focusFirst: Attachment<HTMLElement> = (node) => {
     const frame = requestAnimationFrame(() => {
-      node.focus();
+      /* Without scrolling: below a page's fold, focus would jump the reader past what is above. */
+      node.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   };
@@ -732,6 +738,12 @@
         />
       {/if}
       </div>
+      {#if notice}
+        <div class="session-error session-notice" role="status">
+          <p>{notice}</p>
+          {#if onDismissNotice}<Chip size="xs" fill="quiet" onclick={onDismissNotice}>Dismiss</Chip>{/if}
+        </div>
+      {/if}
       {#if sessionsError}
         <div class="session-error" role="alert">
           <p>{sessionsError}</p>
@@ -744,7 +756,7 @@
         {#if !sessionsError && filteredSessionItems.length === 0}
           <div class="session-empty">
             <strong>{sessionItems.length ? "No matching sessions" : "No sessions yet"}</strong>
-            <p>{sessionItems.length ? "Try another search or agent filter." : "Choose New session in the top bar to begin."}</p>
+            <p>{sessionItems.length ? "Try another search or agent filter." : "Start one with any of your agents."}</p>
           </div>
         {:else if !sessionsError && sessionGroups.length === 0}
           <!-- Every listed session is archived: the list above the Archived group was blank. -->
@@ -769,6 +781,7 @@
               {@const item = entry.item}
               {@const kind = sessionStatusKind(item)}
               {@const age = sessionAge(item.created_at, now)}
+              {@const days = age.short ? (now / 1000 - item.created_at) / 86_400 : 0}
               {@const pinned = pinRank.has(item.workflow_id)}
               {@const isArchived = archivedIds.has(item.workflow_id)}
               {@const atRest = isArchived || sessionGone(item)}
@@ -783,7 +796,7 @@
                 <button
                   type="button"
                   id={sessionOptionId(item.workflow_id)}
-                  class={["session-row", item.workflow_id === sessionId && "active", kind === "closed" && "closed", arrowedId !== null && item.workflow_id === highlightedId && "highlighted"]}
+                  class={["session-row", item.workflow_id === sessionId && "active", kind === "closed" && "closed", days >= 7 ? "aged-week" : days >= 1 && "aged-day", arrowedId !== null && item.workflow_id === highlightedId && "highlighted"]}
                   role="option"
                   aria-setsize={filteredIds.length}
                   aria-posinset={entry.ordinal}
@@ -1210,6 +1223,20 @@
     font-weight: 500;
   }
 
+  /* Older sessions read a step quieter, so the newest stand out: past a day, then past a week.
+     Only between the two brightest text colors: a closed title's --text-3 stays the dimmest. */
+  .session-row.aged-day:not(.closed) .session-title:not(.untitled) {
+    color: color-mix(in srgb, var(--text-1) 50%, var(--text-2));
+  }
+
+  .session-row.aged-week:not(.closed) .session-title:not(.untitled) {
+    color: var(--text-2);
+  }
+
+  .session-row.active:not(.closed) .session-title:not(.untitled) {
+    color: var(--text-1);
+  }
+
   .session-row.closed .session-title {
     color: var(--text-3);
   }
@@ -1312,6 +1339,19 @@
     font-size: var(--font-sm);
   }
 
+  /* Inset as the rows' text is, and its action kept whole beside a long message. */
+  .session-error {
+    padding-inline: var(--gap-sm);
+  }
+
+  .session-error > :global(.chip) {
+    flex: none;
+  }
+
+  .session-notice {
+    color: var(--text-2);
+  }
+
   .session-error p {
     min-width: 0;
     margin: 0;
@@ -1338,6 +1378,10 @@
     /* The row's hover tint wins over its selection, so the fade's must too. */
     .session-item:hover:has(.session-row) .session-actions {
       --actions-bg: var(--control-hover);
+    }
+
+    .session-item:hover .session-row:is(.aged-day, .aged-week):not(.closed) .session-title:not(.untitled) {
+      color: var(--text-1);
     }
 
   }
