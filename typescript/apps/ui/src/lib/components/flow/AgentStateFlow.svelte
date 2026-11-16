@@ -1,12 +1,13 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { Funnel, X } from "@lucide/svelte";
+  import { Funnel, Map as MapIcon, Minus, X } from "@lucide/svelte";
   import {
     Background,
     BackgroundVariant,
     ControlButton,
     Controls,
     MiniMap,
+    Panel,
     SvelteFlow,
     type DefaultEdgeOptions,
     type Edge,
@@ -25,7 +26,9 @@
     AgentNodeContext,
     AgentNodeData
   } from "$lib/state/flowProjection";
+  import { readOperatorPrefs, writeOperatorPrefs } from "$lib/state/agentRunStorage";
   import { keepUnchanged, lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
+  import AgentLaneNode from "./AgentLaneNode.svelte";
   import AgentStateNode, { kindFromState, setNodeLogViewer, setNodeOpener } from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
@@ -78,6 +81,7 @@
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let settled = $state(false);
+  let showMinimap = $state(readOperatorPrefs().flowMinimap ?? false);
   let inspectedNode = $state<Node<AgentNodeData> | null>(null);
   let inspectorElement = $state<HTMLDialogElement | null>(null);
   let flowWrapElement = $state<HTMLDivElement | null>(null);
@@ -100,7 +104,8 @@
   const fitViewOptions = { padding: 0.16, minZoom, maxZoom: 1 };
   const nodeTypes: NodeTypes = {
     agentState: AgentStateNode,
-    agentWorkflow: AgentWorkflowNode
+    agentWorkflow: AgentWorkflowNode,
+    agentLane: AgentLaneNode
   };
   /* Edges only show the way; nothing happens on clicking one. Without the
      selection and the invisible hit path, an edge cannot turn the selection
@@ -317,14 +322,29 @@
         <Funnel size={14} />
       </ControlButton>
     </Controls>
-    <MiniMap
-      pannable
-      zoomable
-      nodeColor={mapMarkColor}
-      nodeClass={mapMarkClass}
-      nodeBorderRadius={5}
-      ariaLabel="Flow overview"
-    />
+    {#if showMinimap}
+      <MiniMap
+        pannable
+        zoomable
+        nodeColor={mapMarkColor}
+        nodeClass={mapMarkClass}
+        nodeBorderRadius={5}
+        ariaLabel="Flow overview"
+      />
+    {/if}
+    <!-- On the minimap's corner while it shows; in the corner it left once hidden. -->
+    <Panel position="bottom-right" class={["minimap-toggle-panel", showMinimap && "open"]}>
+      <button
+        class="minimap-toggle"
+        aria-label={showMinimap ? "Hide minimap" : "Show minimap"}
+        onclick={() => {
+          showMinimap = !showMinimap;
+          writeOperatorPrefs({ flowMinimap: showMinimap });
+        }}
+      >
+        {#if showMinimap}<Minus size={12} />{:else}<MapIcon size={14} />{/if}
+      </button>
+    </Panel>
     <Background
       variant={BackgroundVariant.Dots}
       gap={18}
@@ -584,6 +604,12 @@
     --edge-reasoning: color-mix(in srgb, var(--reasoning) 70%, var(--border-strong));
     --edge-approval: color-mix(in srgb, var(--live) 78%, var(--text-1) 6%);
     --edge-output: var(--success);
+    /* A steer carries the user's own words into the run, so it takes the input's hue,
+       drawn lighter than the run's own path. */
+    --edge-steer: color-mix(in srgb, var(--accent) 70%, var(--text-3));
+    /* A message handler's lane: a hairline inside the runtime, not a second boundary. */
+    --lane-border: color-mix(in srgb, var(--text-3) 38%, transparent);
+    --lane-fill: color-mix(in srgb, var(--text-3) 3%, transparent);
   }
 
   :global(.svelte-flow__edge-path) {
@@ -594,6 +620,7 @@
   :global(.edge-reasoning .svelte-flow__edge-path) { stroke: var(--edge-reasoning); }
   :global(.edge-approval .svelte-flow__edge-path) { stroke: var(--edge-approval); }
   :global(.edge-output .svelte-flow__edge-path) { stroke: var(--edge-output); }
+  :global(.edge-steer .svelte-flow__edge-path) { stroke: var(--edge-steer); stroke-dasharray: 5 4; }
 
   /* The turn's own path, and its last leg into Output: full weight with round caps,
      and, while it keeps its kind's color, a soft glow of that hue. An edge recolored
@@ -673,6 +700,45 @@
   :global(.svelte-flow__minimap) {
     background: var(--surface-1);
     border: 1px solid var(--border);
+  }
+
+  /* Inside the minimap's bottom-right corner (15px panel margin, 1px border, 3px inset), where
+     the show button sits once it is hidden, so hide and show never move the target. */
+  :global(.minimap-toggle-panel.open) {
+    margin: 0 19px 19px 0;
+  }
+
+  .minimap-toggle {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-3);
+    cursor: pointer;
+  }
+
+  :global(.minimap-toggle-panel.open) .minimap-toggle {
+    width: 20px;
+    height: 20px;
+    border-color: transparent;
+    background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+  }
+
+  .minimap-toggle:hover {
+    color: var(--text-1);
+  }
+
+  :global(.minimap-toggle-panel.open) .minimap-toggle:hover {
+    border-color: var(--border);
+    background: var(--surface-2);
+  }
+
+  .minimap-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* Shape is the second channel: colour alone smears at MiniMap size.

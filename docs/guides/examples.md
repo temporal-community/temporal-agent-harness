@@ -39,7 +39,7 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
+pydantic_ai_hello, strands_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
 The default committed `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
@@ -81,7 +81,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 
 | Agent | Needs |
 |---|---|
-| OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| OpenAI Hello · Pydantic AI Hello · Strands Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](approvals.md#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](../../python/examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](../../python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI, or `just tictactoe-play` for its board |

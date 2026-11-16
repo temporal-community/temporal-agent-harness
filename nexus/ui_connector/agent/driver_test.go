@@ -14,6 +14,7 @@ import (
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/proto"
@@ -30,7 +31,7 @@ func TestTurnEventToEvent_Chunks(t *testing.T) {
 			protocol.Chunk{Thought: &protocol.ThoughtChunk{Delta: "hmm"}}},
 		{"tool_start", turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "search", ToolInput: map[string]any{"q": "x"}},
 			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolRunning, Input: `{"q":"x"}`}}},
-		{"tool_end", turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: "3 hits"},
+		{"tool_end", turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: json.RawMessage(`"3 hits"`)},
 			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolComplete, Output: "3 hits"}}},
 		{"tool_error", turnEvent{Type: "tool_error", ToolID: "t1", ToolName: "search", Message: "oops"},
 			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolErrored, Error: "oops"}}},
@@ -131,6 +132,31 @@ func TestDecodeTurnEvent_RoundTrip(t *testing.T) {
 	assert.Equal(t, "hello", got.Event.Text)
 }
 
+// The Python harness writes tool_output as any JSON value.
+func TestDecodeTurnEvent_ToolOutputJSON(t *testing.T) {
+	cases := map[string]string{
+		`"3 hits"`:                "3 hits",
+		`[{"id": 1}, {"id": 2}]`:  `[{"id":1},{"id":2}]`,
+		`{"results": [], "n": 0}`: `{"results":[],"n":0}`,
+		`42`:                      "42",
+		`null`:                    "",
+	}
+	for raw, want := range cases {
+		t.Run(raw, func(t *testing.T) {
+			si := streamItem{TurnNumber: 1, Event: turnEvent{
+				Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: json.RawMessage(raw)}}
+			got, err := decodeTurnEvent(makeTestStreamItem(t, si, 0, turnEventsTopic))
+			require.NoError(t, err)
+			ev, _ := turnEventToEvent(got.Event, false)
+			require.NotNil(t, ev)
+			require.NotNil(t, ev.Chunk)
+			require.NotNil(t, ev.Chunk.Tool)
+			assert.Equal(t, protocol.ToolComplete, ev.Chunk.Tool.Phase)
+			assert.Equal(t, want, ev.Chunk.Tool.Output)
+		})
+	}
+}
+
 func runStart(ctx workflow.Context, req protocol.Request) (router.Start, error) {
 	return (&Driver{}).Start(ctx, req)
 }
@@ -158,11 +184,31 @@ func sendOp(got *harnessgen.SendAgentMessageInput) nexus.RegisterableOperation {
 	return nexus.NewSyncOperation(harnessgen.AgentService.SendAgentMessage.Name(),
 		func(ctx context.Context, input harnessgen.SendAgentMessageInput, _ nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
 			*got = input
-			return harnessgen.SendMessageOutput{TurnNumber: 2, StreamHeadOffset: ptr(int64(5)), MessageId: ptr("msg-1")}, nil
+			return harnessgen.SendMessageOutput{
+				TurnNumber: 2, TurnID: "turn-2", MessageID: "msg-1",
+				Disposition: harnessgen.SendMessageOutputDispositionOpened, StreamHeadOffset: 5,
+			}, nil
 		})
 }
 
 const setModelSchema = `{"properties":{"model":{"enum":["fast","smart"],"type":"string"}},"required":["model"],"type":"object"}`
+
+// jsonObject decodes a JSON object into the members a generated map-shaped type holds.
+func jsonObject(s string) map[string]json.RawMessage {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &members); err != nil {
+		panic(err)
+	}
+	return members
+}
+
+// payloadJSON encodes a sendAgentMessage payload back to JSON for comparison.
+func payloadJSON(t *testing.T, p harnessgen.SendAgentMessageInputPayload) string {
+	t.Helper()
+	b, err := json.Marshal(p.AdditionalProperties)
+	require.NoError(t, err)
+	return string(b)
+}
 
 func interfaceOp(fail bool) nexus.RegisterableOperation {
 	return nexus.NewSyncOperation(harnessgen.AgentService.QueryAgentInterface.Name(),
@@ -170,10 +216,17 @@ func interfaceOp(fail bool) nexus.RegisterableOperation {
 			if fail {
 				return harnessgen.AgentInterfaceOutput{}, nexus.HandlerErrorf(nexus.HandlerErrorTypeNotFound, "no session")
 			}
-			accept := harnessgen.AcceptedFunctionMidTurnAccept
 			return harnessgen.AgentInterfaceOutput{Handlers: []harnessgen.AcceptedFunction{
-				{Name: "ask", Description: "Chat.", Parameters: `{"properties":{"text":{"type":"string"}},"required":["text"]}`, Output: "{}"},
-				{Name: "set_model", Description: "Set the model.", Parameters: setModelSchema, Output: "{}", MidTurn: &accept},
+				{
+					Name: "ask", Description: "Chat.",
+					Parameters: harnessgen.AcceptedFunctionParameters{AdditionalProperties: jsonObject(`{"properties":{"text":{"type":"string"}},"required":["text"]}`)},
+					MidTurn:    harnessgen.AcceptedFunctionMidTurnEnqueue, ModelCallable: true,
+				},
+				{
+					Name: "set_model", Description: "Set the model.",
+					Parameters: harnessgen.AcceptedFunctionParameters{AdditionalProperties: jsonObject(setModelSchema)},
+					MidTurn:    harnessgen.AcceptedFunctionMidTurnAccept, ModelCallable: true,
+				},
 			}}, nil
 		})
 }
@@ -205,7 +258,7 @@ func TestStart_PlainTextGoesToAsk(t *testing.T) {
 	result := start(t, agentService(sendOp(&got)), message(" hi there "))
 
 	assert.Equal(t, "ask", got.MsgType)
-	assert.JSONEq(t, `{"text":"hi there"}`, got.Payload)
+	assert.JSONEq(t, `{"text":"hi there"}`, payloadJSON(t, got.Payload))
 	assert.Equal(t, []protocol.Event{{TurnStarted: true}}, result.Events)
 	assert.JSONEq(t, `{"sessionId":"slack:C1:1.0","turnNumber":2,"messageId":"msg-1","cursor":5}`, string(result.Handle))
 }
@@ -251,7 +304,7 @@ func TestStart_HandlerFromText(t *testing.T) {
 	var got harnessgen.SendAgentMessageInput
 	result := start(t, agentService(sendOp(&got), interfaceOp(false)), message("/set_model model=smart"))
 	assert.Equal(t, "set_model", got.MsgType)
-	assert.JSONEq(t, `{"model":"smart"}`, got.Payload)
+	assert.JSONEq(t, `{"model":"smart"}`, payloadJSON(t, got.Payload))
 	assert.NotNil(t, result.Handle)
 
 	bad := start(t, agentService(interfaceOp(false)), message("/set_model model=huge"))
@@ -268,6 +321,34 @@ func TestStart_HandlerFromText(t *testing.T) {
 		replyText(t, start(t, agentService(interfaceOp(false)), message("/nope"))))
 }
 
+func failingSendOp(err error) nexus.RegisterableOperation {
+	return nexus.NewSyncOperation(harnessgen.AgentService.SendAgentMessage.Name(),
+		func(ctx context.Context, input harnessgen.SendAgentMessageInput, _ nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
+			return harnessgen.SendMessageOutput{}, err
+		})
+}
+
+func TestStart_MidTurnRejectionIsASystemNotice(t *testing.T) {
+	rejected := &nexus.HandlerError{
+		Type:    nexus.HandlerErrorTypeBadRequest,
+		Message: "MidTurnRejected: Function 'ask' declares mid_turn='reject' and the agent is busy.",
+		Cause: temporal.NewNonRetryableApplicationError(
+			"Function 'ask' declares mid_turn='reject' and the agent is busy.", "MidTurnRejected", nil),
+	}
+	result := start(t, agentService(failingSendOp(rejected)), message("are you there?"))
+
+	assert.Equal(t, []protocol.Event{{Notice: busyNotice}}, result.Events)
+	assert.True(t, router.Empty(result.Handle))
+}
+
+func TestStart_OtherSendFailuresAreErrors(t *testing.T) {
+	env := newTestEnv(t, agentService(failingSendOp(
+		nexus.NewHandlerErrorf(nexus.HandlerErrorTypeBadRequest, "no handler named ask"))))
+	env.ExecuteWorkflow(runStart, message("hi"))
+	require.True(t, env.IsWorkflowCompleted())
+	assert.Error(t, env.GetWorkflowError())
+}
+
 func TestStart_CallSendsPayloadVerbatim(t *testing.T) {
 	var got harnessgen.SendAgentMessageInput
 	result := start(t, agentService(sendOp(&got)), protocol.Request{
@@ -275,7 +356,7 @@ func TestStart_CallSendsPayloadVerbatim(t *testing.T) {
 		Call:      &protocol.HandlerCall{Name: "set_model", Payload: `{"model":"fast"}`},
 	})
 	assert.Equal(t, "set_model", got.MsgType)
-	assert.Equal(t, `{"model":"fast"}`, got.Payload)
+	assert.JSONEq(t, `{"model":"fast"}`, payloadJSON(t, got.Payload))
 	assert.NotNil(t, result.Handle)
 }
 
@@ -292,14 +373,14 @@ func TestStart_ApprovalCallsApproveToolCallAndReturnsTheDecision(t *testing.T) {
 	svc := agentService(nexus.NewSyncOperation(harnessgen.AgentService.ApproveToolCall.Name(),
 		func(ctx context.Context, input harnessgen.ApproveToolCallInput, _ nexus.StartOperationOptions) (harnessgen.ApproveToolCallOutput, error) {
 			got = input
-			return harnessgen.ApproveToolCallOutput{Accepted: true, ToolId: input.ToolId}, nil
+			return harnessgen.ApproveToolCallOutput{Accepted: true, ToolID: input.ToolID}, nil
 		}))
 	result := start(t, svc, protocol.Request{
 		SessionID: "slack:C1",
 		Approval:  &protocol.ApprovalDecision{ToolID: "t1", ToolName: "search", Approved: true, Remember: true, Reason: "by U"},
 	})
 
-	assert.Equal(t, "t1", got.ToolId)
+	assert.Equal(t, "t1", got.ToolID)
 	assert.Equal(t, ptr(true), got.Remember)
 	assert.Equal(t, ptr("by U"), got.Reason)
 	assert.True(t, router.Empty(result.Handle))
@@ -383,7 +464,7 @@ func makeTestStreamItem(t *testing.T, si streamItem, offset int64, topic string)
 func TestStartPreservesLiteralMentions(t *testing.T) {
 	var got harnessgen.SendAgentMessageInput
 	start(t, agentService(sendOp(&got)), message("<@U1> is the on-call engineer"))
-	assert.JSONEq(t, `{"text":"<@U1> is the on-call engineer"}`, got.Payload)
+	assert.JSONEq(t, `{"text":"<@U1> is the on-call engineer"}`, payloadJSON(t, got.Payload))
 }
 
 func TestPoll_ModelUsageIsScopedToTheReply(t *testing.T) {

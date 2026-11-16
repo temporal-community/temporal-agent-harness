@@ -93,15 +93,14 @@ def test_built_distributions_expose_ui_server_console_script(
     assert "temporal-agent-harness = temporal_agent_harness.web.cli:main" in entry_points
 
 
-def test_built_distributions_exclude_nexus(
+def test_built_distributions_ship_the_nexus_adapter_but_not_the_nexus_projects(
     built_distributions: tuple[Path, Path],
 ) -> None:
-    """Neither the repo's top-level ``nexus/`` nor ``temporal_agent_harness/nexus_agent_adapter/``
-    ships in the package.
+    """``temporal_agent_harness/nexus_agent_adapter/`` ships; the repo's top-level ``nexus/``
+    does not.
 
     ``nexus/`` holds the separate Go/Nexus projects (``nexus/mcp`` is wired in only as a
-    workspace-local editable source for the ``nexus-mcp`` extra). The adapter is not published:
-    Bazel does not build it, so nothing in ``//python/temporal_agent_harness`` reaches it.
+    workspace-local editable source for the ``nexus-mcp`` extra).
     """
     wheel_path, sdist_path = built_distributions
 
@@ -111,9 +110,17 @@ def test_built_distributions_exclude_nexus(
         # sdist members are prefixed with "<name>-<version>/"; strip it before checking.
         sdist_names = {name.split("/", 1)[-1] for name in sdist.getnames()}
 
+    adapter = "temporal_agent_harness/nexus_agent_adapter/"
     for names in (wheel_names, sdist_names):
         assert not [name for name in names if name.startswith("nexus/")]
-        assert not [name for name in names if name.startswith("temporal_agent_harness/nexus_agent_adapter")]
+        assert {
+            adapter + "__init__.py",
+            adapter + "handler.py",
+            adapter + "worker.py",
+            adapter + "generated/__init__.py",
+            adapter + "generated/models.py",
+            adapter + "generated/services.py",
+        } <= names
 
 
 def test_built_distributions_record_writable_non_executable_files(

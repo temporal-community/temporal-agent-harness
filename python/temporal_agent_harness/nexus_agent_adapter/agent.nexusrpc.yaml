@@ -3,40 +3,36 @@ nexusrpc: "1.0.0"
 services:
   AgentService:
     fqn: AgentService
-    description: "Nexus service that exposes an agent session to external callers (e.g. the Slack connector). The connector calls sendAgentMessage to deliver user input and pollMessages to consume the agent's response stream."
+    description: "Nexus service that exposes one agent type's sessions to callers in any namespace or SDK language. A caller sends messages with sendAgentMessage, which starts the session if needed, and reads the agent's events with pollMessages."
     operations:
       sendAgentMessage:
-        description: "Start or reuse an agent workflow session and deliver a message to a named @agent.accepts handler. Mirrors AgentClient.send_message() - msgType is the handler name (e.g. 'ask', 'slash'), payload is its JSON-encoded input model. Returns the turn output for polling via pollMessages."
+        description: "Start the session if it isn't running, then deliver a message to one of the agent's @agent.accepts handlers. msgType is the handler name and payload its input. startConfig and startData apply only when this call starts the session. Mirrors AgentClient.start_and_submit_message(). When the handler rejects mid-turn messages and a turn is open, fails with BAD_REQUEST whose cause is an ApplicationError of type MidTurnRejected."
         input: { $ref: "#/$defs/SendAgentMessageInput" }
         output: { $ref: "#/$defs/SendMessageOutput" }
-      executeOperatorCommand:
-        description: "Execute a harness-level operator command (e.g. /approvals, /stop, /status). Does not create a turn - the harness applies the change directly and returns a reply string synchronously."
-        input: { $ref: "#/$defs/ExecuteOperatorCommandInput" }
-        output: { $ref: "#/$defs/ExecuteOperatorCommandOutput" }
       approveToolCall:
         description: "Resolve a pending tool-approval gate. The workflow's tool_approval update records the decision; the gated tool call proceeds (or is rejected) immediately."
         input: { $ref: "#/$defs/ApproveToolCallInput" }
         output: { $ref: "#/$defs/ApproveToolCallOutput" }
       queryAgentInterface:
-        description: "Return the list of @agent.accepts handlers the agent exposes - name, description, and input/output schemas - mirroring AgentClient.get_agent_interface(). Use this to construct valid sendAgentMessage payloads or to model the agent as a subagent tool."
+        description: "Return the agent's @agent.accepts handlers: name, description, input and output schemas, and mid-turn behavior. Mirrors AgentClient.get_agent_interface(). Use it to build valid sendAgentMessage payloads."
         input: { $ref: "#/$defs/QuerySessionInput" }
         output: { $ref: "#/$defs/AgentInterfaceOutput" }
-      queryOperatorInterface:
-        description: "Return the list of operator commands the agent accepts. Use this to build the Slack App manifest slash_commands section and to route incoming slash commands to the correct operation."
-        input: { $ref: "#/$defs/QuerySessionInput" }
-        output: { $ref: "#/$defs/QueryOperatorInterfaceOutput" }
       queryAgentStatus:
-        description: "Return a snapshot of the agent session's current state: turn counter, whether a turn is active, pending tool approvals, and message-queuing configuration. Mirrors AgentClient.get_status()."
+        description: "Return a snapshot of the session's state: turn counter, whether a turn is open, queued messages, pending approvals and callbacks, subagents, and the approval policy. Mirrors AgentClient.get_status()."
         input: { $ref: "#/$defs/QuerySessionInput" }
         output: { $ref: "#/$defs/AgentStatusOutput" }
       pollMessages:
-        description: "Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor."
+        description: "Async operation that completes once the agent has published events at or after cursor. Returns a batch of stream items (WorkflowStream PollResult wire format) and the next cursor. Completes synchronously with closed=true when the session has already ended."
         input: { $ref: "#/$defs/PollMessagesInput" }
         output: { $ref: "#/$defs/PollMessagesOutput" }
       provideCallbackResult:
         description: "Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set."
         input: { $ref: "#/$defs/ProvideCallbackResultInput" }
         output: { $ref: "#/$defs/ProvideCallbackResultOutput" }
+      closeSession:
+        description: "Send the agent the harness's close signal: it winds down its turn loop and denies any pending approvals and callbacks. Succeeds when the session has already ended."
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/CloseSessionOutput" }
 
 $defs:
   SendAgentMessageInput:
@@ -44,17 +40,42 @@ $defs:
     properties:
       sessionId:
         type: string
-        description: "Provider-prefixed session identifier (e.g. slack:C12345)"
+        description: "Session identifier; the agent's workflow ID is the handler's prefix plus this"
       msgType:
         type: string
-        description: "Target @agent.accepts handler name (e.g. 'ask', 'slash')"
+        description: "Target @agent.accepts handler name"
       payload:
-        type: string
-        description: "JSON-encoded input matching the target handler's input model (e.g. '{\"text\":\"hello\"}' for the 'ask' handler)"
+        type: object
+        additionalProperties: true
+        description: "The handler's input, matching its parameters schema from queryAgentInterface"
+      startConfig:
+        $ref: "#/$defs/StartConfig"
+      startData:
+        type: object
+        additionalProperties: true
+        description: "The agent's @agent.init data, for an agent that takes it. The agent validates it when the session starts."
     required:
       - sessionId
       - msgType
       - payload
+    additionalProperties: false
+
+  StartConfig:
+    type: object
+    description: "The session's AgentConfig, used only when sendAgentMessage starts the session. Every field is optional; an omitted field takes the agent's default."
+    properties:
+      approvalPolicy:
+        $ref: "#/$defs/ApprovalPolicy"
+      autoApprovalCriteria:
+        type: object
+        additionalProperties: true
+        description: "The auto mode rulebook, in the JSON shape of the harness's AutoApprovalCriteria"
+      agentId:
+        type: string
+        description: "The agent's own short ID, stamped on every event it publishes"
+      closeAfterIdleSeconds:
+        type: number
+        description: "Close the session once it has been idle this long"
     additionalProperties: false
 
   SendMessageOutput:
@@ -62,49 +83,26 @@ $defs:
     properties:
       turnNumber:
         type: integer
-        description: "Monotonic turn counter for this session"
+        description: "The turn this message belongs to: a new turn, or the open turn it joined"
       turnId:
         type: string
         description: "Unique ID for this turn"
-      streamHeadOffset:
-        type: integer
-        description: "Stream log offset at message-accept time; start the first pollMessages call from this offset to skip prior-turn history"
-      pending:
-        type: boolean
-        description: "True if the message was queued behind an active turn rather than dispatched immediately"
       messageId:
         type: string
-        description: "Message ID used to filter pollMessages events for this reply"
+        description: "This message's ID, stamped on every event its handler's work publishes"
+      disposition:
+        type: string
+        enum: ["opened", "joined", "queued"]
+        description: "What the message did to the turn: opened a new one, joined the open one, or queued behind it"
+      streamHeadOffset:
+        type: integer
+        description: "Stream offset when the message was accepted; start the first pollMessages call here to skip earlier turns"
     required:
       - turnNumber
       - turnId
-    additionalProperties: false
-
-  ExecuteOperatorCommandInput:
-    type: object
-    properties:
-      sessionId:
-        type: string
-        description: "Provider-prefixed session identifier"
-      name:
-        type: string
-        description: "Operator command name (e.g. 'approvals', 'stop', 'status')"
-      arg:
-        type: string
-        description: "Optional argument string"
-    required:
-      - sessionId
-      - name
-    additionalProperties: false
-
-  ExecuteOperatorCommandOutput:
-    type: object
-    properties:
-      reply:
-        type: string
-        description: "Human-readable reply text from the harness"
-    required:
-      - reply
+      - messageId
+      - disposition
+      - streamHeadOffset
     additionalProperties: false
 
   ApproveToolCallInput:
@@ -112,10 +110,10 @@ $defs:
     properties:
       sessionId:
         type: string
-        description: "Provider-prefixed session identifier"
+        description: "Session identifier"
       toolId:
         type: string
-        description: "The tool_id from the ToolApprovalRequested stream event"
+        description: "The tool_id from the tool_approval_requested event"
       approved:
         type: boolean
         description: "True to allow the tool call, false to deny it"
@@ -150,7 +148,7 @@ $defs:
     properties:
       sessionId:
         type: string
-        description: "Provider-prefixed session identifier"
+        description: "Session identifier"
     required:
       - sessionId
     additionalProperties: false
@@ -162,14 +160,14 @@ $defs:
         type: array
         items:
           $ref: "#/$defs/AcceptedFunction"
-        description: "Ordered list of @agent.accepts handlers the agent exposes"
+        description: "The agent's @agent.accepts handlers, in declaration order"
     required:
       - handlers
     additionalProperties: false
 
   AcceptedFunction:
     type: object
-    description: "One @agent.accepts handler exposed by the agent, described tool-style (mirrors harness AcceptedFunction)"
+    description: "One @agent.accepts handler, described tool-style (mirrors the harness's AcceptedFunction)"
     properties:
       name:
         type: string
@@ -178,87 +176,32 @@ $defs:
         type: string
         description: "Handler docstring describing when and how to use it"
       parameters:
-        type: string
-        description: "JSON-encoded JSON Schema for the handler's input model"
+        type: object
+        additionalProperties: true
+        description: "JSON Schema for the handler's input model"
       output:
-        type: string
-        description: "JSON-encoded JSON Schema for the handler's return model"
+        type: object
+        additionalProperties: true
+        description: "JSON Schema for the handler's return model"
       midTurn:
         type: string
         enum: ["enqueue", "reject", "accept"]
-        description: "Request policy during an active turn: enqueue waits, reject refuses the request, and accept runs the handler"
+        description: "What a message does while a turn is open: enqueue waits, reject refuses it, and accept joins the open turn"
+      modelCallable:
+        type: boolean
+        description: "The handler author's hint that a parent agent's model may call this handler"
     required:
       - name
       - description
       - parameters
       - output
-    additionalProperties: false
-
-  QueryOperatorInterfaceOutput:
-    type: object
-    properties:
-      commands:
-        type: array
-        items:
-          $ref: "#/$defs/OperatorCommand"
-        description: "Ordered list of operator commands the agent accepts"
-    required:
-      - commands
-    additionalProperties: false
-
-  OperatorCommand:
-    type: object
-    properties:
-      name:
-        type: string
-        description: "Canonical command name used as the routing key (e.g. 'scope')"
-      label:
-        type: string
-        description: "Display label including the slash (e.g. '/scope')"
-      description:
-        type: string
-        description: "Human-readable description suitable for a Slack manifest entry"
-      source:
-        type: string
-        description: "'harness' for built-in commands, 'agent' for agent-registered ones"
-      argument:
-        $ref: "#/$defs/OperatorCommandArgument"
-    required:
-      - name
-      - label
-      - description
-      - source
-    additionalProperties: false
-
-  OperatorCommandArgument:
-    type: object
-    description: "Argument metadata for rendering a UI hint or menu"
-    properties:
-      kind:
-        type: string
-        description: "'enum' | 'text' | 'tool_names'"
-      required:
-        type: boolean
-        description: "Whether the argument must be provided"
-      choices:
-        type: array
-        items:
-          type: string
-        description: "Valid choices when kind is 'enum'"
-      placeholder:
-        type: string
-        description: "Hint text for the argument (e.g. 'docs|forum|all')"
-      allowMultiple:
-        type: boolean
-        description: "Whether multiple space-separated values are accepted"
-    required:
-      - kind
-      - required
+      - midTurn
+      - modelCallable
     additionalProperties: false
 
   AgentStatusOutput:
     type: object
-    description: "Mirrors harness AgentStatus - the single source of truth for session state"
+    description: "Mirrors the harness's AgentStatus"
     properties:
       agentId:
         type: string
@@ -268,25 +211,25 @@ $defs:
         description: "Monotonic turn counter"
       turnActive:
         type: boolean
-        description: "True if a turn is currently running"
-      isMessageQueuingEnabled:
-        type: boolean
-        description: "True if the session accepts messages while a turn is active"
+        description: "True while a turn is open"
+      turnParticipants:
+        type: integer
+        description: "How many messages are running in the open turn; more than 1 when handlers joined it"
       pendingTurns:
         type: array
         items:
           $ref: "#/$defs/PendingTurn"
-        description: "Messages waiting in the agent's queue behind the active turn"
+        description: "Messages queued behind the open turn"
       pendingApprovals:
         type: array
         items:
           $ref: "#/$defs/PendingApproval"
-        description: "Gated tool calls currently awaiting a human decision"
+        description: "Gated tool calls awaiting a human decision"
       pendingCallbacks:
         type: array
         items:
           $ref: "#/$defs/PendingCallback"
-        description: "Callback tool calls currently awaiting a client-supplied result"
+        description: "Callback tool calls awaiting a client-supplied result"
       subagents:
         type: array
         items:
@@ -294,57 +237,70 @@ $defs:
         description: "Subagents this agent is currently driving"
       approvalPolicy:
         $ref: "#/$defs/ApprovalPolicy"
-      hasCustomApprovalFallback:
+      hasAutoApprovalEvaluator:
         type: boolean
-        description: "Whether a developer custom-approval predicate is wired (the predicate itself is non-serializable and never surfaced)"
+        description: "Whether the agent has an auto mode evaluator wired"
+      closeReason:
+        type: string
+        enum: ["requested", "idle_timeout_expired"]
+        description: "Why the agent closed; absent while it is running"
     required:
       - agentId
       - currentTurn
       - turnActive
-      - isMessageQueuingEnabled
+      - turnParticipants
       - pendingTurns
       - pendingApprovals
       - pendingCallbacks
       - subagents
       - approvalPolicy
-      - hasCustomApprovalFallback
+      - hasAutoApprovalEvaluator
     additionalProperties: false
 
   PendingTurn:
     type: object
-    description: "A message waiting in the agent's queue (mirrors harness PendingTurn)"
+    description: "A message queued behind the open turn (mirrors the harness's PendingTurn)"
     properties:
       turnNumber:
         type: integer
       turnId:
         type: string
+      messageId:
+        type: string
+        description: "The queued message's ID, as returned by sendAgentMessage"
       message:
         type: string
         description: "JSON-compacted {type, payload} envelope of the queued message"
     required:
       - turnNumber
       - turnId
+      - messageId
       - message
     additionalProperties: false
 
   PendingApproval:
     type: object
-    description: "A gated tool call awaiting a human decision (mirrors harness PendingApproval)"
+    description: "A gated tool call awaiting a human decision (mirrors the harness's PendingApproval)"
     properties:
       toolId:
         type: string
         description: "ID to pass to approveToolCall"
+      shortId:
+        type: string
+        description: "A short, session-unique alias for toolId, for chat platforms whose button payloads can't hold a provider's tool ID"
       toolName:
         type: string
         description: "Human-readable tool name"
       toolInput:
-        type: string
-        description: "JSON-encoded model-facing tool input (injected parameters excluded)"
+        type: object
+        additionalProperties: true
+        description: "The model-facing tool input (injected parameters excluded)"
       turnNumber:
         type: integer
         description: "Turn that triggered this approval request"
     required:
       - toolId
+      - shortId
       - toolName
       - toolInput
       - turnNumber
@@ -352,7 +308,7 @@ $defs:
 
   PendingCallback:
     type: object
-    description: "A callback tool call awaiting a client-supplied result (mirrors harness PendingCallback)"
+    description: "A callback tool call awaiting a client-supplied result (mirrors the harness's PendingCallback)"
     properties:
       toolId:
         type: string
@@ -361,11 +317,13 @@ $defs:
         type: string
         description: "Human-readable tool name"
       toolInput:
-        type: string
-        description: "JSON-encoded model-facing tool input (injected parameters excluded)"
+        type: object
+        additionalProperties: true
+        description: "The model-facing tool input (injected parameters excluded)"
       outputSchema:
-        type: string
-        description: "JSON-encoded JSON Schema the submitted result must match"
+        type: object
+        additionalProperties: true
+        description: "JSON Schema the submitted result must match"
       turnNumber:
         type: integer
         description: "Turn that triggered this callback request"
@@ -379,28 +337,25 @@ $defs:
 
   SubagentInfo:
     type: object
-    description: "An active subagent this agent is driving (mirrors harness SubagentInfo)"
+    description: "A subagent this agent is driving (mirrors the harness's SubagentInfo)"
     properties:
       subagentId:
         type: string
-        description: "The short id this agent references the subagent by"
+        description: "The short ID this agent references the subagent by"
       agentKey:
         type: string
       workflowId:
         type: string
-        description: "The subagent's real child workflow ID"
-      nextExpectedTurn:
-        type: integer
+        description: "The subagent's child workflow ID"
     required:
       - subagentId
       - agentKey
       - workflowId
-      - nextExpectedTurn
     additionalProperties: false
 
   ApprovalPolicy:
     type: object
-    description: "The live tool-approval policy the agent is running under (mirrors harness ToolApprovalPolicy)"
+    description: "Which tool calls skip human approval (mirrors the harness's ToolApprovalPolicy)"
     properties:
       dangerouslySkipAllApprovals:
         type: boolean
@@ -413,11 +368,15 @@ $defs:
         items:
           type: string
         uniqueItems: true
-        description: "Specific tool names auto-approved regardless of the layers above"
+        description: "Tool names that skip the gate"
+      autoModeEnabled:
+        type: boolean
+        description: "If true, the agent's auto mode evaluator may approve or deny calls the fields above don't allow"
     required:
       - dangerouslySkipAllApprovals
       - autoApproveInherentlySafe
       - autoApproveTools
+      - autoModeEnabled
     additionalProperties: false
 
   PollMessagesInput:
@@ -425,12 +384,10 @@ $defs:
     properties:
       sessionId:
         type: string
-        description: "Provider-prefixed session identifier"
+        description: "Session identifier"
       cursor:
         type: integer
-      timeoutSeconds:
-        type: number
-        description: "How long the WorkflowStream poll update waits for new events before returning empty"
+        description: "Stream offset to read from: streamHeadOffset for a new message, else the previous call's next_offset"
     required:
       - sessionId
       - cursor
@@ -438,22 +395,22 @@ $defs:
 
   PollMessagesOutput:
     type: object
-    description: "Mirrors WorkflowStream PollResult wire format so the async update-with-callback payload decodes correctly without transformation."
+    description: "Mirrors WorkflowStream's PollResult wire format, so the poll update's result is the operation's result without transformation."
     properties:
       items:
         type: array
         items:
           $ref: "#/$defs/StreamItem"
-        description: "Stream events since cursor; decode each as TurnEvent and map to Slack output"
+        description: "Events published at or after cursor"
       next_offset:
         type: integer
-        description: "Next cursor value to use in the following pollMessages call"
+        description: "Cursor for the next pollMessages call"
       more_ready:
         type: boolean
-        description: "True when more items are immediately available (batch was capped)"
+        description: "True when more items are immediately available (the batch was capped)"
       closed:
         type: boolean
-        description: "True only in the sync error path when the agent workflow has already completed"
+        description: "True only when the session had already ended"
     required:
       - items
       - next_offset
@@ -462,14 +419,14 @@ $defs:
 
   StreamItem:
     type: object
-    description: "One event from WorkflowStream._log. Data is base64(proto Payload{encoding:json/plain, data:TurnEvent JSON})."
+    description: "One event the agent published"
     properties:
       topic:
         type: string
         description: "Stream topic name (turn_events)"
       data:
         type: string
-        description: "base64-encoded proto Payload containing a TurnEvent"
+        description: "base64 of a serialized Temporal Payload whose data is the event's JSON (the harness's AgentStreamItem)"
       offset:
         type: integer
         description: "Absolute position of this item in the stream"
@@ -485,14 +442,14 @@ $defs:
     properties:
       sessionId:
         type: string
-        description: "Provider-prefixed session identifier"
+        description: "Session identifier"
       toolId:
         type: string
-        description: "The tool_id from the CallbackRequested stream event"
+        description: "The tool_id from the callback_requested event"
       result:
         type: object
         additionalProperties: true
-        description: "The value the client produced. Object-shaped only over this operation - nex-gen's Go target can't compile a oneOf with an object branch (generates a dangling type reference), so a scalar/list result must be wrapped, e.g. {\"value\": ...}."
+        description: "The value the client produced. Object-shaped only over this operation - nex-gen's Go target can't compile a oneOf with an object branch (generates a dangling type reference), so a result for a tool whose output schema is not an object is wrapped as {\"value\": ...}."
       error:
         type: string
         description: "Set instead of result when the client could not fulfill the call"
@@ -513,4 +470,14 @@ $defs:
     required:
       - toolId
       - accepted
+    additionalProperties: false
+
+  CloseSessionOutput:
+    type: object
+    properties:
+      alreadyClosed:
+        type: boolean
+        description: "True when the session had already ended before this call"
+    required:
+      - alreadyClosed
     additionalProperties: false

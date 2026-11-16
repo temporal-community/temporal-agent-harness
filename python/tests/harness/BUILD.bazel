@@ -60,6 +60,7 @@ harness_pytest_test(
         "//python/examples/openai_hello:workflow",  # keep
         "//python/examples/pydantic_ai_hello:workflow",  # keep
         "//python/examples/react_agent:workflow",  # keep
+        "//python/examples/strands_hello:workflow",  # keep
         "//python/examples/tictactoe:workflow",  # keep
         "//python/temporal_agent_harness/harness:agent",
         "//python/temporal_agent_harness/harness:agent_schema",

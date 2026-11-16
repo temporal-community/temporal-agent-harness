@@ -240,13 +240,17 @@ the visible one, but not the only one):
    still apply. (For a framework with its own tool loop, this is the hardest part — interpose
    `run_tool` into the framework's loop.)
 
-Two integrations, two provenances:
+The vendored and harness-authored integrations:
 - **Gemini** (`ai_sdks/google_genai_plugin/`) — **harness-authored**; the harness wrote the
   activity-wrapping itself (not an official Temporal SDK integration).
 - **OpenAI Agents SDK** (`ai_sdks/openai_agents/` + `ai_sdks/openai_agents_harness.py`) — a
   **vendored copy** of `temporalio.contrib.openai_agents` + generic streaming seams
   (`stream_to_provider` / `observer_factory`), with harness specifics in the sibling module. (See
   `python-idioms-for-java-spring-devs.md` for decorator mechanics and the re-vendoring note.)
+- **Strands Agents** (`ai_sdks/strands_agents/` + `ai_sdks/strands_agents_harness.py`, and the
+  TypeScript `ai-sdks/strands-agents/` in core and worker) — a **vendored copy** of
+  `temporalio/ai-integrations` Strands Agents with a `stream_route` / `observer_factory` seam,
+  harness specifics in the sibling module.
 
 ## Model output is not one blob — it's typed parts
 

@@ -56,6 +56,8 @@ ts_project(
     srcs = ["scripted-model.ts"],
     declaration = True,
     tsconfig = "//typescript/packages/worker:tsconfig",
+    # The Strands tests run these agents on the same worker as theirs.
+    visibility = ["//typescript/packages/worker/test/ai-sdks:__subpackages__"],
     deps = ["//typescript/packages/worker:node_modules/@openai/agents-core"],
 )
 
@@ -67,6 +69,8 @@ ts_project(
     srcs = ["workflows.ts"],
     declaration = True,
     tsconfig = "//typescript/packages/worker:tsconfig",
+    # The Strands tests run these agents on the same worker as theirs.
+    visibility = ["//typescript/packages/worker/test/ai-sdks:__subpackages__"],
     deps = [
         ":scripted-model",
         ":tools",

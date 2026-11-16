@@ -175,6 +175,49 @@ def test_links_inside_code_fences_are_not_links():
     assert link_targets(body, "x.md") == ["b"]
 
 
+def test_wikilinks_are_paths_from_the_bundle_root():
+    body = (
+        "See [[people/ana]], [[trips/denver#Dates|the trip]] and [[/projects/x.md]].\n"
+        "Again [[people/ana|Ana]], [[#Dates]], [[]], [[index]] and [[../outside]].\n"
+        "| [[people/bo\\|Bo]] | ![[prefs/coffee]] | [[trips/trip]] | [[ not closed |\n"
+        "```\n[[no]]\n```\n"
+    )
+    assert link_targets(body, "trips/trip.md") == [
+        "people/ana",
+        "trips/denver",
+        "projects/x",
+        "people/bo",
+        "prefs/coffee",
+    ]
+
+
+def test_a_wikilink_can_be_the_end_of_one_concepts_path():
+    concepts = {"people/ana", "team/people/bo", "work/notes", "home/notes", "todo", "work/todo"}
+    body = "[[ana]] [[people/bo]] [[notes]] [[todo]] [[cy]]"
+    assert link_targets(body, "x.md", concepts) == [
+        "people/ana",
+        "team/people/bo",
+        "notes",  # the end of two paths, so it stays a path from the root
+        "todo",  # a concept's own id comes before the end of another path
+        "cy",
+    ]
+
+
+async def test_a_walk_resolves_wikilinks_against_the_concepts_it_found():
+    fs = Bundle(
+        {
+            "people/ana.md": concept("type: Person", "Likes [[coffee]] and [[tea]]."),
+            "prefs/coffee.md": concept("type: Preference", "Goes with [[people/ana|Ana]]."),
+        }
+    )
+    graph = await build_okf_graph(fs, prefix=PurePosixPath("."), links=True, now=NOW)
+    assert [(l.source, l.target, l.dangling) for l in graph.links] == [
+        ("people/ana", "prefs/coffee", False),
+        ("people/ana", "tea", True),
+        ("prefs/coffee", "people/ana", False),
+    ]
+
+
 # ---------------------------------------------------------------- the walk
 
 

@@ -20,9 +20,11 @@ Your agents run on your TypeScript worker.
 The worker is an ordinary Temporal worker, so it can host other workflows and activities too.
 `AgentHarnessPlugin` adds the harness's activities, payload offload, activity tool bodies
 (`tools: [toolActivity(tool, impl), ...]`), and Code Mode when `@pydantic/monty` is installed.
-Register it after your model integration's plugin, such as `OpenAIAgentsPlugin` or
-`GoogleGenAIPlugin`. The OpenAI plugin must be imported from this package's
-`/ai-sdks/openai-agents` entry point to enable harness streaming.
+Register it after your model integration's plugin, such as `OpenAIAgentsPlugin`,
+`GoogleGenAIPlugin` or `StrandsPlugin`. The OpenAI plugin must be imported from this package's
+`/ai-sdks/openai-agents` entry point to enable harness streaming. `StrandsPlugin` comes from
+`/ai-sdks/strands-agents`; pass it `observerFactory: harnessObserverFactory` from
+`/ai-sdks/strands-agents-harness` to stream onto the turn.
 
 Keep the underlying Temporal SDK packages at the version required by the model integration.
 The `@temporalio/agent-harness*` packages have their own, separate version. The quickstart

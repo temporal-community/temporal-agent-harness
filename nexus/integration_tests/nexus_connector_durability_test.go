@@ -226,7 +226,10 @@ func mockAgentSvc(items []harnessgen.StreamItem) *nexus.Service {
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.SendAgentMessage.Name(),
 		func(_ context.Context, _ harnessgen.SendAgentMessageInput, _ nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
-			return harnessgen.SendMessageOutput{TurnNumber: 1, TurnId: "t1"}, nil
+			return harnessgen.SendMessageOutput{
+				TurnNumber: 1, TurnID: "t1", MessageID: "m1",
+				Disposition: harnessgen.SendMessageOutputDispositionOpened,
+			}, nil
 		},
 	))
 	svc.MustRegister(nexus.NewSyncOperation(
@@ -345,6 +348,7 @@ func (testSink) Settle(timeline.Prompt, protocol.ApprovalResolution) error { ret
 func (testSink) Guide([]protocol.Handler) error                            { return nil }
 func (testSink) Form(protocol.Handler) error                               { return nil }
 func (testSink) Error(string) error                                        { return nil }
+func (testSink) Notice(string) error                                       { return nil }
 
 func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue string, platform testOutboundActivities) sdkworker.Worker {
 	t.Helper()

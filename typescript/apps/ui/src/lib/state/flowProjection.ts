@@ -2,6 +2,7 @@ import type { Edge, Node, NodeHandle, Position } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
+  MessageId,
   SubagentUnavailableCode,
   ToolId
 } from "$lib/api/types";
@@ -220,6 +221,37 @@ interface ToolRuntime {
   retryCount?: number;
 }
 
+/**
+ * A message handler that joined the open turn: its own input, model work and reply, apart
+ * from the opener's, which keeps the fold's top-level fields. Scalar fields only, for the
+ * same reason as ToolRuntime.
+ */
+interface LaneState {
+  messageId: MessageId;
+  handler: string;
+  message: string;
+  envelope: string;
+  handlerState: "joined" | "running" | "replied" | "error";
+  currentModel: string;
+  modelState: string;
+  reasoningState: string;
+  reasoningDetail: string;
+  replyText: string;
+  replyIsData: boolean;
+  replyState: string;
+  outputSeen: boolean;
+}
+
+interface SteerRuntime {
+  id: string;
+  text: string;
+  status: "queued" | "claimed" | "dropped";
+  /** The outer call whose result carried it, once claimed; null for a claim without one. */
+  toolId: ToolId | null;
+  /** The lane of the participant that claimed it; null for the opener's. */
+  claimLane: MessageId | null;
+}
+
 /** One run of an auto approval evaluator over one gated tool call. */
 interface EvaluationRuntime {
   id: string;
@@ -278,9 +310,19 @@ type RuntimeNodeId =
   | "subagent"
   | "output"
   | ToolRuntimeNodeId
-  | ApprovalEvaluationNodeId;
+  | ApprovalEvaluationNodeId
+  | LaneScopedNodeId
+  | SteerNodeId;
 
 type ToolRuntimeNodeId = `tool:${ToolId}`;
+
+/* A joined message handler's own cards. The opener's keep the bare ids above, so a turn
+   with one handler builds exactly the nodes it always has. */
+type LaneScopedKind = "input" | "output" | "model" | "reasoning";
+type LaneScopedNodeId = `${LaneScopedKind}:${MessageId}`;
+
+/* One piece of steering, keyed by its steering_id: a handler that steers twice gets two. */
+type SteerNodeId = `steer:${string}`;
 
 /* An automatic approval evaluator judging one gated call. A node of its OWN, not a state
    of the tool's node: the evaluator is separate work, running somewhere else, and folding
@@ -295,7 +337,8 @@ type EdgeKind =
   | "main"
   | "reasoning"
   | "approval"
-  | "output";
+  | "output"
+  | "steer";
 
 interface NodeDimensions {
   width: number;
@@ -306,7 +349,17 @@ interface RuntimeLayout {
   positions: Map<RuntimeNodeId, { x: number; y: number }>;
   boundaryWidth: number;
   boundaryHeight: number;
+  /** The height of the card grid alone, from its first row's top. */
+  contentHeight: number;
 }
+
+/** Which of a lane's cards are its model and the thought card hung under it. */
+interface ModelPair {
+  model: RuntimeNodeId;
+  reasoning: RuntimeNodeId;
+}
+
+const openerModelPair: ModelPair = { model: "model", reasoning: "reasoning" };
 
 interface GraphBounds {
   minX: number;
@@ -378,6 +431,24 @@ const layout = {
   columns: 3,
   runtimePaddingX: 40,
   outputGap: 30
+};
+
+/**
+ * A message handler's lane inside the runtime box, outlined only while two or more handlers
+ * share the turn.
+ *
+ * Every number here fits inside the space a single-handler runtime already leaves around its
+ * cards: the label row sits in the 32px between the box's 88px header and the first card row,
+ * and the outline's foot in the 40px under the last one. So the opener's cards inside the box
+ * stay where they are when outlines appear.
+ */
+const laneBox = {
+  insetX: 16,
+  headerHeight: 28,
+  padBottom: 16,
+  /** Under the label row of a lane with nothing in it, which shrinks to that row. */
+  emptyPadBottom: 8,
+  gap: 16
 };
 
 function runtimeRows(count: number): number {
@@ -590,6 +661,37 @@ function isToolRuntimeNodeId(id: string): id is ToolRuntimeNodeId {
   return id.startsWith("tool:");
 }
 
+function laneScopedNodeId(kind: LaneScopedKind, messageId: MessageId): LaneScopedNodeId {
+  return `${kind}:${messageId}`;
+}
+
+const laneScopedPattern = /^(input|output|model|reasoning):(.+)$/;
+
+function parseLaneScopedNodeId(id: string): { kind: LaneScopedKind; messageId: MessageId } | null {
+  const match = laneScopedPattern.exec(id);
+  return match ? { kind: match[1] as LaneScopedKind, messageId: match[2]! } : null;
+}
+
+function steerNodeId(steeringId: string): SteerNodeId {
+  return `steer:${steeringId}`;
+}
+
+function isSteerNodeId(id: string): id is SteerNodeId {
+  return id.startsWith("steer:");
+}
+
+function modelPairFor(messageId: MessageId | null): ModelPair {
+  return messageId == null
+    ? openerModelPair
+    : { model: laneScopedNodeId("model", messageId), reasoning: laneScopedNodeId("reasoning", messageId) };
+}
+
+/* The opener's lane has no message id of its own in the fold (a frame without one still
+   opens a turn), so its outline takes a fixed id. */
+function laneNodeId(messageId: MessageId | null): string {
+  return messageId == null ? "lane:opener" : `lane:${messageId}`;
+}
+
 function sameFailedRetry(a: ToolRuntime | undefined, b: ToolRuntime | undefined): boolean {
   return Boolean(
     a &&
@@ -731,11 +833,12 @@ function columnLefts(widths: readonly number[], columns: number, gap: number): n
 
 function runtimeLayoutFor(
   order: RuntimeNodeId[],
-  dataById: Map<RuntimeNodeId, AgentNodeData>
+  dataById: Map<RuntimeNodeId, AgentNodeData>,
+  pair: ModelPair = openerModelPair
 ): RuntimeLayout {
-  const attachReasoning = order.includes("model") && order.includes("reasoning");
+  const attachReasoning = order.includes(pair.model) && order.includes(pair.reasoning);
   const flowOrder = attachReasoning
-    ? order.filter((id) => id !== "reasoning")
+    ? order.filter((id) => id !== pair.reasoning)
     : order;
   const positions = new Map<RuntimeNodeId, { x: number; y: number }>();
   const sizes = flowOrder.map((id) => {
@@ -743,8 +846,8 @@ function runtimeLayoutFor(
     const dimensions = data
       ? dimensionsForData(data)
       : { width: stateNodeWidth, height: stateNodeHeight };
-    if (!(attachReasoning && id === "model")) return dimensions;
-    const reasoningData = dataById.get("reasoning");
+    if (!(attachReasoning && id === pair.model)) return dimensions;
+    const reasoningData = dataById.get(pair.reasoning);
     const reasoningDimensions = reasoningData
       ? dimensionsForData(reasoningData)
       : dimensions;
@@ -777,10 +880,10 @@ function runtimeLayoutFor(
     contentHeight = Math.max(contentHeight, y - layout.gridStartY + dimensions.height);
   }
   if (attachReasoning) {
-    const modelPosition = positions.get("model");
-    const modelData = dataById.get("model");
+    const modelPosition = positions.get(pair.model);
+    const modelData = dataById.get(pair.model);
     if (modelPosition && modelData) {
-      positions.set("reasoning", {
+      positions.set(pair.reasoning, {
         x: modelPosition.x,
         y: modelPosition.y + dimensionsForData(modelData).height + modelReasoningGap
       });
@@ -790,7 +893,8 @@ function runtimeLayoutFor(
   return {
     positions,
     boundaryWidth: layout.runtimePaddingX + contentWidth + layout.runtimePaddingX,
-    boundaryHeight: layout.gridStartY - layout.runtime.y + contentHeight + 40
+    boundaryHeight: layout.gridStartY - layout.runtime.y + contentHeight + 40,
+    contentHeight
   };
 }
 
@@ -811,7 +915,19 @@ function port(id: string, type: NodeHandle["type"], position: string, x: number,
   return { id, type, position: position as Position, x, y, width: 0, height: 0 };
 }
 
-function handlesFor(type: string | undefined, { width, height }: NodeDimensions): NodeHandle[] {
+function handlesFor(
+  type: string | undefined,
+  { width, height }: NodeDimensions,
+  data?: AgentNodeData
+): NodeHandle[] {
+  if (type === "agentLane") {
+    const portY = data ? numericData(data, "portY", height / 2) : height / 2;
+    return [
+      port("target-left", "target", "left", -1, portY),
+      port("source-right", "source", "right", width + 1, portY),
+      port("target-bottom", "target", "bottom", width / 2 - 1, height + 1)
+    ];
+  }
   if (type === "agentWorkflow") {
     return [
       port("target-top", "target", "top", width / 2 - 1, -1),
@@ -841,7 +957,7 @@ function handlesFor(type: string | undefined, { width, height }: NodeDimensions)
 function withKnownSizes(nodes: Node<AgentNodeData>[]): Node<AgentNodeData>[] {
   return nodes.map((item) => {
     const dimensions = nodeDimensions(item);
-    return { ...item, ...dimensions, handles: handlesFor(item.type, dimensions) };
+    return { ...item, ...dimensions, handles: handlesFor(item.type, dimensions, item.data) };
   });
 }
 
@@ -1101,6 +1217,14 @@ function terminalRuntimeSources(
   return segments.at(-1)?.ids ?? [];
 }
 
+/**
+ * What a handler returned, as sent, for when its reply has no text to show: a steering handler
+ * returns `{"text": ""}`, and that is still its result, not the absence of one.
+ */
+function returnedOutput(output: unknown): string | null {
+  return output === undefined || output === null ? null : JSON.stringify(output, null, 2);
+}
+
 function textSection(
   label: string,
   text: string | undefined,
@@ -1142,6 +1266,18 @@ export function settledToolIdFromFrame(frame: AgentSseFrame): ToolId | null {
 }
 
 /**
+ * Everything this frame puts on hold for a beat: the tool it settled, and each steer it
+ * claimed (as its `steer:<steering_id>` node id). A claimed steer is drawn lit, with its edge
+ * to the call that carried it, only while held; after the beat it dims and the edge goes, since
+ * the model carries on from there and the claim has been shown.
+ */
+export function heldIdsFromFrame(frame: AgentSseFrame): string[] {
+  if (frame.event === "steering_claimed") return frame.data.steering_ids.map(steerNodeId);
+  const toolId = settledToolIdFromFrame(frame);
+  return toolId == null ? [] : [toolId];
+}
+
+/**
  * How many steps of the cursor a finished tool stays drawn while a run is being
  * read back. One: the frame that finished it draws it done, and the next frame
  * dismisses it.
@@ -1161,7 +1297,7 @@ export function settledToolIdFromFrame(frame: AgentSseFrame): ToolId | null {
 export const cursorHoldSteps = 1;
 
 /**
- * The tool that settled on the frame the cursor is parked on, if one did.
+ * The tool that settled, or the steers claimed, on the frame the cursor is parked on.
  *
  * The read-back half of the hold. Scrubbing rebuilds the graph from the frames up
  * to the cursor, so a tool that finished one step ago is simply absent from focus
@@ -1179,8 +1315,7 @@ export function settledNearCursor(
 ): ReadonlySet<ToolId> {
   const held = new Set<ToolId>();
   for (let at = Math.max(0, timeline.length - steps); at < timeline.length; at += 1) {
-    const toolId = settledToolIdFromFrame(timeline[at].frame);
-    if (toolId != null) held.add(toolId);
+    for (const id of heldIdsFromFrame(timeline[at].frame)) held.add(id);
   }
   return held;
 }
@@ -1331,6 +1466,9 @@ interface AgentFoldState {
   /* The envelope the rendered text came from — `{type, payload}` as the message was sent —
      so the inspector can show the raw message next to the readable one. */
   currentUserEnvelope: string;
+  /** The opener's handler name and how it stands, for its lane's label. */
+  currentHandler: string;
+  handlerState: LaneState["handlerState"];
   inputState: string;
   currentModel: string;
   modelState: string;
@@ -1345,7 +1483,14 @@ interface AgentFoldState {
   replyIsData: boolean;
   replyState: string;
   queued: number;
-  queuedByTurn: Map<number, [message: string, envelope: string]>;
+  queuedByTurn: Map<number, [message: string, envelope: string, handler: string]>;
+  /* The turn's joined handlers in arrival order, keyed by message_id. Cleared at turn_started. */
+  lanes: Map<MessageId, LaneState>;
+  steers: Map<string, SteerRuntime>;
+  /* The joined lane each runtime node was first marked in. A node absent here is the opener's. */
+  nodeLane: Map<RuntimeNodeId, MessageId>;
+  /* The lane of the frame being folded, so markRuntimeNode files a new node under it. */
+  currentLaneId: MessageId | null;
   runtimeHeaderPrefix: string | undefined;
   subagentState: string;
   subagentSubtitle: string;
@@ -1394,6 +1539,8 @@ function initialState(): AgentFoldState {
     currentUserMessage: "No message received",
     queuedMessage: "",
     currentUserEnvelope: "",
+    currentHandler: "",
+    handlerState: "joined",
     inputState: "waiting",
     currentModel: "model idle",
     modelState: "idle",
@@ -1405,7 +1552,11 @@ function initialState(): AgentFoldState {
     replyIsData: false,
     replyState: "waiting",
     queued: 0,
-    queuedByTurn: new Map<number, [message: string, envelope: string]>(),
+    queuedByTurn: new Map<number, [message: string, envelope: string, handler: string]>(),
+    lanes: new Map<MessageId, LaneState>(),
+    steers: new Map<string, SteerRuntime>(),
+    nodeLane: new Map<RuntimeNodeId, MessageId>(),
+    currentLaneId: null,
     runtimeHeaderPrefix: undefined,
     subagentState: "idle",
     subagentSubtitle: "",
@@ -1461,9 +1612,113 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     if (!s.runtimeNodes.has(id)) {
       s.runtimeNodes.add(id);
       s.runtimeNodeOrder.push(id);
+      if (s.currentLaneId != null) s.nodeLane.set(id, s.currentLaneId);
     }
     s.latestNodeId = id;
     remember(id);
+  }
+
+  /* A lane's Input and Output follow the graph's placement, as the opener's do: cards outside
+     the runtime box for a top-level agent, cards in the lane for an embedded subagent. */
+  function markLaneEnd(kind: "input" | "output", messageId: MessageId, placement: AgentGraphOptions["inputPlacement"]): void {
+    const id = laneScopedNodeId(kind, messageId);
+    if (placement === "runtime") {
+      markRuntimeNode(id);
+    } else {
+      s.latestNodeId = id;
+      remember(id);
+    }
+  }
+
+  function joinLane(frame: Extract<AgentSseFrame, { event: "message_accepted" }>, messageId: MessageId): void {
+    const message = renderUserMessage(frame.data.handler, frame.data.payload);
+    s.lanes.set(messageId, {
+      messageId,
+      handler: frame.data.handler,
+      message,
+      envelope: JSON.stringify({ type: frame.data.handler, payload: frame.data.payload }),
+      handlerState: "joined",
+      currentModel: "model idle",
+      modelState: "idle",
+      reasoningState: "idle",
+      reasoningDetail: "",
+      replyText: "",
+      replyIsData: false,
+      replyState: "waiting",
+      outputSeen: false
+    });
+    s.currentLaneId = messageId;
+    markLaneEnd("input", messageId, inputPlacement);
+  }
+
+  function markLaneOutput(laneState: LaneState): void {
+    laneState.outputSeen = true;
+    markLaneEnd("output", laneState.messageId, outputPlacement);
+  }
+
+  /**
+   * A joined handler's own lifecycle, model work and reply. Returns false for everything
+   * else, which the shared code below folds and files under the lane through currentLaneId:
+   * tools, approvals, callbacks and steering are drawn the same in any lane.
+   */
+  function addLaneFrame(laneState: LaneState, frame: AgentSseFrame, outputSchema: unknown): boolean {
+    const pair = modelPairFor(laneState.messageId);
+    switch (frame.event) {
+      case "message_handler_start":
+        laneState.handlerState = "running";
+        return true;
+      case "model_interaction_started":
+        markRuntimeNode(pair.model);
+        laneState.currentModel = frame.data.model ?? "unknown model";
+        laneState.modelState = "running";
+        laneState.reasoningState = "waiting";
+        return true;
+      case "model_interaction_ended":
+        markRuntimeNode(pair.model);
+        laneState.currentModel = frame.data.model ?? laneState.currentModel;
+        laneState.modelState = "finished";
+        if (laneState.reasoningState === "running" || frame.data.usage?.thought_tokens) {
+          laneState.reasoningState = "captured";
+        }
+        return true;
+      case "thought_summary":
+        markRuntimeNode(pair.reasoning);
+        laneState.reasoningDetail += thoughtDeltaText(frame.data.delta);
+        laneState.reasoningState = "running";
+        return true;
+      case "reply_delta":
+        markLaneOutput(laneState);
+        laneState.replyText += frame.data.text;
+        laneState.replyIsData = streamingIsData(laneState.replyText, outputSchema);
+        laneState.replyState = "streaming";
+        return true;
+      case "text_annotation":
+        markLaneOutput(laneState);
+        laneState.replyState = "annotated";
+        return true;
+      case "message_handler_end": {
+        laneState.handlerState = "replied";
+        if (laneState.modelState === "running") laneState.modelState = "finished";
+        const reply = handlerReply(frame.data, outputSchema);
+        const returned = reply.text || laneState.replyText ? null : returnedOutput(frame.data.output);
+        laneState.replyText = reply.text || laneState.replyText || (returned ?? "");
+        laneState.replyIsData = reply.json !== undefined || returned != null;
+        /* An Output card even for an empty reply (every steering handler returns one): the
+           handler is done the moment it returns, and a lane with no Output reads as still
+           running. Its steer cards are the one part that settles later. */
+        markLaneOutput(laneState);
+        laneState.replyState = "available";
+        return true;
+      }
+      case "message_handler_error":
+        laneState.handlerState = "error";
+        markLaneOutput(laneState);
+        laneState.replyText = frame.data.message;
+        laneState.replyState = "error";
+        return true;
+      default:
+        return false;
+    }
   }
 
   function markOutput(): void {
@@ -1533,7 +1788,14 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     // A call keeps the place its first frame gave it: one the model asked for alongside a
     // host starts while the host runs, but is not one of its script's calls.
     const existing = s.tools.get(toolId);
-    return existing ? existing.parentToolId : s.activeCodeModeToolIds.at(-1);
+    if (existing) return existing.parentToolId;
+    /* Only a script running in the same message handler's lane: a joined handler's call made
+       while the opener's script runs is the joined handler's own, not one of that script's. */
+    for (let index = s.activeCodeModeToolIds.length - 1; index >= 0; index -= 1) {
+      const hostId = s.activeCodeModeToolIds[index]!;
+      if ((s.nodeLane.get(toolRuntimeNodeId(hostId)) ?? null) === s.currentLaneId) return hostId;
+    }
+    return undefined;
   }
 
   function markCodeModeStarted(toolId: ToolId): void {
@@ -1556,7 +1818,8 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     s.activeRuntimeToolIds.clear();
     s.runtimeToolFlowGroup = 0;
     for (let index = s.runtimeNodeOrder.length - 1; index >= 0; index -= 1) {
-      if (isToolRuntimeNodeId(s.runtimeNodeOrder[index])) {
+      const id = s.runtimeNodeOrder[index];
+      if (isToolRuntimeNodeId(id) || isSteerNodeId(id) || s.nodeLane.has(id)) {
         s.runtimeNodes.delete(s.runtimeNodeOrder[index]);
         s.runtimeNodeOrder.splice(index, 1);
       }
@@ -1564,8 +1827,18 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     /* No earlier turn's call is drawn again, and one that sends another frame is remembered
        afresh; kept, these were a hundred thousand entries every checkpoint had to copy. */
     for (const id of s.lastFrameByNode.keys()) {
-      if (isToolRuntimeNodeId(id) || isApprovalEvaluationNodeId(id)) s.lastFrameByNode.delete(id);
+      if (
+        isToolRuntimeNodeId(id) ||
+        isApprovalEvaluationNodeId(id) ||
+        isSteerNodeId(id) ||
+        parseLaneScopedNodeId(id)
+      ) {
+        s.lastFrameByNode.delete(id);
+      }
     }
+    s.lanes.clear();
+    s.steers.clear();
+    s.nodeLane.clear();
   }
 
   function add(frame: AgentSseFrame): void {
@@ -1574,20 +1847,35 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     s.currentFrame = frame;
     if (frame.event === "message_accepted") accepted.push(frame);
     const outputSchema = schemaOf(frame, foldOptions.agentInterface);
+    /* Every event is attributed by its envelope's message_id. One that belongs to a handler
+       which joined this turn is that handler's, and never touches the opener's input, reply or
+       status; anything else, including frames with no message_id, is the opener's. */
+    const messageId = frame.data.message_id ?? null;
+    const joinedLane = messageId != null ? s.lanes.get(messageId) : undefined;
+    s.currentLaneId = joinedLane ? joinedLane.messageId : null;
+    if (frame.event === "message_accepted" && frame.data.disposition === "joined" && messageId != null) {
+      joinLane(frame, messageId);
+      return;
+    }
+    if (joinedLane && addLaneFrame(joinedLane, frame, outputSchema)) return;
     if (frame.event === "message_accepted") {
       // The one event carrying what was sent, whatever it did to the turn. Only a QUEUED one
-      // shows in the queue depth; an "opened" message is about to be the turn, and a "joined"
-      // one is already running inside it.
+      // shows in the queue depth; an "opened" message is about to be the turn.
       markInput();
       s.currentUserMessage = renderUserMessage(frame.data.handler, frame.data.payload);
       s.currentUserEnvelope = JSON.stringify({
         type: frame.data.handler,
         payload: frame.data.payload
       });
+      s.currentHandler = frame.data.handler;
       if (frame.data.disposition === "queued") {
         s.queued += 1;
         s.queuedMessage = s.currentUserMessage;
-        s.queuedByTurn.set(frame.data.turn_number, [s.currentUserMessage, s.currentUserEnvelope]);
+        s.queuedByTurn.set(frame.data.turn_number, [
+          s.currentUserMessage,
+          s.currentUserEnvelope,
+          frame.data.handler
+        ]);
         s.inputState = `${s.queued} queued`;
       } else {
         // The card now shows this message, and turn_started is at least a frame away (the
@@ -1603,8 +1891,9 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       s.inputState = `turn ${frame.data.turn_number}`;
       // Later queued messages overwrote the card's text; the turn starting now is about its own.
       const opening = s.queuedByTurn.get(frame.data.turn_number);
-      if (opening) [s.currentUserMessage, s.currentUserEnvelope] = opening;
+      if (opening) [s.currentUserMessage, s.currentUserEnvelope, s.currentHandler] = opening;
       s.queuedByTurn.delete(frame.data.turn_number);
+      s.handlerState = "running";
       s.modelState = "waiting";
       s.reasoningState = "waiting";
       s.reasoningDetail = "";
@@ -1650,21 +1939,46 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     } else if (frame.event === "text_annotation") {
       markOutput();
       s.replyState = "annotated";
+    } else if (frame.event === "message_handler_start") {
+      s.handlerState = "running";
     } else if (frame.event === "message_handler_end") {
       markOutput();
       s.status = "replied";
+      s.handlerState = "replied";
       const reply = handlerReply(frame.data, outputSchema);
-      s.replyText = reply.text || s.replyText;
-      s.replyIsData = reply.json !== undefined;
+      const returned = reply.text || s.replyText ? null : returnedOutput(frame.data.output);
+      s.replyText = reply.text || s.replyText || (returned ?? "");
+      s.replyIsData = reply.json !== undefined || returned != null;
       /* "reply available" was wider than the chip, the same way "awaiting
-         approval" was. The noun is carried by the card, which is titled Output. */
+         approval" was. The noun is carried by the card, which is titled with its handler. */
       s.replyState = "available";
     } else if (frame.event === "message_handler_error") {
       markOutput();
       s.status = "error";
+      s.handlerState = "error";
       s.failed = true;
       s.replyText = frame.data.message;
       s.replyState = "error";
+    } else if (frame.event === "steering_enqueued") {
+      /* Filed under the lane of the handler that steered, through currentLaneId. */
+      markRuntimeNode(steerNodeId(frame.data.steering_id));
+      s.steers.set(frame.data.steering_id, {
+        id: frame.data.steering_id,
+        text: frame.data.text,
+        status: "queued",
+        toolId: null,
+        claimLane: null
+      });
+    } else if (frame.event === "steering_claimed" || frame.event === "steering_dropped") {
+      /* Named by id, so a claim settles exactly the steering it took, whichever lane that is in. */
+      for (const steeringId of frame.data.steering_ids) {
+        const steer = s.steers.get(steeringId);
+        if (!steer) continue;
+        steer.status = frame.event === "steering_claimed" ? "claimed" : "dropped";
+        steer.toolId = frame.event === "steering_claimed" ? frame.data.tool_id : null;
+        steer.claimLane = s.currentLaneId;
+        remember(steerNodeId(steeringId));
+      }
     } else if (frame.event === "turn_end") {
       s.activeTurn = frame.data.turn_number;
       s.status = "idle";
@@ -1919,6 +2233,9 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     return {
       ...from,
       queuedByTurn: new Map(from.queuedByTurn),
+      lanes: new Map([...from.lanes].map(([id, lane]) => [id, { ...lane }])),
+      steers: new Map([...from.steers].map(([id, steer]) => [id, { ...steer }])),
+      nodeLane: new Map(from.nodeLane),
       tools: new Map([...from.tools].map(([id, tool]) => [id, { ...tool }])),
       codeModeChildren: new Map(from.codeModeChildren),
       evaluations: new Map([...from.evaluations].map(([id, evaluation]) => [id, { ...evaluation }])),
@@ -1996,6 +2313,11 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         const at = order.indexOf("reasoning");
         if (at >= 0) order.splice(at, 1);
       }
+      for (const laneState of s.lanes.values()) {
+        if (laneState.reasoningState === "running") continue;
+        const at = order.indexOf(modelPairFor(laneState.messageId).reasoning);
+        if (at >= 0) order.splice(at, 1);
+      }
       /* Not optional bookkeeping: `active: activeNodeId === id` is what marks the
          live card, so a turn whose last tool just settled off the canvas would
          have no active node at all. The newest survivor is where the run is. */
@@ -2037,14 +2359,34 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
      * The two synthetic nodes — the tool container and the runtime boundary — have
      * no frame of their own, so they describe what they are made of instead.
      */
-    function replySection(label: string): AgentNodeContext | null {
-      return streamingIsData(s.replyText) ? maybeJsonSection(label, stripJsonFence(s.replyText)) : textSection(label, s.replyText, "markdown");
+    function replySection(label: string, text = s.replyText): AgentNodeContext | null {
+      return streamingIsData(text) ? maybeJsonSection(label, stripJsonFence(text)) : textSection(label, text, "markdown");
+    }
+
+    function messageSections(message: string, envelope: string): Array<AgentNodeContext | null> {
+      return [
+        textSection("User message", message, "markdown"),
+        envelope && envelope !== message ? maybeJsonSection("Raw message", envelope) : null
+      ];
     }
 
     function contextFor(id: LocalNodeId): AgentNodeContext[] {
       const sections: Array<AgentNodeContext | null> = [];
+      const scoped = parseLaneScopedNodeId(id);
+      const scopedLane = scoped ? s.lanes.get(scoped.messageId) : undefined;
 
-      if (id === "input") {
+      if (scoped && scopedLane) {
+        if (scoped.kind === "input") sections.push(...messageSections(scopedLane.message, scopedLane.envelope));
+        else if (scoped.kind === "output") sections.push(replySection("Reply", scopedLane.replyText));
+        else if (scoped.kind === "model") sections.push(textSection("Model", scopedLane.currentModel));
+        else sections.push(textSection("Thought summary", scopedLane.reasoningDetail, "markdown"));
+      } else if (isSteerNodeId(id)) {
+        const steer = s.steers.get(id.slice("steer:".length));
+        sections.push(
+          textSection("Steering sent to the model", steer?.text, "markdown"),
+          textSection("Carried by tool call", steer?.toolId ?? undefined)
+        );
+      } else if (id === "input") {
         const rendered = s.currentUserMessage || s.queuedMessage;
         sections.push(textSection("User message", rendered, "markdown"));
         if (s.currentUserEnvelope && s.currentUserEnvelope !== rendered) {
@@ -2113,13 +2455,99 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       return { ...baseNodeDataFor(id), context: contextFor(id) };
     }
 
+    function laneNodeDataFor(kind: LaneScopedKind, laneState: LaneState, id: LocalNodeId): AgentNodeData {
+      const active = activeNodeId === id;
+      if (kind === "input") {
+        return {
+          tone: "neutral",
+          title: laneState.handler,
+          variant: "prompt",
+          state: "joined",
+          subtitle: "mid-turn message",
+          detail: laneState.message,
+          nodeHeight: stateNodeHeight,
+          active
+        };
+      }
+      if (kind === "output") {
+        return {
+          tone:
+            laneState.replyState === "error"
+              ? "error"
+              : laneState.replyText || laneState.handlerState === "replied"
+                ? "done"
+                : "neutral",
+          title: laneState.handler,
+          state: laneState.replyState,
+          subtitle: "reply",
+          detail: laneState.replyText,
+          markdown: !laneState.replyIsData && laneState.replyState !== "error",
+          nodeHeight: stateNodeHeight,
+          active
+        };
+      }
+      if (kind === "model") {
+        return {
+          tone: laneState.modelState === "running" ? "model" : "neutral",
+          title: "Model interaction",
+          state: laneState.modelState,
+          subtitle: laneState.currentModel,
+          size: "large",
+          active
+        };
+      }
+      return {
+        tone:
+          laneState.reasoningState === "running" || laneState.reasoningState === "captured"
+            ? "reasoning"
+            : "neutral",
+        title: "Thought summary",
+        state: laneState.reasoningState,
+        subtitle: "thinking trace",
+        detail: laneState.reasoningDetail || NO_THOUGHT_SUMMARY,
+        nodeHeight: resultNodeHeight,
+        active
+      };
+    }
+
+    function steerNodeData(steer: SteerRuntime | undefined, id: LocalNodeId): AgentNodeData {
+      const carrier = steer?.toolId ? shownTools.get(steer.toolId)?.name ?? s.tools.get(steer.toolId)?.name : undefined;
+      const status = steer?.status ?? "queued";
+      /* Lit for the beat its claim is held, showing it go to the model; dimmed after, when the
+         model's own cards carry the run on. */
+      const justClaimed = status === "claimed" && lingeringTools.has(id);
+      return {
+        tone: justClaimed ? "done" : status === "claimed" ? "neutral" : status === "dropped" ? "error" : "queue",
+        title: "Steer",
+        state: status,
+        subtitle:
+          status === "claimed"
+            ? carrier
+              ? `sent with ${carrier}`
+              : "sent to the model"
+            : status === "dropped"
+              ? "never reached the model"
+              : "waiting for the next tool result",
+        detail: steer?.text ?? "",
+        markdown: true,
+        nodeHeight: stateNodeHeight,
+        active: justClaimed || (status !== "claimed" && activeNodeId === id)
+      };
+    }
+
     function baseNodeDataFor(id: LocalNodeId): AgentNodeData {
+      const scoped = parseLaneScopedNodeId(id);
+      const scopedLane = scoped ? s.lanes.get(scoped.messageId) : undefined;
+      if (scoped && scopedLane) return laneNodeDataFor(scoped.kind, scopedLane, id);
+      if (isSteerNodeId(id)) return steerNodeData(s.steers.get(id.slice("steer:".length)), id);
       if (id === "input") {
         return {
           /* Queue-toned only while a message actually waits behind the running turn: the
              run being busy is the runtime's news, not the message's. */
           tone: s.queuedByTurn.size > 0 ? "queue" : "neutral",
-          title: "Input",
+          /* Named for the handler it is input to: which handler a message reached is the
+             question the card answers. */
+          title: s.currentHandler || "Input",
           variant: "prompt",
           state: s.inputState,
           subtitle: "user message",
@@ -2247,7 +2675,8 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
              `status` is reset to idle by turn_end, so an Output toned off it went green the
              moment a failed turn ended (the error is reply text too) while it still said ERROR. */
           tone: s.replyState === "error" ? "error" : s.replyText ? "done" : "neutral",
-          title: "Output",
+          /* Named for the handler whose reply it is, as the Input card is for the handler it reached. */
+          title: s.currentHandler || "Output",
           state: s.replyState,
           subtitle: "streaming response",
           detail: s.replyText,
@@ -2266,17 +2695,103 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     const runtimeDataById = new Map<RuntimeNodeId, AgentNodeData>(
       order.map((id) => [id, nodeDataFor(id)])
     );
-    const runtimeLayout = runtimeLayoutFor(order, runtimeDataById);
-    const boundaryWidth = runtimeLayout.boundaryWidth;
-    const boundaryHeight = runtimeLayout.boundaryHeight;
+
+    /* The opener first, then each joined handler in arrival order. Outlines are drawn only
+       while there are two or more: the lanes are there to show handlers running at once. */
+    const laneIds: Array<MessageId | null> = [null, ...s.lanes.keys()];
+    const lanesDrawn = laneIds.length > 1;
+    const laneOrders = laneIds.map((messageId) =>
+      order.filter((id) => (s.nodeLane.get(id) ?? null) === messageId)
+    );
+    const laneLayouts = laneOrders.map((laneOrder, index) =>
+      runtimeLayoutFor(laneOrder, runtimeDataById, modelPairFor(laneIds[index] ?? null))
+    );
+
+    /* How far below a lane's first card row its approval satellites reach, so the next lane
+       starts under them rather than on top of them. */
+    function satelliteReach(laneLayout: RuntimeLayout): number {
+      let reach = 0;
+      for (const evaluation of s.evaluations.values()) {
+        if (satelliteDismissed(evaluation)) continue;
+        const ownerNodeId = approvalAnchorOwner(evaluation.toolId);
+        const ownerPosition = laneLayout.positions.get(ownerNodeId);
+        if (!ownerPosition) continue;
+        const ownerHeight = numericData(
+          runtimeDataById.get(ownerNodeId) ?? nodeDataFor(ownerNodeId),
+          "nodeHeight",
+          resultNodeHeight
+        );
+        reach = Math.max(
+          reach,
+          ownerPosition.y - layout.gridStartY + ownerHeight + approvalEvaluationGapY + stateNodeHeight
+        );
+      }
+      return reach;
+    }
+
+    /* How tall the Input and Output cards beside a lane stand: the opener's are full cards, a
+       joined handler's compact ones. None when the graph keeps them inside the runtime. */
+    const externalEnds = inputPlacement === "external" || outputPlacement === "external";
+    const endHeightOf = (index: number) =>
+      !externalEnds ? 0 : index === 0 ? resultNodeHeight : stateNodeHeight;
+
+    /* Each lane is as tall as what it holds, down to its label row alone when it holds nothing.
+       Lanes stack in arrival order, spaced only as far as the cards centred beside them need
+       to clear each other. The opener's lane keeps the grid's own origin, so its cards never
+       move when outlines appear. */
+    const laneGeometry: Array<{ laneTop: number; laneHeight: number }> = [];
+    const positions = new Map<RuntimeNodeId, { x: number; y: number }>();
+    let slotBottom = 0;
+    laneLayouts.forEach((laneLayout, index) => {
+      const empty = lanesDrawn && laneOrders[index]!.length === 0;
+      const contentHeight = empty
+        ? 0
+        : lanesDrawn
+          ? Math.max(laneLayout.contentHeight, satelliteReach(laneLayout))
+          : laneLayout.contentHeight;
+      const laneHeight =
+        laneBox.headerHeight + (empty ? laneBox.emptyPadBottom : contentHeight + laneBox.padBottom);
+      const overhang = Math.max(0, (endHeightOf(index) - laneHeight) / 2);
+      const laneTop =
+        index === 0 ? layout.gridStartY - laneBox.headerHeight : slotBottom + laneBox.gap + overhang;
+      const shift = laneTop + laneBox.headerHeight - layout.gridStartY;
+      for (const [id, position] of laneLayout.positions) {
+        positions.set(id, { x: position.x, y: position.y + shift });
+      }
+      laneGeometry.push({ laneTop, laneHeight });
+      slotBottom = laneTop + laneHeight + overhang;
+    });
+    const lanesBottom = Math.max(...laneGeometry.map((item) => item.laneTop + item.laneHeight));
+    const boundaryWidth = Math.max(...laneLayouts.map((laneLayout) => laneLayout.boundaryWidth));
+    /* The box's foot sits as far under the last lane as a single runtime's sits under its cards. */
+    const boundaryHeight = lanesBottom + 40 - laneBox.padBottom - layout.runtime.y;
+    const runtimeLayout: RuntimeLayout = {
+      positions,
+      boundaryWidth,
+      boundaryHeight,
+      contentHeight: lanesBottom - laneBox.padBottom - layout.gridStartY
+    };
+    /* Where a lane's Input and Output cards sit: centred on the lane while outlines are drawn.
+       Without them the opener's stay where they have always been. */
+    const laneEndY = (index: number) => {
+      const geometry = laneGeometry[index]!;
+      return geometry.laneTop + geometry.laneHeight / 2 - endHeightOf(index) / 2;
+    };
+
+    /* The opener's handler ending does not settle the runtime while a joined one still runs. */
+    const anyJoinedRunning = [...s.lanes.values()].some(
+      (laneState) => laneState.handlerState === "joined" || laneState.handlerState === "running"
+    );
+    const runtimeStatus: AgentGraph["status"] =
+      s.status === "replied" && anyJoinedRunning ? "running" : s.status;
 
     const runtimeNode = node(
       "agent-runtime",
       layout.runtime,
       {
-        tone: s.status === "error" ? "error" : "agent",
+        tone: runtimeStatus === "error" ? "error" : "agent",
         title: "Agent runtime",
-        state: s.status === "idle" ? "idle" : s.status,
+        state: runtimeStatus === "idle" ? "idle" : runtimeStatus,
         subtitle: "model calls, tool execution, and internal state",
         headerPrefix: s.runtimeHeaderPrefix,
         boundaryWidth,
@@ -2315,8 +2830,67 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       "agentWorkflow"
     );
     const nodes: Node<AgentNodeData>[] = [runtimeNode];
+
+    function laneData(messageId: MessageId | null, index: number): AgentNodeData {
+      const joined = messageId != null ? s.lanes.get(messageId) : undefined;
+      const handlerState = joined ? joined.handlerState : s.handlerState;
+      const handler = joined ? joined.handler : s.currentHandler || "message";
+      const geometry = laneGeometry[index]!;
+      return {
+        tone: handlerState === "error" ? "error" : handlerState === "replied" ? "done" : "agent",
+        title: handler,
+        subtitle: joined ? "joined" : "turn opener",
+        state: handlerState,
+        nodeWidth: boundaryWidth - laneBox.insetX * 2,
+        nodeHeight: geometry.laneHeight,
+        /* The side ports, at the lane's middle, where its Input and Output cards are centred. */
+        portY: geometry.laneHeight / 2,
+        context: [
+          ...(joined
+            ? messageSections(joined.message, joined.envelope)
+            : messageSections(s.currentUserMessage, s.currentUserEnvelope)),
+          joined ? replySection("Reply", joined.replyText) : replySection("Reply")
+        ].filter((section): section is AgentNodeContext => section != null)
+      };
+    }
+
+    if (lanesDrawn) {
+      laneIds.forEach((messageId, index) => {
+        nodes.push({
+          ...node(
+            laneNodeId(messageId),
+            {
+              x: layout.runtime.x + laneBox.insetX,
+              y: laneGeometry[index]!.laneTop
+            },
+            laneData(messageId, index),
+            "agentLane"
+          ),
+          /* Over the runtime's floor, under its edges and cards. */
+          zIndex: 0
+        });
+      });
+    }
     if (s.inputSeen && inputPlacement === "external") {
-      nodes.push(node("input", layout.input, nodeDataFor("input")));
+      nodes.push(
+        node("input", lanesDrawn ? { x: layout.input.x, y: laneEndY(0) } : layout.input, nodeDataFor("input"))
+      );
+    }
+    if (inputPlacement === "external") {
+      laneIds.forEach((messageId, index) => {
+        if (messageId == null) return;
+        const id = laneScopedNodeId("input", messageId);
+        nodes.push(node(id, { x: layout.input.x, y: laneEndY(index) }, nodeDataFor(id)));
+      });
+    }
+    if (outputPlacement === "external") {
+      laneIds.forEach((messageId, index) => {
+        if (messageId == null || !s.lanes.get(messageId)?.outputSeen) return;
+        const id = laneScopedNodeId("output", messageId);
+        nodes.push(
+          node(id, { x: outputPosition(boundaryWidth).x, y: laneEndY(index) }, nodeDataFor(id))
+        );
+      });
     }
     nodes.push(
       ...order.map((id) =>
@@ -2357,7 +2931,10 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       }
     }
     if (s.outputSeen && outputPlacement === "external") {
-      nodes.push(node("output", outputPosition(boundaryWidth), nodeDataFor("output")));
+      const outputAt = outputPosition(boundaryWidth);
+      nodes.push(
+        node("output", lanesDrawn ? { x: outputAt.x, y: laneEndY(0) } : outputAt, nodeDataFor("output"))
+      );
     }
 
     const edges: Edge[] = [];
@@ -2373,6 +2950,14 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
     function approvalAnchorOwner(toolId: ToolId): ToolRuntimeNodeId {
       const parentToolId = shownTools.get(toolId)?.parentToolId;
       return toolRuntimeNodeId(parentToolId ?? toolId);
+    }
+
+    function satelliteDismissed(evaluation: EvaluationRuntime): boolean {
+      const gateDecided = s.resolvedApprovalToolIds.has(evaluation.toolId);
+      const heldWithRefusedCall =
+        s.deniedApprovalToolIds.has(evaluation.toolId) &&
+        lingeringTools.has(evaluation.toolId);
+      return gateDecided && evaluation.status !== "cancelled" && !heldWithRefusedCall;
     }
 
     /* One column per owner, so several gated calls under one Code Mode host do not stack. */
@@ -2403,13 +2988,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
          put its own tool id back in the set when it FINISHED, and the evaluation card that
          had been dismissed at the approval reappeared minutes later as the tool wrapped up.
          Only a refusal can resurrect a card, and only for the beat its own call is held. */
-      const gateDecided = s.resolvedApprovalToolIds.has(evaluation.toolId);
-      const heldWithRefusedCall =
-        s.deniedApprovalToolIds.has(evaluation.toolId) &&
-        lingeringTools.has(evaluation.toolId);
-      if (gateDecided && evaluation.status !== "cancelled" && !heldWithRefusedCall) {
-        continue;
-      }
+      if (satelliteDismissed(evaluation)) continue;
       const toolNodeId = toolRuntimeNodeId(evaluation.toolId);
       // The call's card can be gone (focus view drops settled ones); its satellite goes too,
       // or the edge below would point at a node that is not drawn.
@@ -2459,34 +3038,77 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
         edges.push(...embeddedGraph.edges);
       }
     }
-    const reasoningAttachedToModel =
-      order.includes("model") && order.includes("reasoning");
-    const runtimeFlowOrder = reasoningAttachedToModel
-      ? order.filter((id) => id !== "reasoning")
-      : order;
-    if (reasoningAttachedToModel) {
+    const laneFlowOrders = laneIds.map((messageId, index) => {
+      const laneOrder = laneOrders[index]!;
+      const pair = modelPairFor(messageId);
+      if (!(laneOrder.includes(pair.model) && laneOrder.includes(pair.reasoning))) return laneOrder;
       edges.push(
-        edge(
-          "flow-model-reasoning",
-          "model",
-          "reasoning",
-          {
-            sourceHandle: "source-bottom",
-            targetHandle: "target-top",
-            kind: "reasoning"
-          }
-        )
+        edge(`flow-${pair.model}-${pair.reasoning}`, pair.model, pair.reasoning, {
+          sourceHandle: "source-bottom",
+          targetHandle: "target-top",
+          kind: "reasoning"
+        })
+      );
+      return laneOrder.filter((id) => id !== pair.reasoning);
+    });
+    /* With outlines drawn, an Input card leads into its lane, not into the first card inside
+       it; the lane is what the message reached. Without them the opener's Input leads into
+       its first card, as it always has. */
+    laneFlowOrders.forEach((laneFlowOrder, index) => {
+      addRuntimeFlowEdges(
+        edges,
+        laneFlowOrder,
+        runtimeDataById,
+        runtimeLayout,
+        index === 0 && !lanesDrawn && s.inputSeen,
+        inputPlacement
+      );
+    });
+    const runtimeFlowOrder = laneFlowOrders[0]!;
+    if (lanesDrawn) {
+      laneIds.forEach((messageId) => {
+        const laneId = laneNodeId(messageId);
+        if (inputPlacement === "external" && (messageId != null || s.inputSeen)) {
+          const inputId = messageId == null ? "input" : laneScopedNodeId("input", messageId);
+          edges.push(edge(`flow-${inputId}-${laneId}`, inputId, laneId));
+        }
+        const outputSeen = messageId == null ? s.outputSeen : Boolean(s.lanes.get(messageId)?.outputSeen);
+        if (outputPlacement === "external" && outputSeen) {
+          const outputId = messageId == null ? "output" : laneScopedNodeId("output", messageId);
+          edges.push(edge(`flow-${laneId}-${outputId}`, laneId, outputId, { kind: "output" }));
+        }
+      });
+    }
+
+    /* A steer leads to the call whose result carried it to the model, normally in the opener's
+       lane above, for the one beat its claim is held. If that card has been folded away it
+       leads to the claiming lane's model, then to the lane itself, so it never points at
+       nothing. */
+    const drawnNodeIds = new Set(nodes.map((item) => item.id));
+    for (const steer of s.steers.values()) {
+      const steerId = steerNodeId(steer.id);
+      if (steer.status !== "claimed" || !lingeringTools.has(steerId) || !drawnNodeIds.has(steerId)) continue;
+      const toolNodeId = steer.toolId ? toolRuntimeNodeId(steer.toolId) : null;
+      const modelId = modelPairFor(steer.claimLane).model;
+      const target =
+        toolNodeId && drawnNodeIds.has(toolNodeId)
+          ? toolNodeId
+          : drawnNodeIds.has(modelId)
+            ? modelId
+            : lanesDrawn
+              ? laneNodeId(steer.claimLane)
+              : null;
+      if (!target) continue;
+      edges.push(
+        edge(`steer-${steerId}-${target}`, steerId, target, {
+          sourceHandle: "source-top",
+          targetHandle: "target-bottom",
+          kind: "steer"
+        })
       );
     }
-    addRuntimeFlowEdges(
-      edges,
-      runtimeFlowOrder,
-      runtimeDataById,
-      runtimeLayout,
-      s.inputSeen,
-      inputPlacement
-    );
-    if (s.outputSeen && outputPlacement === "external") {
+
+    if (!lanesDrawn && s.outputSeen && outputPlacement === "external") {
       const outputSources = terminalRuntimeSources(runtimeFlowOrder, runtimeDataById);
       if (outputSources.length > 0) {
         edges.push(
@@ -2513,7 +3135,7 @@ function agentGraphFold(foldOptions: AgentGraphOptions): AgentGraphFold {
       nodes: withKnownSizes(cued.nodes),
       edges: cued.edges,
       activeTurn: s.activeTurn,
-      status: s.status,
+      status: runtimeStatus,
       failed: s.failed,
       usage
     };
