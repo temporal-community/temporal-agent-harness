@@ -14,7 +14,7 @@
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
-  import { Keyboard, PanelLeft } from "@lucide/svelte";
+  import { Keyboard, PanelLeft, Plus } from "@lucide/svelte";
   import { tick, untrack } from "svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel, { verdictTone } from "$lib/components/agent/ApprovalDecisionPanel.svelte";
@@ -767,10 +767,10 @@
       onOpenDrawer={drawerHeight === 0 ? toggleDrawer : undefined}
       describe={describePane}
     >
-      {#snippet lead()}
+      {#snippet start()}
         <button
           type="button"
-          class={["head-button session-drawer-trigger", sessionDrawerOpen && "on"]}
+          class={["head-button labelled session-drawer-trigger", sessionDrawerOpen && "on"]}
           aria-label="Sessions"
           data-tip="Sessions&#10;S"
           aria-pressed={sessionDrawerOpen}
@@ -781,8 +781,30 @@
           onclick={toggleSessionManager}
         >
           <PanelLeft size={13} aria-hidden="true" />
+          <span class="head-button-label">Sessions</span>
+          <!-- Once the list has come back, so a cold start never shows a count it has to take back. -->
+          {#if run.sessionsLoaded}
+            <span class="head-button-count">({run.sessions.length.toLocaleString()})</span>
+          {/if}
         </button>
+        <span class="minimap-divider" aria-hidden="true"></span>
+        <!-- Beside the list it adds to; the dialog it opens stays with the session controls.
+             Named "New session", which starts with the "New" it shows. -->
+        <button
+          type="button"
+          class="head-button labelled session-new"
+          aria-label="New session"
+          data-tip="New session"
+          data-tip-below
+          aria-haspopup="dialog"
+          onclick={openNewSession}
+        >
+          <Plus size={13} aria-hidden="true" />
+          <span class="head-button-label">New</span>
+        </button>
+      {/snippet}
 
+      {#snippet lead()}
         <!-- History, creation, and the current run have distinct roles in the nav. -->
         <SessionControls
           display="launcher"
@@ -797,7 +819,6 @@
           gone={run.sessionGone}
           error={run.connectionError}
           {pendingLabel}
-          onEnsureAgents={() => run.refreshAgents()}
           onRefreshAgents={() => run.refreshAgents()}
           refreshingAgents={run.refreshingAgents}
           agentsError={run.agentsError}

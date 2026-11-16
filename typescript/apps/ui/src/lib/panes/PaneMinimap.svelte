@@ -38,11 +38,13 @@
     describe: (pane: Pane) => PaneDescription;
     /** Whatever anchors the row ahead of the map — in the app, the session menu. */
     lead?: Snippet;
+    /** Beside the mark, at the row's start: in the app, the Sessions switch. */
+    start?: Snippet;
     /** Whatever closes the row after the launcher — in the app, the shortcuts hint. */
     trail?: Snippet;
   }
 
-  let { stack, drawer, onOpenDrawer, describe, lead, trail }: Props = $props();
+  let { stack, drawer, onOpenDrawer, describe, lead, start, trail }: Props = $props();
 
   /**
    * The only hues that reach a tick.
@@ -156,12 +158,6 @@
 </script>
 
 <nav class="surface-head minimap" aria-label="Session and open panes">
-  <div class="minimap-lead">
-    {#if lead}
-      {@render lead()}
-    {/if}
-  </div>
-
   <div class="minimap-mark">
     <!-- Silent decoration. The document title names the console; nothing on this
          strip restates it. -->
@@ -171,6 +167,17 @@
         d="M123.34 68.6596C119.655 41.0484 110.327 18 96 18C81.6731 18 72.3454 41.0484 68.6596 68.6596C41.0484 72.3454 18 81.6731 18 96C18 110.327 41.0525 119.655 68.6596 123.34C72.3454 150.948 81.6731 174 96 174C110.327 174 119.655 150.948 123.34 123.34C150.952 119.655 174 110.327 174 96C174 81.6731 150.948 72.3454 123.34 68.6596ZM67.7583 115.298C41.3151 111.479 25.893 102.737 25.893 96C25.893 89.2629 41.3151 80.5212 67.7583 76.7021C67.1764 83.0674 66.8733 89.566 66.8733 96C66.8733 102.434 67.1764 108.937 67.7583 115.298ZM96 25.893C102.737 25.893 111.479 41.3151 115.298 67.7583C108.937 67.1764 102.434 66.8733 96 66.8733C89.566 66.8733 83.0633 67.1764 76.7021 67.7583C80.5212 41.3151 89.2629 25.893 96 25.893ZM124.242 115.298C122.94 115.488 117.602 116.114 116.252 116.248C116.118 117.602 115.488 122.936 115.302 124.238C111.483 150.681 102.741 166.103 96.0041 166.103C89.267 166.103 80.5253 150.681 76.7061 124.238C76.5202 122.936 75.8898 117.598 75.7564 116.248C75.1421 109.979 74.7703 103.246 74.7703 96C74.7703 88.7537 75.1421 82.0206 75.7564 75.7483C82.0247 75.134 88.7577 74.7622 96.0041 74.7622C103.25 74.7622 109.983 75.134 116.252 75.7483C117.606 75.8817 122.94 76.5121 124.242 76.698C150.685 80.5172 166.111 89.2629 166.111 95.996C166.111 102.729 150.685 111.479 124.242 115.298Z"
       />
     </svg>
+    {#if start}
+      {@render start()}
+    {/if}
+  </div>
+
+  <!-- In the middle column, where the eye lands first: the session is the one thing on
+       this strip that every other reading depends on. -->
+  <div class="minimap-lead">
+    {#if lead}
+      {@render lead()}
+    {/if}
   </div>
 
   <div class="minimap-trail">
@@ -298,7 +305,7 @@
 <style>
   /* The shared header row (`.surface-head`), so the strip, the Session Manager's
      header and every pane header below it have one height and one hairline. Laid
-     out as a grid rather than its flex row, for the centred mark. Must not clip:
+     out as a grid rather than its flex row, for the centred session. Must not clip:
      the launcher popover hangs below it. */
   .minimap {
     display: grid;
@@ -313,20 +320,48 @@
     height: 24px;
   }
 
-  /* The drawer's switch, the session anchor and the Web UI link, at one gap. */
+  /* An icon with its name beside it: the same box and states, as wide as the word, set in
+     the strip's label type so it reads with the session chip and the pane kickers. */
+  .minimap :global(.head-button.labelled) {
+    width: auto;
+    display: inline-flex;
+    gap: var(--gap-xs);
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: var(--label-size);
+    font-weight: var(--label-weight);
+    letter-spacing: var(--label-tracking);
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .minimap :global(.head-button-count) {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The hairline the session chip draws before its status, at the height of its words. */
+  .minimap :global(.minimap-divider) {
+    flex: none;
+    width: 1px;
+    height: 14px;
+    background: var(--border);
+  }
+
+  /* The session anchor and the Web UI link, at one gap. */
   .minimap-lead {
     min-width: 0;
     max-width: 100%;
     display: flex;
     align-items: center;
     gap: var(--gap-xs);
-    justify-self: start;
+    justify-self: center;
   }
 
   .minimap-mark {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
+    gap: var(--gap-sm);
   }
 
   .minimap-trail {
@@ -649,9 +684,9 @@
     }
   }
 
-  /* Below the rail's minimum useful width the seams close up, and the centered
-     mark is the one thing in the row that gives way — silent decoration nobody
-     has to reach. */
+  /* Below the rail's minimum useful width the seams close up, and the mark is
+     the one thing in the row that gives way — silent decoration nobody has to
+     reach. */
   @media (max-width: 980px) {
     .minimap {
       column-gap: var(--gutter-tight);
@@ -660,11 +695,16 @@
 
   @media (max-width: 760px) {
     .minimap {
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: auto minmax(0, 1fr) auto;
     }
 
-    .minimap-mark {
+    .brand-mark {
       display: none;
+    }
+
+    /* With the mark gone the lead is the first column, so it starts the row. */
+    .minimap-lead {
+      justify-self: start;
     }
   }
 

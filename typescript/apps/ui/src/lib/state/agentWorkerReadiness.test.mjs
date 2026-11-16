@@ -45,6 +45,9 @@ const sessionControlsSource = readFileSync(
   "utf8"
 );
 
+/* Where New session lives now: the top bar's start, which opens the picker from here. */
+const appSource = readFileSync(fileURLToPath(new URL("../../App.svelte", import.meta.url)), "utf8");
+
 const dialogSource = readFileSync(
   fileURLToPath(new URL("../components/chat/StartSessionDialog.svelte", import.meta.url)), "utf8"
 );
@@ -144,19 +147,16 @@ describe("agent worker readiness", () => {
   });
 
   it("opening the agent picker asks for a fresh list", () => {
-    assert.match(functionSource(sessionControlsSource, "openNewSessionMenu") ?? "", /onEnsureAgents\?\.\(\)/);
+    assert.match(functionSource(appSource, "openNewSession") ?? "", /run\.refreshAgents\(\)/);
   });
 
   it("finds that function wherever an $effect lands around it", () => {
     /* The check this replaced sliced up to the first `$effect(() => {` in the file, so an effect
        declared anywhere above the function emptied the slice and failed a correct component. */
-    const at = sessionControlsSource.indexOf("function openNewSessionMenu");
-    const moved = `${sessionControlsSource.slice(0, at)}$effect(() => {});\n  ${sessionControlsSource.slice(at)}`;
-    assert.equal(
-      functionSource(moved, "openNewSessionMenu"),
-      functionSource(sessionControlsSource, "openNewSessionMenu")
-    );
-    assert.match(functionSource(sessionControlsSource, "openNewSessionMenu") ?? "", /\}$/, "through its own closing brace");
+    const at = appSource.indexOf("function openNewSession");
+    const moved = `${appSource.slice(0, at)}$effect(() => {});\n  ${appSource.slice(at)}`;
+    assert.equal(functionSource(moved, "openNewSession"), functionSource(appSource, "openNewSession"));
+    assert.match(functionSource(appSource, "openNewSession") ?? "", /\}$/, "through its own closing brace");
   });
 
   it("guards form submission against an unavailable worker", () => {

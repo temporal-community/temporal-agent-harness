@@ -409,6 +409,7 @@ vitest_test(
     deps = [
         ":agentRun.svelte",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
         "//typescript/apps/ui/tests/support:controllerHarness",
