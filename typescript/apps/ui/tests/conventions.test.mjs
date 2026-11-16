@@ -48,7 +48,7 @@ const HREF_ALLOWED = [
 const HREF = /\bhref=\{([^}]*)\}|\{(href)\}|\bhref="[^"]*\$?\{([^}]*)\}/g;
 
 /* Each one adds to the bundle; check its weight in a `vite build` and add it here deliberately. */
-const TANSTACK_ALLOWED = ["@tanstack/charts", "@tanstack/highlight", "@tanstack/markdown", "@tanstack/pacer", "@tanstack/svelte-virtual"];
+const TANSTACK_ALLOWED = ["@tanstack/charts", "@tanstack/highlight", "@tanstack/markdown", "@tanstack/pacer", "@tanstack/svelte-store", "@tanstack/svelte-table", "@tanstack/svelte-virtual"];
 const TANSTACK_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](@tanstack\/[a-z0-9-]+)/g;
 
 /* Panes that draw their own cards. Each insets them by the one pane gutter, so a card's stroke is
@@ -72,7 +72,8 @@ const RECIPES_WITH_A_HOME = [
 /* One-sided strokes that are structure, not state. Selected, open, current and changed rows use
    the --selected-bg tint instead; a hairline divider (1px of --border or --border-strong) passes. */
 const SIDE_STROKE_ALLOWED = [
-  { file: "lib/components/chat/MarkdownMessage.svelte", selector: ".markdown-message :global(blockquote)", why: "a markdown quote" }
+  { file: "lib/components/chat/MarkdownMessage.svelte", selector: ".markdown-message :global(blockquote)", why: "a markdown quote" },
+  { file: "lib/components/primitives/DataTable.svelte", selector: ".resize-line", why: "a table column's edge, drawn while it is resized" }
 ];
 const SIDE_BORDER = /\bborder-(?:left|right|inline-start|inline-end)(?:-color|-width|-style)?\s*:\s*([^;]+)/g;
 const DIVIDER = /^(?:0|none|1px solid var\(--border(?:-strong)?\))$/;
