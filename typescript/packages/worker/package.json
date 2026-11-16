@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-harness-worker",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "description": "Worker side of the Temporal agent harness: the harness plugin and activities, the agent client and the Code Mode sandbox.",
@@ -25,6 +25,14 @@
     "./ai-sdks/openai-agents-harness": {
       "types": "./dist/src/ai-sdks/openai-agents-harness.d.ts",
       "default": "./dist/src/ai-sdks/openai-agents-harness.js"
+    },
+    "./ai-sdks/strands-agents": {
+      "types": "./dist/src/ai-sdks/strands-agents/index.d.ts",
+      "default": "./dist/src/ai-sdks/strands-agents/index.js"
+    },
+    "./ai-sdks/strands-agents-harness": {
+      "types": "./dist/src/ai-sdks/strands-agents-harness.d.ts",
+      "default": "./dist/src/ai-sdks/strands-agents-harness.js"
     },
     "./harness/agent-client": {
       "types": "./dist/src/harness/agent-client.d.ts",
@@ -54,8 +62,8 @@
   },
   "dependencies": {
     "@temporalio/activity": "^1.24.0",
-    "@temporalio/agent-harness": "^0.3.1",
-    "@temporalio/agent-harness-client": "^0.3.1",
+    "@temporalio/agent-harness": "^0.5.0",
+    "@temporalio/agent-harness-client": "^0.5.0",
     "@temporalio/client": "^1.24.0",
     "@temporalio/common": "^1.24.0",
     "@temporalio/plugin": "^1.24.0",
@@ -70,6 +78,7 @@
     "@openai/agents-core": "~0.14.3",
     "@openai/agents-openai": "~0.14.3",
     "@pydantic/monty": "1.0.0",
+    "@strands-agents/sdk": "^1.24.0",
     "@temporalio/external-storage-s3": "^1.24.0",
     "@temporalio/external-storage-s3-aws-sdk": "^1.24.0",
     "@temporalio/openai-agents": "^1.24.0",
@@ -91,6 +100,9 @@
     "@pydantic/monty": {
       "optional": true
     },
+    "@strands-agents/sdk": {
+      "optional": true
+    },
     "@temporalio/external-storage-s3": {
       "optional": true
     },
@@ -107,9 +119,12 @@
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
     "@google/genai": "^2.31.0",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@openai/agents-core": "~0.14.3",
     "@openai/agents-openai": "~0.14.3",
+    "@opentelemetry/api": "^1.10.0",
     "@pydantic/monty": "1.0.0",
+    "@strands-agents/sdk": "^1.24.0",
     "@temporalio/external-storage-s3": "^1.24.0",
     "@temporalio/external-storage-s3-aws-sdk": "^1.24.0",
     "@temporalio/openai-agents": "^1.24.0",

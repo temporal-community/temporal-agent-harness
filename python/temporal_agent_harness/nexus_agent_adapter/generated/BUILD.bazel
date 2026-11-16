@@ -1,0 +1,46 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+# nexgen's output imports its siblings relatively, which Gazelle doesn't resolve: the `# keep` deps.
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_definitions",  # keep
+        ":models",  # keep
+        ":services",  # keep
+    ],
+)
+
+py_library(
+    name = "_definitions",
+    srcs = ["_definitions.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_definitions",  # keep
+        "@pypi//temporalio",
+        "@pypi//typing_extensions",
+    ],
+)
+
+py_library(
+    name = "services",
+    srcs = ["services.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":models",  # keep
+        "@pypi//nexus_rpc",
+    ],
+)

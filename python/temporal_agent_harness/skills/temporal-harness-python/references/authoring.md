@@ -1,7 +1,7 @@
 # Python authoring
 
 Install `temporal-agent-harness` with the integration extra you use: `openai-agents`, `genai`,
-`pydantic-ai`, or `typesafe`. `ui` adds the web server dependencies; `code-mode` adds the sandbox.
+`pydantic-ai`, `strands-agents`, or `typesafe`. `ui` adds the web server dependencies; `code-mode` adds the sandbox.
 Pin the package and lock dependencies. Use `temporal-agent-harness init ./my-agent` for the bundled
 OpenAI example, then follow its README. To keep an existing project, adapt only the needed files.
 The same starter is installed with this skill under `assets/starter/`; read
@@ -59,6 +59,12 @@ For OpenAI, use the harness's `OpenAIAgentsPlugin` and `as_openai_agent_tool`. T
 `stream_to_provider`, `harness_observer_factory`, and consuming `Runner.run_streamed` events:
 all are necessary for the harness streaming path. Add `AgentHarnessPlugin` last on the Temporal
 client, then construct its worker. Activity tools belong in the plugin's `tools` registration.
+
+For Strands Agents, build the agent in `@agent.init` with `harness_strands_agent(runner, ...)` from
+`ai_sdks.strands_agents_harness`, passing harness tools through `as_strands_tool(runner, ...)` and
+MCP servers as `TemporalMCPClient(name)`; every call runs under the approval policy. On the worker,
+register `StrandsPlugin(models=..., observer_factory=harness_observer_factory)` before
+`AgentHarnessPlugin`. Strands interrupts are refused: use a callback tool to ask a person.
 
 Generate schemas with `temporal-agent-harness schema module:Class -o Agent.schema.json`.
 An application module must be installed or importable from the current project. Required init

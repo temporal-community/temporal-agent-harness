@@ -259,3 +259,7 @@ func (s *sink) Form(h protocol.Handler) error {
 func (s *sink) Error(msg string) error {
 	return s.postText("_Something went wrong handling that: " + msg + "_")
 }
+
+func (s *sink) Notice(msg string) error {
+	return s.postText("ℹ️ **System message:** " + msg)
+}

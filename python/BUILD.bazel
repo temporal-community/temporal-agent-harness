@@ -20,10 +20,8 @@ load("//bazel:python_dists.bzl", "python_dists")
 # gazelle:map_kind py_binary harness_module_binary //bazel:binary.bzl
 # gazelle:map_kind py_test harness_pytest_test //bazel:pytest.bzl
 #
-# Nexus is not built by Bazel.
+# The Nexus projects under nexus/, and the code that imports them, are not built by Bazel.
 # gazelle:exclude examples/nexus_hello
-# gazelle:exclude temporal_agent_harness/nexus_agent_adapter
-# gazelle:exclude tests/nexus_agent_adapter
 # gazelle:exclude tests/nexus_mcp
 # gazelle:exclude tests/ai_sdks/openai_agents/test_nexus_mcp.py
 # gazelle:resolve py nexus_mcp //bazel/excluded:temporal_nexus_mcp

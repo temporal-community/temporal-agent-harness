@@ -38,6 +38,8 @@ export type OperatorPrefs = {
   followDefault?: boolean;
   /** Fold settled tool cards on the graph. Absent means yes; see agentRun. */
   graphFocus?: boolean;
+  /** The State Flow's minimap is shown. Absent means no. */
+  flowMinimap?: boolean;
   /** Session Manager pins, most recently pinned first. Read through `readPinnedSessions`. */
   pinnedSessions?: string[];
   /** Hidden from the Session Manager's groups, most recently archived first. Nothing is deleted. */

@@ -1,11 +1,12 @@
 # ABOUTME: Standalone Nexus worker exposing AgentService on its own task queue.
 #
-# Optional: AgentServiceHandler can instead be added to an agent's own Worker (same
-# process, same task queue as the workflow) — use this only if you want Nexus traffic
-# scaled independently.
+# AgentServiceHandler can instead be added to the agent's own worker (same process and task
+# queue as the workflow); run this only to scale Nexus traffic independently.
 #
-# Env vars: TEMPORAL_ADDRESS, AGENT_NAMESPACE, AGENT_WORKFLOW_NAME (required),
-# AGENT_WORKFLOW_ID_PREFIX, AGENT_TASK_QUEUE, NEXUS_AGENT_TASK_QUEUE — see defaults below.
+# Connects like the packaged `serve` command: a temporal.toml profile plus TEMPORAL_* env vars
+# (TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, ...), with the harness's data converter.
+# Env vars: AGENT_WORKFLOW_NAME (required), AGENT_WORKFLOW_ID_PREFIX, AGENT_TASK_QUEUE,
+# NEXUS_AGENT_TASK_QUEUE — see the defaults below.
 
 from __future__ import annotations
 
@@ -13,11 +14,10 @@ import asyncio
 import logging
 import os
 
-from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
-from .handler import AgentServiceHandler, Config
+from temporal_agent_harness.nexus_agent_adapter.handler import AgentServiceHandler, Config
+from temporal_agent_harness.web.client import connect_client, ensure_temporal_address
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,6 @@ def _env_or_default(key: str, default: str) -> str:
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    address = _env_or_default("TEMPORAL_ADDRESS", "localhost:7233")
-    agent_namespace = _env_or_default("AGENT_NAMESPACE", "default")
     agent_workflow_name = os.environ.get("AGENT_WORKFLOW_NAME")
     workflow_id_prefix = _env_or_default("AGENT_WORKFLOW_ID_PREFIX", "agent-")
     agent_task_queue = _env_or_default("AGENT_TASK_QUEUE", "agent")
@@ -38,11 +36,8 @@ async def main() -> None:
     if not agent_workflow_name:
         raise SystemExit("AGENT_WORKFLOW_NAME is required")
 
-    client = await Client.connect(
-        address,
-        namespace=agent_namespace,
-        data_converter=pydantic_data_converter,
-    )
+    ensure_temporal_address(None)
+    client = await connect_client()
 
     config = Config(
         agent_task_queue=agent_task_queue,
@@ -56,9 +51,8 @@ async def main() -> None:
     )
 
     logger.info(
-        "nexus-agent-py ready: namespace=%s nexusQueue=%s agentQueue=%s "
-        "workflow=%s idPrefix=%s",
-        agent_namespace,
+        "AgentService ready: namespace=%s nexusQueue=%s agentQueue=%s workflow=%s idPrefix=%s",
+        client.namespace,
         nexus_task_queue,
         agent_task_queue,
         agent_workflow_name,

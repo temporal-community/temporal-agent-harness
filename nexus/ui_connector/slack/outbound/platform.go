@@ -383,6 +383,10 @@ func (s *sink) Error(msg string) error {
 	return s.postText(errorText(msg))
 }
 
+func (s *sink) Notice(msg string) error {
+	return s.postText(noticeText(msg))
+}
+
 func mrkdwnLink(url, title string) string {
 	return fmt.Sprintf("<%s|%s>", url, title)
 }

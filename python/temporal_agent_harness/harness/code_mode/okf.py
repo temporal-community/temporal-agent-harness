@@ -5,6 +5,7 @@ An OKF bundle is a directory of markdown files. ``index.md`` (a directory listin
 YAML frontmatter between ``---`` lines, whose only required key is ``type``, then a markdown
 body. Concepts link to each other with ordinary markdown links. See
 https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md (v0.2).
+Some bundles link with ``[[wikilinks]]``, and those are read too.
 
 Everything here reads permissively, as OKF asks of consumers: a file with missing or broken
 frontmatter is still a concept, of type ``Unknown``, with the problem recorded, and a link to a
@@ -21,7 +22,7 @@ import posixpath
 import re
 from datetime import date, datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import Any, Collection, Literal, Mapping, Protocol
 from urllib.parse import unquote
 
 from pydantic import BaseModel, JsonValue
@@ -257,11 +258,35 @@ def _link_targets_in(line: str) -> list[str]:
     return found
 
 
-def link_targets(body: str, concept_path: str) -> list[str]:
-    """The concept ids ``body`` links to, in order, without repeats: links to ``.md`` files in
-    the bundle, outside fenced code blocks. ``concept_path`` is the linking file's path in the
-    bundle, against which relative targets resolve; a target starting with ``/`` is relative
-    to the bundle root."""
+def _wikilink_targets_in(line: str) -> list[str]:
+    """The text between the brackets of each ``[[target#heading|alias]]`` in ``line``, in one
+    pass."""
+    found: list[str] = []
+    opening = line.find("[[")
+    while opening >= 0:
+        close = line.find("]]", opening + 2)
+        if close < 0:
+            break
+        inner = line[opening + 2 : close]
+        found.append(inner[inner.rfind("[[") + 2 :] if "[[" in inner else inner)
+        opening = line.find("[[", close + 2)
+    return found
+
+
+def link_targets(body: str, concept_path: str, concepts: Collection[str] = ()) -> list[str]:
+    """The concept ids ``body`` links to, without repeats, in line order: links to ``.md``
+    files in the bundle and ``[[wikilinks]]``, outside fenced code blocks. ``concept_path`` is
+    the linking file's path in the bundle, against which relative targets resolve; a target
+    starting with ``/`` is relative to the bundle root.
+
+    A wikilink is a path from the bundle root. When no concept has that id, it is the one
+    concept in ``concepts`` (the bundle's concept ids) whose path ends with it."""
+    return _link_targets(body, concept_path, _by_path_ending(concepts))
+
+
+def _link_targets(
+    body: str, concept_path: str, by_ending: Mapping[str, str | None]
+) -> list[str]:
     found: list[str] = []
     here = PurePosixPath(concept_path).parent
     fence: str | None = None
@@ -273,8 +298,9 @@ def link_targets(body: str, concept_path: str) -> list[str]:
             continue
         if fence:
             continue
-        for raw in _link_targets_in(line):
-            target = _resolve(unquote(raw), here)
+        targets = [_resolve(unquote(raw), here) for raw in _link_targets_in(line)]
+        targets += [_resolve_wikilink(raw, by_ending) for raw in _wikilink_targets_in(line)]
+        for target in targets:
             if target is not None and target not in found:
                 found.append(target)
     self_id = concept_path.removesuffix(".md")
@@ -285,13 +311,42 @@ def _resolve(target: str, here: PurePosixPath) -> str | None:
     target = target.split("#", 1)[0]
     if not target or _SCHEME.match(target) or not target.endswith(".md"):
         return None
-    joined = target.lstrip("/") if target.startswith("/") else str(here / target)
-    normal = posixpath.normpath(joined)
+    return _concept_id(target.lstrip("/") if target.startswith("/") else str(here / target))
+
+
+def _concept_id(path: str) -> str | None:
+    normal = posixpath.normpath(path)
     if normal in (".", "") or normal.startswith("../") or normal == "..":
         return None
     if PurePosixPath(normal).name in RESERVED_NAMES:
         return None
     return normal.removesuffix(".md")
+
+
+def _by_path_ending(concepts: Collection[str]) -> dict[str, str | None]:
+    """Each concept id, and each ending of one that starts after a ``/``, to the concept it
+    belongs to: ``None`` when it is the ending of more than one."""
+    by_ending: dict[str, str | None] = {}
+    for concept_id in concepts:
+        at = concept_id.find("/")
+        while at >= 0:
+            ending = concept_id[at + 1 :]
+            by_ending[ending] = None if ending in by_ending else concept_id
+            at = concept_id.find("/", at + 1)
+    # A full id is that concept, also when it is the ending of another one.
+    by_ending.update({concept_id: concept_id for concept_id in concepts})
+    return by_ending
+
+
+def _resolve_wikilink(inner: str, by_ending: Mapping[str, str | None]) -> str | None:
+    # In a table the `|` before the alias is written `\|`.
+    target = inner.split("|", 1)[0].split("#", 1)[0].strip().removesuffix("\\").strip("/")
+    if not target:
+        return None
+    wanted = _concept_id(target if target.endswith(".md") else f"{target}.md")
+    if wanted is None:
+        return None
+    return by_ending.get(wanted) or wanted
 
 
 # ---------------------------------------------------------------- the walk
@@ -376,8 +431,9 @@ async def build_okf_graph(
     edges: list[OKFLink] = []
     if links:
         known = {c.id for c in concepts}
+        by_ending = _by_path_ending(known)
         for concept in concepts:
-            for target in link_targets(bodies.get(concept.id, ""), concept.path):
+            for target in _link_targets(bodies.get(concept.id, ""), concept.path, by_ending):
                 edges.append(
                     OKFLink(source=concept.id, target=target, dangling=target not in known)
                 )
