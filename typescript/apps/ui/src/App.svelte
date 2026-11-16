@@ -11,7 +11,7 @@
   import type { AgentApi } from "$lib/api/client";
   import type { JsonRecord } from "$lib/api/types";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
-  import HomeView, { agentsWithoutWorker } from "$lib/components/chat/HomeView.svelte";
+  import HomeView, { BAY_DENSITIES, agentsWithoutWorker, bayDensityAt, cycleBayDensity } from "$lib/components/chat/HomeView.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
@@ -444,7 +444,8 @@
         return {
           title: PANE_META.bay.kindLabel,
           statusLabel: idle > 0 ? `${idle} without a worker` : null,
-          statusTone: idle > 0 ? "--live" : null
+          statusTone: idle > 0 ? "--live" : null,
+          controls: bayControls
         };
       }
       case "setup":
@@ -1160,6 +1161,24 @@
     </section>
   {/if}
 </main>
+
+<!-- The bay's own header control: its row density, cycled. -->
+{#snippet bayControls()}
+  {@const current = BAY_DENSITIES[bayDensityAt()]}
+  {@const next = BAY_DENSITIES[(bayDensityAt() + 1) % BAY_DENSITIES.length]}
+  {@const Icon = current.icon}
+  <button
+    type="button"
+    class="head-button"
+    aria-label={`${current.label}. Switch to ${next.label.toLowerCase()}`}
+    data-tip={`${current.label}\nClick for ${next.label.toLowerCase()}`}
+    data-tip-below
+    data-tip-align="end"
+    onclick={cycleBayDensity}
+  >
+    <Icon size={13} aria-hidden="true" />
+  </button>
+{/snippet}
 
 <HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
 

@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { LayoutList, Rows3, Rows4 } from "@lucide/svelte";
   import { createAtom } from "@tanstack/svelte-store";
   import type { ColumnSizingState } from "@tanstack/svelte-table";
   const REPO = "https://github.com/temporal-community/temporal-agent-harness";
@@ -61,6 +62,19 @@
     return agents.filter((agent) => agent.worker?.status === "no_worker").length;
   }
 
+  /* How much each bay row shows, chosen from the bay's pane header and remembered.
+     Compact is one line; comfortable puts a line of description under the name; detailed wraps
+     it to two. */
+  export const BAY_DENSITIES = [
+    { key: "compact", label: "Compact rows", icon: Rows4 },
+    { key: "comfortable", label: "Comfortable rows", icon: Rows3 },
+    { key: "detailed", label: "Detailed rows", icon: LayoutList }
+  ];
+  const DENSITY_KEY = "temporal-agent-ui.bay-density";
+  export const bayDensity = $state({ key: (typeof localStorage === "undefined" ? null : localStorage.getItem(DENSITY_KEY)) ?? "comfortable" });
+  export function bayDensityAt(): number {
+    return Math.max(0, BAY_DENSITIES.findIndex((item) => item.key === bayDensity.key));
+  }
   /* The bay's columns in the order and at the widths a reader left them, kept across
      reloads. Table slices the app owns, as the TanStack Store atoms the table writes through. */
   const COLUMNS_KEY = "temporal-agent-ui.bay-columns";
@@ -84,6 +98,10 @@
     bayColumnSizing.subscribe(keep);
   }
 
+  export function cycleBayDensity(): void {
+    bayDensity.key = BAY_DENSITIES[(bayDensityAt() + 1) % BAY_DENSITIES.length].key;
+    localStorage.setItem(DENSITY_KEY, bayDensity.key);
+  }
 </script>
 
 <script lang="ts">
@@ -229,7 +247,7 @@
       </EmptyState>
     {:else}
       <DataTable
-        class="bay-cols"
+        class={`bay-cols density-${bayDensity.key}`}
         label="Agents"
         rows={bayRows}
         columns={BAY_COLUMNS}
@@ -519,6 +537,34 @@
 
   .t-needs {
     color: var(--text-2);
+  }
+
+  /* ---------- Row density ---------- */
+  /* Comfortable and detailed put the description on its own line under the name; the other
+     cells keep to the name's line, the first baseline. Comfortable's one line still fades. */
+  .home-pane :global(:is(.density-comfortable, .density-detailed) .trow > *) {
+    padding-block: var(--gap-sm);
+  }
+
+  .home-pane :global(:is(.density-comfortable, .density-detailed) .c-main) {
+    display: grid;
+    gap: var(--gap-2xs);
+  }
+
+  .home-pane :global(.density-detailed .c-main) {
+    white-space: normal;
+    animation: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .home-pane :global(.density-detailed .t-desc) {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    line-height: 1.45;
   }
 
   /* ---------- Releases' rows of links ---------- */

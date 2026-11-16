@@ -104,7 +104,7 @@ describe("the console with no session open", () => {
     const view = readFileSync(new URL("../src/lib/components/chat/HomeView.svelte", import.meta.url), "utf8");
     assert.doesNotMatch(view, /\.setup \{\s*display: grid;\s*grid-template-columns/, "the prompt keeps its own row at any width, the services below it");
     assert.match(view, /id: "agent"[\s\S]*?id: "worker"[\s\S]*?id: "running"[^\n]*size: 64,[\s\S]*?id: "queue"[\s\S]*?id: "seen"/, "the agent first, then whether it can start, and Running wide enough for its header wherever it is moved");
-    assert.match(view, /<DataTable\s+class="bay-cols"/, "the bay is the console's DataTable, its columns sortable");
+    assert.match(view, /<DataTable\s+class=\{`bay-cols density-\$\{bayDensity\.key\}`\}/, "the bay is the console's DataTable, its columns sortable");
     assert.match(view, /onRowClick=\{\(row\) => \(picked = row\.agent\.workflow_type\)\}/);
     assert.match(view, /<StartSessionDialog[\s\S]*?preferredAgentType=\{picked \|\| undefined\}[\s\S]*?\{onStart\}/);
   });

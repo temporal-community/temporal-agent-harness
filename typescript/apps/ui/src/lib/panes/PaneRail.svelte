@@ -26,6 +26,8 @@
     title: string;
     statusTone?: string | null;
     statusLabel?: string | null;
+    /** The pane's own controls, at the start of its header's buttons. */
+    controls?: Snippet;
   }
 
   export interface PaneDragState {
@@ -582,6 +584,7 @@
                 title={description.title}
                 statusTone={description.statusTone ?? null}
                 statusLabel={description.statusLabel ?? null}
+                controls={description.controls}
                 focused={stack.focusedId === pane.id}
                 canClose={stack.canClose(pane.id)}
                 canPin={!stack.fixed}

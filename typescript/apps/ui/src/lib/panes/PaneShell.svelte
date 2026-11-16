@@ -30,6 +30,8 @@
     onDragStart: (event: DragEvent) => void;
     onDragEnd: () => void;
     content: Snippet;
+    /** The pane's own controls, before the frame's split, pin, collapse and close. */
+    controls?: Snippet;
   }
 
   let {
@@ -51,7 +53,8 @@
     onToggleSplit,
     onDragStart,
     onDragEnd,
-    content
+    content,
+    controls
   }: Props = $props();
 
   let element = $state<HTMLElement | null>(null);
@@ -172,6 +175,7 @@
       <!-- Only on a shared column, which is the only place it means anything —
            and it appears exactly when a reader has just made one, which is when
            they want to know the other arrangement exists. -->
+      {@render controls?.()}
       {#if shared}
         <button
           type="button"
