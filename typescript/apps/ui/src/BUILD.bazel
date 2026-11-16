@@ -14,6 +14,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/chat:HomeView",
+        "//typescript/apps/ui/src/lib/components/chat:SearchPalette",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/chat:SessionsFooter",
         "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",

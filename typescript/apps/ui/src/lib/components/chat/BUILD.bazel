@@ -97,6 +97,20 @@ js_library(
 )
 
 js_library(
+    name = "SearchPalette",
+    srcs = ["SearchPalette.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/api:types",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+    ],
+)
+
+js_library(
     name = "SessionsFooter",
     srcs = ["SessionsFooter.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -194,6 +208,18 @@ vitest_test(
         ":HomeView",
         ":SessionsFooter",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "SearchPalette_test",
+    src = "SearchPalette.test.mjs",
+    deps = [
+        ":SearchPalette",
+        ":SessionControls",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

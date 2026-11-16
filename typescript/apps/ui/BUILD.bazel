@@ -106,6 +106,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:JsonReply",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/chat:SearchPalette",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
         "//typescript/apps/ui/src/lib/components/chat:SessionsFooter",
         "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",

@@ -94,6 +94,10 @@
     onArchiveSession?: (sessionId: string) => void;
     /** Bound, so the chat's "Start a new session" opens this same setup dialog. */
     newSessionOpen?: boolean;
+    /** The console's one search: the list's own search and filter become an icon that opens it. */
+    onOpenSearch?: () => void;
+    /** The agent New session opens on, when something other than the open session chose it. */
+    preferredAgent?: string;
   }
 
   let {
@@ -125,7 +129,9 @@
     onClose,
     onEndSession,
     onArchiveSession,
-    newSessionOpen = $bindable(false)
+    newSessionOpen = $bindable(false),
+    onOpenSearch,
+    preferredAgent
   }: Props = $props();
 
   /**
@@ -677,7 +683,7 @@
   {#if newSessionOpen}
     <StartSessionDialog
       {agents}
-      preferredAgentType={activeSession?.agent_workflow_type}
+      preferredAgentType={preferredAgent ?? activeSession?.agent_workflow_type}
       starting={creatingSession}
       refreshing={refreshingAgents}
       error={agentsError}
@@ -691,6 +697,17 @@
     <!-- The pane header's row, so the drawer and the pane beside it share one top edge. -->
     <header class="surface-head">
       <h2 class="head-name"><span class="kicker head-kind">Sessions</span><span class="session-count">{countFormat.format(sessionItems.length)}</span></h2>
+      {#if onOpenSearch}
+        <button
+          type="button"
+          class="head-button"
+          aria-label="Search sessions"
+          data-tip="Search sessions&#10;⌘K"
+          data-tip-below
+          data-tip-align="end"
+          onclick={onOpenSearch}
+        ><Search size={13} aria-hidden="true" /></button>
+      {/if}
       {#if onRefreshSessions}
         <button
           type="button"
@@ -705,6 +722,7 @@
       {/if}
     </header>
     <div class="session-body">
+      {#if !onOpenSearch}
       <div class="session-filters">
       <label class="field">
         <Search size={14} aria-hidden="true" />
@@ -738,6 +756,7 @@
         />
       {/if}
       </div>
+      {/if}
       {#if notice}
         <div class="session-error session-notice" role="status">
           <p>{notice}</p>

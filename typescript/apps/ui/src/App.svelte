@@ -12,11 +12,12 @@
   import type { JsonRecord } from "$lib/api/types";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import SessionsFooter from "$lib/components/chat/SessionsFooter.svelte";
+  import SearchPalette, { type PaletteScope } from "$lib/components/chat/SearchPalette.svelte";
   import HomeView, { BAY_DENSITIES, agentsWithoutWorker, bayDensityAt, cycleBayDensity } from "$lib/components/chat/HomeView.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
-  import { Keyboard, PanelLeft } from "@lucide/svelte";
+  import { Keyboard, PanelLeft, Search } from "@lucide/svelte";
   import { tick, untrack } from "svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel, { verdictTone } from "$lib/components/agent/ApprovalDecisionPanel.svelte";
@@ -28,7 +29,7 @@
   } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
-  import { chatPaneTitle, PANE_META } from "$lib/panes/registry";
+  import { chatPaneTitle, PANE_KINDS, PANE_META, type PaneKind } from "$lib/panes/registry";
   import { AgentRunController } from "$lib/state/agentRun.svelte";
   import { createPaneStack, dockFocusedPane, makePane, openDefaultDrawer, type Pane } from "$lib/state/paneStack.svelte";
   import {
@@ -532,8 +533,25 @@
 
   /* One window handler, because a component may only have one `<svelte:window>`
      — and now one binding table behind it. */
+  /* The console's one search. Every search icon opens it on its own list, and Cmd/Ctrl+K on
+     everything. */
+  let paletteOpen = $state(false);
+  let paletteScope = $state<PaletteScope>("all");
+  let palettePreferred = $state<string | undefined>(undefined);
+  function openPalette(scope: PaletteScope): void {
+    paletteScope = scope;
+    paletteOpen = true;
+  }
+  /* The panes the desk on screen can open: the home desk's own, or a session's. */
+  const paletteKinds = $derived(home ? (Object.keys(PANE_META) as PaneKind[]).filter((kind) => PANE_META[kind].home) : PANE_KINDS);
+
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.defaultPrevented) return;
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      openPalette("all");
+      return;
+    }
 
     const action = resolveReplayAction(
       describeReplayKeyEvent(event, { helpOpen: hotkeyHelpOpen, bleeding })
@@ -897,6 +915,7 @@
           agentsError={run.agentsError}
           onNewSession={startSession}
           bind:newSessionOpen
+          preferredAgent={palettePreferred}
         />
       {/snippet}
 
@@ -970,6 +989,7 @@
             onRefreshSessions={() => run.refreshSessions()}
             onEndSession={(sessionId) => run.endSession(sessionId)}
             onArchiveSession={(sessionId) => run.quiesce(sessionId)}
+            onOpenSearch={() => openPalette("sessions")}
             onClose={() => holdSessionManager(false)}
           />
           <SessionsFooter resourcesShown={home} />
@@ -1175,9 +1195,18 @@
   {/if}
 </main>
 
-<!-- The bay's own header control: its row density, cycled. -->
+<!-- The bay's own header controls: its search, then its row density, cycled. -->
 {#snippet bayControls()}
   {@const current = BAY_DENSITIES[bayDensityAt()]}
+  <button
+    type="button"
+    class="head-button"
+    aria-label="Search agents"
+    data-tip="Search agents&#10;⌘K"
+    data-tip-below
+    data-tip-align="end"
+    onclick={() => openPalette("agents")}
+  ><Search size={13} aria-hidden="true" /></button>
   {@const next = BAY_DENSITIES[(bayDensityAt() + 1) % BAY_DENSITIES.length]}
   {@const Icon = current.icon}
   <button
@@ -1194,6 +1223,25 @@
 {/snippet}
 
 <HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
+
+<SearchPalette
+  bind:open={paletteOpen}
+  bind:scope={paletteScope}
+  sessions={run.sessions}
+  agents={run.agents}
+  paneKinds={paletteKinds}
+  onSession={(workflowId) => run.selectSession(workflowId)}
+  onAgent={(workflowType) => {
+    palettePreferred = workflowType;
+    newSessionOpen = true;
+  }}
+  onPane={(kind) => {
+    /* Out of full screen first, or the pane opens behind the one holding the screen. */
+    deskStack.exitBleed();
+    deskDrawer.exitBleed();
+    deskStack.openPane({ kind });
+  }}
+/>
 
 <style>
   .app {
