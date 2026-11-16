@@ -97,6 +97,16 @@ js_library(
 )
 
 js_library(
+    name = "SessionsFooter",
+    srcs = ["SessionsFooter.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":HomeView",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+    ],
+)
+
+js_library(
     name = "StartSessionDialog",
     srcs = ["StartSessionDialog.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -172,6 +182,17 @@ vitest_test(
         ":SchemaForm",
         ":schemaForm",
         "//typescript/apps/ui:node_modules/@temporalio/agent-harness-client",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "SessionsFooter_test",
+    src = "SessionsFooter.test.mjs",
+    deps = [
+        ":HomeView",
+        ":SessionsFooter",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],

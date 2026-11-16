@@ -1,14 +1,26 @@
 <script lang="ts" module>
-  import { LayoutList, Rows3, Rows4 } from "@lucide/svelte";
+  import { BookOpen, LayoutGrid, LayoutList, MessageCircle, Rows3, Rows4, Scale } from "@lucide/svelte";
   import { createAtom } from "@tanstack/svelte-store";
   import type { ColumnSizingState } from "@tanstack/svelte-table";
-  const REPO = "https://github.com/temporal-community/temporal-agent-harness";
-  const RELEASES = `${REPO}/releases`;
+  export const REPO = "https://github.com/temporal-community/temporal-agent-harness";
+  export const RELEASES = `${REPO}/releases`;
 
   const REGISTRY = { python: "PyPI", typescript: "npm" };
   const DOCS = `${REPO}/blob/main`;
 
   const GUIDES = `${DOCS}/docs/guides`;
+  const CAPABILITIES = `${GUIDES}/capabilities.md`;
+  const EXAMPLES = `${GUIDES}/examples.md`;
+
+  /* The console's links to the project, on the home desk's status line and in the Sessions
+     sidebar's footer menu. `name` is the full name for the tip and a screen reader where the
+     label is short. */
+  export const RESOURCES = [
+    { label: "Guides", name: "Guides", href: CAPABILITIES, icon: BookOpen },
+    { label: "Examples", name: "Examples", href: EXAMPLES, icon: LayoutGrid },
+    { label: "Community", name: "Community Slack", href: "https://temporal.io/slack", icon: MessageCircle },
+    { label: "MIT", name: "MIT License", href: `${DOCS}/LICENSE`, icon: Scale }
+  ];
 
   /* What the harness does, one card each, linked to the guide section that explains it. Two of
      those headings open with an emoji, whose invisible joiners GitHub keeps in the anchor. The
@@ -111,7 +123,7 @@
    * and the counts are the server's; features and setup are fixed docs content, and releases
    * are a log kept in this file. Each pane's status rides in its own head, not the status line.
    */
-  import { ArrowUpRight, BookOpen, Check, Copy, LayoutGrid, MessageCircle, Package, PanelBottom, Play, Scale, ScrollText } from "@lucide/svelte";
+  import { ArrowUpRight, Check, Copy, Package, PanelBottom, Play, ScrollText } from "@lucide/svelte";
   import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
   import StartSessionDialog, { agentEntries } from "$lib/components/chat/StartSessionDialog.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
@@ -151,16 +163,7 @@
     onToggleDrawer
   }: Props = $props();
 
-  const CAPABILITIES = `${DOCS}/docs/guides/capabilities.md`;
-  const EXAMPLES = `${DOCS}/docs/guides/examples.md`;
   const id = $props.id();
-  /* `name` is the full name for the tip and a screen reader where the label is short. */
-  const RESOURCES = [
-    { label: "Guides", name: "Guides", href: CAPABILITIES, icon: BookOpen },
-    { label: "Examples", name: "Examples", href: EXAMPLES, icon: LayoutGrid },
-    { label: "Community", name: "Community Slack", href: "https://temporal.io/slack", icon: MessageCircle },
-    { label: "MIT", name: "MIT License", href: `${DOCS}/LICENSE`, icon: Scale }
-  ];
 
   let sdkKey = $state("python");
   const sdk = $derived(SDKS.find((item) => item.key === sdkKey) ?? SDKS[0]);

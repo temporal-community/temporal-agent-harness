@@ -11,6 +11,7 @@
   import type { AgentApi } from "$lib/api/client";
   import type { JsonRecord } from "$lib/api/types";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
+  import SessionsFooter from "$lib/components/chat/SessionsFooter.svelte";
   import HomeView, { BAY_DENSITIES, agentsWithoutWorker, bayDensityAt, cycleBayDensity } from "$lib/components/chat/HomeView.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
@@ -945,30 +946,34 @@
         onResize={(width) => (sessionDrawerWidth = width)}
         onFit={() => (sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W)}
       >
-        <SessionControls
-          display="pane"
-          sessions={run.sessions}
-          agents={run.agents}
-          sessionId={run.session?.workflow_id ?? ""}
-          connecting={run.connecting}
-          connectingSince={run.connectingSince}
-          sending={run.sending}
-          creatingSession={run.creatingSession}
-          refreshingSessions={run.refreshingSessions}
-          closed={run.sessionClosed}
-          closedWorkflowIds={run.closedWorkflowIds}
-          error={run.connectionError}
-          sessionsError={run.sessionsError}
-          notice={run.missingLinkedSession ? `The linked session ${run.missingLinkedSession} isn't in the session manager: it may have been deleted, or the link is wrong.` : null}
-          onDismissNotice={() => (run.missingLinkedSession = null)}
-          sessionsLoaded={run.sessionsLoaded}
-          {pendingLabel}
-          onSelectSession={(sessionId) => run.selectSession(sessionId)}
-          onRefreshSessions={() => run.refreshSessions()}
-          onEndSession={(sessionId) => run.endSession(sessionId)}
-          onArchiveSession={(sessionId) => run.quiesce(sessionId)}
-          onClose={() => holdSessionManager(false)}
-        />
+        <!-- The list, then the foot the sidebar keeps its links in. -->
+        <div class="session-sidebar">
+          <SessionControls
+            display="pane"
+            sessions={run.sessions}
+            agents={run.agents}
+            sessionId={run.session?.workflow_id ?? ""}
+            connecting={run.connecting}
+            connectingSince={run.connectingSince}
+            sending={run.sending}
+            creatingSession={run.creatingSession}
+            refreshingSessions={run.refreshingSessions}
+            closed={run.sessionClosed}
+            closedWorkflowIds={run.closedWorkflowIds}
+            error={run.connectionError}
+            sessionsError={run.sessionsError}
+            notice={run.missingLinkedSession ? `The linked session ${run.missingLinkedSession} isn't in the session manager: it may have been deleted, or the link is wrong.` : null}
+            onDismissNotice={() => (run.missingLinkedSession = null)}
+            sessionsLoaded={run.sessionsLoaded}
+            {pendingLabel}
+            onSelectSession={(sessionId) => run.selectSession(sessionId)}
+            onRefreshSessions={() => run.refreshSessions()}
+            onEndSession={(sessionId) => run.endSession(sessionId)}
+            onArchiveSession={(sessionId) => run.quiesce(sessionId)}
+            onClose={() => holdSessionManager(false)}
+          />
+          <SessionsFooter resourcesShown={home} />
+        </div>
       </DockedDrawer>
     </aside>
   {/if}
@@ -1216,6 +1221,12 @@
 
   .app.has-session-drawer .chrome {
     grid-column: 1 / -1;
+  }
+
+  .session-sidebar {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .app.has-session-drawer .session-drawer {

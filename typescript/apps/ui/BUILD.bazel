@@ -107,6 +107,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:SessionsFooter",
         "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
         "//typescript/apps/ui/src/lib/components/chat:schemaForm",
         "//typescript/apps/ui/src/lib/components/flow:AgentLaneNode",

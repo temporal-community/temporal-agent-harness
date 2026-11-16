@@ -46,6 +46,9 @@ const HREF_ALLOWED = [
   { file: "lib/components/chat/HomeView.svelte", expr: "item.packageUrl", why: "a fixed package registry URL from the view's own SDKS list" },
   { file: "lib/components/chat/HomeView.svelte", expr: "feature.href", why: "a fixed guide URL from the view's own FEATURES list" },
   { file: "lib/components/chat/HomeView.svelte", expr: "link.href", why: "a fixed resource URL from the view's own RESOURCES list" },
+  { file: "lib/components/chat/SessionsFooter.svelte", expr: "RELEASES", why: "the fixed releases URL HomeView exports" },
+  { file: "lib/components/chat/SessionsFooter.svelte", expr: "ISSUES", why: "a fixed new-issue URL built from HomeView's REPO" },
+  { file: "lib/components/chat/SessionsFooter.svelte", expr: "link.href", why: "a fixed resource URL from HomeView's RESOURCES list" },
   { file: "lib/components/primitives/Chip.svelte", expr: "href", why: "forwards its prop; every caller's href is scanned here" },
   { file: "lib/components/chat/MarkdownMessage.svelte", expr: "href", why: "citation markup from citationLinks" },
   { file: "lib/components/chat/MarkdownMessage.svelte", expr: "escapeAttribute(href)", why: "link markup from safeHref" }
