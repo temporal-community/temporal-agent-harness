@@ -45,9 +45,11 @@ prefix with its trailing slash, because `/agent-kit` without one resolves those
 relative URLs against `/`.
 
 `?mock=demo` (also `worst`, `empty`, `transcript5k`, `sessions10k`, and the
-others in `src/main.ts`) runs the console on fixture data with no API. It is a
+others in `src/lib/mock/`) runs the console on fixture data with no API. It is a
 development-only switch, so it works under `just ui-dev` or a build made with
 `NODE_ENV=development vite build --mode development`, not the shipped `dist`.
+In those builds the dev tools button in a corner switches between the fixtures
+and the live API (⌥D brings it back if hidden).
 
 The console is an app, not a library. To put an agent in your own UI, build on
 the client packages instead: `@temporalio/agent-kit-client` for the

@@ -129,6 +129,8 @@ const HOVER_LAYOUT_PROPERTY = /\b(transform|(?:min-|max-)?height|padding(?:-[\w-
 /* Literal times in styles that are a loop's own cycle, not a UI moment's duration. */
 const DURATION_ALLOWED = [
   { file: "lib/components/chat/SessionControls.svelte", literal: "800ms", why: "the refresh button's spinner cycle" },
+  { file: "DevTools.svelte", literal: "800ms", why: "the dev tools mark's turn while Vite applies a change" },
+  { file: "DevTools.svelte", literal: "1600ms", why: "the dev tools mark's two-beat pulse on hover" },
   { file: "lib/components/primitives/StateGlyph.svelte", literal: "1s", why: "the running glyph's spinner cycle" },
   { file: "lib/components/primitives/StatusChip.svelte", literal: "900ms", why: "a live status icon's breathing cycle" },
   { file: "lib/components/primitives/ThinkingOrb.svelte", literal: "3429ms", why: "the working mark's turn, coprime with its trace and breathe" },
