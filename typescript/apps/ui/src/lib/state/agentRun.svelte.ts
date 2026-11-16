@@ -22,7 +22,7 @@ import type {
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi, workflowGone } from "$lib/api/httpClient";
 import { contextWindowUsage, summarizeCost, usagePointAt, usageTimelineBuilder } from "$lib/cost/pricing";
-import { readOperatorPrefs, readUrlSessionId, writeOperatorPrefs, writeUrlSessionId } from "./agentRunStorage";
+import { clearUrlSessionId, readOperatorPrefs, readUrlSessionId, writeOperatorPrefs, writeUrlSessionId } from "./agentRunStorage";
 import {
   agentTreeGraphBuilder,
   heldIdsFromFrame,
@@ -298,6 +298,9 @@ export class AgentRunController {
   agents = $state<AgentDescriptor[]>([]);
   sessions = $state<Session[]>([]);
   session = $state<Session | null>(null);
+  /** The session the address bar named at load that the session manager doesn't list, until a
+   *  session opens or the reader dismisses it. */
+  missingLinkedSession = $state<string | null>(null);
   lastResumeOffset = $state(0);
   #streamVersion = 0;
   #connectionVersion = 0;
@@ -1036,7 +1039,15 @@ export class AgentRunController {
         return;
       }
       const session = await this.#bootSession(linkedSessionId);
-      if (!session) return;
+      if (!session) {
+        /* A link to a session the session manager doesn't list, mistyped or purged: say so,
+           and drop it so a reload doesn't land here again. */
+        if (linkedSessionId && this.#isCurrentConnection(connectionVersion)) {
+          this.missingLinkedSession = linkedSessionId;
+          clearUrlSessionId();
+        }
+        return;
+      }
       this.session = session;
       streaming = await this.#openSession(session, connectionVersion, "Failed to initialize agent session.");
     } catch (error) {
@@ -1089,6 +1100,7 @@ export class AgentRunController {
    * False when no stream was started: the workflow is closed or the session was switched.
    */
   async #openSession(session: Session, connectionVersion: number, message: string): Promise<boolean> {
+    this.missingLinkedSession = null;
     this.#rememberActiveSession(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
     /* Awaited so the cache lands before the live stream opens: interleaving

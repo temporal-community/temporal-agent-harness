@@ -68,6 +68,9 @@
     error?: string | null;
     /** List refresh failure — shown in the manager, not as stream "Needs attention". */
     sessionsError?: string | null;
+    /** Something the list should say that isn't a failure of its own, with a way to dismiss it. */
+    notice?: string | null;
+    onDismissNotice?: () => void;
     /** `sessions` came from the server, not just a row painted from cache. */
     sessionsLoaded?: boolean;
     /** What the agent is waiting on the reader for, e.g. "1 response needed". */
@@ -108,6 +111,8 @@
     closedWorkflowIds = [],
     error = null,
     sessionsError = null,
+    notice = null,
+    onDismissNotice,
     sessionsLoaded = false,
     pendingLabel = null,
     onNewSession,
@@ -733,6 +738,12 @@
         />
       {/if}
       </div>
+      {#if notice}
+        <div class="session-error session-notice" role="status">
+          <p>{notice}</p>
+          {#if onDismissNotice}<Chip size="xs" fill="quiet" onclick={onDismissNotice}>Dismiss</Chip>{/if}
+        </div>
+      {/if}
       {#if sessionsError}
         <div class="session-error" role="alert">
           <p>{sessionsError}</p>
@@ -1326,6 +1337,19 @@
     justify-content: space-between;
     color: var(--error);
     font-size: var(--font-sm);
+  }
+
+  /* Inset as the rows' text is, and its action kept whole beside a long message. */
+  .session-error {
+    padding-inline: var(--gap-sm);
+  }
+
+  .session-error > :global(.chip) {
+    flex: none;
+  }
+
+  .session-notice {
+    color: var(--text-2);
   }
 
   .session-error p {

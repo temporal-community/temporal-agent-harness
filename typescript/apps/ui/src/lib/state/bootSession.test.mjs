@@ -102,6 +102,24 @@ describe("boot", () => {
     assert.equal(created.length, 0);
   });
 
+  /* A link to a session the session manager doesn't list, mistyped or purged, says so instead of
+     landing on the lists without a word, and drops the id so a reload doesn't land there again. */
+  it("names a linked session the session manager doesn't list, and drops it from the address bar", async () => {
+    const urls = [];
+    window.history.replaceState = (_state, _title, url) => urls.push(String(url));
+    window.location.href = "http://localhost/?s=wf-nope";
+    try {
+      const { controller, created } = await bootWith([at("wf-live")], "wf-nope");
+      assert.equal(controller.session, null);
+      assert.equal(created.length, 0);
+      assert.equal(controller.missingLinkedSession, "wf-nope");
+      assert.ok(urls.length > 0 && urls.every((url) => !url.includes("s=")), `the id stayed in the address bar: ${urls.join(", ")}`);
+    } finally {
+      window.location.href = "http://localhost/";
+      window.history.replaceState = () => {};
+    }
+  });
+
   /* Marking closed sessions one at a time copied the whole list per id: 10,000 sessions
      froze the tab for 88 s. At 20,000 here, quadratic work takes ~2.8 s and linear ~6 ms. */
   it("marks every closed session of a 20,000-session list in linear time", async () => {

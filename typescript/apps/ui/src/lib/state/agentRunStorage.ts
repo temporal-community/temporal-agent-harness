@@ -116,6 +116,19 @@ export function readUrlSessionId(): string | null {
   }
 }
 
+/** Drop the session from the address bar, so a reload opens the console's lists. */
+export function clearUrlSessionId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("s")) return;
+    url.searchParams.delete("s");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+  } catch {
+    // Ignore URL write failures.
+  }
+}
+
 export function writeUrlSessionId(sessionId: string): void {
   if (typeof window === "undefined") return;
   try {

@@ -200,7 +200,11 @@
   const activeRail = $derived(drawerActive && deskDrawer.groups.length > 0 ? drawerRail : rail);
 
   $effect(() => {
-    void run.initialize().finally(() => (booting = false));
+    void run.initialize().finally(() => {
+      booting = false;
+      /* A link whose session wasn't found lands on the lists, where the sidebar says why. */
+      if (linkedAtLoad && !run.session) sessionManagerHeld = true;
+    });
   });
 
   /* The lists are the page while no session is open, so keep the sessions one current: a
@@ -953,6 +957,8 @@
           closedWorkflowIds={run.closedWorkflowIds}
           error={run.connectionError}
           sessionsError={run.sessionsError}
+          notice={run.missingLinkedSession ? `The linked session ${run.missingLinkedSession} isn't in the session manager: it may have been deleted, or the link is wrong.` : null}
+          onDismissNotice={() => (run.missingLinkedSession = null)}
           sessionsLoaded={run.sessionsLoaded}
           {pendingLabel}
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
