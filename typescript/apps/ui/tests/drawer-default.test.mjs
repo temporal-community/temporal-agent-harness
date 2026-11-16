@@ -14,11 +14,11 @@ describe("the bottom drawer default", () => {
   afterEach(() => delete globalThis.window);
 
   it("opens the workflow timeline", () => {
-    assert.match(app, /drawer\.groups\.length === 0\) drawer\.openPane\(\{ kind: "timeline" \}\)/);
+    assert.match(app, /deskDrawer\.groups\.length === 0 && !home\) deskDrawer\.openPane\(\{ kind: "timeline" \}\)/);
   });
 
   it("uses the transport overview for either lone trace", () => {
-    assert.match(app, /kind === "latency"\s*\|\|\s*drawer\.groups\[0\]\?\.\[0\]\?\.kind === "timeline"/);
+    assert.match(app, /kind === "latency"\s*\|\|\s*deskDrawer\.groups\[0\]\?\.\[0\]\?\.kind === "timeline"/);
     assert.match(app, /overview=\{traceOverview\}/);
   });
 
@@ -67,7 +67,7 @@ describe("the bottom drawer default", () => {
 describe("shutting the bottom drawer", () => {
   it("folds its pane at zero height instead of closing it, and boots shut from a folded link", () => {
     assert.doesNotMatch(app, /drawer\.closePane/);
-    assert.match(app, /drawer\.foldAll\(drawerHeight === 0\)/);
+    assert.match(app, /deskDrawer\.foldAll\(drawerHeight === 0\)/);
     assert.match(app, /const drawerBootShut = drawer\.allFolded;/);
     assert.match(app, /\$state\(drawerBootShut \? 0 :/);
   });

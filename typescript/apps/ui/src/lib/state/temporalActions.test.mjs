@@ -9,7 +9,6 @@ import { describe, it } from "vitest";
 import { installFakeIndexedDb } from "../../../tests/support/fakeIndexedDb.mjs";
 import { installBrowserSurface, session, sleep, waitFor } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
-import { writeStoredActiveSessionId } from "./agentRunStorage.ts";
 import { appendRunFrames, runKeyOf } from "./frameStore.ts";
 
 const { freshStorage } = installBrowserSurface();
@@ -53,7 +52,7 @@ const messageSent = (workflowId, subagentId, turn) =>
  */
 function boot({ streamFor = () => [], reply = {}, interfaceFails = () => false } = {}) {
   freshStorage();
-  writeStoredActiveSessionId(parent.workflow_id);
+  window.location.search = `?s=${parent.workflow_id}`;
   const calls = { attach: [], agentInterface: [] };
   const api = {
     async listAgents() {

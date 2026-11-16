@@ -21,6 +21,6 @@ describe("Session Manager list errors", () => {
 
   it("explains how to begin when no sessions exist", () => {
     assert.match(markup({ sessions: [] }), /No sessions yet/);
-    assert.match(markup({ sessions: [] }), /Choose New session in the top bar/);
+    assert.match(markup({ sessions: [] }), /Start one with any of your agents\./);
   });
 });

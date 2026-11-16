@@ -41,6 +41,11 @@ const HTML_ALLOWED = [
 const HREF_ALLOWED = [
   { file: "lib/components/agent/TranscriptPanel.svelte", expr: "link.url", why: "comes from citationLinks, which runs safeHref" },
   { file: "lib/components/chat/SessionControls.svelte", expr: "temporalHref", why: "temporalWorkflowUrl: an http(s) base plus an encoded workflow id" },
+  { file: "lib/components/chat/HomeView.svelte", expr: "RELEASES", why: "a fixed releases URL" },
+  { file: "lib/components/chat/HomeView.svelte", expr: "sdk.quickstart", why: "a fixed quickstart URL the view builds from its own DOCS constant" },
+  { file: "lib/components/chat/HomeView.svelte", expr: "item.packageUrl", why: "a fixed package registry URL from the view's own SDKS list" },
+  { file: "lib/components/chat/HomeView.svelte", expr: "feature.href", why: "a fixed guide URL from the view's own FEATURES list" },
+  { file: "lib/components/chat/HomeView.svelte", expr: "link.href", why: "a fixed resource URL from the view's own RESOURCES list" },
   { file: "lib/components/primitives/Chip.svelte", expr: "href", why: "forwards its prop; every caller's href is scanned here" },
   { file: "lib/components/chat/MarkdownMessage.svelte", expr: "href", why: "citation markup from citationLinks" },
   { file: "lib/components/chat/MarkdownMessage.svelte", expr: "escapeAttribute(href)", why: "link markup from safeHref" }

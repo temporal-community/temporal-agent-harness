@@ -7,7 +7,11 @@ export type PaneKind =
   | "timeline"
   | "usage"
   | "state"
-  | "files";
+  | "files"
+  | "bay"
+  | "setup"
+  | "releases"
+  | "capabilities";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -28,6 +32,12 @@ export interface PaneMeta {
   /** The column that stretches over spare room, so none sits empty after the last column. */
   flexible?: boolean;
   /**
+   * How narrow a column of this kind goes, short of its default, when the window can't
+   * fit the stretching column's own width, before the rail scrolls. Absent, it keeps its
+   * width. A width the reader sets is kept either way.
+   */
+  narrowSize?: number;
+  /**
    * What the title this kind is described by actually names.
    *
    * "kind" means it restates the badge: "Replay log" under LOGS, "Tokens and
@@ -43,6 +53,11 @@ export interface PaneMeta {
    * might.
    */
   optIn?: boolean;
+  /**
+   * A pane of the console's home, the desk with no session open. A session's desk never
+   * offers one in its launcher or opens one from a link: they describe no run.
+   */
+  home?: boolean;
 }
 
 /*
@@ -143,6 +158,47 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     content: "viewport",
     titleNames: "kind",
     optIn: true
+  },
+  bay: {
+    kindLabel: "Agent Bay",
+    accent: "--accent",
+    /* Wide enough, inside its insets, for every column, the task queue included. */
+    defaultSize: 600,
+    minSize: 360,
+    content: "viewport",
+    titleNames: "kind",
+    home: true
+  },
+  setup: {
+    kindLabel: "Setup",
+    accent: "--accent",
+    defaultSize: 600,
+    minSize: 300,
+    narrowSize: 464,
+    content: "document",
+    titleNames: "kind",
+    home: true
+  },
+  releases: {
+    kindLabel: "Releases",
+    accent: "--accent",
+    defaultSize: 520,
+    minSize: 320,
+    narrowSize: 464,
+    content: "viewport",
+    titleNames: "kind",
+    home: true
+  },
+  capabilities: {
+    kindLabel: "Features",
+    accent: "--accent",
+    defaultSize: 488,
+    minSize: 300,
+    content: "document",
+    /* The column that stretches over spare room on the home desk. */
+    flexible: true,
+    titleNames: "kind",
+    home: true
   }
 };
 
@@ -155,7 +211,7 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
  * nothing else, so "root" had stopped distinguishing anything. Derived from
  * PANE_META rather than restated, so a new kind is in both by existing.
  */
-export const PANE_KINDS = Object.keys(PANE_META) as PaneKind[];
+export const PANE_KINDS = (Object.keys(PANE_META) as PaneKind[]).filter((kind) => !PANE_META[kind].home);
 
 /** A folded label. Wide enough for a sideways kind and a status pixel. */
 export const SPINE_SIZE = 42;
@@ -172,7 +228,11 @@ const SINGLETON_KINDS = new Set<PaneKind>([
   "timeline",
   "usage",
   "state",
-  "files"
+  "files",
+  "bay",
+  "setup",
+  "releases",
+  "capabilities"
 ]);
 
 export function isSingletonKind(kind: PaneKind): boolean {

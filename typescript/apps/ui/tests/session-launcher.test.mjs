@@ -91,7 +91,9 @@ describe("the session anchor in the app chrome", () => {
      is what moves them. A literal or a one-time copy here is the regression. */
   it("takes its name and status live from the run", () => {
     for (const prop of [
-      "sessionId={run.runInfo.sessionId}",
+      /* The open session's own id, not runInfo's "unknown-session" placeholder, which drew a
+         Temporal link to a workflow that does not exist while no session was open. */
+      'sessionId={run.session?.workflow_id ?? ""}',
       "sessions={run.sessions}",
       "agents={run.agents}",
       "connecting={run.connecting}",

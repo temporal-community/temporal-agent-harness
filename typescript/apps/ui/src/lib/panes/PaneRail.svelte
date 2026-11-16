@@ -461,6 +461,7 @@
 <div
   class="rail"
   class:settling
+  class:dragging={dragState.id != null}
   class:bleed={bleedingId != null}
   bind:this={railElement}
   style={`--pane-spine: ${SPINE_SIZE}px; --split-min: ${SPLIT_MIN}px`}
@@ -583,6 +584,7 @@
                 statusLabel={description.statusLabel ?? null}
                 focused={stack.focusedId === pane.id}
                 canClose={stack.canClose(pane.id)}
+                canPin={!stack.fixed}
                 canResize={!split && isFront && !pane.collapsed}
                 onFocus={() => stack.focusPane(pane.id)}
                 onToggleCollapse={() => stack.toggleCollapse(pane.id)}
@@ -988,6 +990,13 @@
   .rail.settling :global(.pane),
   .rail.settling :global(.spine) {
     transition: none;
+  }
+
+  /* The seams' resize handles sit over the column edges a dragged pane lands on, and
+     belong to no pane: while one is carried, the drop goes through them to the pane below. */
+  .rail.dragging .col-gutter,
+  .rail.dragging .share-gutter {
+    pointer-events: none;
   }
 
   /* Spines accumulate against the leading edge as the rail scrolls: the move

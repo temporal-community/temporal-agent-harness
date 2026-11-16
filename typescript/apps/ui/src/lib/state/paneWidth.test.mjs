@@ -10,7 +10,7 @@ import { afterEach, describe, it } from "vitest";
 
 import { PANE_META, SPINE_SIZE } from "../panes/registry.ts";
 import { installBrowserSurface } from "../../../tests/support/controllerHarness.mjs";
-import { createPaneStack, slotKey } from "./paneStack.svelte.ts";
+import { createPaneStack, makePane, slotKey } from "./paneStack.svelte.ts";
 
 const SESSION = "wf-own-widths";
 const rail = readFileSync(new URL("../panes/PaneRail.svelte", import.meta.url), "utf8");
@@ -199,5 +199,36 @@ describe("a column's width", () => {
     const laptop = deskAt(1440);
     assert.equal(deskWidth(laptop), 1440, "the whole default desk on screen");
     assert.equal(widths(laptop).chat, PANE_META.chat.defaultSize, "only the state flow gives up width");
+  });
+
+  it("narrows a column whose kinds name a narrow size before the stretching one drops below its own width", () => {
+    installBrowserSurface();
+    const split = (kind) => ({ ...makePane({ kind }), split: true });
+    const home = () => {
+      const stack = createPaneStack({ initial: [[split("setup"), split("releases")], [split("bay"), split("capabilities")]], fixed: true });
+      stack.enterSession("home-desk");
+      return stack;
+    };
+    const [left, right] = [(stack) => stack.sizeOfGroup(stack.groups[0]), (stack) => stack.sizeOfGroup(stack.groups[1])];
+    const own = PANE_META.setup.defaultSize;
+    const bay = PANE_META.bay.defaultSize;
+
+    const wide = home();
+    wide.noteRailWidth(own + bay + 400);
+    assert.deepEqual([left(wide), right(wide)], [own, bay + 400], "room to spare: setup keeps its width");
+
+    const laptop = home();
+    laptop.noteRailWidth(own + bay - 100);
+    assert.deepEqual([left(laptop), right(laptop)], [own - 100, bay], "setup gives the bay back its own width");
+
+    const narrow = home();
+    narrow.noteRailWidth(PANE_META.setup.narrowSize + PANE_META.bay.minSize);
+    assert.equal(left(narrow), PANE_META.setup.narrowSize, "never past its narrow size");
+    assert.equal(right(narrow), PANE_META.bay.minSize, "then the bay gives way to its minimum");
+
+    const sized = home();
+    sized.noteRailWidth(own + bay - 100);
+    sized.setGroupSize(sized.groups[0][0].id, own);
+    assert.equal(left(sized), own, "a width the reader sets is kept");
   });
 });

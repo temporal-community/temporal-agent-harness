@@ -139,6 +139,7 @@ export class MockAgentApi implements AgentApi {
   async createSession(
     request: CreateSessionRequest
   ): Promise<CreateSessionResponse> {
+    if (this.#scenario.createError) throw new Error(this.#scenario.createError);
     const number = this.#sessions.length + 1;
     const session: Session = {
       workflow_id: `agent-session-mock-${number}`,

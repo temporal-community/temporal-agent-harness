@@ -40,9 +40,12 @@
     lead?: Snippet;
     /** Whatever closes the row after the launcher — in the app, the shortcuts hint. */
     trail?: Snippet;
+    /** False with no session open: the home desk's panes are mapped like any desk's, but the
+        views and panes the launcher opens are a session's. */
+    canLaunch?: boolean;
   }
 
-  let { stack, drawer, onOpenDrawer, describe, lead, trail }: Props = $props();
+  let { stack, drawer, onOpenDrawer, describe, lead, trail, canLaunch = true }: Props = $props();
 
   /**
    * The only hues that reach a tick.
@@ -234,6 +237,7 @@
          Trail holds ticks then controls; flex-end on the trail keeps them on the
          right edge. -->
     <div class="controls">
+      {#if canLaunch}
       <div class="launcher">
         <button
           type="button"
@@ -287,6 +291,7 @@
           </div>
         {/if}
       </div>
+      {/if}
 
       {#if trail}
         {@render trail()}
