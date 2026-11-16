@@ -857,6 +857,8 @@
       onOpenDrawer={drawerHeight === 0 ? toggleDrawer : undefined}
       describe={describePane}
       canLaunch={!home}
+      onHome={() => run.closeSessionView()}
+      atHome={home}
     >
       {#snippet lead()}
         <button

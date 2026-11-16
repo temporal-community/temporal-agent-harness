@@ -1314,6 +1314,21 @@ export class AgentRunController {
     await this.#switchSession(session);
   }
 
+  /**
+   * Close the open session's view and return to the console's lists. Its workflow is left as
+   * it is: ending it is `endSession`.
+   */
+  closeSessionView(): void {
+    if (!this.session) return;
+    this.#beginConnection();
+    this.#resetSessionView();
+    this.session = null;
+    this.connecting = false;
+    this.sending = false;
+    this.connectionError = null;
+    clearUrlSessionId();
+  }
+
   async #switchSession(session: Session): Promise<void> {
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;

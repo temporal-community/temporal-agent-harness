@@ -120,6 +120,25 @@ describe("boot", () => {
     }
   });
 
+  /* Home leaves the session's workflow as it is: only the view closes, and the link with it. */
+  it("closes the open session's view without ending it, and drops it from the address bar", async () => {
+    const { controller } = await bootWith([at("wf-live")], "wf-live");
+    assert.equal(controller.session?.workflow_id, "wf-live");
+    const urls = [];
+    window.history.replaceState = (_state, _title, url) => urls.push(String(url));
+    window.location.href = "http://localhost/?s=wf-live";
+    try {
+      controller.closeSessionView();
+      assert.equal(controller.session, null);
+      assert.equal(controller.connecting, false);
+      assert.deepEqual(controller.closedWorkflowIds, [], "the workflow is not ended");
+      assert.ok(urls.length === 1 && !urls[0].includes("s="));
+    } finally {
+      window.location.href = "http://localhost/";
+      window.history.replaceState = () => {};
+    }
+  });
+
   /* Marking closed sessions one at a time copied the whole list per id: 10,000 sessions
      froze the tab for 88 s. At 20,000 here, quadratic work takes ~2.8 s and linear ~6 ms. */
   it("marks every closed session of a 20,000-session list in linear time", async () => {

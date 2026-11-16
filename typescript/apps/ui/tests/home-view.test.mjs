@@ -168,9 +168,14 @@ describe("the console with no session open", () => {
     assert.match(app, /case "releases":\s*return \{ title: PANE_META\.releases\.kindLabel \};/);
   });
 
-  /* The lists are the page with no session open, so the session list keeps itself current there. */
-  it("refreshes the session list on the home desk", () => {
+  /* The lists are the page with no session open, so the session list keeps itself current there,
+     and a session open can always be left for them without ending it. */
+  it("refreshes the session list on the home desk and leads back to it with Home", () => {
     assert.match(app, /if \(!home \|\| booting\) return;[\s\S]*?if \(!document\.hidden\) void run\.ensureSessionsEnriched\(\);[\s\S]*?setInterval\(refresh, 15_000\)[\s\S]*?addEventListener\("focus", refresh\)/);
+    assert.match(app, /<PaneMinimap[\s\S]*?onHome=\{\(\) => run\.closeSessionView\(\)\}\s*atHome=\{home\}/, "the Temporal mark leads home");
+    assert.doesNotMatch(app, /aria-label="Home"/, "no separate Home button beside it");
+    const minimap = readFileSync(new URL("../src/lib/panes/PaneMinimap.svelte", import.meta.url), "utf8");
+    assert.match(minimap, /\{#if onHome\}\s*<!--[\s\S]*?-->\s*<button\s+type="button"\s+class="brand-home"\s+aria-label="Home"\s+aria-current=\{atHome \? "page" : undefined\}[\s\S]*?onclick=\{onHome\}\s*>\s*\{@render mark\(\)\}/);
   });
 
   /* With no session the header keeps Sessions, New session and the pane map, which maps the
