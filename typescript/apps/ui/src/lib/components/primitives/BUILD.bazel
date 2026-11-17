@@ -103,10 +103,17 @@ js_library(
     srcs = ["DataTable.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":placeMenu",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
         "//typescript/apps/ui:node_modules/@tanstack/svelte-table",
         "//typescript/apps/ui:node_modules/svelte",
     ],
+)
+
+js_library(
+    name = "placeMenu",
+    srcs = ["placeMenu.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
 js_library(

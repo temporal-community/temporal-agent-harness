@@ -148,6 +148,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
         "//typescript/apps/ui/src/lib/components/primitives:metrics",
         "//typescript/apps/ui/src/lib/components/primitives:nest",
+        "//typescript/apps/ui/src/lib/components/primitives:placeMenu",
         "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
         "//typescript/apps/ui/src/lib/components/primitives:scrollActivity",
         "//typescript/apps/ui/src/lib/components/primitives:tipFocus",

@@ -1,6 +1,6 @@
 <script lang="ts">
   /** The launcher identifies the current run; the drawer only browses existing sessions. */
-  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
+  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, ListFilter, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
   import { createVirtualizer, type VirtualItem } from "@tanstack/svelte-virtual";
   import { tick, untrack, type Snippet } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -11,7 +11,7 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconAgent from "$lib/components/primitives/IconAgent.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import Select from "$lib/components/primitives/Select.svelte";
+  import { placeMenu } from "$lib/components/primitives/placeMenu";
   import StateGlyph from "$lib/components/primitives/StateGlyph.svelte";
   import { STATUS_TONES, type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
   import TipCard, { type TipField } from "$lib/components/primitives/TipCard.svelte";
@@ -20,9 +20,11 @@
     readArchivedSessions,
     readOperatorPrefs,
     readPinnedSessions,
+    readUrlList,
     toggleArchivedSession,
     togglePinnedSession,
-    writeOperatorPrefs
+    writeOperatorPrefs,
+    writeUrlList
   } from "$lib/state/agentRunStorage";
   import { handleListKey, keptHighlight } from "$lib/state/quickSwitch";
   import { markdownToText } from "$lib/components/chat/MarkdownMessage.svelte";
@@ -152,7 +154,21 @@
     "closed"
   ]);
 
-  let agentFilter = $state("");
+  /* The agents and statuses whose sessions are listed; none chosen lists all of them. Kept in the
+     address bar like the desk, so a reload or a shared link keeps the list as filtered, and a
+     fresh visit lists everything. */
+  const AGENT_PARAM = "sa";
+  const STATUS_PARAM = "ss";
+  let agentFilter = $state(readUrlList(AGENT_PARAM));
+  let statusFilter = $state(readUrlList(STATUS_PARAM));
+  $effect(() => {
+    if (display !== "pane") return;
+    writeUrlList(AGENT_PARAM, agentFilter);
+    writeUrlList(STATUS_PARAM, statusFilter);
+  });
+  /* Only what the list knows now. A wait seen when a session was last open is not here: it may
+     be over, and the row already says so. */
+  const STATUS_FILTERS = ["Open", "Needs attention", "No worker", "Closed", "Unavailable"] as const;
   let sessionSearch = $state("");
   let sessionSearchInput = $state<HTMLInputElement | null>(null);
 
@@ -167,12 +183,21 @@
   const sessionItems = $derived(sortedSessions(sessions));
   const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
   const agentOptions = $derived(
-    [...new Set(sessionItems.map((session) => session.agent_workflow_type))].map((type) => ({
-      type, label: agentName(agents, type)
+    [...Map.groupBy(sessionItems, (session) => session.agent_workflow_type)].map(([type, list]) => ({
+      type, label: agentName(agents, type), count: list.length
     })).sort((a, b) => a.label.localeCompare(b.label))
   );
+  const statusOptions = $derived.by(() => {
+    const counts = Map.groupBy(sessionItems, sessionStatusFilter);
+    return STATUS_FILTERS.filter((status) => counts.has(status)).map((status) => ({ status, count: counts.get(status)!.length }));
+  });
+  /* Only what the list has a checkbox for counts: a link naming an agent or status that isn't
+     listed (or isn't yet, while sessions load) must not hide every row with nothing to untick. */
+  const chosenAgents = $derived(agentOptions.length > 1 ? agentFilter.filter((type) => agentOptions.some((option) => option.type === type)) : []);
+  const chosenStatuses = $derived(statusOptions.length > 1 ? statusFilter.filter((status) => statusOptions.some((option) => option.status === status)) : []);
   const filteredSessionItems = $derived(sessionItems.filter((session) =>
-    (!agentFilter || session.agent_workflow_type === agentFilter) &&
+    (!chosenAgents.length || chosenAgents.includes(session.agent_workflow_type)) &&
+    (!chosenStatuses.length || chosenStatuses.includes(sessionStatusFilter(session))) &&
     (!sessionSearchTerm || sessionMatchesSearch(session, sessionSearchTerm))
   ));
   /* One clock for every row's age, ticking on the minute; the day groups read it too, so
@@ -317,7 +342,18 @@
   }
 
   /* Its row repeats it when the list is one agent's sessions; the name still says it. */
-  const showAgent = $derived(!agentFilter && agentOptions.length > 1);
+  const showAgent = $derived(chosenAgents.length !== 1 && agentOptions.length > 1);
+  const toggled = (list: string[], value: string) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
+  const filtering = $derived(chosenAgents.length > 0 || chosenStatuses.length > 0);
+  /* Moment-to-moment states of the open session (connecting, thinking) all count as Open, so its
+     row never drops in and out of the filtered list while it is watched. */
+  function sessionStatusFilter(session: Session): (typeof STATUS_FILTERS)[number] {
+    if (sessionGone(session)) return "Unavailable";
+    if (sessionFailed(session)) return "Needs attention";
+    if (sessionClosed(session)) return "Closed";
+    if (workerless.has(session.agent_workflow_type)) return "No worker";
+    return "Open";
+  }
 
   function sessionAgentLabel(session: Session): string {
     return agentName(agents, session.agent_workflow_type);
@@ -708,6 +744,54 @@
           onclick={onOpenSearch}
         ><Search size={13} aria-hidden="true" /></button>
       {/if}
+      {#if agentOptions.length > 1 || statusOptions.length > 1}
+        {@const chosen = [...agentOptions.filter((option) => chosenAgents.includes(option.type)).map((option) => option.label), ...chosenStatuses].join(", ")}
+        <!-- The table's column filter, on the list: a checklist per facet, with counts. A facet with
+             one value has nothing to choose between, so it isn't shown. -->
+        <button
+          type="button"
+          class={["head-button", filtering && "on"]}
+          aria-label={filtering ? `Filter sessions: ${chosen}` : "Filter sessions"}
+          data-tip={filtering ? `Showing ${chosen}` : "Filter by agent or status"}
+          data-tip-below
+          data-tip-align="end"
+          popovertarget="session-filter"
+        ><ListFilter size={13} aria-hidden="true" /></button>
+        <div
+          id="session-filter"
+          class="table-menu"
+          popover="auto"
+          ontoggle={(event) => placeMenu(event, (event.currentTarget as HTMLElement).previousElementSibling as HTMLElement)}
+        >
+          {#if agentOptions.length > 1}
+            <div class="menu-group" role="group" aria-labelledby="session-filter-agent">
+              <span class="kicker menu-heading" id="session-filter-agent">Agent</span>
+              {#each agentOptions as option (option.type)}
+                <label class="menu-check">
+                  <input type="checkbox" checked={chosenAgents.includes(option.type)} onchange={() => ((agentFilter = toggled(chosenAgents, option.type)), (arrowedId = null))} />
+                  <span>{option.label}</span>
+                  <span class="kicker menu-count">{countFormat.format(option.count)}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+          {#if statusOptions.length > 1}
+            <div class="menu-group" role="group" aria-labelledby="session-filter-status">
+              <span class="kicker menu-heading" id="session-filter-status">Status</span>
+              {#each statusOptions as option (option.status)}
+                <label class="menu-check">
+                  <input type="checkbox" checked={chosenStatuses.includes(option.status)} onchange={() => ((statusFilter = toggled(chosenStatuses, option.status)), (arrowedId = null))} />
+                  <span>{option.status}</span>
+                  <span class="kicker menu-count">{countFormat.format(option.count)}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+          {#if filtering}
+            <button type="button" class="menu-clear" onclick={() => ((agentFilter = []), (statusFilter = []), (arrowedId = null))}>Show all</button>
+          {/if}
+        </div>
+      {/if}
       {#if onRefreshSessions}
         <button
           type="button"
@@ -747,14 +831,6 @@
           </IconButton>
         {/if}
       </label>
-      {#if agentOptions.length > 1}
-        <Select
-          bind:value={agentFilter}
-          aria-label="Agent"
-          onchange={() => (arrowedId = null)}
-          options={[{ value: "", label: "All agents" }, ...agentOptions.map((option) => ({ value: option.type, label: option.label }))]}
-        />
-      {/if}
       </div>
       {/if}
       {#if notice}
@@ -775,11 +851,11 @@
         {#if !sessionsError && filteredSessionItems.length === 0}
           <div class="session-empty">
             <strong>{sessionItems.length ? "No matching sessions" : "No sessions yet"}</strong>
-            <p>{sessionItems.length ? "Try another search or agent filter." : "Start one with any of your agents."}</p>
+            <p>{sessionItems.length ? "Try another search or filter." : "Start one with any of your agents."}</p>
           </div>
         {:else if !sessionsError && sessionGroups.length === 0}
           <!-- Every listed session is archived: the list above the Archived group was blank. -->
-          <div class="session-empty"><strong>{sessionSearchTerm || agentFilter ? "Every match is archived" : "Every session is archived"}</strong></div>
+          <div class="session-empty"><strong>{sessionSearchTerm || filtering ? "Every match is archived" : "Every session is archived"}</strong></div>
         {/if}
         <div class="session-rows" style:height={`${$sessionRows.getTotalSize()}px`}>
         {#each visibleGroups as group (group.label)}
@@ -994,10 +1070,6 @@
 
   .session-filters > .field {
     flex: 1 1 12rem;
-  }
-
-  .session-filters > :global(.field.select) {
-    flex: 0 1 11rem;
   }
 
   /* A size container, so a row's tip is never wider than the list that clips it. */
