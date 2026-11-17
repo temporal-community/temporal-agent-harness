@@ -254,11 +254,16 @@ class OpenAIStreamObserver:
         to the buffered delta fragments. ``tool_id`` is the SDK ``call_id`` (shared
         with the execution lifecycle in ``run_tool``); if the opening
         ``output_item.added`` was somehow missed, we degrade to the item id and the
-        done event's own name rather than dropping the request.
+        done event's name when available, or the item id when it is not.
         """
         item_id = event.item_id
         buffered = self._arg_buffers.pop(item_id, "")
-        call_id, name = self._fn_calls.pop(item_id, (item_id, event.name))
+        identity = self._fn_calls.pop(item_id, None)
+        if identity is None:
+            call_id = item_id
+            name = getattr(event, "name", None) or item_id
+        else:
+            call_id, name = identity
         raw = event.arguments or buffered
         pub.publish(
             ToolRequested(
