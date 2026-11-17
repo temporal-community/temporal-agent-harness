@@ -1,6 +1,6 @@
 <script lang="ts">
   /** The launcher identifies the current run; the drawer only browses existing sessions. */
-  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, ListFilter, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
+  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, ListFilter, OctagonX, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
   import { createVirtualizer, type VirtualItem } from "@tanstack/svelte-virtual";
   import { tick, untrack, type Snippet } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -946,7 +946,7 @@
                     data-tip-align="end"
                     onclick={(event) => askToEnd(item, event.currentTarget as HTMLElement)}
                   >
-                    <X size={14} />
+                    <OctagonX size={14} />
                   </IconButton>
                 {/if}
                 <!-- Last, so an archive drawn at rest always sits beside the age, End or not.
