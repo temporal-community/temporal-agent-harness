@@ -288,11 +288,11 @@ offer to resubmit it as a new message, which opens a turn of its own once the ag
 
 Same design, same names in camelCase, at the mirrored paths:
 
-- `steer` / `claimSteering` on the runner in `core/src/harness/agent-workflow.ts`. The
+- `steer` / `claimSteering` on the runner in `core/src/agent-workflow.ts`. The
   outermost-only check reads `toolCallStore.getStore()`, which is what `runTool` sets.
 - The three event types come from `contract/protocol.schema.json` through the generated
-  client `protocol.ts`, which `core/src/harness/agent-protocol/events.ts` re-exports.
-- `ClaimedSteering` / `SteeringMessage` in `core/src/harness/steering.ts`, exported from the
+  client `protocol.ts`, which `core/src/agent-protocol/events.ts` re-exports.
+- `ClaimedSteering` / `SteeringMessage` in `core/src/steering.ts`, exported from the
   package root for hand-written loops.
 - Adapter changes in `core/src/ai-sdks/openai-agents.ts`, including its MCP wrapper.
 
