@@ -111,7 +111,7 @@ async function browserClaim(key: string, answer: () => Promise<void>): Promise<b
     await answer();
     return true;
   }
-  const storageKey = `agent-harness-client-tool:${key}`;
+  const storageKey = `agent-kit-client-tool:${key}`;
   const run = async () => {
     if (window.localStorage.getItem(storageKey)) return false;
     await answer();

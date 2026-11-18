@@ -1,4 +1,4 @@
-# Temporal Agent Harness for Python
+# Temporal Agent Kit for Python
 
 Build durable agents using Python, Temporal, and your preferred AI SDK.
 
@@ -24,14 +24,14 @@ You need **Python 3.11+**, [uv](https://docs.astral.sh/uv/getting-started/instal
 Run this from the directory where you want the new project:
 
 ```bash
-uvx temporal-agent-harness@latest init my-agent
+uvx temporal-agent-kit@latest init my-agent
 cd my-agent
 uv sync
 ```
 
 `uvx` supplies the CLI before you have a project. `init` creates `my_agent/workflow.py`,
 `my_agent/worker.py`, `agents.toml`, a `pyproject.toml` named after the directory, and a README.
-It pins the installed harness version with the `ui` and `openai-agents` extras and refuses to
+It pins the installed Agent Kit version with the `ui` and `openai-agents` extras and refuses to
 overwrite existing files. `uv sync` installs the project and its dependencies. The starter's
 weather tool returns sample data.
 
@@ -39,8 +39,8 @@ weather tool returns sample data.
 
 ```bash
 cp env.example .env.local
-uv run temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
-uv run temporal-agent-harness skills install   # asks which coding agents to install the skill for
+uv run temporal-agent-kit schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
+uv run temporal-agent-kit skills install   # asks which coding agents to install the skill for
 ```
 
 `.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `schema` exports
@@ -57,7 +57,7 @@ Choose both if you use Claude Code alongside another agent. To skip the question
 pass the choices: `skills install --for claude --for agents`.
 Installing the Python package bundles the
 skill; this explicit step makes it discoverable in your project. For a tool with another skill
-directory, run `uv run temporal-agent-harness skills path` to locate the bundled resources, or
+directory, run `uv run temporal-agent-kit skills path` to locate the bundled resources, or
 use `skills install --dest <directory>`.
 
 ### 3. Start the three services
@@ -70,10 +70,10 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session manager, API, and harness console:**
+**Terminal 2 — shared session manager, API, and Agent Kit console:**
 
 ```bash
-uv run temporal-agent-harness dev agents.toml
+uv run temporal-agent-kit dev agents.toml
 ```
 
 **Terminal 3 — your Python agent worker:**
@@ -91,7 +91,7 @@ settings in each service terminal. `.env.local` above loads only into the agent 
 
 ### 4. Verify, then develop with your coding agent
 
-1. Open the **harness console at <http://localhost:8000>**. Create a session for
+1. Open the **Agent Kit console at <http://localhost:8000>**. Create a session for
    **OpenAI Hello (Python)**.
 2. Send a `ping` message. The message box's handler button names the handler your
    message goes to; a new session starts on `ping`. Type any text, such as `hello`,
@@ -111,21 +111,21 @@ settings in each service terminal. `.env.local` above loads only into the agent 
 5. Check configuration and service availability:
 
    ```bash
-   uv run temporal-agent-harness doctor --registry agents.toml
+   uv run temporal-agent-kit doctor --registry agents.toml
    ```
 
 Add `--json` for a machine-readable report. The doctor checks the registry and schemas, Temporal
 connectivity, task queue pollers, and the API without creating or resetting sessions. A failed
 check exits 1. Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the
-harness console.
+Agent Kit console.
 
 With the services running, open the project in your coding agent. Reload its session if it was
 already running, then ask it to use the skill:
 
 | Tool | Prompt |
 | --- | --- |
-| Codex | `Use $temporal-harness-python to help me build this agent. Explain the starter, then verify it with ping before making model calls.` |
-| Claude Code | `/temporal-harness-python Explain the starter, then verify it with ping before making model calls.` |
+| Codex | `Use $temporal-agent-kit-python to help me build this agent. Explain the starter, then verify it with ping before making model calls.` |
+| Claude Code | `/temporal-agent-kit-python Explain the starter, then verify it with ping before making model calls.` |
 
 Edit `my_agent/workflow.py` to change your agent and `my_agent/worker.py` for worker configuration.
 After changes, stop the worker, regenerate the schema with the command in step 2, and restart
@@ -155,7 +155,7 @@ Clone at a release tag. You need [just](https://just.systems/),
 
 ```bash
 git clone --branch 0.11.0 https://github.com/temporal-community/temporal-agent-harness.git
-cd temporal-agent-harness
+cd temporal-agent-kit
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
 
@@ -163,7 +163,7 @@ Then run two commands in separate terminals to get going with all example agents
 
 ```bash
 just temporal       # 1. local Temporal dev server (needs the `temporal` CLI)
-just dev            # 2. session-manager, harness server and all example agent workers
+just dev            # 2. session-manager, Agent Kit server and all example agent workers
 ```
 
 Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
@@ -180,12 +180,12 @@ the tag rather than on a branch. Later, move to a newer release with
 
 Use this path to build your own agents in your own project. You don’t need to clone this repository.
 
-The harness is published to
-[PyPI](https://pypi.org/project/temporal-agent-harness/). In a
+Agent Kit is published to
+[PyPI](https://pypi.org/project/temporal-agent-kit/). In a
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-harness[ui]==0.11.0'
+uv add 'temporal-agent-kit[ui]==0.11.0'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -207,7 +207,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-harness[ui]==0.11.0",
+    "temporal-agent-kit[ui]==0.11.0",
 ]
 ```
 
@@ -216,7 +216,7 @@ releases — see [Versioning and stability](#versioning-and-stability).
 
 #### Run the web UI — no checkout, no Node
 
-The package installs a `temporal-agent-harness` command; the `ui` extra adds its server runtime —
+The package installs a `temporal-agent-kit` command; the `ui` extra adds its server runtime —
 `uv run` it, the way you would any other project tool. It serves the browser UI built into the
 wheel: nothing to clone, nothing to build. One command per terminal:
 
@@ -227,10 +227,10 @@ temporal server start-dev
 # 2. The packaged session-manager worker. It hosts SessionManagerWorkflow, which starts your
 #    agents as child workflows — without it the server comes up but has nothing to answer
 #    /api/agents or session creation, since both are workflow queries.
-uv run temporal-agent-harness session-manager
+uv run temporal-agent-kit session-manager
 
 # 3. The prebuilt Svelte UI + JSON API on http://localhost:8000
-uv run temporal-agent-harness serve ./agents.toml
+uv run temporal-agent-kit serve ./agents.toml
 
 # 4. Your own worker, hosting your agent workflows on their own task queue
 uv run python -m my_app.worker
@@ -238,7 +238,7 @@ uv run python -m my_app.worker
 
 Open <http://localhost:8000> and create a session. `serve` accepts several registries and merges
 them (`serve one/agents.toml two/agents.toml`), so a single UI can list agents from more than one
-project. From the next release, `temporal-agent-harness dev ./agents.toml` runs steps 2 and 3 in
+project. From the next release, `temporal-agent-kit dev ./agents.toml` runs steps 2 and 3 in
 one process, as the quickstart does.
 
 That registry is what lists the launchable agents:
@@ -257,7 +257,7 @@ schema = "MyAgent.schema.json"   # optional; see below
 `schema` subcommand writes from its class:
 
 ```bash
-uv run temporal-agent-harness schema my_app.workflow:MyAgentWorkflow -o MyAgent.schema.json
+uv run temporal-agent-kit schema my_app.workflow:MyAgentWorkflow -o MyAgent.schema.json
 ```
 
 The server reads what the agent takes to start from it and never imports the agent's code. If its
@@ -276,17 +276,17 @@ automatically**; point at a project-local file (or a Temporal Cloud profile) exp
 
 ```bash
 TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud \
-    uv run temporal-agent-harness serve ./agents.toml
+    uv run temporal-agent-kit serve ./agents.toml
 ```
 
-`uv run temporal-agent-harness --help` documents the full precedence order.
+`uv run temporal-agent-kit --help` documents the full precedence order.
 
 Need the API and UI mounted inside your own FastAPI service instead? See
 [Self-hosting the web app](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/api/hosting.md#self-hosting-the-web-app).
 
 #### Extras
 
-Agent authors import the runtime from `temporal_agent_harness.harness`; the base install carries
+Agent authors import the runtime from `temporal_agent_kit`; the base install carries
 only `temporalio` and `pydantic`, so nothing drags in an AI SDK you don't use. Everything else is
 opt-in:
 
@@ -296,25 +296,25 @@ opt-in:
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. Importing `agent` needs nothing extra; building a `code_mode_tool` does. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
-| `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
-| `strands-agents` | use the **Strands Agents** integration (`ai_sdks.strands_agents`, with the harness glue in `ai_sdks.strands_agents_harness`); pulls in `strands-agents` and the MCP packages its `TemporalMCPClient` uses. |
-| `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe_harness`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentHarnessPlugin`. |
+| `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai`). |
+| `strands-agents` | use the **Strands Agents** integration (`ai_sdks.strands_agents`); pulls in `strands-agents` and the MCP packages its `TemporalMCPClient` uses. |
+| `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentKitPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.11.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-kit[ui,code-mode,genai]==0.11.0'`.
 
 
 ## Versioning and stability
 
 **Pin to a release.** Every release is listed on the
 [releases page](https://github.com/temporal-community/temporal-agent-harness/releases) and
-published to [PyPI](https://pypi.org/project/temporal-agent-harness/). A release tag marks a
+published to [PyPI](https://pypi.org/project/temporal-agent-kit/). A release tag marks a
 commit that is known-good at the moment it was cut: the tests passed, and the published wheel and
 sdist were built from that commit, browser UI included.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.11.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-kit==0.11.0`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 
@@ -323,7 +323,7 @@ Two artifacts come out of a release, and they pin differently:
 Releases are cut when the maintainers judge the state stable ([how](https://github.com/temporal-community/temporal-agent-harness/blob/main/RELEASE.md)). This project is
 **experimental** and pre-1.0: APIs will change between releases, without warning. Pinning is what
 keeps that churn from reaching you unannounced — so pin, and upgrade deliberately when you want
-to try out new harness capabilities.
+to try out new Agent Kit capabilities.
 
 
 ## A taste
@@ -335,8 +335,8 @@ from pydantic import BaseModel
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_protocol import AgentConfig, MidTurn, ToolApprovalPolicy
+from temporal_agent_kit import AgentWorkflowRunner, agent
+from temporal_agent_kit.agent_protocol import AgentConfig, MidTurn, ToolApprovalPolicy
 
 
 # A durable, activity-backed tool: runs as a retried, observable Temporal activity and
@@ -437,26 +437,26 @@ session under the same workflow id. It starts fresh, without the closed session'
 > **Subagents never close on idle.** This is deliberate: a parent owns the whole lifecycle of
 > its subagents. It may leave a subagent waiting between messages for as long as it likes, and
 > it alone decides when that subagent ends, with `stop_<key>`. So whenever a parent starts a
-> subagent, the harness turns the subagent's idle timeout off, overriding any default the
+> subagent, Agent Kit turns the subagent's idle timeout off, overriding any default the
 > subagent's own agent sets.
 
 ## Running a worker — one plugin
 
-An agent is a Temporal workflow, so it runs on a Temporal worker. `AgentHarnessPlugin` is the
-single registration that wires that worker (and its client) for the harness — you never
-assemble the harness's activity list or its data converter by hand:
+An agent is a Temporal workflow, so it runs on a Temporal worker. `AgentKitPlugin` is the
+single registration that wires that worker (and its client) for Agent Kit — you never
+assemble Agent Kit's activity list or its data converter by hand:
 
 ```python
 from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 client = await Client.connect(
     **ClientConfig.load_client_connect_config(),
-    # Your AI SDK's plugin first, the harness plugin last.
-    plugins=[OpenAIAgentsPlugin(model_params=...), AgentHarnessPlugin(tools=MY_TOOLS)],
+    # Your AI SDK's plugin first, the Agent Kit plugin last.
+    plugins=[OpenAIAgentsPlugin(model_params=...), AgentKitPlugin(tools=MY_TOOLS)],
 )
 
 worker = Worker(client, task_queue="my-agent", workflows=[TravelAgent])
@@ -465,7 +465,7 @@ await worker.run()
 
 The worker declares only its workflows. Adding the plugin brings:
 
-- the harness's **data converter** (Pydantic + large-payload offload) — add the plugin to every
+- Agent Kit's **data converter** (Pydantic + large-payload offload) — add the plugin to every
   client, worker, and server in the deployment so they all agree on it;
 - the durable **activity body** of each `@agent.activity_tool_defn` tool in `tools=` (pass your
   whole toolset — tools with no worker-side body are skipped);

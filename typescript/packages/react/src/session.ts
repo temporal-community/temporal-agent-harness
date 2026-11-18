@@ -24,13 +24,13 @@ import {
   type ConnectionStatus,
   type HandlerInput,
   type HandlerName,
-  type HarnessMessage,
+  type KitMessage,
   type SteeringView,
   type SubmitMessageResponse,
   type ToolApprovalDecision,
   type UntypedAgent,
   type WaitingToolCall
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 import { ReactSessionState, type SessionSnapshot } from "./state.js";
 
@@ -67,7 +67,7 @@ class SessionEntry<A extends AgentSchema> {
 
 /**
  * Sessions by id, so that components following the same session share one connection and one
- * state. Put one in context with `<HarnessProvider>`; a component using `useAgentSession`
+ * state. Put one in context with `<KitProvider>`; a component using `useAgentSession`
  * outside any provider gets a store of its own.
  *
  * The first component to follow an id decides that session's options (`callbackTools`,
@@ -90,7 +90,7 @@ const StoreContext = createContext<SessionStore | null>(null);
 
 /** Share sessions below this component: every `useAgentSession` in its subtree for the same
  *  session id uses one connection. */
-export function HarnessProvider({ store, children }: { store?: SessionStore; children?: ReactNode }) {
+export function KitProvider({ store, children }: { store?: SessionStore; children?: ReactNode }) {
   const [value] = useState(() => store ?? new SessionStore());
   return createElement(StoreContext.Provider, { value }, children);
 }
@@ -102,13 +102,13 @@ export interface AgentSession<A extends AgentSchema = UntypedAgent> {
   /** The last connection or action failure, until `clearError()`. */
   readonly error: Error | undefined;
   /** The root agent's messages. */
-  readonly messages: readonly HarnessMessage<A>[];
+  readonly messages: readonly KitMessage<A>[];
   /** The root agent's observable state, by state id; each is undefined until its snapshot. */
   readonly states: Readonly<Partial<A["states"]>>;
   /** Whether the root agent has a turn open. */
   readonly agentStatus: "idle" | "busy";
   /** Messages sent from here that the server has not admitted yet, and failed sends. */
-  readonly pending: readonly HarnessMessage<A>[];
+  readonly pending: readonly KitMessage<A>[];
   /** The root agent's steering in its latest turn: queued now, or claimed or dropped by that
    *  turn. Empty again when the next turn opens; `useSteering` re-renders on nothing else. */
   readonly steering: SteeringView<A>;

@@ -187,15 +187,15 @@ The optional `request_context_factory` callback receives MCP `_meta`, or `None`
 during tool discovery. By default,
 `_meta["io.temporal/idempotencyKey"]` sets the Nexus idempotency key.
 
-### OpenAI Agents in an Agent Harness workflow
+### OpenAI Agents in an Agent Kit workflow
 
-Use the Agent Harness
-[`nexus_native_mcp_server`](../../temporal_agent_harness/ai_sdks/openai_agents/workflow.py)
+Use the Agent Kit
+[`nexus_native_mcp_server`](../../temporal_agent_kit/ai_sdks/openai_agents/workflow.py)
 factory inside a Temporal workflow:
 
 ```python
 from agents import Agent
-from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+from temporal_agent_kit.ai_sdks.openai_agents.workflow import (
     nexus_native_mcp_server,
 )
 
@@ -327,7 +327,7 @@ become a native Nexus service.
 
 ```python
 from agents import Agent
-from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+from temporal_agent_kit.ai_sdks.openai_agents.workflow import (
     nexus_tools_gateway,
 )
 

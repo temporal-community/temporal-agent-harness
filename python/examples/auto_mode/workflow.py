@@ -13,7 +13,7 @@ that brings tools you did not write (an MCP server's, say) under auto mode.
 
 The user chats in plain text; a *model in the loop* converses to gather what it needs, then
 **writes a Python script and runs it** to search and book flights/hotels, and replies in prose.
-It does this through the harness Code Mode feature: :func:`agent.code_mode_tool` turns the travel
+It does this through Agent Kit Code Mode feature: :func:`agent.code_mode_tool` turns the travel
 activity tools into a single ``run_travel_code`` tool that executes a model-authored script in a
 sandbox, where each tool is an async host function the script calls. Every host call runs as a
 durable, approval-gated activity, and the script can combine many with real control flow (loops,
@@ -46,21 +46,21 @@ with workflow.unsafe.imports_passed_through():
     )
     from google.genai.client import AsyncClient
 
-    from temporal_agent_harness.ai_sdks.google_genai_plugin import (
+    from temporal_agent_kit.ai_sdks.google_genai_plugin import (
         InteractionConversation,
         function_param,
         google_genai_client,
     )
-    from temporal_agent_harness.ai_sdks.jev import jev_evaluator
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit.ai_sdks.jev import jev_evaluator
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
     from examples.monty import activities, trip_board
 

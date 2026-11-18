@@ -26,7 +26,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.utils.large_payload import (
+from temporal_agent_kit.utils.large_payload import (
     local_payload_storage,
     with_large_payload_offload,
 )
@@ -78,8 +78,8 @@ async def main(
     client = await Client.connect(
         **connect_config,
         # The gateway isn't an agent, so it builds its converter by hand rather than adding
-        # AgentHarnessPlugin — but it exchanges payloads with agents, so the offload backend
-        # must match theirs (AgentHarnessPlugin's default is this same local storage).
+        # AgentKitPlugin — but it exchanges payloads with agents, so the offload backend
+        # must match theirs (AgentKitPlugin's default is this same local storage).
         data_converter=with_large_payload_offload(
             pydantic_data_converter, local_payload_storage()
         ),

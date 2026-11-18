@@ -4,7 +4,7 @@
 // session manager has a fixed workflow id and queue. Setting TASK_QUEUE_PREFIX to the same value
 // for every process changes all of them together: workers poll `<prefix>-<queue>`, the server
 // routes sessions there, and the session manager becomes `<prefix>-session-manager`. Unset, every
-// name is unchanged. The Python SDK's `temporal_agent_harness.utils.task_queue` is the same rule.
+// name is unchanged. The Python SDK's `temporal_agent_kit.utils.task_queue` is the same rule.
 
 export const TASK_QUEUE_PREFIX_ENV = "TASK_QUEUE_PREFIX";
 

@@ -8,7 +8,7 @@
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin } from "../../src/index.ts";
+import { AgentKitPlugin } from "../../src/index.ts";
 
 const { values } = parseArgs({
   options: {
@@ -31,7 +31,7 @@ const worker = await Worker.create({
   namespace: values.namespace ?? process.env.TEMPORAL_NAMESPACE ?? "default",
   taskQueue,
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
-  plugins: [new AgentHarnessPlugin()],
+  plugins: [new AgentKitPlugin()],
 });
 console.log(`serving worker ready: taskQueue=${taskQueue}`);
 await worker.run();

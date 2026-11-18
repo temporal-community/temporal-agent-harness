@@ -10,6 +10,7 @@ ts_project(
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],
     deps = [
+        ":kit",
         ":load-polyfills",
         ":model-activity",
         ":strands-errors",
@@ -30,6 +31,26 @@ ts_project(
     deps = [
         "//typescript/packages/core:node_modules/@strands-agents/sdk",
         "//typescript/packages/core:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "kit",
+    srcs = ["kit.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":temporal-agent",
+        ":temporal-mcp",
+        "//typescript/packages/core:node_modules/@strands-agents/sdk",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core:node_modules/zod",
+        "//typescript/packages/core/src:agent",
+        "//typescript/packages/core/src:agent-workflow",
+        "//typescript/packages/core/src/agent-protocol:index",
+        "//typescript/packages/core/src/agent-workflow:errors",
+        "//typescript/packages/core/src/agent-workflow:types",
     ],
 )
 

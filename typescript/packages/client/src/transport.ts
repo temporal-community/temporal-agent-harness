@@ -1,5 +1,5 @@
 // How a session reaches its agent. `SessionTransport` is everything the session core needs;
-// `HttpTransport` implements it over the harness web API (`temporal_agent_harness.web.app`),
+// `HttpTransport` implements it over the harness web API (`temporal_agent_kit.web.app`),
 // along with `SessionStarter` and listing the server's sessions.
 
 import type { AgentSseFrame, MessageDisposition } from "./frames.ts";

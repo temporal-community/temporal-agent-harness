@@ -16,12 +16,12 @@ import pytest
 from fastapi.testclient import TestClient
 from temporalio.service import RPCError, RPCStatusCode
 
-from temporal_agent_harness.web import (
+from temporal_agent_kit.web import (
     AgentDescriptor,
     AgentRegistry,
-    create_agent_harness_app,
+    create_agent_kit_app,
 )
-from temporal_agent_harness.web.session_manager import (
+from temporal_agent_kit.web.session_manager import (
     CreateSessionRequest,
     Session,
     SessionManagerWorkflow,
@@ -71,7 +71,7 @@ class _FakeManagerHandle:
 
 @pytest.fixture
 def app_and_manager():
-    app = create_agent_harness_app(registry=REGISTRY)
+    app = create_agent_kit_app(registry=REGISTRY)
     manager = _FakeManagerHandle()
     app.state.temporal = _FakeTemporalClient()
     app.state.manager_handle = manager
@@ -193,8 +193,8 @@ class _RecordingAgentClient:
 @pytest.fixture
 def messages_app(monkeypatch):
     _RecordingAgentClient.calls = []
-    monkeypatch.setattr("temporal_agent_harness.web.app.AgentClient", _RecordingAgentClient)
-    app = create_agent_harness_app(registry=REGISTRY)
+    monkeypatch.setattr("temporal_agent_kit.web.app.AgentClient", _RecordingAgentClient)
+    app = create_agent_kit_app(registry=REGISTRY)
     app.state.temporal = _FakeTemporalClient()
     app.state.manager_handle = _FakeManagerHandle()
     return app

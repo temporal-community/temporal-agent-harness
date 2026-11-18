@@ -1,4 +1,4 @@
-// Worker-side harness: `AgentHarnessPlugin`, which a worker adds to run harness agents (the
+// Worker-side harness: `AgentKitPlugin`, which a worker adds to run harness agents (the
 // harness's own activities, activity-tool bodies, Code Mode), and publishing to an agent's turn
 // stream from an activity. Code Mode's sandbox loads on a worker's first Code Mode call.
 
@@ -12,8 +12,8 @@ export {
   type ToolActivity,
   type ToolActivityContext,
   type TurnEventPublisher,
-} from "./harness/agent-workflow.ts";
-export { runSubagentTurn } from "./harness/subagent-activities.ts";
+} from "./agent-workflow.ts";
+export { runSubagentTurn } from "./subagent-activities.ts";
 export {
   jevToolApproval,
   postSystemOne,
@@ -22,9 +22,9 @@ export {
   type SystemOneResponse,
 } from "./ai-sdks/jev/evaluator.ts";
 export {
-  AgentHarnessPlugin,
+  AgentKitPlugin,
   CODE_MODE_MISSING_EXTRA_ERROR,
-  harnessActivities,
+  kitActivities,
 } from "./plugin.ts";
 export {
   DEFAULT_PAYLOAD_STORAGE,
@@ -40,4 +40,4 @@ export {
   filesystemActivities,
   type FilesystemOps,
   type FilesystemRegistration,
-} from "./harness/code-mode/activity-fs.ts";
+} from "./code-mode/activity-fs.ts";

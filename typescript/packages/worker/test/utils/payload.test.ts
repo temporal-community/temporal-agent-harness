@@ -24,7 +24,7 @@ import { NativeConnection, Worker } from "@temporalio/worker";
 import { after, before, describe, it } from "node:test";
 import { localFileStorageDriver, localPayloadStorage } from "../../src/utils/large-payload.ts";
 import { s3PayloadStorage } from "../../src/utils/s3.ts";
-import { AgentHarnessPlugin } from "../../src/index.ts";
+import { AgentKitPlugin } from "../../src/index.ts";
 import { assertMatch } from "../match.ts";
 import { collect, replyText, send, startEnv, type TestEnv } from "../support.ts";
 
@@ -125,7 +125,7 @@ describe("the local-file driver", () => {
         namespace: env.namespace,
         taskQueue: `unwritable-${randomUUID()}`,
         plugins: [
-          new AgentHarnessPlugin({
+          new AgentKitPlugin({
             largePayloadOffload: localPayloadStorage({ baseDir: join(dir, "store") }),
           }),
         ],

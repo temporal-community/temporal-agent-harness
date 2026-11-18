@@ -2,7 +2,7 @@
 
 The Python and TypeScript SDKs each bundle a language-specific skill, focused API references,
 and an OpenAI starter. These resources travel with the package version so an agent can work in
-your application without cloning or reading the harness implementation.
+your application without cloning or reading the Agent Kit implementation.
 
 > The commands on this page ship with the next package releases. They are not present in the
 > previously published Python 0.8.0 and npm 0.2.0 packages.
@@ -14,22 +14,22 @@ skills in its own directory, so install for each tool you use:
 
 | Tool | Skill directory | Command | Invoke it with |
 | --- | --- | --- | --- |
-| Claude Code | `.claude/skills` | `skills install --for claude` | `/temporal-harness-python` / `/temporal-harness-typescript` |
-| Codex and other agents that read the shared directory | `.agents/skills` | `skills install --for agents` | `$temporal-harness-python` / `$temporal-harness-typescript` in Codex; per tool otherwise |
+| Claude Code | `.claude/skills` | `skills install --for claude` | `/temporal-agent-kit-python` / `/temporal-agent-kit-typescript` |
+| Codex and other agents that read the shared directory | `.agents/skills` | `skills install --for agents` | `$temporal-agent-kit-python` / `$temporal-agent-kit-typescript` in Codex; per tool otherwise |
 | A tool with another skill directory | its own | `skills install --dest <directory>` | per that tool |
 
 ```bash
 # Python
-uv run temporal-agent-harness skills path
-uv run temporal-agent-harness skills install
+uv run temporal-agent-kit skills path
+uv run temporal-agent-kit skills install
 
-# TypeScript: the command comes from @temporalio/agent-harness-worker
-npx agent-harness skills path
-npx agent-harness skills install
+# TypeScript: the command comes from @temporalio/agent-kit-worker
+npx agent-kit skills path
+npx agent-kit skills install
 ```
 
 `skills path` prints the bundled directory. `skills install` copies it into
-`<skill directory>/temporal-harness-python` or `<skill directory>/temporal-harness-typescript`
+`<skill directory>/temporal-agent-kit-python` or `<skill directory>/temporal-agent-kit-typescript`
 and reports whether anything changed. Without `--for` or `--dest`, `skills install` asks which
 coding agents to install for; outside a terminal it requires one of them. `--for` is repeatable. Reload your agent session if it was
 already running. Installing an SDK does not automatically activate a skill or write into your project.
@@ -48,13 +48,13 @@ with `uvx` or `npx`, then create the project, install its skill, and start the s
 
 ```bash
 # Choose one, from a project where the SDK is installed:
-uv run temporal-agent-harness init ./my-agent
-npx agent-harness init ./my-agent
+uv run temporal-agent-kit init ./my-agent
+npx agent-kit init ./my-agent
 ```
 
 Follow the generated README. Each starter contains an agent, worker, registry, dependency
 manifest named after the directory, environment template, and schema-generation command. `init`
-pins the installed harness version and refuses to overwrite existing files. It does not install
+pins the installed Agent Kit version and refuses to overwrite existing files. It does not install
 dependencies, start services, or configure credentials for you.
 
 The `ask` handler demonstrates a streaming model call and a safe weather tool with sample data.
@@ -63,20 +63,20 @@ provider key, so an agent can verify connectivity before spending model tokens. 
 use the same three-process architecture:
 
 1. Temporal service.
-2. `temporal-agent-harness dev agents.toml`: the Python session-manager worker and the API and
+2. `temporal-agent-kit dev agents.toml`: the Python session-manager worker and the API and
    console server in one process. `session-manager` and `serve` remain available separately.
 3. Your Python or TypeScript agent worker.
 
-For TypeScript applications, the starter's `npm run harness:dev` runs `dev` through `uvx`; no
+For TypeScript applications, the starter's `npm run agent-kit:dev` runs `dev` through `uvx`; no
 Python project is needed. There is currently no Node.js implementation of the shared server.
-The TypeScript CLI is one command: `agent-harness init|schema|skills|doctor`, where `schema` is
-the existing `agent-harness-schema` binary.
+The TypeScript CLI is one command: `agent-kit init|schema|skills|doctor`, where `schema` is
+the existing `agent-kit-schema` binary.
 
 ## Diagnose and verify
 
 ```bash
-uv run temporal-agent-harness doctor --registry agents.toml --api-url http://localhost:8000
-npx agent-harness doctor --schema agent.schema.json --api-url http://localhost:8000
+uv run temporal-agent-kit doctor --registry agents.toml --api-url http://localhost:8000
+npx agent-kit doctor --schema agent.schema.json --api-url http://localhost:8000
 ```
 
 Both commands report versions, API reachability, and the API's agent-worker poller status.
@@ -113,19 +113,19 @@ development; existing histories need normal Temporal replay/versioning disciplin
 
 The canonical skills live in the packages:
 
-- [Python](../python/temporal_agent_harness/skills/temporal-harness-python/SKILL.md)
-- [TypeScript](../typescript/packages/core/skills/temporal-harness-typescript/SKILL.md)
+- [Python](../python/temporal_agent_kit/skills/temporal-agent-kit-python/SKILL.md)
+- [TypeScript](../typescript/packages/core/skills/temporal-agent-kit-typescript/SKILL.md)
 
 Repository `.agents/skills/` links point to these canonical directories for project discovery,
-beside `temporal-harness-repo`, a repository-only skill for contributors working in the checkout
+beside `temporal-agent-kit-repo`, a repository-only skill for contributors working in the checkout
 (Bazel targets, `just` recipes, generated registries). It is not packaged.
 The Python wheel/sdist and core npm tarball include the complete resource trees. The worker
-npm package provides `agent-harness`. Author the shared API reference in
+npm package provides `agent-kit`. Author the shared API reference in
 [docs/api/README.md](api/README.md) and shared verification and starter files in
 [docs/agent-resources/](agent-resources/). Update both packaged copies with:
 
 ```bash
-bazel run //python/temporal_agent_harness:shared_skill_files_update
+bazel run //python/temporal_agent_kit:shared_skill_files_update
 bazel run //typescript/packages/core:shared_skill_files_update
 ```
 
@@ -135,5 +135,5 @@ comes from the root `LICENSE`; refresh it with
 Package installation tests generate and compile starters,
 install skills, export schemas, and run a model-free handler with the installed artifacts.
 The TypeScript starter pins the Python package that provides the shared services in its
-`package.json` `harness:dev` script; the release script updates that pin with the other
+`package.json` `agent-kit:dev` script; the release script updates that pin with the other
 documentation pins.

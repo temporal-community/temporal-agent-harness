@@ -1,0 +1,357 @@
+"""Argument parsing for the ``temporal-agent-kit`` console script.
+
+This module is only the command-line surface: it parses arguments, resolves the Temporal address,
+and dispatches. The work lives in the modules the subcommands name — ``web.serve`` for the web
+app process and ``web.session_manager_worker`` for the session-manager worker — so neither is reachable only
+through a CLI.
+
+Adding the harness to a project with the ``ui`` extra installs this command into the project's
+environment (reachable as ``uv run temporal-agent-kit``), so a project gets the whole
+web-facing harness with no repo checkout, no Node/pnpm, and no ``examples/`` tree.
+A normal dev setup runs both subcommands:
+
+    uv add 'temporal-agent-kit[ui]'
+    uv run temporal-agent-kit session-manager &          # hosts SessionManagerWorkflow
+    uv run temporal-agent-kit serve path/to/agents.toml   # prebuilt Svelte UI + JSON API
+
+``serve`` publishes the UI built into the wheel (``temporal_agent_kit/ui/dist``) over one or
+more ``agents.toml`` registries. ``session-manager`` runs the agent-agnostic worker that hosts
+the packaged ``SessionManagerWorkflow``; without it the server comes up but ``/api/agents`` and
+session creation have nothing to answer them, since both are workflow queries.
+
+``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
+declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
+``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
+of an ``agents.toml`` registry. The running server exposes the HTTP contract at ``/openapi.json``.
+
+``dev`` runs ``session-manager`` and ``serve`` together in one process for local development.
+``init`` copies a bundled starter; ``skills`` locates or installs this release's agent skill.
+``doctor`` reads configuration and service status without creating or resetting workflows.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from temporal_agent_kit.development import SKILL_DIRECTORIES, SKILL_TARGETS
+from temporal_agent_kit.web.client import (
+    DEFAULT_TEMPORAL_ADDRESS,
+    ensure_temporal_address,
+)
+
+TEMPORAL_CONNECTION_HELP = """\
+Temporal connection:
+  Service commands and doctor resolve connections with temporalio's standard client config, so the
+  server and the session-manager worker land on the same namespace when configured the same
+  way. In precedence order:
+
+    1. --temporal-address HOST:PORT
+         Overrides the ADDRESS only. Namespace, TLS, and API key still come from the
+         profile below, so this composes with a temporal.toml rather than replacing it.
+    2. TEMPORAL_ADDRESS (and the other TEMPORAL_* env overrides).
+    3. The profile named by TEMPORAL_PROFILE (default: "default") in the temporal.toml
+         named by TEMPORAL_CONFIG_FILE, else ~/.config/temporalio/temporal.toml.
+    4. localhost:7233
+         The `temporal server start-dev` default. Used ONLY when nothing above resolves
+         an address, so it never overrides a configured profile.
+
+  Note: a temporal.toml in the CURRENT DIRECTORY is NOT picked up automatically --
+  temporalio reads only the user-level file above. Point at a project-local one
+  explicitly:
+
+      TEMPORAL_CONFIG_FILE=./temporal.toml temporal-agent-kit serve ./agents.toml
+
+Task queues:
+  TASK_QUEUE_PREFIX, set to the same value for `serve`, `session-manager` and every agent
+  worker, moves the whole deployment onto its own queues: agents.toml's queues and the
+  session manager's workflow id and queue all become `<prefix>-<name>`.
+
+Examples:
+  temporal-agent-kit dev ./agents.toml            # session manager + API/console, one process
+  temporal-agent-kit session-manager
+  temporal-agent-kit serve ./agents.toml
+  temporal-agent-kit serve one/agents.toml two/agents.toml --port 9000
+  temporal-agent-kit serve ./agents.toml --temporal-address my-host:7233
+
+  # A project-local config file, and a named profile within it (e.g. Temporal Cloud,
+  # whose namespace and API key come from that profile):
+  TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud \\
+      temporal-agent-kit serve ./agents.toml
+"""
+
+
+def _serve(args: argparse.Namespace) -> None:
+    # Imported at call time so `--help` on the other subcommand doesn't pay for FastAPI.
+    from temporal_agent_kit.web.serve import run_server
+
+    run_server(*args.registry_paths, host=args.host, port=args.port)
+
+
+def _dev(args: argparse.Namespace) -> None:
+    from temporal_agent_kit.web.dev import run_dev
+
+    run_dev(*args.registry_paths, host=args.host, port=args.port)
+
+
+def _session_manager(args: argparse.Namespace) -> None:
+    from temporal_agent_kit.web.session_manager_worker import run_session_manager_worker
+
+    run_session_manager_worker(task_queue=args.task_queue, identity=args.identity)
+
+
+def _schema(args: argparse.Namespace) -> None:
+    from temporal_agent_kit.agent_schema import (
+        dump_agent_schema,
+        dump_protocol_schema,
+        load_agent_class,
+    )
+
+    if [args.agent is not None, args.protocol, args.registry].count(True) != 1:
+        raise SystemExit(
+            "temporal-agent-kit schema: give one of an agent class, --protocol or --registry"
+        )
+    try:
+        if args.protocol:
+            text = dump_protocol_schema()
+        elif args.registry:
+            from temporal_agent_kit.web.registry import dump_registry_schema
+
+            text = dump_registry_schema()
+        else:
+            text = dump_agent_schema(load_agent_class(args.agent))
+    except ValueError as e:
+        raise SystemExit(f"temporal-agent-kit schema: {e}") from None
+    if args.output is None:
+        sys.stdout.write(text)
+    else:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
+def _development(args: argparse.Namespace) -> None:
+    from temporal_agent_kit.development import (
+        SKILL_NAME,
+        SKILL_PROMPTS,
+        choose_skill_tools,
+        create_starter,
+        install_skill,
+        package_version,
+        skill_destinations,
+        skill_path,
+    )
+
+    try:
+        if args.command == "init":
+            root = create_starter(Path(args.destination))
+            print(f"Created {root}")
+            print("Next: follow its README.md to install dependencies, add credentials, and start the services.")
+        elif args.command == "skills" and args.action == "path":
+            print(skill_path())
+        elif args.command == "skills":
+            release = package_version()
+            tools = args.tools
+            if not tools and args.dest is None and sys.stdin.isatty():
+                tools = choose_skill_tools()
+            for destination in skill_destinations(tools, args.dest):
+                installed = install_skill(destination)
+                state = "Installed" if installed.changed else "Already up to date:"
+                print(f"{state} {SKILL_NAME} {release} in {installed.root}")
+            prompts = ", ".join(f"`{prompt}` in {tool}" for tool, prompt in SKILL_PROMPTS.items())
+            print(f"Next: ask your coding agent to use the skill ({prompts}).")
+        else:
+            from temporal_agent_kit.web.doctor import diagnose
+
+            report = diagnose(Path(args.registry) if args.registry else None, args.api_url, args.timeout)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print("Versions: " + ", ".join(f"{k}={v}" for k, v in report["versions"].items()))
+                for check in report["checks"]:
+                    print(f"{'OK' if check['ok'] else 'FAIL'} {check['check']}: {check['detail']}")
+            if not report["ok"]:
+                raise SystemExit(1)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"temporal-agent-kit {args.command}: {error}") from None
+
+
+def main(argv: list[str] | None = None) -> None:
+    # --temporal-address is shared rather than duplicated, so the two subcommands can never
+    # drift on the one setting that has to agree between them.
+    connection = argparse.ArgumentParser(add_help=False)
+    connection.add_argument(
+        "--temporal-address",
+        default=None,
+        metavar="HOST:PORT",
+        help="Temporal frontend address. Overrides any temporal.toml profile / "
+        "TEMPORAL_ADDRESS. When omitted and nothing else configures one, defaults to "
+        f"{DEFAULT_TEMPORAL_ADDRESS}.",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="temporal-agent-kit",
+        description="Build and run Temporal agents: create a starter, install a coding-agent skill, "
+        "export schemas, diagnose services, or run the shared API/UI and session manager.",
+        epilog=TEMPORAL_CONNECTION_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+
+    init = subparsers.add_parser("init", help="Copy the bundled OpenAI starter without overwriting files.")
+    init.add_argument("destination")
+    init.set_defaults(handler=_development)
+    skills = subparsers.add_parser(
+        "skills",
+        help="Locate or install this SDK release's coding-agent skill.",
+        description="`path` prints the bundled skill directory. `install` copies it into the "
+        "project where your coding agents discover skills: Claude Code reads .claude/skills; Codex "
+        "and other agents read the shared .agents/skills. Without --for or --dest it asks which to "
+        "install for. Reruns update unchanged files and preserve local edits.",
+    )
+    skills.add_argument("action", choices=("path", "install"))
+    skills.add_argument(
+        "--for",
+        dest="tools",
+        action="append",
+        choices=tuple(SKILL_DIRECTORIES),
+        metavar="{" + ",".join(SKILL_DIRECTORIES) + "}",
+        help="Install for these coding agents (repeatable): "
+        + "; ".join(f"{k}: {SKILL_TARGETS[k]} ({v})" for k, v in SKILL_DIRECTORIES.items())
+        + ".",
+    )
+    skills.add_argument("--dest", default=None, help="Parent directory for a tool that reads skills from somewhere else.")
+    skills.set_defaults(handler=_development)
+    doctor = subparsers.add_parser("doctor", parents=[connection], help="Read-only configuration and service diagnostics.")
+    doctor.add_argument("--registry", help="Validate this TOML registry and its referenced schemas.")
+    doctor.add_argument("--api-url", default="http://localhost:8000")
+    doctor.add_argument("--timeout", type=float, default=5)
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(handler=_development)
+
+    dev = subparsers.add_parser(
+        "dev",
+        parents=[connection],
+        help="Run the session-manager worker and the web UI/API together for local development.",
+        description="Run the packaged session-manager worker and the prebuilt Agent Kit web UI and "
+        "JSON API in one process. Equivalent to `session-manager` and `serve` in two terminals; "
+        "start Temporal and your agent worker separately.",
+        epilog=TEMPORAL_CONNECTION_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dev.add_argument(
+        "registry_paths",
+        nargs="+",
+        metavar="registry_path",
+        help="Path(s) to agents.toml registries, merged as `serve` does.",
+    )
+    dev.add_argument("--host", default="0.0.0.0")
+    dev.add_argument("--port", type=int, default=8000)
+    dev.set_defaults(handler=_dev)
+
+    serve = subparsers.add_parser(
+        "serve",
+        parents=[connection],
+        help="Serve the packaged web UI over one or more agents.toml registries.",
+        description="Serve the prebuilt Agent Kit web UI and JSON API over one or more "
+        "agents.toml registries. Needs `temporal-agent-kit session-manager` running "
+        "against the same namespace, since the agent list and session creation are "
+        "workflow queries.",
+        epilog=TEMPORAL_CONNECTION_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    serve.add_argument(
+        "registry_paths",
+        nargs="+",
+        metavar="registry_path",
+        help="Path(s) to agents.toml registries. One serves that registry standalone; "
+        "several are merged so the UI lists all their agents.",
+    )
+    serve.add_argument("--host", default="0.0.0.0")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.set_defaults(handler=_serve)
+
+    session_manager = subparsers.add_parser(
+        "session-manager",
+        parents=[connection],
+        help="Run the worker hosting the packaged session-manager workflow.",
+        description="Run the agent-agnostic worker that hosts the packaged "
+        "SessionManagerWorkflow. It registers no agent workflows or activities of its own — "
+        "it launches whichever agents `serve` registered, as child workflows on their own "
+        "task queues — so one worker serves every agent.",
+        epilog=TEMPORAL_CONNECTION_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # Imported lazily: reaching for the default task queue shouldn't drag the session-manager
+    # module into `--help` on the other subcommand.
+    from temporal_agent_kit.utils.task_queue import task_queue_name
+    from temporal_agent_kit.web.session_manager import SESSION_MANAGER_TASK_QUEUE
+
+    session_manager.add_argument(
+        "--task-queue",
+        default=task_queue_name(SESSION_MANAGER_TASK_QUEUE),
+        help="Task queue to poll. Must match what the server expects "
+        "(default: %(default)r, under $TASK_QUEUE_PREFIX when set).",
+    )
+    session_manager.add_argument(
+        "--identity",
+        default=None,
+        help="Worker identity reported to Temporal. Defaults to the SDK's own identity.",
+    )
+    session_manager.set_defaults(handler=_session_manager)
+
+    schema = subparsers.add_parser(
+        "schema",
+        help="Print an agent's handlers and declared state, the event protocol, or the "
+        "agents.toml format, as JSON Schema.",
+        description="Import one agent class and print its @agent.accepts handlers (input "
+        "and output models) and its agent.state(...) declarations as a single JSON Schema "
+        "document with shared $defs — the input to client codegen. Starts no workflow and "
+        "needs no Temporal connection.",
+    )
+    schema.add_argument(
+        "agent",
+        nargs="?",
+        metavar="module.path:ClassName",
+        help="The agent class, e.g. examples.tictactoe.workflow:TicTacToeAgentWorkflow.",
+    )
+    schema.add_argument(
+        "--protocol",
+        action="store_true",
+        help="Print the event stream's wire types (every agent publishes the same ones) "
+        "instead of one agent's schema.",
+    )
+    schema.add_argument(
+        "--registry",
+        action="store_true",
+        help="Print the schema of an agents.toml registry instead of one agent's schema.",
+    )
+    schema.add_argument(
+        "-o", "--output", default=None, help="Write to this file instead of stdout."
+    )
+    schema.set_defaults(handler=_schema)
+
+    # A bare `temporal-agent-kit` is how someone finds out what this command does, so answer
+    # with the full help (subcommands and connection rules included) rather than argparse's terse
+    # "the following arguments are required" one-liner. Still exits non-zero: the invocation
+    # really was incomplete, and a script shouldn't read it as success.
+    if not (sys.argv[1:] if argv is None else argv):
+        parser.print_help()
+        raise SystemExit(2)
+
+    args = parser.parse_args(argv)
+
+    # Flags without a subcommand name no action to take, so answer them the same way.
+    handler = getattr(args, "handler", None)
+    if handler is None:
+        parser.print_help()
+        raise SystemExit(2)
+
+    if hasattr(args, "temporal_address"):
+        ensure_temporal_address(args.temporal_address)
+    handler(args)
+
+
+if __name__ == "__main__":
+    main()

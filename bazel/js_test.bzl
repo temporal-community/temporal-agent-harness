@@ -1,10 +1,10 @@
-"""harness_js_test: a js_test that can start the Temporal dev server pinned in MODULE.bazel."""
+"""agent_kit_js_test: a js_test that can start the Temporal dev server pinned in MODULE.bazel."""
 
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 
 _TEMPORAL_CLI = Label("//bazel/temporal:cli")
 
-def _harness_js_test_impl(name, visibility, entry_point, data, env, size, timeout, tags, flaky):
+def _agent_kit_js_test_impl(name, visibility, entry_point, data, env, size, timeout, tags, flaky):
     js_test(
         name = name,
         visibility = visibility,
@@ -20,12 +20,12 @@ def _harness_js_test_impl(name, visibility, entry_point, data, env, size, timeou
         flaky = flaky,
     )
 
-harness_js_test = macro(
+agent_kit_js_test = macro(
     doc = """A node:test file run with the `temporal` CLI pinned in MODULE.bazel.
 
     TEMPORAL_CLI_PATH names the CLI, whose dev server the test starts instead of downloading one.
     """,
-    implementation = _harness_js_test_impl,
+    implementation = _agent_kit_js_test_impl,
     attrs = {
         "entry_point": attr.label(mandatory = True, allow_single_file = True, configurable = False, doc = "The compiled test file."),
         "data": attr.label_list(allow_files = True, configurable = False, doc = "The test's ts_project and anything else it reads at runtime."),

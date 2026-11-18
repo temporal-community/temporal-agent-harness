@@ -1,5 +1,5 @@
 // The type parameter a session is generic over: an agent's init data, handlers and observable
-// state, as `harness-codegen` generates them. Untyped when there is no generated type to give.
+// state, as `agent-kit-codegen` generates them. Untyped when there is no generated type to give.
 
 export interface AgentSchema {
   /** The init data the agent's `@agent.init` takes after its config, and whether a session

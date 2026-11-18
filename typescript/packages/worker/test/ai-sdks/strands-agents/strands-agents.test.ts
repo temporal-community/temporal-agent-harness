@@ -12,12 +12,12 @@ import { after, before, describe, it } from "node:test";
 import { McpClient, type JSONValue, type McpTransport } from "@strands-agents/sdk";
 import { Client, Connection } from "@temporalio/client";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentClient } from "../../../src/harness/agent-client.ts";
+import type { AgentEvent } from "@temporalio/agent-kit/agent-protocol";
+import { AgentClient } from "../../../src/agent-client.ts";
 import { OpenAIAgentsPlugin } from "../../../src/ai-sdks/openai-agents/index.ts";
 import { StrandsPlugin } from "../../../src/ai-sdks/strands-agents/index.ts";
-import { harnessObserverFactory } from "../../../src/ai-sdks/strands-agents-harness.ts";
-import { AgentHarnessPlugin, toolActivity } from "../../../src/index.ts";
+import { kitObserverFactory } from "../../../src/ai-sdks/strands-agents/kit.ts";
+import { AgentKitPlugin, toolActivity } from "../../../src/index.ts";
 import { assertMatch } from "../../match.ts";
 import { collect, one, send, startServer, typesFor, type TemporalServer } from "../../support.ts";
 import {
@@ -119,12 +119,12 @@ describe("a harness Strands agent's turn on a dev server", () => {
               ]),
           },
           mcpClients: { [ECHO_MCP_SERVER]: () => new EchoMcpClient() },
-          observerFactory: harnessObserverFactory,
+          observerFactory: kitObserverFactory,
         }),
         new OpenAIAgentsPlugin({
           modelProvider: scriptedProvider({ [OPENAI_SCRIPTED_MODEL]: weatherScript }),
         }),
-        new AgentHarnessPlugin({
+        new AgentKitPlugin({
           largePayloadOffload: null,
           tools: [toolActivity(
             convertToCelsius,

@@ -1,45 +1,45 @@
 # Parity with the Python SDK
 
-The TypeScript SDK (`@temporalio/agent-harness`, `@temporalio/agent-harness-worker`) follows the
-Python SDK (`python/temporal_agent_harness/`): the same protocol (`contract/protocol.schema.json`),
+The TypeScript SDK (`@temporalio/agent-kit`, `@temporalio/agent-kit-worker`) follows the
+Python SDK (`python/temporal_agent_kit/`): the same protocol (`contract/protocol.schema.json`),
 the same behavior where both can express it, and the same layout. A Python module's TypeScript
 counterpart is at the same path with the same words in kebab-case
-(`harness/agent_workflow.py` is `src/harness/agent-workflow.ts`), in `core` for code that runs in
+(`agent_workflow.py` is `src/agent-workflow.ts`), in `core` for code that runs in
 the workflow and in `worker` for code that runs in activities or the worker process.
 
 ## Where each Python module lives
 
-Paths are under `python/temporal_agent_harness/`, `typescript/packages/core/src/` (core) and
+Paths are under `python/temporal_agent_kit/`, `typescript/packages/core/src/` (core) and
 `typescript/packages/worker/src/` (worker).
 
 | Python | TypeScript |
 | --- | --- |
-| `harness/agent.py` | core `harness/agent.ts` |
-| `harness/agent_workflow.py` | core `harness/agent-workflow.ts`, `harness/agent-workflow/{errors,types}.ts`; worker `harness/agent-workflow.ts` (activity tools) |
-| `harness/agent_client.py` | worker `harness/agent-client.ts` |
-| `harness/agent_protocol/` | core `harness/agent-protocol/`; the protocol types come from `@temporalio/agent-harness-client` |
-| `harness/agent_schema.py` | core `harness/agent-schema.ts` (the document); worker `harness/agent-schema.ts` (loading an agent and writing it: the `agent-harness-schema <module>#<export>` bin, the TypeScript half of `temporal-agent-harness schema`) |
-| `harness/stream_context.py` | core `harness/stream-context.ts` |
-| `harness/subagent_toolset.py` | core `harness/subagent-toolset.ts` |
-| `harness/subagent_activities.py` | worker `harness/subagent-activities.ts` |
-| `harness/state/` | core `harness/state/index.ts` |
-| `harness/stream_merge/` | worker `harness/stream-merge/index.ts` |
-| `harness/code_mode/{driver,tool,stubs,vfs,okf,okf_tool,mount_decl,activity_fs}.py` | core `harness/code-mode/` at the same names, with `base64.ts` (the workflow sandbox has no `Buffer`); the activity side of `activity_fs` and `okf` in worker `harness/code-mode/` |
-| `harness/code_mode/monty_stepper.py` | worker `harness/code-mode/monty-stepper.ts` |
-| `harness/code_mode/_texts.py` | core `harness/code-mode/texts.ts`; both generated from `contract/code_mode/` |
-| — | core `harness/py-repr.ts`: Python's `repr()`, which Code Mode shows the model |
+| `agent.py` | core `agent.ts` |
+| `agent_workflow.py` | core `agent-workflow.ts`, `agent-workflow/{errors,types}.ts`; worker `agent-workflow.ts` (activity tools) |
+| `agent_client.py` | worker `agent-client.ts` |
+| `agent_protocol/` | core `agent-protocol/`; the protocol types come from `@temporalio/agent-kit-client` |
+| `agent_schema.py` | core `agent-schema.ts` (the document); worker `agent-schema.ts` (loading an agent and writing it: the `agent-kit-schema <module>#<export>` bin, the TypeScript half of `temporal-agent-kit schema`) |
+| `stream_context.py` | core `stream-context.ts` |
+| `subagent_toolset.py` | core `subagent-toolset.ts` |
+| `subagent_activities.py` | worker `subagent-activities.ts` |
+| `state/` | core `state/index.ts` |
+| `stream_merge/` | worker `stream-merge/index.ts` |
+| `code_mode/{driver,tool,stubs,vfs,okf,okf_tool,mount_decl,activity_fs}.py` | core `code-mode/` at the same names, with `base64.ts` (the workflow sandbox has no `Buffer`); the activity side of `activity_fs` and `okf` in worker `code-mode/` |
+| `code_mode/monty_stepper.py` | worker `code-mode/monty-stepper.ts` |
+| `code_mode/_texts.py` | core `code-mode/texts.ts`; both generated from `contract/code_mode/` |
+| — | core `py-repr.ts`: Python's `repr()`, which Code Mode shows the model |
 | `plugin.py` | worker `plugin.ts` |
 | `utils/large_payload.py` | worker `utils/large-payload.ts`, `utils/s3.ts` |
 | `ai_sdks/jev/evaluator.py` | core and worker `ai-sdks/jev/evaluator.ts` |
-| `ai_sdks/integration_helpers/` | worker `ai-sdks/integration-helpers/stream-observer.ts`: the same per-call observer contract, with which each integration's model activity translates its SDK's stream and publishes harness events to the turn. Python's `RawTopicObserver` fallback (raw events to a named topic, for its plugins used outside the harness) has no counterpart: the TypeScript integrations only run inside it |
+| `ai_sdks/integration_helpers/` | worker `ai-sdks/integration-helpers/stream-observer.ts`: the same per-call observer contract, with which each integration's model activity translates its SDK's stream and publishes Agent Kit events to the turn. Python's `RawTopicObserver` fallback (raw events to a named topic, for its plugins used outside Agent Kit) has no counterpart: the TypeScript integrations only run inside it |
 | `web/`, `ui/` | None: the server, session manager, registry, the rest of the CLI and the console have one implementation, which serves agents written with either SDK |
-| `ai_sdks/openai_agents_harness.py` | core `ai-sdks/openai-agents-harness.ts` (tools, the streamed run, MCP governance, in the workflow); worker `ai-sdks/openai-agents-harness.ts` (`OpenAIStreamObserver`, in the model activity) |
+| `ai_sdks/openai_agents/_kit.py` | core `ai-sdks/openai-agents.ts` (tools, the streamed run, MCP governance, in the workflow); worker `ai-sdks/openai-agents/kit.ts` (`OpenAIStreamObserver`, in the model activity) |
 | `ai_sdks/openai_agents/` | Temporal's `@temporalio/openai-agents`, which Python vendors, used as published; worker `ai-sdks/openai-agents/` replaces only its streamed model activity (`invoke-model-activity.ts`, to add the observer) and wraps its plugin (`temporal-openai-agents.ts`). Not ported yet: stateful MCP, sandbox, tracing, Nexus MCP, `activity_as_tool`, `nexus_operation_as_tool`, `testing`, hosted-tool credentials |
 | `ai_sdks/google_genai_plugin/` | core `ai-sdks/google-genai-plugin/` (the client, `InteractionConversation`, `functionParam`) and worker `ai-sdks/google-genai-plugin/` (`GoogleGenAIPlugin`, the Interactions activity, error mapping), module for module. Not ported yet: `models.generate_content` and its function calling, files, file search stores, Vertex AI options |
-| `ai_sdks/strands_agents_harness.py` | core `ai-sdks/strands-agents-harness.ts` (`harnessStreamRoute`, `asStrandsTool(s)`, `harnessStrandsAgent`, in the workflow); worker `ai-sdks/strands-agents-harness.ts` (`StrandsStreamObserver`, `harnessObserverFactory`, in the model activity) |
-| `ai_sdks/strands_agents/` | Both vendor `temporalio/ai-integrations` at the same commit: Python its `python/strands_agents`, TypeScript its `typescript/strands-agents`, split into core `ai-sdks/strands-agents/` (`TemporalAgent`, `TemporalModel`, the tool classes, the MCP client's workflow half, errors, polyfills) and worker `ai-sdks/strands-agents/` (`StrandsPlugin`, `ModelActivity`, the MCP connections, heartbeat). None: `TemporalSandbox` and its activities, `temporal_worker_env_ref`, the sync-call guard and bytes tagging, which upstream's TypeScript package doesn't have, so a harness Strands agent in TypeScript takes no `sandbox` |
-| `ai_sdks/pydantic_ai_harness.py` | None: Pydantic AI is Python-only |
-| `ai_sdks/typesafe_harness.py` | Not ported yet |
+| `ai_sdks/strands_agents/_kit.py` | core `ai-sdks/strands-agents/kit.ts` (`kitStreamRoute`, `asStrandsTool(s)`, `kitStrandsAgent`, in the workflow); worker `ai-sdks/strands-agents/kit.ts` (`StrandsStreamObserver`, `kitObserverFactory`, in the model activity) |
+| `ai_sdks/strands_agents/` | Both vendor `temporalio/ai-integrations` at the same commit: Python its `python/strands_agents`, TypeScript its `typescript/strands-agents`, split into core `ai-sdks/strands-agents/` (`TemporalAgent`, `TemporalModel`, the tool classes, the MCP client's workflow half, errors, polyfills) and worker `ai-sdks/strands-agents/` (`StrandsPlugin`, `ModelActivity`, the MCP connections, heartbeat). None: `TemporalSandbox` and its activities, `temporal_worker_env_ref`, the sync-call guard and bytes tagging, which upstream's TypeScript package doesn't have, so an Agent Kit Strands agent in TypeScript takes no `sandbox` |
+| `ai_sdks/pydantic_ai.py` | None: Pydantic AI is Python-only |
+| `ai_sdks/typesafe.py` | Not ported yet |
 | `nexus_agent_adapter/` | None: Nexus is not part of the TypeScript SDK |
 
 ## Differences
@@ -59,7 +59,7 @@ change, or adds a row here saying which SDK has it and why.
 | Decorators | `@agent.defn`, `@agent.accepts`, `@agent.tool_defn` | `defineAgent`, `handler`, `tool`, `activityTool` | TypeScript has no decorators on functions; declarations are data plus zod schemas |
 | Ambient context | `contextvars` | `AsyncLocalStorage` | Language |
 | Schemas | pydantic models | Any Standard Schema that renders JSON Schema (zod 4); rendered in zod's own input and output modes, so documents are equivalent to Python's but not byte-identical | Language |
-| What `AgentHarnessPlugin(tools=...)` takes | The agent's tools; the activity-backed ones carry their bodies | The bodies alone, each from `toolActivity(tool, impl)` | A tool's declaration is bundled into the workflow, which can't import its worker-side body |
+| What `AgentKitPlugin(tools=...)` takes | The agent's tools; the activity-backed ones carry their bodies | The bodies alone, each from `toolActivity(tool, impl)` | A tool's declaration is bundled into the workflow, which can't import its worker-side body |
 | Running an OpenAI agent streamed | `Runner.run_streamed(agent, input, context=runner)`; the vendored runner's `stream_to_provider` hook reads the turn off the run context | `runStreamed(runner, agent, input)`, which hands the turn to the official runner as its streaming route | Temporal's TypeScript runner has no `stream_to_provider` hook |
 | Where OpenAI model-activity settings are set | On the worker's `OpenAIAgentsPlugin(model_params=...)`, which installs them in the worker process for every workflow it runs | As Temporal's TypeScript plugin designs it: workflow code sets defaults (`runStreamed(..., { defaultModelParams })`, the official runner's option), and the plugin's `modelParams`, on the client that starts a workflow, travel in its header and override them | A workflow isolate can't read the worker's memory; settings written in the workflow or recorded with its start hold for every worker and bundle that runs it |
 | OpenAI streamed usage when the provider reports none | `None` | `0` | `@openai/agents-core` normalizes missing usage to zero |

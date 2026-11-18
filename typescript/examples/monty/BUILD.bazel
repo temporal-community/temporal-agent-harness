@@ -1,8 +1,8 @@
 load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
 load("@npm//:defs.bzl", "npm_link_all_packages")
-load("//bazel:agents.bzl", "harness_agent_registry", "harness_ts_agent")
-load("//bazel:js_test.bzl", "harness_js_test")
+load("//bazel:agents.bzl", "agent_kit_agent_registry", "agent_kit_ts_agent")
+load("//bazel:js_test.bzl", "agent_kit_js_test")
 
 # The TypeScript twin of //python/examples/monty: the same agents, under "Ts" workflow types on
 # their own task queue, so both languages' examples can be served side by side.
@@ -26,7 +26,7 @@ ts_config(
     ],
 )
 
-# Code Mode's Monty sandbox, an optional peer of @temporalio/agent-harness-worker, hoisted where
+# Code Mode's Monty sandbox, an optional peer of @temporalio/agent-kit-worker, hoisted where
 # the worker package's code finds it (MODULE.bazel's public_hoist_packages).
 js_library(
     name = "monty_sandbox",
@@ -40,7 +40,7 @@ ts_project(
     declaration = True,
     tsconfig = ":tsconfig",
     deps = [
-        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-kit",
         ":node_modules/zod",
     ],
 )
@@ -51,7 +51,7 @@ ts_project(
     declaration = True,
     tsconfig = ":tsconfig",
     deps = [
-        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-kit",
         ":node_modules/zod",
         ":travel-models",
     ],
@@ -65,7 +65,7 @@ ts_project(
     deps = [
         ":activities",
         ":node_modules/@temporalio/activity",
-        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/agent-kit-worker",
         ":travel-models",
     ],
 )
@@ -92,7 +92,7 @@ ts_project(
     deps = [
         ":ask-user",
         ":conversational-workflow",
-        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-kit",
         ":node_modules/@temporalio/workflow",
         ":workflow",
     ],
@@ -107,7 +107,7 @@ ts_project(
         ":activities",
         ":ask-user",
         ":node_modules/@google/genai",
-        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-kit",
         ":node_modules/@temporalio/workflow",
         ":node_modules/zod",
         ":trip-board",
@@ -136,7 +136,7 @@ ts_project(
     declaration = True,
     tsconfig = ":tsconfig",
     deps = [
-        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-kit",
         ":node_modules/@temporalio/workflow",
         ":node_modules/zod",
     ],
@@ -152,7 +152,7 @@ ts_project(
         ":agents",
         ":monty_sandbox",
         ":node_modules/@google/genai",
-        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/agent-kit-worker",
         ":node_modules/@temporalio/envconfig",
         ":node_modules/@temporalio/worker",
         ":workflow",
@@ -167,7 +167,7 @@ ts_project(
     deps = [
         ":activities",
         ":models",
-        ":node_modules/@temporalio/agent-harness",
+        ":node_modules/@temporalio/agent-kit",
         ":node_modules/@temporalio/workflow",
         ":trip-board",
     ],
@@ -194,21 +194,21 @@ ts_project(
         ":agents",
         ":monty_sandbox",
         ":node_modules/@google/genai",
-        ":node_modules/@temporalio/agent-harness",
-        ":node_modules/@temporalio/agent-harness-worker",
+        ":node_modules/@temporalio/agent-kit",
+        ":node_modules/@temporalio/agent-kit-worker",
         ":node_modules/@temporalio/client",
         ":node_modules/@temporalio/testing",
         ":node_modules/@temporalio/worker",
     ],
 )
 
-harness_js_test(
+agent_kit_js_test(
     name = "chat_turn_runs_a_code_mode_script_over_a_host_function_and_streams_the_reply_test",
     data = [":conversational-workflow.test"],
     entry_point = "conversational-workflow.test.js",
 )
 
-harness_ts_agent(
+agent_kit_ts_agent(
     name = "MontyChatAgentTs",
     description = """
 A conversational travel-booking assistant, in TypeScript. Chat in plain text; an LLM converses to
@@ -222,7 +222,7 @@ orchestrate durable flight/hotel search + booking activities, replying with the 
     deps = [":agents"],
 )
 
-harness_ts_agent(
+agent_kit_ts_agent(
     name = "MontyChatSubagentAgentTs",
     description = """
 Same conversational travel-booking experience as Monty (Conversational, TypeScript), but instead
@@ -239,7 +239,7 @@ toolset.""",
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //typescript/examples/monty:agents_registry_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents_registry",
     srcs = [
         "MontyChatAgentTs.schema.json",

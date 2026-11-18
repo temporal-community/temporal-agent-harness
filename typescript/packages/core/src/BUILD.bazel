@@ -10,19 +10,19 @@ ts_project(
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],
     deps = [
+        "//typescript/packages/core/src:agent",
+        "//typescript/packages/core/src:agent-workflow",
+        "//typescript/packages/core/src:steering",
+        "//typescript/packages/core/src:subagent-toolset",
+        "//typescript/packages/core/src/agent-protocol:index",
         "//typescript/packages/core/src/ai-sdks/jev:evaluator",
-        "//typescript/packages/core/src/harness:agent",
-        "//typescript/packages/core/src/harness:agent-workflow",
-        "//typescript/packages/core/src/harness:steering",
-        "//typescript/packages/core/src/harness:subagent-toolset",
-        "//typescript/packages/core/src/harness/agent-protocol:index",
-        "//typescript/packages/core/src/harness/code-mode:activity-fs",
-        "//typescript/packages/core/src/harness/code-mode:index",
-        "//typescript/packages/core/src/harness/code-mode:mount-decl",
-        "//typescript/packages/core/src/harness/code-mode:okf",
-        "//typescript/packages/core/src/harness/code-mode:okf-tool",
-        "//typescript/packages/core/src/harness/code-mode:vfs",
-        "//typescript/packages/core/src/harness/state:index",
+        "//typescript/packages/core/src/code-mode:activity-fs",
+        "//typescript/packages/core/src/code-mode:index",
+        "//typescript/packages/core/src/code-mode:mount-decl",
+        "//typescript/packages/core/src/code-mode:okf",
+        "//typescript/packages/core/src/code-mode:okf-tool",
+        "//typescript/packages/core/src/code-mode:vfs",
+        "//typescript/packages/core/src/state:index",
     ],
 )
 
@@ -32,4 +32,92 @@ ts_project(
     declaration = True,
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "agent-schema",
+    srcs = ["agent-schema.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":agent",
+        "//typescript/packages/core/src/agent-protocol:index",
+    ],
+)
+
+ts_project(
+    name = "agent-workflow",
+    srcs = ["agent-workflow.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":steering",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core:node_modules/@temporalio/workflow-streams",
+        "//typescript/packages/core/src/agent-protocol:index",
+        "//typescript/packages/core/src/agent-workflow:errors",
+        "//typescript/packages/core/src/agent-workflow:types",
+        "//typescript/packages/core/src/state:index",
+    ],
+)
+
+ts_project(
+    name = "agent",
+    srcs = ["agent.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":agent-workflow",
+        "//typescript/packages/core:node_modules/@temporalio/common",
+        "//typescript/packages/core:node_modules/@temporalio/workflow",
+        "//typescript/packages/core:node_modules/zod",
+        "//typescript/packages/core/src/agent-protocol:index",
+        "//typescript/packages/core/src/agent-workflow:types",
+        "//typescript/packages/core/src/state:index",
+    ],
+)
+
+ts_project(
+    name = "py-repr",
+    srcs = ["py-repr.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "steering",
+    srcs = ["steering.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "stream-context",
+    srcs = ["stream-context.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//typescript/packages/core:node_modules/zod",
+    ],
+)
+
+ts_project(
+    name = "subagent-toolset",
+    srcs = ["subagent-toolset.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/core:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":agent",
+        ":agent-workflow",
+        "//typescript/packages/core:node_modules/zod",
+        "//typescript/packages/core/src/agent-protocol:index",
+    ],
 )

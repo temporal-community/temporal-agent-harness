@@ -1,6 +1,6 @@
 # Shared Example UI
 
-This directory is the shared Svelte frontend for the packaged harness web API.
+This directory is the shared Svelte frontend for the packaged Agent Kit web API.
 In development, Vite serves the app and proxies `/api` to the FastAPI server on
 `localhost:8000`.
 
@@ -39,9 +39,9 @@ To add a pane, follow [AGENTS.md](AGENTS.md#add-a-pane).
 
 The build is path-independent: Vite's `base` is `./` and every API call is
 relative (`api/agents`, not `/api/agents`), so `dist` can be served under any
-prefix. Serve it at `/harness/` and the console asks for `/harness/assets/...`
-and `/harness/api/...`; route that `api/` to the harness API. Link to the
-prefix with its trailing slash, because `/harness` without one resolves those
+prefix. Serve it at `/agent-kit/` and the console asks for `/agent-kit/assets/...`
+and `/agent-kit/api/...`; route that `api/` to the Agent Kit API. Link to the
+prefix with its trailing slash, because `/agent-kit` without one resolves those
 relative URLs against `/`.
 
 `?mock=demo` (also `worst`, `empty`, `transcript5k`, `sessions10k`, and the
@@ -50,7 +50,7 @@ development-only switch, so it works under `just ui-dev` or a build made with
 `NODE_ENV=development vite build --mode development`, not the shipped `dist`.
 
 The console is an app, not a library. To put an agent in your own UI, build on
-the client packages instead: `@temporalio/agent-harness-client` for the
-transport and types, plus `@temporalio/agent-harness-svelte` or
-`@temporalio/agent-harness-react` for the bindings (`python/examples/agent_dag/ui`
+the client packages instead: `@temporalio/agent-kit-client` for the
+transport and types, plus `@temporalio/agent-kit-svelte` or
+`@temporalio/agent-kit-react` for the bindings (`python/examples/agent_dag/ui`
 uses the Svelte one).

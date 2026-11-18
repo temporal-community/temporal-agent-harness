@@ -5,21 +5,21 @@ The release flow, for npm and for the Python package alike, is in the repository
 tags, creates the GitHub Release and publishes. This page covers what is specific to these
 packages: how they version, how to test them locally, and the one-time registry setup.
 
-Every `@temporalio/agent-harness*` package here shares one version. A release moves all of them
+Every `@temporalio/agent-kit*` package here shares one version. A release moves all of them
 and every workspace dependency on one of them (`^<version>`), tags `npm-v<version>`, and
 [Publish to npm](../../.github/workflows/publish-npm.yml) publishes the public ones in dependency
-order with npm trusted publishing. `@temporalio/agent-harness` (core) and
-`@temporalio/agent-harness-worker` are the authoring/runtime packages. The next release also
-publishes `@temporalio/agent-harness-codegen` for application type generation.
+order with npm trusted publishing. `@temporalio/agent-kit` (core) and
+`@temporalio/agent-kit-worker` are the authoring/runtime packages. The next release also
+publishes `@temporalio/agent-kit-codegen` for application type generation.
 
 | Package | Publishes today |
 | --- | --- |
-| `@temporalio/agent-harness-client` | yes |
-| `@temporalio/agent-harness-react` | yes |
-| `@temporalio/agent-harness-svelte` | yes |
-| `@temporalio/agent-harness` | yes |
-| `@temporalio/agent-harness-worker` | yes |
-| `@temporalio/agent-harness-codegen` | starting with the next release |
+| `@temporalio/agent-kit-client` | yes |
+| `@temporalio/agent-kit-react` | yes |
+| `@temporalio/agent-kit-svelte` | yes |
+| `@temporalio/agent-kit` | yes |
+| `@temporalio/agent-kit-worker` | yes |
+| `@temporalio/agent-kit-codegen` | starting with the next release |
 
 ## Testing local changes without publishing
 
@@ -72,7 +72,7 @@ after further edits, and keep `.tgz` files out of commits.
    | Field | Value |
    | --- | --- |
    | Organization or user | `temporal-community` |
-   | Repository | `temporal-agent-harness` |
+   | Repository | `temporal-agent-kit` |
    | Workflow filename | `publish-npm.yml` |
    | Environment name | `npm` |
    | Allowed actions, if shown | Allow direct `npm publish` |

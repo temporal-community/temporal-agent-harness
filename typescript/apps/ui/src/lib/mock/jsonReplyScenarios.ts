@@ -335,7 +335,7 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     "",
     "1. Install:",
     "    ```bash",
-    "    pip install temporal-agent-harness",
+    "    pip install temporal-agent-kit",
     "    ```",
     "2. Run it",
     "",

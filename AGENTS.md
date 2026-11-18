@@ -1,24 +1,24 @@
 # Working in this repository
 
-Temporal Agent Harness is a Python and TypeScript SDK for building durable agents, with a development+observability web console and
+Temporal Agent Kit is a Python and TypeScript SDK for building durable agents, with a development+observability web console and
 TypeScript clients for building products over the agents. This file covers contributing; [README.md](README.md) covers usage.
 Run commands below from the repository root unless stated otherwise.
 
 For building applications with installed packages, use the packaged
-[Python skill](python/temporal_agent_harness/skills/temporal-harness-python/SKILL.md) or
-[TypeScript skill](typescript/packages/core/skills/temporal-harness-typescript/SKILL.md).
-For agents working in this checkout, `.agents/skills/temporal-harness-repo/` explains how
+[Python skill](python/temporal_agent_kit/skills/temporal-agent-kit-python/SKILL.md) or
+[TypeScript skill](typescript/packages/core/skills/temporal-agent-kit-typescript/SKILL.md).
+For agents working in this checkout, `.agents/skills/temporal-agent-kit-repo/` explains how
 examples are wired, run, and tested here; the packaged skills' commands do not apply in the repo.
 Codex discovers it in place; for Claude Code, link it with
-`mkdir -p .claude/skills && ln -s ../../.agents/skills/temporal-harness-repo .claude/skills/`
+`mkdir -p .claude/skills && ln -s ../../.agents/skills/temporal-agent-kit-repo .claude/skills/`
 (`.claude/` is gitignored). [Agent development](docs/agent-development.md) covers installation
 and updates of the packaged skills.
 
 ## Find the right code
 
-- `python/temporal_agent_harness/harness/`: agent runtime, tools, and orchestration.
-- `python/temporal_agent_harness/ai_sdks/`: AI SDK integrations.
-- `python/temporal_agent_harness/web/`: CLI, session manager, and FastAPI service.
+- `python/temporal_agent_kit/`: agent runtime, tools, and orchestration.
+- `python/temporal_agent_kit/ai_sdks/`: AI SDK integrations.
+- `python/temporal_agent_kit/web/`: CLI, session manager, and FastAPI service.
 - `python/examples/`: runnable agents; examples are not shipped in the Python package.
 - `python/tests/`: Python tests, organized by subsystem.
 - `typescript/apps/ui/`: Svelte 5 console; `typescript/packages/`: clients and codegen.
@@ -44,7 +44,7 @@ For UI hot reload, keep the API on port 8000 and run `just ui-dev` separately.
 ## Make changes
 
 - Follow neighboring code and tests; keep changes focused on the requested behavior.
-- Use absolute Python imports rooted at `temporal_agent_harness`, `examples`, or `tests`.
+- Use absolute Python imports rooted at `temporal_agent_kit`, `examples`, or `tests`.
 - Python dependencies live in `python/pyproject.toml` and `python/uv.lock`;
   JavaScript dependencies use the `typescript/` pnpm workspace and its single lockfile.
   Use Bazel's pinned pnpm: `bazel run //typescript:pnpm -- <args>`.
@@ -54,7 +54,7 @@ For UI hot reload, keep the API on port 8000 and run `just ui-dev` separately.
 - TypeScript BUILD files are maintained by hand: wire new sources and tests into them.
   Run `scripts/check-ts-test-targets.sh` when adding or moving TypeScript tests.
 - Run `just buildifier` after changing Bazel files. New Python package entry points must
-  be reachable from `python/temporal_agent_harness/BUILD.bazel`; verify with
+  be reachable from `python/temporal_agent_kit/BUILD.bazel`; verify with
   `scripts/check-python-package-entry-points.sh`.
 - Edit frontend sources, not compiled assets. UI build output is not committed.
 
@@ -69,11 +69,11 @@ Do not fix an out-of-date generated-file test by editing the generated file dire
 | Example client schema (where a client SDK is declared) | `bazel run //python/examples/<example>:client_sdk_update` |
 | Event protocol | `bazel run //contract:protocol_update` then `bazel run //typescript/packages/client/src:protocol_codegen_update` |
 | Registry format | `bazel run //contract:registry_update` |
-| Shared skill API, verification, or starter resources (`docs/`) | `bazel run //python/temporal_agent_harness:shared_skill_files_update` then `bazel run //typescript/packages/core:shared_skill_files_update` |
+| Shared skill API, verification, or starter resources (`docs/`) | `bazel run //python/temporal_agent_kit:shared_skill_files_update` then `bazel run //typescript/packages/core:shared_skill_files_update` |
 | Root license (codegen package copy) | `bazel run //typescript/packages/codegen:license_update` |
 | Intentional conformance behavior | `bazel run //python/tests/conformance:goldens_update` |
 
-For example registries, edit the `harness_agent` declarations and agent classes.
+For example registries, edit the `agent_kit_agent` declarations and agent classes.
 The non-Bazel `nexus_hello` example keeps a handwritten registry and schema.
 Read [contract/README.md](contract/README.md) and [conformance/README.md](conformance/README.md)
 before changing protocol schemas or golden fixtures; review their diffs for behavior changes.

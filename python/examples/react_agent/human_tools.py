@@ -5,7 +5,7 @@
 # the tool's output schema (the client's result is validated against it), mirroring
 # tool_activities.py. A stringized annotation would break that resolution.
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 
 @agent.callback_tool_defn(inherently_safe=True)
@@ -18,7 +18,7 @@ async def ask_user(question: str) -> str:
     Args:
         question: The question to put to the user, in plain language.
     """
-    # Never runs on the worker: this is a callback tool. When the model calls it, the harness
+    # Never runs on the worker: this is a callback tool. When the model calls it, Agent Kit
     # publishes a `callback_requested` event and parks the turn on a durable wait until an
     # attached client (examples/react_agent/client.py) returns the user's answer as the result.
     ...

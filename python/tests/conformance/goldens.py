@@ -9,7 +9,7 @@ import shlex
 from collections.abc import Sequence
 from pathlib import Path
 
-from temporal_agent_harness.harness.agent_protocol import AgentEventType
+from temporal_agent_kit.agent_protocol import AgentEventType
 from tests.conformance.driver import (
     Recording,
     external_worker,

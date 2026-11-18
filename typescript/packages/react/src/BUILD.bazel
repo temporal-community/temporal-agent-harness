@@ -11,7 +11,7 @@ ts_project(
     deps = [
         ":session",
         ":state",
-        "//typescript/packages/react:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/react:node_modules/@temporalio/agent-kit-client",
     ],
 )
 
@@ -23,7 +23,7 @@ ts_project(
     visibility = ["//visibility:public"],
     deps = [
         ":state",
-        "//typescript/packages/react:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/react:node_modules/@temporalio/agent-kit-client",
         "//typescript/packages/react:node_modules/@types/react",
         "//typescript/packages/react:node_modules/react",
     ],
@@ -35,5 +35,5 @@ ts_project(
     declaration = True,
     tsconfig = "//typescript/packages/react:tsconfig",
     visibility = ["//visibility:public"],
-    deps = ["//typescript/packages/react:node_modules/@temporalio/agent-harness-client"],
+    deps = ["//typescript/packages/react:node_modules/@temporalio/agent-kit-client"],
 )

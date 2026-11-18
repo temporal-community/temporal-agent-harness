@@ -1,6 +1,6 @@
 # Conformance
 
-Scenarios every harness SDK's worker is run through, and the `turn_events` streams Python's
+Scenarios every Agent Kit SDK's worker is run through, and the `turn_events` streams Python's
 worker publishes for them. An SDK conforms when its streams, normalized as below, equal these.
 The event types themselves are in [`contract/protocol.schema.json`](../contract/protocol.schema.json).
 
@@ -9,7 +9,7 @@ The event types themselves are in [`contract/protocol.schema.json`](../contract/
 | `scenarios/` | One JSON file per scenario: the messages a client sends and what it does when given events arrive. |
 | `goldens/` | Per scenario, `<name>.events.jsonl` (every agent's stream, normalized) and `<name>.sends.jsonl` (what each send returned). Recorded from Python. |
 
-After a change to the harness that alters a stream, or to a scenario, record them again and
+After a change to Agent Kit that alters a stream, or to a scenario, record them again and
 commit the result:
 
 ```bash
@@ -21,7 +21,7 @@ golden.
 
 ## How a scenario runs
 
-Two test-only programs stand in for what surrounds the harness core in a real session:
+Two test-only programs stand in for what surrounds the Agent Kit core in a real session:
 
 - **The scripted integration** (`python/tests/conformance/scripted_agent.py`) is the agent's inner
   loop, in place of a model and its AI SDK. Each message carries a script, and the agent plays its
@@ -68,7 +68,7 @@ rather than by the server for a completed workflow.
 
 ## Normalization
 
-- Every id the harness mints becomes `<kind>-<n>`, numbered by first appearance across the
+- Every id Agent Kit mints becomes `<kind>-<n>`, numbered by first appearance across the
   scenario (the root agent's stream, then each subagent's in start order, then the sends):
   `agent_id` and `subagent_id` (`agent-`), `turn_id` (`turn-`), `message_id` (`message-`),
   `workflow_id` (`workflow-`), `evaluation_id` (`evaluation-`), `steering_id` and each entry of

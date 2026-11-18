@@ -1,5 +1,5 @@
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
-load("//bazel:js_test.bzl", "harness_js_test")
+load("//bazel:js_test.bzl", "agent_kit_js_test")
 
 # Tests of the payload stores (src/utils/large-payload.ts, src/utils/s3.ts) and of oversized
 # payloads on a running agent.
@@ -21,7 +21,7 @@ ts_project(
     ],
 )
 
-harness_js_test(
+agent_kit_js_test(
     name = "payload_test",
     data = [":payload.test"],
     entry_point = "payload.test.js",

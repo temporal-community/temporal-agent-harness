@@ -1,4 +1,4 @@
-"""Tests for the packaged ``temporal-agent-harness`` console script.
+"""Tests for the packaged ``temporal-agent-kit`` console script.
 
 The CLI's whole job is to make the prebuilt UI runnable from a plain ``pip install``, so what
 matters here is (a) that it never overrides a Temporal profile the user already configured, and
@@ -12,8 +12,8 @@ import os
 
 import pytest
 
-from temporal_agent_harness.web.cli import main
-from temporal_agent_harness.web.client import (
+from temporal_agent_kit.web.cli import main
+from temporal_agent_kit.web.client import (
     DEFAULT_TEMPORAL_ADDRESS,
     connect_client,
     ensure_temporal_address,
@@ -153,7 +153,7 @@ def test_session_manager_defaults_to_the_packaged_task_queue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`session-manager` with no flags must poll the queue the server actually expects."""
-    from temporal_agent_harness.web.session_manager import SESSION_MANAGER_TASK_QUEUE
+    from temporal_agent_kit.web.session_manager import SESSION_MANAGER_TASK_QUEUE
 
     captured: dict[str, object] = {}
 
@@ -162,7 +162,7 @@ def test_session_manager_defaults_to_the_packaged_task_queue(
         captured["identity"] = identity
 
     monkeypatch.setattr(
-        "temporal_agent_harness.web.session_manager_worker.run_session_manager_worker", fake_run
+        "temporal_agent_kit.web.session_manager_worker.run_session_manager_worker", fake_run
     )
 
     main(["session-manager"])
@@ -180,7 +180,7 @@ def test_session_manager_forwards_task_queue_and_identity(
         captured["identity"] = identity
 
     monkeypatch.setattr(
-        "temporal_agent_harness.web.session_manager_worker.run_session_manager_worker", fake_run
+        "temporal_agent_kit.web.session_manager_worker.run_session_manager_worker", fake_run
     )
 
     main(["session-manager", "--task-queue", "custom-queue", "--identity", "worker-7"])
@@ -197,7 +197,7 @@ def test_session_manager_honors_the_temporal_address_flag(
         return None
 
     monkeypatch.setattr(
-        "temporal_agent_harness.web.session_manager_worker.run_session_manager_worker", fake_run
+        "temporal_agent_kit.web.session_manager_worker.run_session_manager_worker", fake_run
     )
 
     main(["session-manager", "--temporal-address", "manager-host:7233"])
@@ -267,8 +267,8 @@ def test_serve_checks_temporal_before_binding_the_port(
     async def fake_verify() -> None:
         calls.append("verify")
 
-    monkeypatch.setattr("temporal_agent_harness.web.serve.verify_temporal_reachable", fake_verify)
-    monkeypatch.setattr("temporal_agent_harness.web.serve.create_app", lambda *_: "app")
+    monkeypatch.setattr("temporal_agent_kit.web.serve.verify_temporal_reachable", fake_verify)
+    monkeypatch.setattr("temporal_agent_kit.web.serve.create_app", lambda *_: "app")
     monkeypatch.setitem(
         __import__("sys").modules,
         "uvicorn",
@@ -283,7 +283,7 @@ def test_serve_checks_temporal_before_binding_the_port(
 def test_schema_prints_the_agent_schema_without_touching_temporal_config(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from temporal_agent_harness.harness.agent_schema import dump_agent_schema, load_agent_class
+    from temporal_agent_kit.agent_schema import dump_agent_schema, load_agent_class
 
     target = "examples.tictactoe.workflow:TicTacToeAgentWorkflow"
     main(["schema", target])
@@ -306,7 +306,7 @@ def test_schema_reports_a_bad_target_as_a_usage_error() -> None:
 
 
 def test_schema_protocol_prints_the_event_protocol(capsys: pytest.CaptureFixture[str]) -> None:
-    from temporal_agent_harness.harness.agent_schema import dump_protocol_schema
+    from temporal_agent_kit.agent_schema import dump_protocol_schema
 
     main(["schema", "--protocol"])
 
@@ -314,7 +314,7 @@ def test_schema_protocol_prints_the_event_protocol(capsys: pytest.CaptureFixture
 
 
 def test_schema_registry_prints_the_agents_toml_schema(capsys: pytest.CaptureFixture[str]) -> None:
-    from temporal_agent_harness.web.registry import dump_registry_schema
+    from temporal_agent_kit.web.registry import dump_registry_schema
 
     main(["schema", "--registry"])
 

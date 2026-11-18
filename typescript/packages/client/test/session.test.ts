@@ -345,7 +345,7 @@ test("an exposed session is inspected as plain data from the global hook", async
   core.start();
   await until(() => state.connection === "idle");
 
-  const hook = (globalThis as { __AGENT_HARNESS__?: Record<string, () => unknown> }).__AGENT_HARNESS__!;
+  const hook = (globalThis as { __AGENT_KIT__?: Record<string, () => unknown> }).__AGENT_KIT__!;
   const seen = hook.s1!();
   assert.deepEqual(JSON.parse(JSON.stringify(seen)), seen);
   assert.deepEqual(seen, {

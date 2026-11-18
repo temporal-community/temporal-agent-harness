@@ -11,12 +11,12 @@ import {
   defineAgent,
   handler,
   tool,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   asOpenAIAgentTools,
   runStreamed,
   statelessMcpServer,
-} from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
+} from "@temporalio/agent-kit/ai-sdks/openai-agents";
 import {
   PROBE_MCP_SERVER,
   SCRIPTED_ASK_MODEL,

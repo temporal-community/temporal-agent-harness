@@ -45,12 +45,12 @@ phase isn't throttled by approving one thing at a time.
 | `workflow.py` | `CodingAgent`: a Gemini tool-calling loop that converses and calls the tools. |
 | `worker.py` | Hosts `CodingAgent` (no tool activities — callback tools are inline). |
 | `agents.toml`, `CodingAgent.schema.json` | This example's registry (just the `CodingAgent`) and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
-| `opencode_shim/` | The OpenCode-protocol server. `harness_backend.py` fronts the workflow; `local_tools.py` executes the callback tools on your disk; `backend.py` defines the `AgentBackend` protocol + the `AgentTurn` seam. |
+| `opencode_shim/` | The OpenCode-protocol server. `agent_kit_backend.py` fronts the workflow; `local_tools.py` executes the callback tools on your disk; `backend.py` defines the `AgentBackend` protocol + the `AgentTurn` seam. |
 | `justfile` | Recipes for the local stack. |
 
 The web server and session-manager worker are **shared across examples** — `just server` points
-the packaged `temporal-agent-harness serve` at this example's `agents.toml`, and
-`just session-manager` runs the packaged `temporal-agent-harness session-manager`.
+the packaged `temporal-agent-kit serve` at this example's `agents.toml`, and
+`just session-manager` runs the packaged `temporal-agent-kit session-manager`.
 
 ## Setup
 
@@ -108,7 +108,7 @@ no `write` prompt) so you see a diff of what will be written.
 ## More OpenCode capabilities
 
 - **Reasoning / thinking** — the workflow enables Gemini thinking summaries
-  (`generation_config.thinking_summaries`); the shim maps the harness `thought_summary` events to
+  (`generation_config.thinking_summaries`); the shim maps Agent Kit's `thought_summary` events to
   OpenCode's collapsible "thinking" block (a `reasoning` message part).
 - **Todo list** — `todowrite`/`todoread` are *inline* tools (not callbacks): the plan is durable
   **workflow state** (`self._todos`), supplied to each call as an `Injected` sink, so it survives
@@ -118,13 +118,13 @@ no `write` prompt) so you see a diff of what will be written.
   gated.
 - **Change review** — `/session/{id}/diff` returns the working-tree diff vs `HEAD` (the shim runs
   `git` in the project dir), so OpenCode's diff viewer shows everything the agent changed.
-- **Abort** — aborting in the TUI signals the harness `close` (via `POST /api/sessions/{id}/close`
+- **Abort** — aborting in the TUI signals Agent Kit `close` (via `POST /api/sessions/{id}/close`
   on the packaged server), which really stops the durable agent; the next prompt starts a fresh
   session.
 
-## How it maps to the harness
+## How it maps to Agent Kit
 
-- The tools are ordinary harness tools, so they go through the **same tool path** as any other:
+- The tools are ordinary Agent Kit tools, so they go through the **same tool path** as any other:
   `run_tool` → the tool-approval policy (here: gate everything) → `tool_start` →
   `callback_requested` → the shim's result → `tool_end`.
 - The shim uses only the packaged HTTP server: `POST /api/sessions` (create the durable session
@@ -132,16 +132,16 @@ no `write` prompt) so you see a diff of what will be written.
   the OpenCode permission decision), `POST /api/callback-result` (return each tool's result), and
   `POST /api/sessions/{id}/close` (abort).
 - A callback result is validated against the tool's declared return type before it resolves the
-  call, and the submission is idempotent — see `temporal_agent_harness/harness` and the tests in
-  `tests/harness/test_callback_tools.py`.
+  call, and the submission is idempotent — see `temporal_agent_kit` and the tests in
+  `tests/test_callback_tools.py`.
 
 ## Not yet wired
 
-**Subagents.** The harness supports subagents (an agent driving child agents), which OpenCode
+**Subagents.** Agent Kit supports subagents (an agent driving child agents), which OpenCode
 renders as a `task` tool with a nested child session. Surfacing them here means giving the agent a
 subagent toolset and demultiplexing the merged event stream by `agent_id` in the shim — including
 routing each subagent's `callback_requested` to the *child* workflow (or the subagent deadlocks).
 It's a sizeable feature; not implemented yet.
 
-Abort ends the whole durable session (the harness has no per-turn cancel); the next prompt starts
+Abort ends the whole durable session (Agent Kit has no per-turn cancel); the next prompt starts
 a fresh one.

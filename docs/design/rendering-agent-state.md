@@ -23,14 +23,14 @@ document carries its JSON type and nothing else.
 ## What the author writes
 
 ```python
-class Booking(HarnessState):
+class Booking(AgentState):
     kind: BookingKind
     confirmation_code: str
     detail: Annotated[str, Display(as_="heading")]
     price_usd: float
 
 
-class Trip(HarnessState):
+class Trip(AgentState):
     description: Annotated[str, Display(as_="heading")]
     remaining: Annotated[list[TripTask], Display(as_="checklist")]
     flights: Annotated[list[Booking], Display(as_="table")]
@@ -159,7 +159,7 @@ writing down before someone reaches for it as a privacy mechanism, because it wi
 
 ## Defaults
 
-A `HarnessState` with nothing said about it renders as a **card**, at every depth. An agent
+A `AgentState` with nothing said about it renders as a **card**, at every depth. An agent
 can declare more than one `agent.state(...)`, so a panel holds several documents, and each one needs its own
 delimiter titled with its `state_id` — and once a card is the right answer for a root and for a
 list item, making it the answer by default everywhere is one rule instead of three.
@@ -285,7 +285,7 @@ to draw yet. A view that cannot tell those apart has no business replacing the t
 ## Reference
 
 - Depends on: [`observable-agent-state.md`](observable-agent-state.md)
-- Would live in: `temporal_agent_harness/harness/state/display.py`, exported from
+- Would live in: `temporal_agent_kit/state/display.py`, exported from
   `harness.state`; validated in `base.py` alongside `_check_field_types`
 - Wire: a `value_schema` field on `AgentStateSnapshot` in `agent_protocol/events.py`
 - Console: `ui/src/lib/components/agent/AgentStatePanel.svelte` and a schema-to-render

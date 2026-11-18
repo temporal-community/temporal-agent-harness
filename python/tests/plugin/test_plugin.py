@@ -1,4 +1,4 @@
-# ABOUTME: Tests for AgentHarnessPlugin — the one plugin that wires a client + worker for the
+# ABOUTME: Tests for AgentKitPlugin — the one plugin that wires a client + worker for the
 # harness. Covers what it registers (subagent, Jev approval, and tool activities), what it
 # refuses (a non-harness "tool"), how its data converter composes with an AI-SDK plugin's, and
 # that it never double-registers an activity a worker already passed by hand.
@@ -21,10 +21,10 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_protocol import RUN_SUBAGENT_TURN_ACTIVITY
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.utils.large_payload import (
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent_protocol import RUN_SUBAGENT_TURN_ACTIVITY
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.utils.large_payload import (
     DEFAULT_PAYLOAD_STORAGE,
     local_payload_storage,
 )
@@ -61,7 +61,7 @@ class _StubWorkflow:
     async def run(self) -> None: ...
 
 
-def _plugin_activity_names(plugin: AgentHarnessPlugin) -> set[str]:
+def _plugin_activity_names(plugin: AgentKitPlugin) -> set[str]:
     """The activity names a plugin contributes to a worker, before it sees one."""
     return {
         getattr(fn, "__temporal_activity_definition").name
@@ -91,7 +91,7 @@ def _registered_activity_names(worker: Worker) -> set[str]:
 
 
 def test_data_converter_fills_in_pydantic_and_offload():
-    converter = AgentHarnessPlugin().data_converter(None)
+    converter = AgentKitPlugin().data_converter(None)
     assert converter.payload_converter_class is PydanticPayloadConverter
     assert converter.external_storage is not None
     [driver] = converter.external_storage.drivers
@@ -100,7 +100,7 @@ def test_data_converter_fills_in_pydantic_and_offload():
 
 def test_data_converter_upgrades_a_default_converter_in_place():
     # A caller who passed `data_converter=DataConverter.default` still gets both requirements.
-    converter = AgentHarnessPlugin().data_converter(DataConverter.default)
+    converter = AgentKitPlugin().data_converter(DataConverter.default)
     assert converter.payload_converter_class is PydanticPayloadConverter
     assert converter.external_storage is not None
 
@@ -108,13 +108,13 @@ def test_data_converter_upgrades_a_default_converter_in_place():
 def test_data_converter_keeps_an_ai_sdk_payload_converter():
     """The plugin runs LAST, so an AI SDK's payload converter must survive it."""
     openai_agents = pytest.importorskip(
-        "temporal_agent_harness.ai_sdks.openai_agents._temporal_openai_agents"
+        "temporal_agent_kit.ai_sdks.openai_agents._temporal_openai_agents"
     )
     sdk_converter = DataConverter(
         payload_converter_class=openai_agents.OpenAIPayloadConverter
     )
 
-    converter = AgentHarnessPlugin().data_converter(sdk_converter)
+    converter = AgentKitPlugin().data_converter(sdk_converter)
 
     assert converter.payload_converter_class is openai_agents.OpenAIPayloadConverter
     assert converter.external_storage is not None, "offload is still added"
@@ -124,7 +124,7 @@ def test_data_converter_keeps_an_existing_external_storage(tmp_path):
     import dataclasses
 
     mine = local_payload_storage(base_dir=tmp_path)
-    converter = AgentHarnessPlugin().data_converter(
+    converter = AgentKitPlugin().data_converter(
         dataclasses.replace(pydantic_data_converter, external_storage=mine)
     )
     assert converter.external_storage is mine
@@ -133,18 +133,18 @@ def test_data_converter_keeps_an_existing_external_storage(tmp_path):
 def test_the_offload_target_is_configuration_not_a_flag(tmp_path):
     """The caller hands the plugin an ``ExternalStorage``; the harness reads no env vars."""
     mine = local_payload_storage(base_dir=tmp_path, payload_size_threshold=64)
-    converter = AgentHarnessPlugin(large_payload_offload=mine).data_converter(None)
+    converter = AgentKitPlugin(large_payload_offload=mine).data_converter(None)
     assert converter.external_storage is mine
     assert converter.external_storage.payload_size_threshold == 64
 
 
 def test_the_default_offload_target_is_the_shared_local_storage():
-    converter = AgentHarnessPlugin().data_converter(None)
+    converter = AgentKitPlugin().data_converter(None)
     assert converter.external_storage is DEFAULT_PAYLOAD_STORAGE
 
 
 def test_offload_can_be_turned_off():
-    converter = AgentHarnessPlugin(large_payload_offload=None).data_converter(None)
+    converter = AgentKitPlugin(large_payload_offload=None).data_converter(None)
     assert converter.payload_converter_class is PydanticPayloadConverter
     assert converter.external_storage is None
 
@@ -153,14 +153,14 @@ def test_offload_can_be_turned_off():
 
 
 def test_tools_registers_activity_bodies_and_skips_bodiless_tools():
-    plugin = AgentHarnessPlugin(tools=[durable_tool, inline_tool, callback_tool])
+    plugin = AgentKitPlugin(tools=[durable_tool, inline_tool, callback_tool])
     names = _plugin_activity_names(plugin)
     assert names == {"durable_tool"}
 
 
 def test_tools_rejects_a_non_harness_tool():
-    with pytest.raises(TypeError, match="not a harness tool"):
-        AgentHarnessPlugin(tools=[plain_function])
+    with pytest.raises(TypeError, match="not an Agent Kit tool"):
+        AgentKitPlugin(tools=[plain_function])
 
 
 # ---------------------------------------------------------------- worker wiring
@@ -168,7 +168,7 @@ def test_tools_rejects_a_non_harness_tool():
 
 async def test_worker_gets_every_harness_activity_from_the_plugin():
     """The headline claim: add the plugin, declare only workflows, get the capabilities."""
-    plugin = AgentHarnessPlugin(tools=[durable_tool, inline_tool])
+    plugin = AgentKitPlugin(tools=[durable_tool, inline_tool])
 
     async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
@@ -188,7 +188,7 @@ async def test_hand_registered_harness_activities_are_not_duplicated():
     Temporal rejects two activities with one name, so the plugin merges by name and lets the
     explicitly passed function win.
     """
-    from temporal_agent_harness.harness.subagent_activities import SubagentActivities
+    from temporal_agent_kit.subagent_activities import SubagentActivities
 
     async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
@@ -202,7 +202,7 @@ async def test_hand_registered_harness_activities_are_not_duplicated():
             task_queue="plugin-test",
             workflows=[_StubWorkflow],
             activities=hand_written,
-            plugins=[AgentHarnessPlugin(tools=[durable_tool])],
+            plugins=[AgentKitPlugin(tools=[durable_tool])],
         )
         activities = worker.config(active_config=True)["activities"]
         assert len(activities) == len(hand_written)
@@ -224,7 +224,7 @@ async def test_unrelated_worker_activities_survive():
             task_queue="plugin-test",
             workflows=[_StubWorkflow],
             activities=[unrelated],
-            plugins=[AgentHarnessPlugin()],
+            plugins=[AgentKitPlugin()],
         )
         assert _registered_activity_names(worker) == {
             "unrelated",
@@ -251,7 +251,7 @@ async def test_client_registered_plugin_reaches_the_worker():
     agent worker declare nothing but its workflows.
     """
     async with await WorkflowEnvironment.start_time_skipping(
-        plugins=[AgentHarnessPlugin(tools=[durable_tool])]
+        plugins=[AgentKitPlugin(tools=[durable_tool])]
     ) as env:
         worker = Worker(env.client, task_queue="plugin-test", workflows=[_StubWorkflow])
         assert _registered_activity_names(worker) == {
@@ -271,7 +271,7 @@ async def test_plugins_configured_storage_offloads_a_large_payload(tmp_path):
 
     size = 2_000_000
     async with await WorkflowEnvironment.start_time_skipping(
-        plugins=[AgentHarnessPlugin(large_payload_offload=storage)]
+        plugins=[AgentKitPlugin(large_payload_offload=storage)]
     ) as env:
         async with Worker(
             env.client, task_queue="plugin-offload", workflows=[_BigPayloadWorkflow]

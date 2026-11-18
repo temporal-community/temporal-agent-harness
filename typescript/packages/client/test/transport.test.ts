@@ -55,7 +55,7 @@ async function collect(frames: AsyncIterable<AgentSseFrame>): Promise<AgentSseFr
   return out;
 }
 
-/** One frame exactly as `temporal_agent_harness.web.app._sse` writes it. */
+/** One frame exactly as `temporal_agent_kit.web.app._sse` writes it. */
 const frame = (event: string, data: Record<string, unknown>) =>
   `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`;
 

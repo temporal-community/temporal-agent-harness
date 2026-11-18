@@ -6,13 +6,13 @@ Run from the repo root with:
 Hosts only the OpenAIHelloAgent workflow. Its one tool (`get_weather`) is an inline workflow
 tool with no worker-side body, so there are no tool activities to register — the OpenAI Agents
 plugin registers the model activities (including the streaming one) itself, and
-`AgentHarnessPlugin` supplies the harness's data converter and activities.
+`AgentKitPlugin` supplies Agent Kit's data converter and activities.
 
-The plugin is wired for the HARNESS STREAMING PATH:
+The plugin is wired for the AGENT KIT STREAMING PATH:
   * ``model_params.stream_to_provider=stream_to_provider`` — resolves each streamed model
     call's per-turn stream context ambiently off the running workflow, and
-  * ``observer_factory=harness_observer_factory`` — turns that context into the observer that
-    translates raw OpenAI events into the harness turn-stream vocabulary live.
+  * ``observer_factory=kit_observer_factory`` — turns that context into the observer that
+    translates raw OpenAI events into Agent Kit turn-stream vocabulary live.
 Drop either one and streaming falls back to the plugin's plain raw-topic behavior.
 
 Env vars (set in .env.local — see .env.example):
@@ -34,16 +34,16 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.ai_sdks.openai_agents import (
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
 )
-from temporal_agent_harness.ai_sdks.openai_agents_harness import (
-    harness_observer_factory,
+from temporal_agent_kit.ai_sdks.openai_agents import (
+    kit_observer_factory,
     stream_to_provider,
 )
-from temporal_agent_harness.utils.task_queue import task_queue_name
+from temporal_agent_kit.utils.task_queue import task_queue_name
 
 from examples.openai_hello.workflow import TASK_QUEUE, OpenAIHelloAgentWorkflow
 
@@ -66,18 +66,18 @@ async def main() -> None:
             # heartbeat timeout well under the overall start-to-close.
             start_to_close_timeout=timedelta(minutes=2),
             heartbeat_timeout=timedelta(seconds=30),
-            # The harness streaming seam: route streamed events to the in-flight turn.
+            # Agent Kit streaming seam: route streamed events to the in-flight turn.
             stream_to_provider=stream_to_provider,
         ),
-        observer_factory=harness_observer_factory,
+        observer_factory=kit_observer_factory,
     )
 
-    # Two plugins, harness LAST so the OpenAI plugin's (OpenAI-aware, pydantic-compatible)
-    # payload converter wins; the harness plugin then adds the large-payload offload on top,
+    # Two plugins, AgentKitPlugin LAST so the OpenAI plugin's (OpenAI-aware, pydantic-compatible)
+    # payload converter wins; Agent Kit plugin then adds the large-payload offload on top,
     # matching the session-manager worker and the web server.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
-        **connect_config, plugins=[plugin, AgentHarnessPlugin()]
+        **connect_config, plugins=[plugin, AgentKitPlugin()]
     )
 
     worker = Worker(
@@ -86,7 +86,7 @@ async def main() -> None:
         workflows=[OpenAIHelloAgentWorkflow],
         # No activities to declare: get_weather is an inline workflow tool, the OpenAI model
         # activities (incl. invoke_model_activity_streaming) come from the OpenAI plugin, and
-        # the harness's own activities come from AgentHarnessPlugin.
+        # Agent Kit's own activities come from AgentKitPlugin.
     )
     print(
         f"OpenAI hello agent worker ready: "

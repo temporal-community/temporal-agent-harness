@@ -39,9 +39,9 @@ check:
 run: _deps
     #!/usr/bin/env bash
     set -euo pipefail
-    # HARNESS_URL defaults to the repo root's `just server` port, so .env.local only needs to
+    # AGENT_KIT_URL defaults to the repo root's `just server` port, so .env.local only needs to
     # set it when the Python app lives somewhere else.
-    export HARNESS_URL="${HARNESS_URL:-http://127.0.0.1:8000}"
+    export AGENT_KIT_URL="${AGENT_KIT_URL:-http://127.0.0.1:8000}"
     {{pnpm}} --dir "{{justfile_directory()}}" run --silent dev
 
 # Install on first use, so `just run` works from a fresh clone with no separate step.

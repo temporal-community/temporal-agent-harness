@@ -44,18 +44,18 @@ agent-worker:
 adapter-worker:
     {{local}} AGENT_WORKFLOW_NAME=MontyChatAgent AGENT_TASK_QUEUE={{agent_queue}} \
       AGENT_WORKFLOW_ID_PREFIX=nexus-travel- NEXUS_AGENT_TASK_QUEUE={{nexus_queue}} \
-      bazel run //python/temporal_agent_harness/nexus_agent_adapter:worker
+      bazel run //python/temporal_agent_kit/nexus_agent_adapter:worker
 
 # Optional, to watch the session in the harness console: the session manager the console needs.
 session-manager:
-    {{local}} bazel run //python/temporal_agent_harness/web:cli -- session-manager
+    {{local}} bazel run //python/temporal_agent_kit/web:cli -- session-manager
 
 # Serving Monty's registry, the console lists running MontyChatAgent sessions it didn't start,
 # including the caller's, as discovered.
 
 # Optional: the harness console on http://localhost:8000, to watch the caller's session.
 console:
-    {{local}} bazel run //python/temporal_agent_harness/web:cli -- serve \
+    {{local}} bazel run //python/temporal_agent_kit/web:cli -- serve \
       "{{root}}/python/examples/monty/agents.toml" --host 0.0.0.0 --port 8000
 
 # Run the caller workflow and print its transcript. It switches Monty to skip approvals first.

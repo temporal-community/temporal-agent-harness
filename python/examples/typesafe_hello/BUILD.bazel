@@ -1,5 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
 py_library(
     name = "__init__",
@@ -8,15 +8,15 @@ py_library(
     visibility = ["//:__subpackages__"],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//temporalio",
         "@pypi//temporalio_typesafe",
         "@pypi//typesafe_sdk",
@@ -29,10 +29,10 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks:typesafe",
         "@pypi//pydantic",
         "@pypi//temporalio",
         "@pypi//typesafe_sdk",

@@ -65,7 +65,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-const HARNESS_URL = env('HARNESS_URL', 'http://127.0.0.1:8000');
+const AGENT_KIT_URL = env('AGENT_KIT_URL', 'http://127.0.0.1:8000');
 const PORT = Number(env('PORT', '3000'));
 
 /**
@@ -106,7 +106,7 @@ if (!routing.fallback && Object.keys(routing.routes).length === 0) {
   );
 }
 
-const harness = new HarnessClient(HARNESS_URL);
+const harness = new HarnessClient(AGENT_KIT_URL);
 /**
  * Where un-prefixed text goes. Most agents spell it `ask(TextMessage)` with a `text` field,
  * but nothing in the harness enforces either name — an agent whose entry point is
@@ -189,7 +189,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 server.listen(PORT, () => {
-  console.log(`chat-server on :${PORT} -> harness ${HARNESS_URL}`);
+  console.log(`chat-server on :${PORT} -> Agent Kit ${AGENT_KIT_URL}`);
   console.log(`adapters: ${Object.keys(adapters).join(', ')} | routes: ${JSON.stringify(routing)}`);
   console.log(
     `plain text -> ${defaultHandler.name}(${defaultHandler.field}=...); ` +

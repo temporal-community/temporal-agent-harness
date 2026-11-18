@@ -12,7 +12,7 @@ import {
 import type { BundleOptions, WorkerOptions } from "@temporalio/worker";
 import OpenAI from "openai";
 import type { ObserverFactory } from "../integration-helpers/stream-observer.ts";
-import { harnessObserverFactory, type HarnessStreamToken } from "../openai-agents-harness.ts";
+import { kitObserverFactory, type KitStreamToken } from "./kit.ts";
 import {
   INVOKE_MODEL_STREAM_ACTIVITY,
   createInvokeModelStreamActivity,
@@ -23,8 +23,8 @@ export interface OpenAIAgentsPluginOptions
   extends Omit<TemporalOpenAIAgentsPluginOptions, "modelProvider"> {
   /** Resolves model names to models. Default: OpenAI, with the client's own retries off. */
   modelProvider?: ModelProvider;
-  /** Builds each streamed call's observer from its routing token (harnessObserverFactory). */
-  observerFactory?: ObserverFactory<HarnessStreamToken, StreamEvent>;
+  /** Builds each streamed call's observer from its routing token (kitObserverFactory). */
+  observerFactory?: ObserverFactory<KitStreamToken, StreamEvent>;
 }
 
 /**
@@ -46,7 +46,7 @@ function defaultModelProvider(): ModelProvider {
 // as ESM would bundle a second copy, whose classes fail the plugin's `instanceof` checks and whose
 // async chunk the workflow sandbox cannot load. And the plugin's workflow interceptor hands the
 // runner its config through module state in `@temporalio/openai-agents/workflow`, which a second
-// copy (say, one resolved from `@temporalio/agent-harness`'s own location) would not see.
+// copy (say, one resolved from `@temporalio/agent-kit`'s own location) would not see.
 const workerRequire = createRequire(import.meta.url);
 const pluginRequire = createRequire(workerRequire.resolve("@temporalio/openai-agents"));
 const WORKFLOW_ALIASES = {
@@ -77,12 +77,12 @@ export class OpenAIAgentsPlugin extends TemporalOpenAIAgentsPlugin {
 
   constructor({
     modelProvider = defaultModelProvider(),
-    observerFactory = harnessObserverFactory,
+    observerFactory = kitObserverFactory,
     ...options
   }: OpenAIAgentsPluginOptions = {}) {
     if (options.hostedToolCredentials !== undefined)
       throw new TypeError(
-        "hostedToolCredentials is not supported by the harness's OpenAIAgentsPlugin yet: its " +
+        "hostedToolCredentials is not supported by Agent Kit's OpenAIAgentsPlugin yet: its " +
           "streamed model activity does not inject them. Put the credentials on the hosted tools.",
       );
     if (options.modelParams?.streamingTopic !== undefined)

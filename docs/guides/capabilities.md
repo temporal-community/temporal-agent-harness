@@ -8,7 +8,7 @@ can wait minutes or days for an external event without holding a process open; a
 tool call, and decision is recorded and replayable.
 
 ### 📊 Standardized agents, fully observable
-The interface to agents built on this harness is **carefully standardized**. Every agent takes the
+The interface to agents built on Agent Kit is **carefully standardized**. Every agent takes the
 same configuration contract and emits the same structured **event stream**: a protocol (under
 active development) that captures an agent's entire lifecycle — every turn, model interaction, tool
 call (start / end / error), reply token, citation, approval decision, subagent hand-off, and
@@ -17,7 +17,7 @@ token-usage tally.
 That one standardized stream is the foundation of **observability and analytics** for every agent
 you build. **Watch an agent live** as it works, or **replay exactly what happened** afterward —
 what it decided, which tools it ran, what it cost, and where a human stepped in. You instrument
-once; every agent on the harness gets it.
+once; every Agent Kit agent gets it.
 
 ### 🖥️ Your own UI, typed end to end — React and Svelte
 Build the product UI for your agent — a game board, a trip planner, a document it edits —
@@ -39,16 +39,16 @@ own code — or a model — in the gate, judging each call against reusable crit
 edit mid-session: see [Auto mode](approvals.md#auto-mode--letting-code-or-a-model-decide).
 
 ### 🔌 Bring your own AI SDK
-Write turn logic with the SDK you already know. The harness's integrations turn each SDK call into
+Write turn logic with the SDK you already know. Agent Kit's integrations turn each SDK call into
 a durable Temporal activity — so retries and credentials never leak into your workflow code.
 Support is growing across the AI SDKs and agent frameworks Temporal integrates with:
 
 | AI SDK | Status | Notes |
 | --- | --- | --- |
-| [Google Gemini](../../python/temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
-| [OpenAI Agents SDK](../../python/temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
-| [Pydantic AI](../../python/temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
-| [Strands Agents](../../python/temporal_agent_harness/ai_sdks/strands_agents) | ✅ Available now | Python and [TypeScript](../../typescript/packages/core/src/ai-sdks/strands-agents); ships in this repo and is **experimental** - vendored from Temporal's [Strands Agents integration](https://docs.temporal.io/develop/python/integrations/strands-agents), with MCP and sandbox tools under harness approvals. |
+| [Google Gemini](../../python/temporal_agent_kit/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported integration outside Agent Kit. |
+| [OpenAI Agents SDK](../../python/temporal_agent_kit/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported integration outside Agent Kit. |
+| [Pydantic AI](../../python/temporal_agent_kit/ai_sdks/pydantic_ai.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [Strands Agents](../../python/temporal_agent_kit/ai_sdks/strands_agents) | ✅ Available now | Python and [TypeScript](../../typescript/packages/core/src/ai-sdks/strands-agents); ships in this repo and is **experimental** - vendored from Temporal's [Strands Agents integration](https://docs.temporal.io/develop/python/integrations/strands-agents), with MCP and sandbox tools under Agent Kit approvals. |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
 
@@ -65,7 +65,7 @@ An agent running on a Temporal worker often needs to act somewhere it can't reac
 user's laptop, a photo from their phone, a device on a private network. A **callback tool**
 (`@agent.callback_tool_defn`) has no worker-side body: the agent **pauses inside the workflow**,
 publishes the call, and an **attached client executes it on its own machine** and sends the result
-back. You declare only the tool's typed contract (its `...` body is enforced) — the harness
+back. You declare only the tool's typed contract (its `...` body is enforced) — Agent Kit
 supplies the single generic implementation. Because it's dispatched like any other tool, a callback
 tool inherits the *same* approval policy, `tool_start`/`tool_end` events, and durable pause/resume:
 the workflow simply waits (seconds or days) until a result arrives, and that result is validated
@@ -81,13 +81,13 @@ names and input/output schemas — so it's self-describing and ready to be drive
 by your code or by another agent.
 
 ### 🔗 Composable by construction
-Because agents have typed, self-describing interfaces, any harness agent can become a
+Because agents have typed, self-describing interfaces, any Agent Kit agent can become a
 **strongly-typed toolset** another agent drives — start it, call its operations, stop it.
 Multi-agent systems compose through real contracts, not strings pasted between prompts.
 
 ### 🧑‍💻 Code Mode — give the model code, not just a call menu
 Hand a model **one tool that runs a Python script** over your existing tools, instead of a long
-menu of individual calls. `agent.code_mode_tool([...tools...])` turns any set of harness tools
+menu of individual calls. `agent.code_mode_tool([...tools...])` turns any set of Agent Kit tools
 into a single run-a-script tool: the model writes Python that calls them as async host functions,
 with real control flow — loops, conditionals, `min`/`max`, and `asyncio.gather` concurrency — so
 one turn orchestrates many calls. Each host call is still dispatched through the runner as a

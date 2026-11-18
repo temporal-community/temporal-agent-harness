@@ -34,7 +34,7 @@ from temporalio.typesafe import SystemOneResult, TypeSafePlugin
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy, SystemOneResponse
 
-from temporal_agent_harness.ai_sdks.jev import (
+from temporal_agent_kit.ai_sdks.jev import (
     DEFAULT_JEV_MODEL,
     JevApprovalAnswer,
     build_request,
@@ -42,10 +42,10 @@ from temporal_agent_harness.ai_sdks.jev import (
     jev_evaluator,
 )
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_workflow import Injected
-from temporal_agent_harness.harness.agent_client import AgentClient
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import AgentWorkflowRunner, agent
+from temporal_agent_kit.agent_workflow import Injected
+from temporal_agent_kit.agent_client import AgentClient
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,

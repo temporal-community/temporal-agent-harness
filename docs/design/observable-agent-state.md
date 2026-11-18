@@ -95,7 +95,7 @@ Outside a draft, every write raises `FrozenError` naming the fix. This is Immer'
 (`produce(state, draft => ...)`) plus React's "state is a value; the setter is the only place
 it changes."
 
-`temporal_agent_harness/harness/state/` is a **leaf package** — stdlib and pydantic only, no
+`temporal_agent_kit/state/` is a **leaf package** — stdlib and pydantic only, no
 imports from anywhere else in `harness` — for the same reason `stream_context.py` is: the
 runner, the protocol and offline tests can all depend on it without a cycle. It does not know
 Temporal exists. The runner translates its `StateSnapshot`/`StatePatch` dataclasses into the
@@ -160,7 +160,7 @@ it is, unconditionally, because the one type that could not honour that is not s
   open a bracket for turn 0, so that was not a delay but a strand — and a held event stays its
   cursor's head, so the child's whole stream queued behind it. Turn-0 child events are now
   exempt from the open gate, which is also what operator commands on a subagent needed.
-- **Root must be a `HarnessState`.** `agent.state(list)` is rejected when the class body runs.
+- **Root must be a `AgentState`.** `agent.state(list)` is rejected when the class body runs.
 - **No op coalescing.** `d.x = 1; d.x = 2` emits two ops.
 - **Commit-time validators must not mutate their own state.** `mutate()` unlocks the ref before
   it commits, so that a commit that raises cannot wedge it. The cost is that a `model_validator`
@@ -221,16 +221,16 @@ never the state it lives in.
 
 - Next: [`rendering-agent-state.md`](rendering-agent-state.md) — how an author says what a piece
   of state *means*, so a client can draw it as a checklist or a table rather than as JSON
-- Layer: `temporal_agent_harness/harness/state/`
+- Layer: `temporal_agent_kit/state/`
 - Wire types: `AgentStateSnapshot` / `AgentStatePatch` in `agent_protocol/events.py`
-- Opt-in: `agent.state(...)` / `StateDecl` in `harness/state/decl.py`, registered by
+- Opt-in: `agent.state(...)` / `StateDecl` in `state/decl.py`, registered by
   `AgentWorkflowRunner._register_declared_states` in `agent_workflow.py`
 - Console: `ui/src/lib/state/agentState.ts` (the fold), `ui/src/lib/state/jsonPatch.ts` (the
   applier) and `ui/src/lib/components/agent/AgentStatePanel.svelte` (the pane)
 - Example: `examples/monty/trip_board.py`, declared in `examples/monty/workflow.py` and
   `examples/monty/conversational_workflow.py`
 - Tests: `tests/state/` (the layer, incl. a hypothesis property test),
-  `tests/harness/test_observable_state.py` (end-to-end through a real workflow),
+  `tests/test_observable_state.py` (end-to-end through a real workflow),
   `tests/examples/monty/test_observable_trip_board.py` (the example, end-to-end: a script drives the board
   and the ops replay into what the agent holds) and
   `ui/src/lib/state/{agentState,jsonPatch}.test.mjs` (the fold, replayed over the console's own

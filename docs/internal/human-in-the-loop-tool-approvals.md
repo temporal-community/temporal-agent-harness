@@ -1,7 +1,7 @@
 # Human-in-the-Loop Tool Approvals
 
 **Status:** ✅ Implemented (see `harness/test_tool_approvals.py`, `harness/test_runner_builder.py`).
-**Scope:** `harness/` (decorators, runner, builder, protocol), `ai_sdks/jev/`, `google_genai_plugin/` (schema adapter), and the agent tool definitions + worker wiring.
+**Scope:** `` (decorators, runner, builder, protocol), `ai_sdks/jev/`, `google_genai_plugin/` (schema adapter), and the agent tool definitions + worker wiring.
 **Also see:** `tests/ai_sdks/jev/test_jev_evaluator.py` for the Jev-backed AI approval gate.
 
 > ## ⚠️ Read first — approvals are SAFE-BY-DEFAULT and POLICY-DRIVEN
@@ -19,7 +19,7 @@
 >   `False`. There is no `approval_required` anymore.
 > - **An agent-level `ToolApprovalPolicy` decides gating, not the tool.** It is a single
 >   *composable, serializable, frozen* pydantic model
->   (`harness/agent_protocol/agent_interface.py`) whose layers `auto_approves(...)` checks
+>   (`agent_protocol/agent_interface.py`) whose layers `auto_approves(...)` checks
 >   in priority order:
 >     0. `dangerously_skip_all_approvals` — approve EVERYTHING (disables the guardrail).
 >     1. `auto_approve_inherently_safe` — approve tools that declared `inherently_safe`.
@@ -61,7 +61,7 @@
 >   (3) whatever is still unresolved runs the same unbounded `wait_condition` gate as before.
 > - **Public API:** `from harness.agent import ToolApprovalPolicy, AutoApprovalContext,
 >   AutoModeEvaluator, AutoApprovalVerdict, AutoApprovalDecision` (re-exported alongside
->   the decorators); `from temporal_agent_harness.ai_sdks.jev import jev_evaluator`. `client.approve_tool(..., remember=False)`.
+>   the decorators); `from temporal_agent_kit.ai_sdks.jev import jev_evaluator`. `client.approve_tool(..., remember=False)`.
 >
 > ### Auto mode evaluators — async, three-valued
 >
@@ -215,7 +215,7 @@
 > `default` (the catch-all), `context`, and the agent-wide thresholds.
 >
 > - **Tools declare a NAME, not rules.** `@agent.tool_defn(auto_approval_criteria="financial")`
->   on all four tool decorators, plus `code_mode_tool` and `as_harness_mcp_server`. A tool
+>   on all four tool decorators, plus `code_mode_tool` and `as_kit_mcp_server`. A tool
 >   author is well placed to say what KIND of thing a tool is and badly placed to say how sure
 >   a machine must be before acting unattended, so the bodies live in configuration where the
 >   deploying operator — usually the end user, not the agent's author — can redefine what
@@ -304,7 +304,7 @@
 > - **Not reachable by the agent.** Dispatched as a bare `workflow.execute_activity` by name,
 >   never through `run_tool` — so it is not a tool, the model cannot call it or influence what
 >   is asked about its own call, and the gate does not recurse into itself.
-> - **Registered unconditionally by `AgentHarnessPlugin`**, with
+> - **Registered unconditionally by `AgentKitPlugin`**, with
 >   the extra checked per call: an unregistered activity name is a *retryable* Temporal error,
 >   which would hang every gated call mid-approval instead of failing once.
 > - Splits along the workflow boundary: `approver.py`/`models.py` are workflow-safe (plain
@@ -404,7 +404,7 @@ async def get_page_outline(store_display_name: Injected[str], page_url: str) -> 
 DOCS_TOOLS = [activity_as_tool(get_page_outline, activity_config=...), ...]  # plugin, separate site
 ```
 
-`agent_workflow.tool()`'s `wrapper` (`harness/agent_workflow.py:1093-1181`) carries an
+`agent_workflow.tool()`'s `wrapper` (`agent_workflow.py:1093-1181`) carries an
 `if activity.in_activity(): … if not workflow.in_workflow(): …` split, and the
 workflow-side dispatch (bind model args, fill injected, append `AgentToolContext`,
 `execute_activity`) lives in a *different* module (`google_genai_plugin/workflow.py:activity_as_tool`).
@@ -492,7 +492,7 @@ Adding an approval gate to this shape forces either approval logic into the gene
 
 ## 4. The approval gate (shared internal helper)
 
-New in `harness/agent_workflow.py`. Reads the ambient state `run_tool` parks; touches only
+New in `agent_workflow.py`. Reads the ambient state `run_tool` parks; touches only
 the runner and workflow state.
 
 ```python
@@ -546,7 +546,7 @@ start; nothing about the indefinite wait defeats the `Token.reset()` in `run_too
 
 ## 5. Component-by-component changes
 
-### 5a. `harness/agent_protocol/events.py` — two new events
+### 5a. `agent_protocol/events.py` — two new events
 
 Add enum members to `AgentEventType` (document them inline, per the file's convention; the
 existing `TOOL_REQUESTED` doc already anticipates this gap):
@@ -577,9 +577,9 @@ class ToolApprovalResolved(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_RESOLV
 ```
 
 Add both to the `AgentStreamItem` union (`events.py:311`) and to
-`harness/agent_protocol/__init__.py` exports.
+`agent_protocol/__init__.py` exports.
 
-### 5b. `harness/agent_protocol/agent_interface.py` — update contract + status
+### 5b. `agent_protocol/agent_interface.py` — update contract + status
 
 ```python
 TOOL_APPROVAL_UPDATE = "tool_approval"     # protocol constant, next to USER_INPUT_UPDATE
@@ -759,16 +759,16 @@ decorated object as `tool` (which is what `callables_by_name` will now hold; see
 | `agent/python/forum_tools.py` | Same migration; `FORUM_TOOLS = [read_forum_thread, get_forum_accepted_answer]`. |
 | `agent/python/worker.py` | Register `activities=[tool_activity(t) for t in (*DOCS_TOOLS, *FORUM_TOOLS)]` (imports `tool_activity` from `harness.agent`) instead of importing the raw functions (`worker.py:91-99`). |
 | `agent/python/workflow.py` | `callables_by_name = {fn.__name__: fn for fn in setup.tool_functions}` already keys on `__name__` (preserved on the decorated object) and `function_param(fn)` still works — likely **no change** beyond importing nothing new. `_run_one_tool` unchanged. |
-| `harness/agent.py` | Export `activity_tool_defn`, `tool_defn`, `tool_activity` (and keep `Injected`, `AgentToolContext`, `defn`); update `__all__` and the module docstring's usage examples. Remove `tool` once all call sites migrate. |
-| `harness/agent_protocol/__init__.py` | Export the new events, `TOOL_APPROVAL_UPDATE`, `ToolApprovalDecision`, `ToolApprovalResult`, `PendingApproval`. |
-| `harness/agent_client.py` | Add a client method to send the approval update + expose pending approvals (see §8). |
+| `agent.py` | Export `activity_tool_defn`, `tool_defn`, `tool_activity` (and keep `Injected`, `AgentToolContext`, `defn`); update `__all__` and the module docstring's usage examples. Remove `tool` once all call sites migrate. |
+| `agent_protocol/__init__.py` | Export the new events, `TOOL_APPROVAL_UPDATE`, `ToolApprovalDecision`, `ToolApprovalResult`, `PendingApproval`. |
+| `agent_client.py` | Add a client method to send the approval update + expose pending approvals (see §8). |
 | `google_genai_plugin/__init__.py`, `workflow.py` | Remove `activity_as_tool` export/impl; keep `function_param`. Update `test_activity_as_tool.py` to target the new decorator (it pins the injected/self hiding contract — keep that assertion, retarget the subject). |
 | `harness/test_agent_tool.py` | Retarget to the split decorators (it currently simulates `activity_as_tool` appending an `AgentToolContext`). Add approval-path cases (see §9). |
 | `agent/python/monty_dynamic_workflow/` | **Migrated** (follow-up pass). `activities.py` tools → `@agent.activity_tool_defn(name=…)`; `ALL_ACTIVITIES` → `[tool_activity(t) for t in …]`; `workflow.py:_run_activity_tool` collapsed to `run_tool(call_id, tool, request)` (the hand-rolled `AgentToolContext`/`execute_activity` closure is gone). |
 
 ---
 
-## 8. Client API additions (`harness/agent_client.py`)
+## 8. Client API additions (`agent_client.py`)
 
 - `async def approve_tool(self, tool_id, *, approved, reason=None) -> ToolApprovalResult:`
   → `handle.execute_update(TOOL_APPROVAL_UPDATE, ToolApprovalDecision(...), result_type=ToolApprovalResult)`.

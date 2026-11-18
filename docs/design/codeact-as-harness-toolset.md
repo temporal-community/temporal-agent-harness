@@ -19,7 +19,7 @@ And the two parts that *are* hand-wired today seem auto-derivable:
 
 - `HOST_FUNCTION_STUBS` (`examples/monty/travel_models.py`) — the type-check stubs are
   hand-maintained, but the harness already introspects every tool's signature to build the
-  model schema (`_tool_signatures` / `model_json_schema` in `harness/agent_workflow.py`), so
+  model schema (`_tool_signatures` / `model_json_schema` in `agent_workflow.py`), so
   the stubs could be generated from the agent's registered tools.
 - `_dispatch_host_call` (`examples/monty/_host_driver.py`) — the `match name:` table maps host
   function names to activities, but those host functions are just the agent's registered
@@ -41,7 +41,7 @@ Same "generate a model-facing surface from typed declarations" philosophy.
 
 - **Dependency coupling.** It'd couple the core to `pydantic-monty` (experimental, compiled,
   v0.0.x). Today it's deliberately example-only (`pyproject.toml` `examples` group). Probably
-  an optional extra at most (e.g. `temporal-agent-harness[codeact]`).
+  an optional extra at most (e.g. `temporal-agent-kit[codeact]`).
 - **The harness is deliberately unopinionated about the agentic loop.** CodeAct is one
   strategy among several (ReAct, plan-execute). As an optional toolset it stays agnostic; as
   core machinery it takes a side.

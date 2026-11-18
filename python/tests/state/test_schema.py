@@ -1,4 +1,4 @@
-# ABOUTME: The definition-time field-type checker — which annotations a HarnessState may
+# ABOUTME: The definition-time field-type checker — which annotations an AgentState may
 # declare, and that every rejection names the offending field and the fix.
 
 """The definition-time field-type checker."""
@@ -20,10 +20,10 @@ import pytest
 from pydantic import BaseModel, PrivateAttr, computed_field
 from pydantic.errors import PydanticSchemaGenerationError
 
-from temporal_agent_harness.harness.state import HarnessState, StateSchemaError
+from temporal_agent_kit.state import AgentState, StateSchemaError
 
 
-class _Member(HarnessState):
+class _Member(AgentState):
     """A state model, so `set[_Member]` is a set the checker once accepted."""
 
     n: int = 0
@@ -33,7 +33,7 @@ def _rejects(name: str, annotation: Any) -> StateSchemaError:
     with pytest.raises(StateSchemaError) as info:
         type(
             "Bad",
-            (HarnessState,),
+            (AgentState,),
             {"__annotations__": {name: annotation}},
         )
     return info.value
@@ -62,7 +62,7 @@ def test_plain_basemodel_is_rejected():
     class Plain(BaseModel):
         x: int = 0
 
-    assert "HarnessState" in str(_rejects("field", Plain))
+    assert "AgentState" in str(_rejects("field", Plain))
 
 
 def test_dataclass_is_rejected():
@@ -94,7 +94,7 @@ def test_arbitrary_class_is_rejected():
     # `arbitrary_types_allowed=False` means pydantic refuses the schema first;
     # either way the failure is at class-definition time, not at runtime.
     with pytest.raises((StateSchemaError, PydanticSchemaGenerationError)):
-        type("Bad", (HarnessState,), {"__annotations__": {"field": Thing}})
+        type("Bad", (AgentState,), {"__annotations__": {"field": Thing}})
 
 
 def test_nesting_is_checked_recursively():
@@ -110,7 +110,7 @@ def test_nesting_is_checked_recursively():
 def test_private_attributes_are_rejected():
     with pytest.raises(StateSchemaError, match="private attributes"):
 
-        class Bad(HarnessState):
+        class Bad(AgentState):
             x: int = 0
             _cache: dict = PrivateAttr(default_factory=dict)
 
@@ -118,7 +118,7 @@ def test_private_attributes_are_rejected():
 def test_computed_fields_are_rejected():
     with pytest.raises(StateSchemaError, match="computed fields"):
 
-        class Bad(HarnessState):
+        class Bad(AgentState):
             x: int = 0
 
             @computed_field  # type: ignore[misc]
@@ -130,7 +130,7 @@ def test_computed_fields_are_rejected():
 def test_any_warns_but_is_allowed():
     with pytest.warns(UserWarning, match="escape hatch"):
 
-        class Escape(HarnessState):
+        class Escape(AgentState):
             payload: Any = None
 
     value = Escape(payload={"mutable": []})
@@ -141,7 +141,7 @@ class Color(enum.Enum):
     RED = "red"
 
 
-class Accepted(HarnessState):
+class Accepted(AgentState):
     """Every annotation the design says is allowed."""
 
     s: str = ""
@@ -167,10 +167,10 @@ def test_allowed_scalars_are_accepted():
 
 
 def test_nested_harness_state_in_every_container():
-    class Node(HarnessState):
+    class Node(AgentState):
         n: int = 0
 
-    class Holder(HarnessState):
+    class Holder(AgentState):
         as_list: list[Node] = []
         as_dict: dict[str, Node] = {}
         as_nested: dict[str, list[Node]] = {}
@@ -183,7 +183,7 @@ def test_nested_harness_state_in_every_container():
 
 
 def test_self_referencing_model_is_accepted():
-    class Tree(HarnessState):
+    class Tree(AgentState):
         name: str = ""
         children: list["Tree"] = []
 
@@ -193,7 +193,7 @@ def test_self_referencing_model_is_accepted():
 
 
 def test_tuple_forms():
-    class Shapes(HarnessState):
+    class Shapes(AgentState):
         fixed: tuple[int, str] = (0, "")
         variadic: tuple[int, ...] = ()
         empty: tuple[()] = ()

@@ -1,16 +1,15 @@
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
-harness_pytest_test(
-    name = "test_strands_harness_streaming",
-    srcs = ["test_strands_harness_streaming.py"],
+agent_kit_pytest_test(
+    name = "test_strands_kit_streaming",
+    srcs = ["test_strands_kit_streaming.py"],
     imports = ["../../.."],
     deps = [
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks:strands_agents_harness",
-        "//python/temporal_agent_harness/ai_sdks/strands_agents:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/strands_agents:__init__",
         "//python/tests:conftest",
         "@pypi//mcp",
         "@pypi//mcp_types",
@@ -20,15 +19,15 @@ harness_pytest_test(
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_strands_stream_observer",
     srcs = ["test_strands_stream_observer.py"],
     imports = ["../../.."],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks:strands_agents_harness",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness:stream_context",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/strands_agents:_kit",
         "//python/tests:conftest",
         "@pypi//pytest",
         "@pypi//strands_agents",

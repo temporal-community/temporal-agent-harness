@@ -345,7 +345,7 @@ describe("history arriving over the stream", () => {
    backlog is stamped replay while the root's frames are live. Merged into one
    pipeline the two orderings interleave, so the mode latches at the first live
    frame rather than reading the mark per frame. Proven in
-   tests/harness/test_replay_stamp.py: ordered per attach, not across attaches. */
+   tests/test_replay_stamp.py: ordered per attach, not across attaches. */
 describe("interleaved replay marks", () => {
   it("latches the mode at the first live frame", () => {
     assert.equal(catchingUpAfterFrame(true, false), true, "a replay frame before the live edge is catch-up");

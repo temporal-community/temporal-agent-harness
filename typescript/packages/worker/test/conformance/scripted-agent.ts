@@ -15,8 +15,8 @@ import {
   state,
   tool,
   type AgentWorkflowRunner,
-  type AnyHarnessTool,
-} from "@temporalio/agent-harness";
+  type AnyKitTool,
+} from "@temporalio/agent-kit";
 import { Script, ScriptReply, TOOL_NAMES } from "./script.ts";
 
 export const SCRIPTED_AGENT = "ScriptedAgent";
@@ -83,7 +83,7 @@ const askClient = tool({
   outputSchema: z.string(),
 });
 
-const TOOLS: Record<(typeof TOOL_NAMES)[number], AnyHarnessTool> = {
+const TOOLS: Record<(typeof TOOL_NAMES)[number], AnyKitTool> = {
   add,
   lookup,
   echo,

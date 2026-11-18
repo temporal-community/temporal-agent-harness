@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ApplicationFailure } from "@temporalio/common";
-import { InteractionConversation } from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+import { InteractionConversation } from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 import { call, completed, stream, text, thought, type Event } from "./script.ts";
 
 describe("InteractionConversation", () => {

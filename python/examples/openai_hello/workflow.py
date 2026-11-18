@@ -1,10 +1,10 @@
-"""A hello-world OpenAI Agents SDK agent on the harness, with one tool call.
+"""A hello-world OpenAI Agents SDK agent on Agent Kit, with one tool call.
 
 A conversational agent that answers in plain text and can call a single tool
 (``get_weather``). The turn runs the model with ``Runner.run_streamed(...)``, which routes
-model calls through the streaming activity so the harness observer can translate raw
+model calls through the streaming activity so Agent Kit observer can translate raw
 OpenAI events into the turn-stream events an attached client sees. The tool is a normal
-harness tool adapted onto the SDK with ``as_openai_agent_tool``, so the harness still owns
+Agent Kit tool adapted onto the SDK with ``as_openai_agent_tool``, so Agent Kit still owns
 approval and its ``tool_start`` / ``tool_end`` / ``tool_error`` events.
 
 Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is
@@ -20,15 +20,15 @@ with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
     from agents import Runner, TResponseInputItem
 
-    from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tool
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit.ai_sdks.openai_agents import as_openai_agent_tool
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 
 TASK_QUEUE = "openai-hello"
@@ -81,7 +81,7 @@ class OpenAIHelloAgentWorkflow:
         ]
 
         # run_streamed returns immediately; iterate its events to drive the turn to completion.
-        # context=self._runner threads the harness runner to the streaming activity so the
+        # context=self._runner threads Agent Kit runner to the streaming activity so the
         # plugin can route live events to this turn's stream.
         result = Runner.run_streamed(sdk_agent, input=input_items, context=self._runner)
         async for _event in result.stream_events():

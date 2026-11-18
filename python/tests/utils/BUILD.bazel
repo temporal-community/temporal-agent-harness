@@ -1,11 +1,11 @@
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_large_payload",
     srcs = ["test_large_payload.py"],
     imports = ["../.."],
     deps = [
-        "//python/temporal_agent_harness/utils:large_payload",
+        "//python/temporal_agent_kit/utils:large_payload",
         "//python/tests:conftest",
         "@pypi//boto3",
         "@pypi//moto",
@@ -14,13 +14,13 @@ harness_pytest_test(
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_task_queue",
     srcs = ["test_task_queue.py"],
     imports = ["../.."],
     deps = [
-        "//python/temporal_agent_harness/utils:task_queue",
-        "//python/temporal_agent_harness/web:registry",
+        "//python/temporal_agent_kit/utils:task_queue",
+        "//python/temporal_agent_kit/web:registry",
         "//python/tests:conftest",
         "@pypi//pytest",
     ],

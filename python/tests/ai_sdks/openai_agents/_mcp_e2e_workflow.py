@@ -11,12 +11,12 @@ with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
     from agents import Runner
 
-    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+    from temporal_agent_kit.ai_sdks.openai_agents.workflow import (
         stateless_mcp_server,
     )
-    from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-    from temporal_agent_harness.harness.agent import ToolApprovalPolicy
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import AgentWorkflowRunner, agent
+    from temporal_agent_kit.agent import ToolApprovalPolicy
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextMessage,
         TextReply,

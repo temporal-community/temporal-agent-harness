@@ -18,7 +18,7 @@ export default defineConfig({
       $lib: resolve("src/lib"),
       /* The client's exports point at its dist/, which nothing builds before the console.
          Bazel links the built package instead and leaves the sources out of the sandbox. */
-      ...(existsSync(client) && { "@temporalio/agent-harness-client": client })
+      ...(existsSync(client) && { "@temporalio/agent-kit-client": client })
     }
   },
   test: {

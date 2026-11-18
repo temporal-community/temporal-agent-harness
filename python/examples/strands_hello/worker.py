@@ -1,10 +1,10 @@
 """Worker for the hello-world Strands Agents agent.
 
 Hosts the StrandsHelloAgent workflow. Two plugins on the client:
-  * ``StrandsPlugin`` — the Strands model activity (with the harness observer that streams each
+  * ``StrandsPlugin`` — the Strands model activity (with Agent Kit observer that streams each
     model call onto its turn), the ``scratch`` sandbox's activities, the data converter, and the
     workflow-sandbox passthroughs Strands needs.
-  * ``AgentHarnessPlugin``, after it — the harness's own activities, plus the activity body of
+  * ``AgentKitPlugin``, after it — Agent Kit's own activities, plus the activity body of
     ``get_local_time``, the agent's activity tool.
 
 The ``scratch`` sandbox is Strands' ``NotASandboxLocalEnvironment``: commands and file edits run
@@ -39,10 +39,10 @@ from examples.strands_hello.workflow import (
     StrandsHelloAgentWorkflow,
     get_local_time,
 )
-from temporal_agent_harness.ai_sdks.strands_agents import StrandsPlugin
-from temporal_agent_harness.ai_sdks.strands_agents_harness import harness_observer_factory
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.utils.task_queue import task_queue_name
+from temporal_agent_kit.ai_sdks.strands_agents import StrandsPlugin
+from temporal_agent_kit.ai_sdks.strands_agents import kit_observer_factory
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.utils.task_queue import task_queue_name
 
 OPENAI_MODEL_ID = "gpt-5.1"
 
@@ -63,11 +63,11 @@ async def main() -> None:
         # Built lazily in the model activity, which reads OPENAI_API_KEY from the environment.
         models={MODEL: lambda: OpenAIModel(model_id=OPENAI_MODEL_ID)},
         sandboxes={SANDBOX: lambda _context: NotASandboxLocalEnvironment()},
-        observer_factory=harness_observer_factory,
+        observer_factory=kit_observer_factory,
     )
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
-        **connect_config, plugins=[strands, AgentHarnessPlugin(tools=[get_local_time])]
+        **connect_config, plugins=[strands, AgentKitPlugin(tools=[get_local_time])]
     )
 
     worker = Worker(client, task_queue=task_queue, workflows=[StrandsHelloAgentWorkflow])

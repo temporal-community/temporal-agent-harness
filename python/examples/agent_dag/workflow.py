@@ -32,17 +32,17 @@ with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
     from agents import ModelSettings, Runner, TResponseInputItem
 
-    from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tool
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent import Injected
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit.ai_sdks.openai_agents import as_openai_agent_tool
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent import Injected
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
     from examples.agent_dag import step_tools
     from examples.agent_dag.editor_tools import EDITOR_TOOLS, export_code

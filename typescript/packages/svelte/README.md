@@ -1,12 +1,12 @@
-# @temporalio/agent-harness-svelte
+# @temporalio/agent-kit-svelte
 
-A Svelte 5 binding for `@temporalio/agent-harness-client`: `AgentSession`, a reactive handle on one
-harness agent session.
+A Svelte 5 binding for `@temporalio/agent-kit-client`: `AgentSession`, a reactive handle on one
+Agent Kit agent session.
 
 ```svelte
 <script lang="ts">
-  import { AgentSession } from "@temporalio/agent-harness-svelte";
-  import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
+  import { AgentSession } from "@temporalio/agent-kit-svelte";
+  import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from agent-kit-codegen
 
   let { sessionId } = $props();
   const agent = new AgentSession<TicTacToeAgent>({ get sessionId() { return sessionId; } });
@@ -23,7 +23,7 @@ harness agent session.
 - **Reading opens the connection.** The first effect or markup to read any field opens the
   session's stream; it closes once nothing reads it, so unmounting the last view releases it.
 - **Getter options follow changes.** A `get sessionId()` switches the session when its value does.
-- **One connection per session.** Call `createHarnessContext()` in a parent component and every
+- **One connection per session.** Call `createKitContext()` in a parent component and every
   `AgentSession` below it with the same session id shares one connection and one state.
 - **The whole tree.** `messages`, `states` and `agentStatus` are the root agent's; `agents` and
   `agent(id)` reach every subagent, and a `subagent` part's `messageId` names the child message
@@ -112,9 +112,9 @@ JSON:
     type AgentSchema,
     type HandlerName,
     type HandlerOutput,
-    type HarnessMessage
-  } from "@temporalio/agent-harness-client";
-  import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
+    type KitMessage
+  } from "@temporalio/agent-kit-client";
+  import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from agent-kit-codegen
   import MoveCard from "./MoveCard.svelte"; // props: { output: Partial<TextReply> }
 
   type Cards<A extends AgentSchema> = {
@@ -122,7 +122,7 @@ JSON:
   };
   const cards: Cards<TicTacToeAgent> = { play: MoveCard };
 
-  let { message }: { message: HarnessMessage<TicTacToeAgent> } = $props();
+  let { message }: { message: KitMessage<TicTacToeAgent> } = $props();
 
   // TypeScript can't tie the lookup to the narrowed message, so it is cast once here.
   const Card = $derived(cards[message.handler] as Component<{ output: unknown }> | undefined);
@@ -159,7 +159,7 @@ With native inputs, the schema's constraints become attributes the browser check
 ```svelte
 <!-- SchemaInput.svelte -->
 <script lang="ts">
-  import type { SchemaField } from "@temporalio/agent-harness-client";
+  import type { SchemaField } from "@temporalio/agent-kit-client";
 
   let { field, value, onchange }: { field: SchemaField; value: unknown; onchange: (value: unknown) => void } = $props();
   const required = $derived(field.required && field.kind !== "boolean");
@@ -185,8 +185,8 @@ With native inputs, the schema's constraints become attributes the browser check
 ```svelte
 <!-- HandlerForm.svelte -->
 <script lang="ts">
-  import { buildPayload, describeSchema, emptyValues, validate } from "@temporalio/agent-harness-client";
-  import { AgentSession } from "@temporalio/agent-harness-svelte";
+  import { buildPayload, describeSchema, emptyValues, validate } from "@temporalio/agent-kit-client";
+  import { AgentSession } from "@temporalio/agent-kit-svelte";
   import SchemaInput from "./SchemaInput.svelte";
 
   /** `handler` is one entry of `GET /api/agent-interface/{sessionId}`. */
@@ -224,15 +224,15 @@ whose issue paths it maps onto fields. The same `SchemaInput` renders each field
 <!-- HandlerTanStackForm.svelte: wrap it in {#key handler.name} so another handler starts blank. -->
 <script lang="ts">
   import { createForm, type StandardSchemaV1 } from "@tanstack/svelte-form";
-  import { buildPayload, describeSchema, emptyValues, validate, type SchemaField } from "@temporalio/agent-harness-client";
-  import { AgentSession } from "@temporalio/agent-harness-svelte";
+  import { buildPayload, describeSchema, emptyValues, validate, type SchemaField } from "@temporalio/agent-kit-client";
+  import { AgentSession } from "@temporalio/agent-kit-svelte";
   import SchemaInput from "./SchemaInput.svelte";
 
   /** The client's `validate` as a Standard Schema: each problem is an issue at its field's path. */
   const standardSchema = (fields: SchemaField[]): StandardSchemaV1<Record<string, unknown>> => ({
     "~standard": {
       version: 1,
-      vendor: "agent-harness",
+      vendor: "agent-kit",
       validate: (input) => {
         const value = input as Record<string, unknown>;
         const problems = Object.entries(validate(fields, value));
@@ -325,13 +325,13 @@ Query. Sends, approvals, callbacks and status stay in the session: they go throu
 ```svelte
 <script lang="ts">
   import { createMutation, createQuery, queryOptions, useQueryClient } from "@tanstack/svelte-query";
-  import { HttpTransport, startSession } from "@temporalio/agent-harness-svelte";
-  import { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
+  import { HttpTransport, startSession } from "@temporalio/agent-kit-svelte";
+  import { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from agent-kit-codegen
 
   const transport = new HttpTransport({ baseUrl: "/api/" });
   const sessionsQuery = () =>
     queryOptions({
-      queryKey: ["agent-harness", "sessions"],
+      queryKey: ["agent-kit", "sessions"],
       queryFn: ({ signal }) => transport.listSessions(signal)
     });
 
@@ -352,7 +352,7 @@ Query. Sends, approvals, callbacks and status stay in the session: they go throu
 ## Development
 
 This package is part of the pnpm workspace in `typescript/`, and builds and tests against the
-`@temporalio/agent-harness-client` in the working tree; its published dependency is the
+`@temporalio/agent-kit-client` in the working tree; its published dependency is the
 `^<version>` range in `package.json`. `bazel test //typescript/packages/svelte/...` builds and
 tests it. Without Bazel, build the client first, then run these commands from
 `typescript/packages/svelte` (see

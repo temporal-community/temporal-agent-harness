@@ -1,4 +1,4 @@
-"""harness_pytest_test: this repo's pytest test, the kind Gazelle emits for every test module."""
+"""agent_kit_pytest_test: this repo's pytest test, the kind Gazelle emits for every test module."""
 
 load("@aspect_rules_py//py:defs.bzl", "py_pytest_test")
 load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
@@ -11,7 +11,7 @@ _TEMPORAL_CLI = Label("//bazel/temporal:cli")
 _TEMPORAL_TEST_SERVER = Label("//bazel/temporal:test_server")
 _MONTY = Label("//bazel:monty")
 
-def _harness_pytest_test_impl(name, visibility, srcs, deps, imports, data, env, pytest_args, size, timeout, tags, flaky):
+def _agent_kit_pytest_test_impl(name, visibility, srcs, deps, imports, data, env, pytest_args, size, timeout, tags, flaky):
     py_pytest_test(
         name = name,
         visibility = visibility,
@@ -54,13 +54,13 @@ def _harness_pytest_test_impl(name, visibility, srcs, deps, imports, data, env, 
         package_collisions = PACKAGE_COLLISIONS,
     )
 
-harness_pytest_test = macro(
+agent_kit_pytest_test = macro(
     doc = """A pytest test module run with the repo's pyproject.toml config.
 
     It gets the Temporal servers pinned in MODULE.bazel (TEMPORAL_CLI_PATH,
     TEMPORAL_TEST_SERVER_PATH) and the Code Mode sandbox binary (MONTY_BIN).
     """,
-    implementation = _harness_pytest_test_impl,
+    implementation = _agent_kit_pytest_test_impl,
     attrs = {
         "srcs": attr.label_list(mandatory = True, allow_files = [".py"], configurable = False, doc = "The test modules pytest collects."),
         "deps": attr.label_list(configurable = False, doc = "Libraries the modules import; @pypi//pytest is added."),

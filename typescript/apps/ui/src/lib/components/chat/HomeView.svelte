@@ -42,13 +42,13 @@
       label: "Python",
       quickstart: `${DOCS}/python/README.md#quickstart`,
       registry: REGISTRY.python,
-      packageName: "temporal-agent-harness",
-      packageUrl: "https://pypi.org/project/temporal-agent-harness/",
+      packageName: "temporal-agent-kit",
+      packageUrl: "https://pypi.org/project/temporal-agent-kit/",
       prompt:
-        "Set up the Temporal Agent Harness for Python in this project: run `uvx temporal-agent-harness@latest init my-agent`, then `uv run temporal-agent-harness skills install`. Pin the version it installs; the project is pre-1.0. Then use the /temporal-harness-python skill: every agent is a Temporal workflow declared with @agent.defn, with @agent.accepts handlers for typed operations and @agent.activity_tool_defn for durable tools.",
+        "Set up the Temporal Agent Kit for Python in this project: run `uvx temporal-agent-kit@latest init my-agent`, then `uv run temporal-agent-kit skills install`. Pin the version it installs; the project is pre-1.0. Then use the /temporal-agent-kit-python skill: every agent is a Temporal workflow declared with @agent.defn, with @agent.accepts handlers for typed operations and @agent.activity_tool_defn for durable tools.",
       services: [
         { name: "Temporal service", command: "temporal server start-dev" },
-        { name: "Session manager, API and console", command: "uv run temporal-agent-harness dev agents.toml" },
+        { name: "Session manager, API and console", command: "uv run temporal-agent-kit dev agents.toml" },
         { name: "Your Python agent worker", command: "uv run --env-file .env.local python -m my_agent.worker" }
       ]
     },
@@ -57,13 +57,13 @@
       label: "TypeScript",
       quickstart: `${DOCS}/typescript/packages/core/README.md#quickstart`,
       registry: REGISTRY.typescript,
-      packageName: "@temporalio/agent-harness",
-      packageUrl: "https://www.npmjs.com/package/@temporalio/agent-harness",
+      packageName: "@temporalio/agent-kit",
+      packageUrl: "https://www.npmjs.com/package/@temporalio/agent-kit",
       prompt:
-        "Set up the Temporal Agent Harness for TypeScript in this project: run `npx -y -p @temporalio/agent-harness-worker@latest agent-harness init my-agent`, then `npm run harness:skill`. Pin the version it installs; the project is pre-1.0. Then use the /temporal-harness-typescript skill: every agent is a Temporal workflow built with defineAgent and typed handler() operations, run on a worker with the harness plugin.",
+        "Set up the Temporal Agent Kit for TypeScript in this project: run `npx -y -p @temporalio/agent-kit-worker@latest agent-kit init my-agent`, then `npm run agent-kit:skill`. Pin the version it installs; the project is pre-1.0. Then use the /temporal-agent-kit-typescript skill: every agent is a Temporal workflow built with defineAgent and typed handler() operations, run on a worker with AgentKitPlugin.",
       services: [
         { name: "Temporal service", command: "temporal server start-dev" },
-        { name: "Session manager, API and console", command: "npm run harness:dev" },
+        { name: "Session manager, API and console", command: "npm run agent-kit:dev" },
         { name: "Your TypeScript agent worker", command: "npm start" }
       ]
     }

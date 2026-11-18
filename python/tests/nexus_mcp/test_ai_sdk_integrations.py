@@ -19,11 +19,11 @@ from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.models.test import TestModel as PydanticAITestModel
 
-from temporal_agent_harness.ai_sdks.openai_agents.testing import (
+from temporal_agent_kit.ai_sdks.openai_agents.testing import (
     ResponseBuilders,
     TestModel,
 )
-from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+from temporal_agent_kit.ai_sdks.openai_agents.workflow import (
     nexus_native_mcp_server,
 )
 

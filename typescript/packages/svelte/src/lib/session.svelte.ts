@@ -16,13 +16,13 @@ import {
   type ConnectionStatus,
   type HandlerInput,
   type HandlerName,
-  type HarnessMessage,
+  type KitMessage,
   type SteeringView,
   type SubmitMessageResponse,
   type ToolApprovalDecision,
   type UntypedAgent,
   type WaitingToolCall
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 import { SvelteSessionState } from "./state.svelte.js";
 
@@ -54,7 +54,7 @@ class SessionEntry<A extends AgentSchema> {
 
 /**
  * Sessions by id, so that components following the same session share one connection and one
- * state. Put one in context with `createHarnessContext()`; an AgentSession constructed outside
+ * state. Put one in context with `createKitContext()`; an AgentSession constructed outside
  * any such context gets its own.
  *
  * The first AgentSession to follow an id decides that session's options (`callbackTools`,
@@ -73,11 +73,11 @@ export class SessionStore {
   }
 }
 
-const STORE = Symbol("temporal-agent-harness sessions");
+const STORE = Symbol("temporal-agent-kit sessions");
 
 /** Share sessions below this component: every AgentSession constructed in its subtree for the
  *  same session id uses one connection. Call it during component initialisation. */
-export function createHarnessContext(store = new SessionStore()): SessionStore {
+export function createKitContext(store = new SessionStore()): SessionStore {
   return setContext(STORE, store);
 }
 
@@ -133,7 +133,7 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
   }
 
   /** The root agent's messages. */
-  get messages(): readonly HarnessMessage<A>[] {
+  get messages(): readonly KitMessage<A>[] {
     return rootView<A>(this.#state()).messages;
   }
 
@@ -154,7 +154,7 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
   }
 
   /** Messages sent from here that the server has not admitted yet, and failed sends. */
-  get pending(): readonly HarnessMessage<A>[] {
+  get pending(): readonly KitMessage<A>[] {
     return this.#state().pending;
   }
 

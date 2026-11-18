@@ -45,8 +45,8 @@ def _committed_files_impl(name, visibility, srcs, generated):
 committed_files = macro(
     doc = """Files that targets generate and the source tree keeps, e.g. for readers without Bazel.
 
-    A building block for the macros that commit what they generate (harness_agent_registry,
-    harness_types, harness_client_sdk); BUILD files use those instead.
+    A building block for the macros that commit what they generate (agent_kit_agent_registry,
+    agent_kit_types, agent_kit_client_sdk); BUILD files use those instead.
 
     `bazel run :<name>_update` writes them; `<name>_<file>_up_to_date_test` fails while a committed
     copy differs from what its target generates. `:<name>_files` is the committed copies.

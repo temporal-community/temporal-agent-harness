@@ -1,5 +1,5 @@
 // A TypeScript agent the Python server serves (python/tests/web/test_typescript_agents.py). It
-// takes required init data, so its start form comes from the schema document agent-harness-schema
+// takes required init data, so its start form comes from the schema document agent-kit-schema
 // writes, and its reply carries both that data and the message, so a test sees each arrive.
 
 import { z } from "zod";
@@ -9,7 +9,7 @@ import {
   ToolApprovalPolicy,
   defineAgent,
   handler,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 
 export const BriefedTsAgent = defineAgent({
   name: "BriefedTsAgent",

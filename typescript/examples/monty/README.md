@@ -1,7 +1,7 @@
 # Monty travel-agent example (TypeScript)
 
 The TypeScript twin of [the Python Monty example](../../../python/examples/monty/README.md),
-written with `@temporalio/agent-harness` and run on a TypeScript worker. A "Monty" agent runs a
+written with `@temporalio/agent-kit` and run on a TypeScript worker. A "Monty" agent runs a
 sandboxed Python script ([Monty](https://github.com/pydantic/monty)) whose only escape hatches are
 host functions backed by durable Temporal activities (simulated flight/hotel search + booking).
 Three agents ship here:
@@ -19,7 +19,7 @@ Python one can be served side by side.
 
 As in Python, the scripts are Python: Monty is the sandbox in both SDKs. In TypeScript each
 sandbox step runs in an activity on the worker (Python steps it inside the workflow).
-`AgentHarnessPlugin` registers those activities, as it does wherever `@pydantic/monty` is
+`AgentKitPlugin` registers those activities, as it does wherever `@pydantic/monty` is
 installed.
 
 ## The trip board

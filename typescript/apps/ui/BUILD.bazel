@@ -36,7 +36,7 @@ js_library(
 )
 
 # The console's production build, which the Python package serves and ships
-# (//python/temporal_agent_harness/ui:dist): the page, what its entry module imports, and public/,
+# (//python/temporal_agent_kit/ui:dist): the page, what its entry module imports, and public/,
 # which vite copies as it is.
 vite_bin.vite(
     name = "dist",
@@ -50,7 +50,7 @@ vite_bin.vite(
     args = ["build"],
     chdir = package_name(),
     out_dirs = ["dist"],
-    visibility = ["//python/temporal_agent_harness/ui:__pkg__"],
+    visibility = ["//python/temporal_agent_kit/ui:__pkg__"],
 )
 
 # What vitest reads from the package root. vitest_test (bazel/vitest.bzl) adds it to every test,

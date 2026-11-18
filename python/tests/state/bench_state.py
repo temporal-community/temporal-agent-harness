@@ -10,21 +10,21 @@ from __future__ import annotations
 
 import pytest
 
-from temporal_agent_harness.harness.state import HarnessState
+from temporal_agent_kit.state import AgentState
 
 from tests.state.support import StateHost
-from tests.state.models import AgentState, Group, Todo
+from tests.state.models import PlanState, Group, Todo
 
 N = 10_000
 
 
-class Row(HarnessState):
+class Row(AgentState):
     id: int = 0
     name: str = "x" * 64
     flag: bool = False
 
 
-class Big(HarnessState):
+class Big(AgentState):
     """Roughly a megabyte of state once the rows are materialized."""
 
     label: str = ""
@@ -135,7 +135,7 @@ def test_reads_on_current_are_native(benchmark, big: Big):
 def test_deep_nested_mutation(benchmark):
     ref = StateHost().state(
         "agent",
-        AgentState(
+        PlanState(
             groups=[
                 Group(name=f"g{i}", todos=[Todo(id=f"t{j}") for j in range(50)])
                 for i in range(50)

@@ -22,7 +22,7 @@ from nexus_mcp.durable_tools_gateway.generated import (
     ListAgentEntriesOutputRemoteToolsValueItem,
 )
 
-from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+from temporal_agent_kit.ai_sdks.openai_agents._nexus_mcp import (
     _NexusGatewayMCPServer,
 )
 
@@ -37,7 +37,7 @@ def _server() -> _NexusGatewayMCPServer:
     )
 
 
-@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
+@patch("temporal_agent_kit.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
 async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) -> None:
     mock_client = MagicMock()
     mock_client.execute_operation = AsyncMock(
@@ -66,7 +66,7 @@ async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) ->
     assert server._remote_routes == {"weather_get_forecast": "weather"}
 
 
-@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
+@patch("temporal_agent_kit.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
 async def test_call_tool_wraps_arguments_and_unwraps_result(mock_create_client: MagicMock) -> None:
     mock_client = MagicMock()
     mock_client.execute_operation = AsyncMock(

@@ -5,9 +5,9 @@ wrapper, AND the `run_subagent_turn` activity are all shipped + unit-tested) —
 **D is the example parent wiring + an end-to-end test**. **B ⏸ deferred** (idempotency hardening),
 **E** partially done (unit tests landed with A/C/D; the e2e integration test is the open item).
 This doc is the source of truth for the design and the per-workstream progress tracker; since the
-mechanism is shipped code, the design is best read directly from `harness/subagent_toolset.py`,
-`harness/subagent_activities.py`, `harness/agent_protocol/subagent_interface.py`, the subagent
-section of `harness/agent_workflow.py`, and the tests in `harness/test_subagents.py`.
+mechanism is shipped code, the design is best read directly from `subagent_toolset.py`,
+`subagent_activities.py`, `agent_protocol/subagent_interface.py`, the subagent
+section of `agent_workflow.py`, and the tests in `harness/test_subagents.py`.
 
 > **Update (2026-09-16): `expected_turn` is gone from the protocol.** The child's front door
 > no longer takes or checks a turn token (see `docs/design/unified-message-dispatch.md`,
@@ -17,9 +17,9 @@ section of `harness/agent_workflow.py`, and the tests in `harness/test_subagents
 > **closed** by a different mechanism than it planned: the `run_subagent_turn` activity keys
 > its send on its own activity identity as the Temporal update id, so a retry after a lost
 > reply gets the original acceptance back instead of dispatching a second message.
-**Scope (delivered):** `harness/` (the `subagent_toolset` generator + the `run_subagent_turn`
+**Scope (delivered):** `` (the `subagent_toolset` generator + the `run_subagent_turn`
 activity + the runner-side registry/gate/start-stop-turn methods + handler-dispatch message
-handling + structured rejection details), `harness/agent_client.py` (split into the private
+handling + structured rejection details), `agent_client.py` (split into the private
 `_submit_message` / `_stream_turn` halves the activity reuses), and the example agents (migrated
 to `@agent.accepts` handlers). **Remaining:** wire a real parent→subagent demo + e2e test (D).
 **Last updated:** 2026-06-17
@@ -57,22 +57,22 @@ adapter that lets one harness agent drive another through that same standardized
 
 ## Key prior-art / anchors in the codebase
 
-- `harness/agent_workflow.py` — `AgentWorkflowRunner`, `Turn`/`turns()`/`AgentRunContext`,
+- `agent_workflow.py` — `AgentWorkflowRunner`, `Turn`/`turns()`/`AgentRunContext`,
   `@agent.defn` contract, `tool_defn` / `activity_tool_defn`, `run_tool`, `Injected[...]`,
   approval gate. Workstream A **replaces** `turns()`/`Turn` + the dev's `match` loop with
   handler-dispatch (`@agent.accepts` methods + `runner.run(self)`).
-- `harness/_runner_builder.py` — was the fluent, type-accumulating builder. Workstream A
+- `_runner_builder.py` — was the fluent, type-accumulating builder. Workstream A
   **deletes this module entirely** (along with `Generic[M]`, `add_accepted_message`, and the
   sentinel-key construction guard): with `M`-accumulation gone, the builder was pure
   ceremony. The runner is now constructed directly —
   `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_mode_evaluator=None)` — with the config-vs-default resolution folded into `__init__`
   (`stream` + `approval_policy_default` are required kwargs). Accepted messages are
   discovered from `@agent.accepts` handler signatures.
-- `harness/agent_client.py` — `send_message()` (the one PUBLIC turn driver) does update **+**
+- `agent_client.py` — `send_message()` (the one PUBLIC turn driver) does update **+**
   stream-consume in one call, composing two **private** halves: `_submit_message()` (phase 1)
   and `_stream_turn()` (phase 2). These are in-package primitives the harness reuses (e.g. the
   subagent activity); B adds idempotency to the `_submit_message` path.
-- `harness/agent_protocol/agent_interface.py` — `AgentConfig`, `AgentMessage`,
+- `agent_protocol/agent_interface.py` — `AgentConfig`, `AgentMessage`,
   `UserInput`, `UserInputResult`, the `user_input` validator's `StaleTurn` / `MidTurnRejected` /
   `MalformedMessage` rejections. Workstream A: the `user_input` update → **`send_agent_message`**;
   its payload → an `AgentMessage{type, payload}` **envelope** (`type` names the target
@@ -80,7 +80,7 @@ adapter that lets one harness agent drive another through that same standardized
   **repurposed** from "input base class w/ discriminator" to "the wire envelope". The old
   discriminator requirement and `_discriminator_value` are removed. `AcceptedMessageTypes`
   is **replaced** by `list[AcceptedFunction]` under the renamed `agent_interface` query.
-- `harness/agent_protocol/events.py` — `MessageHandlerEnd` (`message_handler_end`), `TurnEnded` (`turn_end`).
+- `agent_protocol/events.py` — `MessageHandlerEnd` (`message_handler_end`), `TurnEnded` (`turn_end`).
   `MessageHandlerEnd.output: dict[str, Any]` carries the handler's **return value**
   (`result.model_dump(mode="json")`, no manual publish). A `dict` round-trips trivially on
   the shared stream union; a consumer that knows the expected type (from `agent_interface`)
@@ -208,11 +208,11 @@ Each is intended to be separable and potentially worked in its own session. Stat
 
 ## Workstream A — Handler-dispatch message handling + static `agent_interface`
 **Status:** ✅ DONE · **Blocks:** D (tool generation reads the handler signatures statically).
-**Design:** ✅ LOCKED (`@agent.accepts` handler-dispatch). Shipped in `harness/agent_workflow.py`
-+ `harness/agent_protocol/`; tests in `harness/test_runner_builder.py`.
+**Design:** ✅ LOCKED (`@agent.accepts` handler-dispatch). Shipped in `agent_workflow.py`
++ `agent_protocol/`; tests in `harness/test_runner_builder.py`.
 
 > **Implemented (2026-06-15).** `@agent.accepts` + `_discover_handlers` + `agent_handlers`
-> (`harness/agent_workflow.py`); `defn` stamps `__agent_handlers__` at import. Runner
+> (`agent_workflow.py`); `defn` stamps `__agent_handlers__` at import. Runner
 > rewritten: name-routed `send_agent_message` validator (`StaleTurn`/`MidTurnRejected`/
 > `UnknownFunction`/`MalformedMessage`, all with structured `details`), `agent_interface`
 > query → `list[AcceptedFunction]`, and `runner.run(self)` turn loop (publishes the
@@ -378,15 +378,15 @@ without it, so we verify the end-to-end flow first and harden second.
 already landed in A).
 
 > **Shipped (2026-06-17).** Implemented exactly as the locked shape below:
-> `harness/subagent_activities.py` (`SubagentActivities(client).run_subagent_turn` + the
+> `subagent_activities.py` (`SubagentActivities(client).run_subagent_turn` + the
 > `_TurnProgress` heartbeat memo + the steady-interval `_auto_heartbeat`), the sandbox-safe
-> contract in `harness/agent_protocol/subagent_interface.py` (`RUN_SUBAGENT_TURN_ACTIVITY`,
+> contract in `agent_protocol/subagent_interface.py` (`RUN_SUBAGENT_TURN_ACTIVITY`,
 > `RunSubagentTurnInput`, `SubagentTurnResult`, the default timeouts), and the
 > `agent_client.py` split into `_submit_message` / `_stream_turn` (both reused by the activity).
 > The only deferred piece is closing the residual double-submit window — that's Workstream B.
 
 > **Follow-up shipped (2026-09-10).** The "future harness worker plugin" the locked shape below
-> defers is now `temporal_agent_harness.plugin.AgentHarnessPlugin`: it instantiates
+> defers is now `temporal_agent_kit.plugin.AgentKitPlugin`: it instantiates
 > `SubagentActivities` from the worker's own client and registers `run_subagent_turn`, so the
 > manual wiring described below is no longer what agents write. (Binding to the worker's client
 > is precisely why the plugin overrides `configure_worker` rather than passing an `activities`
@@ -427,7 +427,7 @@ already landed in A).
 >
 > **Module layering (done).** The activity NAME, the `RunSubagentTurnInput`/
 > `SubagentTurnResult` models, and the recommended timeouts live in the sandbox-safe
-> `harness/agent_protocol/subagent_interface.py` (stdlib + pydantic only; re-exported flat from
+> `agent_protocol/subagent_interface.py` (stdlib + pydantic only; re-exported flat from
 > the `agent_protocol` package), which the workflow-side runner imports; `subagent_activities.py`
 > keeps only `SubagentActivities` + the client logic. They must be sandbox-safe because the
 > runner (in the workflow sandbox) builds + dispatches the activity — so they can NOT live in
@@ -500,7 +500,7 @@ child_workflow_id)` against the **child**, NOT the parent.
 the end-to-end milestone — a real parent→subagent flow working. Idempotency, Workstream B, comes
 *after* this.)**
 
-> **Generator shipped (2026-06-17).** `harness/subagent_toolset.py` implements
+> **Generator shipped (2026-06-17).** `subagent_toolset.py` implements
 > `subagent_toolset(agent_cls, *, key, task_queue, workflow_type=None)` (the originally-planned
 > `label` arg was dropped — `key` names the subagent in every tool docstring, for consistency
 > across the start/send/stop tools): it reads `agent_handlers(agent_cls)` statically and emits the namespaced

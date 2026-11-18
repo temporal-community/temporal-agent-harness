@@ -1,4 +1,4 @@
-"""Writes a module of string constants from text files, for harness_texts (bazel/texts.bzl).
+"""Writes a module of string constants from text files, for agent_kit_texts (bazel/texts.bzl).
 
     texts_module <label> <update target> <out> <text file>...
 
@@ -20,7 +20,7 @@ def main(label: str, update: str, out: Path, texts: list[Path]) -> None:
     }
     comment = "#" if out.suffix == ".py" else "//"
     lines = [
-        f"{comment} GENERATED from {texts[0].parent.as_posix()}/ by {label} (harness_texts).",
+        f"{comment} GENERATED from {texts[0].parent.as_posix()}/ by {label} (agent_kit_texts).",
         f"{comment} Do not edit: change the text files and run `bazel run {update}`.",
         "",
     ]

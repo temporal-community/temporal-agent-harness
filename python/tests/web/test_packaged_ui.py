@@ -17,21 +17,21 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     AgentMessage,
     SEND_AGENT_MESSAGE_UPDATE,
 )
-from temporal_agent_harness.ui import packaged_ui_dist
-from temporal_agent_harness.web import (
+from temporal_agent_kit.ui import packaged_ui_dist
+from temporal_agent_kit.web import (
     SESSION_MANAGER_TASK_QUEUE,
     AgentDescriptor,
     AgentRegistry,
     Session,
     SessionManagerWorkflow,
-    create_agent_harness_app,
+    create_agent_kit_app,
     create_session_manager_worker,
 )
-from temporal_agent_harness.web.app import (
+from temporal_agent_kit.web.app import (
     _discover_untracked_sessions,
     _ensure_session_manager_workflow,
     _session_with_execution_state,
@@ -59,7 +59,7 @@ def test_packaged_ui_dist_contains_relative_vite_entrypoints() -> None:
 
 
 def test_app_built_from_a_registry_path_serves_packaged_svelte_ui() -> None:
-    from temporal_agent_harness.web.serve import create_app
+    from temporal_agent_kit.web.serve import create_app
 
     app = create_app(ROOT / "examples" / "monty" / "agents.toml")
     client = TestClient(app)
@@ -73,7 +73,7 @@ def test_app_built_from_a_registry_path_serves_packaged_svelte_ui() -> None:
 
 
 def test_packaged_svelte_ui_works_under_path_prefix() -> None:
-    subapp = create_agent_harness_app(registry=AgentRegistry())
+    subapp = create_agent_kit_app(registry=AgentRegistry())
     parent = FastAPI()
     parent.mount("/harness", subapp)
     client = TestClient(parent)
@@ -94,7 +94,7 @@ def test_packaged_svelte_ui_works_under_path_prefix() -> None:
 
 
 def test_chat_request_rejects_client_supplied_from_offset() -> None:
-    app = create_agent_harness_app(registry=AgentRegistry())
+    app = create_agent_kit_app(registry=AgentRegistry())
     client = TestClient(app)
 
     response = client.post(
@@ -112,7 +112,7 @@ def test_chat_request_rejects_client_supplied_from_offset() -> None:
 
 
 def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
-    app = create_agent_harness_app(registry=AgentRegistry())
+    app = create_agent_kit_app(registry=AgentRegistry())
     client = TestClient(app)
 
     response = client.post(
@@ -138,7 +138,7 @@ def test_legacy_session_manager_example_folder_is_removed() -> None:
 def test_create_session_manager_worker_registers_packaged_workflow() -> None:
     client = object()
 
-    with patch("temporal_agent_harness.web.session_manager_worker.Worker") as worker_cls:
+    with patch("temporal_agent_kit.web.session_manager_worker.Worker") as worker_cls:
         worker = create_session_manager_worker(client, identity="session-manager-test")
 
     assert worker is worker_cls.return_value
@@ -153,7 +153,7 @@ def test_create_session_manager_worker_registers_packaged_workflow() -> None:
 def test_create_session_manager_worker_allows_custom_task_queue() -> None:
     client = object()
 
-    with patch("temporal_agent_harness.web.session_manager_worker.Worker") as worker_cls:
+    with patch("temporal_agent_kit.web.session_manager_worker.Worker") as worker_cls:
         create_session_manager_worker(client, task_queue="custom-session-manager")
 
     worker_cls.assert_called_once_with(

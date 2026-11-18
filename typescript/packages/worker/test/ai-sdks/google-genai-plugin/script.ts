@@ -2,7 +2,7 @@
 // one script per `interactions.create`.
 
 import type { GoogleGenAIRequestOptions, Interactions } from "@google/genai";
-import type { InteractionCreateParamsStreaming } from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+import type { InteractionCreateParamsStreaming } from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 import type { GeminiInteractionsClient } from "../../../src/ai-sdks/google-genai-plugin/index.ts";
 
 export type Event = Interactions.InteractionSSEEvent;

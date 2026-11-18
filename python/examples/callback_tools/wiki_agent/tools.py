@@ -11,7 +11,7 @@ directly to build the model-facing tool schemas (via the Gemini plugin's ``funct
 the output-type validator, so they must be concrete types, not stringized.
 """
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 
 @agent.callback_tool_defn()

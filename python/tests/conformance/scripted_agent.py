@@ -14,19 +14,19 @@ from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import AgentWorkflowRunner, agent
+from temporal_agent_kit.agent_protocol import (
     AgentConfig,
     MidTurn,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.harness.agent_protocol.events import (
+from temporal_agent_kit.agent_protocol.events import (
     ModelInteractionEnded,
     ModelInteractionStarted,
     ReplyDelta,
     ToolRequested,
 )
-from temporal_agent_harness.harness.state import HarnessState
+from temporal_agent_kit.state import AgentState
 from tests.conformance.script import (
     ModelStep,
     RaiseStep,
@@ -108,7 +108,7 @@ TOOLS: dict[str, Callable[..., Awaitable[Any]]] = {
 }
 
 
-class Entries(HarnessState):
+class Entries(AgentState):
     values: dict[str, str] = {}
 
 

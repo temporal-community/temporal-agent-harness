@@ -2,7 +2,7 @@
 //
 // `googleGenaiClient` gives workflow code a Gemini client whose network calls run as activities on
 // the worker's real client, registered by `GoogleGenAIPlugin` from
-// `@temporalio/agent-harness-worker/ai-sdks/google-genai-plugin`; no credentials enter the
+// `@temporalio/agent-kit-worker/ai-sdks/google-genai-plugin`; no credentials enter the
 // workflow or its history. The Interactions API has no automatic function calling, so the workflow
 // drives the tool loop: declare tools with `functionParam`, keep the conversation in an
 // `InteractionConversation`, and run each call with `runner.runTool`.

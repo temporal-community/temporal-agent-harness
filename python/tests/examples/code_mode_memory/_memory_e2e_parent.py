@@ -20,13 +20,13 @@ with workflow.unsafe.imports_passed_through():
         SkillsDisk,
     )
     from examples.code_mode_memory.workflow import MemoryConfig, read_memory_index
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 
 class RunCode(BaseModel):

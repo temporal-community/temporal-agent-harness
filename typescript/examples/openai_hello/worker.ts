@@ -6,10 +6,10 @@
 // Hosts only the OpenAIHelloAgentTs workflow. Its one tool (`get_weather`) is an inline workflow
 // tool with no worker-side body, so there are no tool activities to register: the OpenAI Agents
 // plugin registers the model activities (including the streaming one) itself, and
-// `AgentHarnessPlugin` adds the harness's data converter and activities.
+// `AgentKitPlugin` adds Agent Kit's data converter and activities.
 //
-// The plugin's default observer factory is the harness one, which translates each streamed model
-// call's raw OpenAI events into the harness turn-stream vocabulary live; `runStreamed` in
+// The plugin's default observer factory is Agent Kit one, which translates each streamed model
+// call's raw OpenAI events into Agent Kit turn-stream vocabulary live; `runStreamed` in
 // agents.ts routes every model call to its turn.
 //
 // Env vars (set in .env.local; see .env.example):
@@ -21,8 +21,8 @@
 import { fileURLToPath } from "node:url";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin, taskQueueName } from "@temporalio/agent-harness-worker";
-import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
+import { AgentKitPlugin, taskQueueName } from "@temporalio/agent-kit-worker";
+import { OpenAIAgentsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/openai-agents";
 import { TASK_QUEUE } from "./agents.ts";
 
 // Under `bazel run`, run from the workspace root, so repo-relative paths (.env.local's
@@ -43,8 +43,8 @@ const worker = await Worker.create({
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
   // Model activity timeouts are the workflow's own (agents.ts): a plugin's `modelParams` reach
   // only the workflows a client carrying the plugin starts, and the session manager starts these.
-  // The harness's plugin goes last, as in Python.
-  plugins: [new OpenAIAgentsPlugin(), new AgentHarnessPlugin()],
+  // Agent Kit's plugin goes last, as in Python.
+  plugins: [new OpenAIAgentsPlugin(), new AgentKitPlugin()],
 });
 await worker.run();
 await connection.close();

@@ -4,7 +4,7 @@ name: Prepare release
 # from. Merging that PR releases (finish-release.yml). See RELEASE.md.
 #
 #   pypi    python/pyproject.toml, uv.lock and the README's pins; tag <version>; PyPI.
-#   npm     every @temporalio/agent-harness* package at one version; tag npm-v<version>; npm.
+#   npm     every @temporalio/agent-kit* package at one version; tag npm-v<version>; npm.
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
       bump:
         description: Version increment
         type: choice
-        options: [patch, minor, major]
+        options: [patch, minor]
         default: patch
         required: true
 

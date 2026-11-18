@@ -26,7 +26,7 @@ people actually want to build a UI around — read it as untyped JSON.
 
 ```svelte
 <script lang="ts">
-  import { AgentSession } from "@temporalio/agent-harness-svelte";
+  import { AgentSession } from "@temporalio/agent-kit-svelte";
   import type { TicTacToeAgent } from "../../client_sdk/TicTacToeAgent";   // generated
 
   let { sessionId } = $props();
@@ -56,10 +56,10 @@ the console, and each can be published on its own later:
 
 | package | what it is | toolchain |
 | --- | --- | --- |
-| `packages/codegen` — `@temporal-agent-harness/codegen` | `harness-codegen`: schema document → TypeScript | TypeScript 7, `node --test` |
-| `packages/client` — `@temporalio/agent-harness-client` | the framework-independent core, transport, projection, and the generated protocol types | TypeScript 7, `node --test` |
-| `packages/svelte` — `@temporalio/agent-harness-svelte` | the Svelte 5 binding | `svelte-package`, vitest in happy-dom, TypeScript 6 |
-| `packages/react` — `@temporalio/agent-harness-react` | the React binding (18.2+) | `tsc`, vitest with React Testing Library in happy-dom, TypeScript 7 |
+| `packages/codegen` — `@temporalio/agent-kit-codegen` | `agent-kit-codegen`: schema document → TypeScript | TypeScript 7, `node --test` |
+| `packages/client` — `@temporalio/agent-kit-client` | the framework-independent core, transport, projection, and the generated protocol types | TypeScript 7, `node --test` |
+| `packages/svelte` — `@temporalio/agent-kit-svelte` | the Svelte 5 binding | `svelte-package`, vitest in happy-dom, TypeScript 6 |
+| `packages/react` — `@temporalio/agent-kit-react` | the React binding (18.2+) | `tsc`, vitest with React Testing Library in happy-dom, TypeScript 7 |
 
 There is no root workspace. Local packages depend on each other through `file:` links with
 `install-links=false` (in each package's `.npmrc`), so they are symlinks that build against the
@@ -121,14 +121,14 @@ class TicTacToeAgentWorkflow:
             ...
 ```
 
-- `agent.state(...)` (`harness/state/decl.py`) returns a `StateDecl[T]` descriptor. `__set_name__`
+- `agent.state(...)` (`state/decl.py`) returns a `StateDecl[T]` descriptor. `__set_name__`
   takes the state id from the attribute name, so the id can't drift from the attribute. An
   overloaded `__get__` returns the declaration when read from the class (what codegen reads) and
   the instance's `StateRef[T]` when read from an instance; pyright types both.
 - Refs are stored **on the instance, never on the descriptor.** A class attribute is shared by every
   workflow instance on a worker; holding the ref on the descriptor would leak one workflow's board
   into another. `__set__` raises, so `self.board = Board()` cannot shadow the declared state.
-- Bad declarations fail when the class body runs: a non-`HarnessState` type, a type with required
+- Bad declarations fail when the class body runs: a non-`AgentState` type, a type with required
   fields and no `initial=`, one declaration under two names. `@agent.defn` records nothing extra —
   the descriptor validates itself, and a recorded copy would be inherited by subclasses and go
   stale. `declared_states(cls)` reflects over the MRO in declaration order.
@@ -155,7 +155,7 @@ with self.board.mutate() as d:             # pyright: "StateDecl[Board]" has no 
 **One hazard is plain Python.** A state and a handler method with the same name overwrite each
 other in the class namespace — whichever comes last wins — and nothing is left to detect it.
 
-`HarnessState` is already strict, which is what makes it generate cleanly: `extra="forbid"` becomes
+`AgentState` is already strict, which is what makes it generate cleanly: `extra="forbid"` becomes
 `additionalProperties: false`, and `StateSchemaError` rejects fields the harness can't own at
 class definition.
 
@@ -170,10 +170,10 @@ harness. See **Rejected** for the tool-typing design this replaces.
 
 ### Schemas from Python
 
-`harness/agent_schema.py`:
+`agent_schema.py`:
 
 - **`agent_schema(cls)`** — init data, handlers and declared states, printed by
-  `temporal-agent-harness schema module:Class`:
+  `temporal-agent-kit schema module:Class`:
 
   ```
   { agent, source, init_data: { data: ref, required } | null,
@@ -191,7 +191,7 @@ harness. See **Rejected** for the tool-typing design this replaces.
   share a class name raise, naming both — including the case where pydantic would silently call
   them `Name-Input` / `Name-Output` because they were used in different modes.
 - **`protocol_schema()`** — the event stream's wire types, printed by
-  `temporal-agent-harness schema --protocol`: the `AgentEvent` envelope, the payloads in
+  `temporal-agent-kit schema --protocol`: the `AgentEvent` envelope, the payloads in
   `AgentStreamItem` order, and `$defs`, all in serialization mode.
 
 Both are pure reflection: no workflow is started and no Temporal connection is needed. Field
@@ -200,7 +200,7 @@ model that sets `use_attribute_docstrings=True`.
 
 ### TypeScript from the schemas
 
-`harness-codegen <schema.json | -> [-o file] [--name T] [--protocol]` runs `json-schema-to-typescript`
+`agent-kit-codegen <schema.json | -> [-o file] [--name T] [--protocol]` runs `json-schema-to-typescript`
 over `$defs` and appends what no off-the-shelf tool produces:
 
 - **For an agent**, a mapping type named after its workflow type (`--name` overrides it):
@@ -239,7 +239,7 @@ generate one. `Literal` aliases are inlined by pydantic, so a field reads `"X" |
 
 **Where generated files live, and what keeps them current.** Bazel generates every one of them
 and the repo commits the output, so the examples run with uv alone. Each example that ships a
-typed client declares a `harness_client_sdk` for its agents in its own
+typed client declares a `agent_kit_client_sdk` for its agents in its own
 `BUILD.bazel` (`examples/tictactoe/client_sdk/TicTacToeAgent.ts`); the protocol types are
 committed as `packages/client/src/protocol.ts`
 (`//typescript/packages/client/src:protocol_codegen_update`). `bazel test` fails on any difference
@@ -308,7 +308,7 @@ interface SessionState<A extends AgentSchema> {
   error: Error | undefined;
   rootAgentId: string | null;
   agents: Readonly<Record<string, AgentView>>;     // rootView(state) reads the root, typed AgentView<A>
-  pending: readonly HarnessMessage<A>[];
+  pending: readonly KitMessage<A>[];
   frames: readonly AgentSseFrame[];
   updateAgents(updates: ReadonlyArray<readonly [agentId: string, AgentUpdate]>): void;
   appendFrames(frames: readonly AgentSseFrame[]): void;
@@ -322,7 +322,7 @@ implements `SessionTransport` over the harness web API.
 
 ### The message model
 
-One `HarnessMessage` per inbound message, narrowed on `handler` to that handler's `input` and
+One `KitMessage` per inbound message, narrowed on `handler` to that handler's `input` and
 `output` types:
 
 - `id` is the `message_id`; `status` is `sending → accepted → running → done | error`, and
@@ -361,7 +361,7 @@ One `HarnessMessage` per inbound message, narrowed on `handler` to that handler'
   read any field opens the stream, and it closes (in a microtask) once nothing reads it, so
   unmounting the last view releases its update slot with no teardown code.
 - **Getter options** — a `get sessionId()` moves the connection when its value changes.
-- **`createHarnessContext()`** puts a `SessionStore` in context: every `AgentSession` below it with
+- **`createKitContext()`** puts a `SessionStore` in context: every `AgentSession` below it with
   the same session id shares one core, one state and one connection, reference-counted across
   readers. The first to open a session decides its options (`callbackTools`, transport, …).
 
@@ -383,7 +383,7 @@ transformed as SSR, where effects never run.
   A release takes effect a microtask later, and an acquire before then cancels it, so StrictMode's
   mount → unmount → remount in development keeps the one connection instead of reconnecting. A
   changed `sessionId` is a different session, so the effect moves the hold to it.
-- **`<HarnessProvider>`** is `createHarnessContext()`'s counterpart: a `SessionStore` in context,
+- **`<KitProvider>`** is `createKitContext()`'s counterpart: a `SessionStore` in context,
   shared by every `useAgentSession` below it. Without one, each component has a store of its own.
 - **Server rendering** returns the empty snapshot, and effects never run on the server, so nothing
   connects until the client hydrates.
@@ -407,7 +407,7 @@ it fails there.
 | phase | what | commit |
 | --- | --- | --- |
 | 1 | `agent.state(...)` declared on the class; `runner.state()` removed | `7f01f3b` |
-| 2 | `agent_schema(cls)` and `temporal-agent-harness schema` | `94bb9b2` |
+| 2 | `agent_schema(cls)` and `temporal-agent-kit schema` | `94bb9b2` |
 | 3 | `packages/codegen` and the per-example `codegen-client-sdk` recipe | `74e868a` |
 | 4 | protocol types generated from `events.py`; the UI's event types derived from them | `53c14ff` |
 | 5 | `packages/client` (core, projection, per-agent views, transport) | `8078b7e` |
@@ -442,8 +442,8 @@ headless browser.
   one agent re-runs when any agent changes (the arrays it reads are unchanged, so the DOM is not
   touched). Worth revisiting if a large tree makes it measurable.
 - **Publishing.** The packages are `private`. Publishing needs a decision on the npm scope
-  (`@temporal-agent-harness/*` needs that org; Temporal publishes under `@temporalio`), `files` /
-  `exports` fields, and whether `harness-codegen` stays its own package or becomes a bin of the
+  (`@temporal-agent-kit/*` needs that org; Temporal publishes under `@temporalio`), `files` /
+  `exports` fields, and whether `agent-kit-codegen` stays its own package or becomes a bin of the
   client package.
 - **A root workspace.** With four packages plus `ui/` and the chat-server, a root npm or pnpm
   workspace may now pay for itself; it would replace the per-package lockfiles and `file:` links.

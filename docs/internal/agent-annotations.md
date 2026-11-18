@@ -1,7 +1,7 @@
 # Agent annotations reference
 
 The annotations (decorators + type annotation) the harness defines, from the public `agent`
-namespace (`temporal_agent_harness/harness/agent.py` `__all__`). There are six true annotations —
+namespace (`temporal_agent_kit/agent.py` `__all__`). There are six true annotations —
 five decorators and one type annotation — plus related helpers. For *how* Python decorators work
 (and how they differ from Java/Spring annotations), see `python-idioms-for-java-spring-devs.md`.
 

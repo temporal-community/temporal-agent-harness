@@ -1,7 +1,7 @@
-# Temporal Agent Harness
+# Temporal Agent Kit
 
-[![PyPI](https://img.shields.io/pypi/v/temporal-agent-harness.svg)](https://pypi.org/project/temporal-agent-harness/)
-[![npm](https://img.shields.io/npm/v/@temporalio/agent-harness.svg)](https://www.npmjs.com/package/@temporalio/agent-harness)
+[![PyPI](https://img.shields.io/pypi/v/temporal-agent-kit.svg)](https://pypi.org/project/temporal-agent-kit/)
+[![npm](https://img.shields.io/npm/v/@temporalio/agent-kit.svg)](https://www.npmjs.com/package/@temporalio/agent-kit)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Build durable, composable AI agents on Temporal using Python or TypeScript and the AI SDKs you already use.**
@@ -11,9 +11,9 @@
 [Demo video](https://www.youtube.com/watch?v=z3L41NvF6wE) ·
 [Releases](https://github.com/temporal-community/temporal-agent-harness/releases)
 
-[Watch the high-level Temporal Agent Harness Explainer](https://github.com/user-attachments/assets/18a34eb2-fc6d-446d-9507-7fe4c870492f)
+[Watch the high-level Temporal Agent Kit Explainer](https://github.com/user-attachments/assets/18a34eb2-fc6d-446d-9507-7fe4c870492f)
 
-An agent is a Temporal workflow. The harness gives it typed messages, tools, streaming, and
+An agent is a Temporal workflow. Agent Kit gives it typed messages, tools, streaming, and
 human interaction so you can focus on the agent's behavior.
 
 - **Durable execution:** recover workflow state after worker restarts; retry model and activity calls by policy.
@@ -26,7 +26,7 @@ human interaction so you can focus on the agent's behavior.
 
 Both SDKs turn a typed message handler into a durable Temporal workflow. These agents use the
 OpenAI Agents SDK, stream replies, and keep conversation history across messages and worker
-restarts. The worker's harness and model plugins handle the Temporal integration.
+restarts. The worker's Agent Kit and model plugins handle the Temporal integration.
 
 ### Python
 
@@ -36,8 +36,8 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from agents import Agent, Runner, TResponseInputItem
-    from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-    from temporal_agent_harness.harness.agent_protocol import AgentConfig, TextMessage, TextReply
+    from temporal_agent_kit import AgentWorkflowRunner, agent
+    from temporal_agent_kit.agent_protocol import AgentConfig, TextMessage, TextReply
 
 
 @agent.defn
@@ -65,8 +65,8 @@ class ChatAgent:
 
 ```ts
 import { Agent, type AgentInputItem } from "@openai/agents-core";
-import { defineAgent, handler, TextMessage, TextReply } from "@temporalio/agent-harness";
-import { runStreamed } from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
+import { defineAgent, handler, TextMessage, TextReply } from "@temporalio/agent-kit";
+import { runStreamed } from "@temporalio/agent-kit/ai-sdks/openai-agents";
 
 export const ChatAgent = defineAgent({
   name: "ChatAgent",
@@ -97,7 +97,7 @@ The quickstarts below provide complete projects with workers, registry configura
 sample weather tool. Add [tools, approvals, and observable state](docs/guides/capabilities.md),
 or define your own typed operations beyond chat. See the
 [Python](python/README.md#running-a-worker--one-plugin) and
-[TypeScript](typescript/packages/core/README.md#running-a-worker--one-harness-plugin) worker setup
+[TypeScript](typescript/packages/core/README.md#running-a-worker--one-plugin) worker setup
 to run a custom agent definition.
 
 ## Installation
@@ -116,10 +116,10 @@ To add the SDK to an existing project:
 
 ```bash
 # Python
-uv add 'temporal-agent-harness[ui]==0.11.0'
+uv add 'temporal-agent-kit[ui]==0.11.0'
 
 # TypeScript
-npm install --save-exact @temporalio/agent-harness@0.5.0 @temporalio/agent-harness-worker@0.5.0
+npm install --save-exact @temporalio/agent-kit@0.5.0 @temporalio/agent-kit-worker@0.5.0
 ```
 
 The [Python manual setup](python/README.md#build-with-it--install-from-pypi) covers model
@@ -131,19 +131,19 @@ covers the complete compatible dependency set. No repository checkout is require
 
 ```mermaid
 flowchart LR
-    UI[Harness console or your application] --> API[Shared Python HTTP API]
+    UI[Agent Kit console or your application] --> API[Shared Python HTTP API]
     API --> T[Temporal service]
     M[Python session-manager worker] <--> T
     W[Your Python or TypeScript agent worker] <--> T
 ```
 
 **The shared API, UI server, and session manager currently come from the Python package.**
-`temporal-agent-harness dev agents.toml` runs the API server and the session manager in one
+`temporal-agent-kit dev agents.toml` runs the API server and the session manager in one
 process, so local development is three processes: Temporal, `dev`, and your agent worker.
 TypeScript users run `dev` with `uvx` without creating a Python project. The npm SDK runs
-TypeScript agents; it does not yet include a Node.js harness server.
+TypeScript agents; it does not yet include a Node.js Agent Kit server.
 
-The harness console is at **localhost:8000**. Temporal's own workflow UI is at **localhost:8233**
+The Agent Kit console is at **localhost:8000**. Temporal's own workflow UI is at **localhost:8233**
 when using the local dev server. Both quickstarts explain which processes to start.
 
 ## Coding-agent setup
@@ -152,21 +152,21 @@ Each SDK ships a skill, focused references, and an OpenAI starter matching that 
 After installing the SDK, install its skill where your coding agents discover project skills:
 
 ```bash
-uv run temporal-agent-harness skills install   # Python
-npx agent-harness skills install               # TypeScript
+uv run temporal-agent-kit skills install   # Python
+npx agent-kit skills install               # TypeScript
 ```
 
 Each asks which coding agents to install for: Claude Code, which reads `.claude/skills`
 (`--for claude`), and Codex and other agents that read the shared `.agents/skills` directory
 (`--for agents`). Choose both if you use both; pass `--for` to skip the question.
 
-Then ask the agent to use it: `/temporal-harness-python` or `/temporal-harness-typescript` in
-Claude Code, `$temporal-harness-python` or `$temporal-harness-typescript` in Codex. Tools with
+Then ask the agent to use it: `/temporal-agent-kit-python` or `/temporal-agent-kit-typescript` in
+Claude Code, `$temporal-agent-kit-python` or `$temporal-agent-kit-typescript` in Codex. Tools with
 another skill directory can install from the directory printed by `skills path`, or with
 `skills install --dest`.
 Package installation alone does not activate a skill.
 
-Use `temporal-agent-harness init ./my-agent` or `npx agent-harness init ./my-agent` to copy a
+Use `temporal-agent-kit init ./my-agent` or `npx agent-kit init ./my-agent` to copy a
 starter. The commands create files without overwriting existing ones. Follow the generated
 README to install dependencies, configure credentials, and start the application.
 
@@ -177,7 +177,7 @@ produce a conflict instead of being overwritten. See [coding-agent development](
 
 | Topic | Guide |
 | --- | --- |
-| API, sessions, streaming, reconnects | [Harness API](docs/api/README.md) |
+| API, sessions, streaming, reconnects | [Agent Kit API](docs/api/README.md) |
 | Tools, approvals, state, and composition | [Capabilities](docs/guides/capabilities.md) |
 | Handler schemas and mid-turn messages | [Messages](docs/guides/messages.md) |
 | Human approval and auto mode | [Approvals](docs/guides/approvals.md) |
@@ -189,8 +189,8 @@ produce a conflict instead of being overwritten. See [coding-agent development](
 
 ## Versioning and stability
 
-The Python and npm SDKs have independent release versions. Keep the npm harness packages at
-one harness version and use the underlying Temporal/model SDK versions documented by the
+The Python and npm SDKs have independent release versions. Keep the npm Agent Kit packages at
+one Agent Kit version and use the underlying Temporal/model SDK versions documented by the
 quickstart. Commit your dependency lockfile. Examples live in release checkouts, not in the SDK
 packages; the small `init` starters are bundled separately.
 

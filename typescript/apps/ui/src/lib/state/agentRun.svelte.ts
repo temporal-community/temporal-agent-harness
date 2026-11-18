@@ -451,7 +451,7 @@ export class AgentRunController {
       window.addEventListener("pagehide", this.#persistBeforeLeaving);
     }
     if (typeof BroadcastChannel === "function") {
-      this.#tabs = new BroadcastChannel("agent-harness-console");
+      this.#tabs = new BroadcastChannel("agent-kit-console");
       this.#tabs.onmessage = ({ data }: MessageEvent<{ wake?: string }>) => {
         if (data.wake !== undefined && data.wake === this.session?.workflow_id) this.#ensureStreamLive();
       };

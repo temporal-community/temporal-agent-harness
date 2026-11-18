@@ -42,8 +42,8 @@ until something fulfills it. That's fine for this demo.
 | `justfile` | Recipes for the local stack. |
 
 The web server and session-manager worker are **shared across examples** — `just server` points the
-packaged `temporal-agent-harness serve` at this example's `agents.toml`, and `just session-manager`
-runs the packaged `temporal-agent-harness session-manager`. The `POST /api/callback-result` route the client uses lives in
+packaged `temporal-agent-kit serve` at this example's `agents.toml`, and `just session-manager`
+runs the packaged `temporal-agent-kit session-manager`. The `POST /api/callback-result` route the client uses lives in
 the packaged server.
 
 ## Setup
@@ -86,9 +86,9 @@ wiki> Added the read replica to infra/staging.md.
 
 Watch `./wiki` fill up with real Markdown files as you talk.
 
-## How it maps to the harness
+## How it maps to Agent Kit
 
-- The tools are ordinary harness tools, so they go through the **same tool path** as any other:
+- The tools are ordinary Agent Kit tools, so they go through the **same tool path** as any other:
   `run_tool` → the tool-approval policy → `tool_start` → (here) `callback_requested` → the client's
   result → `tool_end`. This agent runs `dangerously_skip_all` approvals because *you* are the one
   executing each call; set `AgentConfig.approval_policy` to gate them and they'd require approval
@@ -96,5 +96,5 @@ Watch `./wiki` fill up with real Markdown files as you talk.
 - The client uses only the packaged HTTP server: `POST /api/chat` (send + stream a turn),
   `POST /api/callback-result` (the one route this example motivated), and `GET /api/status`.
 - A callback result is validated against the tool's declared return type before it resolves the
-  call, and the submission is idempotent — see `temporal_agent_harness/harness` and the tests in
-  `tests/harness/test_callback_tools.py`.
+  call, and the submission is idempotent — see `temporal_agent_kit` and the tests in
+  `tests/test_callback_tools.py`.

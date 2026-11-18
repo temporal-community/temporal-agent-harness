@@ -1,4 +1,4 @@
-// AgentHarnessPlugin (port of tests/plugin/test_plugin.py, minus the Python-only data converter
+// AgentKitPlugin (port of tests/plugin/test_plugin.py, minus the Python-only data converter
 // and payload offload cases): what it registers, and that a worker's own activities win.
 
 import assert from "node:assert/strict";
@@ -12,10 +12,10 @@ import {
   bundleWorkflowCode,
   type WorkerOptions,
 } from "@temporalio/worker";
-import { AgentClient } from "../src/harness/agent-client.ts";
-import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
+import { AgentClient } from "../src/agent-client.ts";
+import type { AgentEvent } from "@temporalio/agent-kit/agent-protocol";
 import {
-  AgentHarnessPlugin,
+  AgentKitPlugin,
   CODE_MODE_MISSING_EXTRA_ERROR,
   toolActivity,
 } from "../src/index.ts";
@@ -34,13 +34,13 @@ import {
 const CODE_MODE = ["code_start_batch", "code_resume_batch", "code_type_check"];
 const HARNESS = ["run_subagent_turn", "jev_tool_approval", ...CODE_MODE];
 
-const registered = (activities?: object, plugin = new AgentHarnessPlugin()) =>
+const registered = (activities?: object, plugin = new AgentKitPlugin()) =>
   plugin.configureWorker({
     taskQueue: "plugin-test",
     ...(activities ? { activities } : {}),
   } as WorkerOptions).activities as Record<string, unknown>;
 
-describe("AgentHarnessPlugin", () => {
+describe("AgentKitPlugin", () => {
   it("gives a worker every harness activity, Code Mode's included", () => {
     assert.deepStrictEqual(Object.keys(registered()).sort(), [...HARNESS].sort());
   });
@@ -56,7 +56,7 @@ describe("AgentHarnessPlugin", () => {
   it("keeps unrelated worker activities, and adds each tool's activity under its name", () => {
     const unrelated = async () => undefined;
     const body = toolActivity(safeActivityTool, async ({ text }) => text);
-    const activities = registered({ unrelated }, new AgentHarnessPlugin({ tools: [body] }));
+    const activities = registered({ unrelated }, new AgentKitPlugin({ tools: [body] }));
     assert.deepStrictEqual(
       Object.keys(activities).sort(),
       ["safe_activity_tool", "unrelated", ...HARNESS].sort(),
@@ -67,11 +67,11 @@ describe("AgentHarnessPlugin", () => {
   it("refuses a tool that is not a toolActivity, and two tools with one name", () => {
     const body = toolActivity(safeActivityTool, async ({ text }) => text);
     assert.throws(
-      () => new AgentHarnessPlugin({ tools: [safeActivityTool as never] }),
+      () => new AgentKitPlugin({ tools: [safeActivityTool as never] }),
       /is not a toolActivity/,
     );
     assert.throws(
-      () => new AgentHarnessPlugin({ tools: [body, body] }),
+      () => new AgentKitPlugin({ tools: [body, body] }),
       /two tools named 'safe_activity_tool'/,
     );
   });
@@ -112,7 +112,7 @@ describe("a Code Mode call on a worker without Code Mode", () => {
       workflowsPath: FIXTURES,
       // What the plugin registers on a worker without @pydantic/monty.
       activities: codeModeUnavailable,
-      plugins: [new AgentHarnessPlugin()],
+      plugins: [new AgentKitPlugin()],
     });
     running = worker.run();
   });
@@ -166,7 +166,7 @@ describe("a Code Mode call on a worker without Code Mode", () => {
         namespace: env.namespace,
         taskQueue,
         workflowBundle,
-        plugins: [new AgentHarnessPlugin()],
+        plugins: [new AgentKitPlugin()],
       });
       return { taskQueue, worker, running: worker.run() };
     };

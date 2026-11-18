@@ -308,7 +308,7 @@ Neither was a prerequisite for the vocabulary in **Settled**; both landed with i
   no ambient id yet. `None` therefore cannot mean "unspecified", hence the `_AMBIENT` sentinel.
 - **Consumers migrated:** `ui/src/lib/state/transcript.ts` (replies and citations now keyed by
   `message_id`, so two concurrent participants no longer merge into one bubble), `replayLog.ts`,
-  `flowProjection.ts`, `stepTimeline.ts`, `agentRun.svelte.ts`, `harness/agent_client.py`'s
+  `flowProjection.ts`, `stepTimeline.ts`, `agentRun.svelte.ts`, `agent_client.py`'s
   terminal detection (which now matches its OWN message's error, not the turn's), and
   `subagent_activities.py`'s `_consume_child_turn` (symptom 4). The three copies of
   `renderUserMessage` in the UI collapsed into one `state/userMessage.ts` — they existed only

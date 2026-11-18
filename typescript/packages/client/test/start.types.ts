@@ -1,6 +1,6 @@
 // Compile-time checks that startSession asks for exactly the init data an agent declares:
 // required, optional, or none. `tsc` fails the build if any of these stop holding. The agent
-// types and definitions have the shape harness-codegen emits.
+// types and definitions have the shape agent-kit-codegen emits.
 
 import { startSession, type SessionStarter } from "../src/start.ts";
 

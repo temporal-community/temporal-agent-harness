@@ -1,10 +1,10 @@
-"""Bazel build for temporal-agent-harness.
+"""Bazel build for temporal-agent-kit.
 
 python/pyproject.toml and python/uv.lock stay the source of truth for Python dependencies; the uv hub
 below reads them directly. Nexus (nexus/, nexgen) is not built by Bazel.
 """
 
-module(name = "temporal_agent_harness")
+module(name = "temporal_agent_kit")
 
 bazel_dep(name = "aspect_rules_py", version = "2.0.0-alpha.8")
 bazel_dep(name = "aspect_rules_js", version = "3.5.1")

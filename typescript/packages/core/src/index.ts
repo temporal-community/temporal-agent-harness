@@ -1,16 +1,16 @@
 // Workflow-safe authoring surface: import this from agent workflow modules.
-export * from "./harness/agent-protocol/index.ts";
-export * from "./harness/agent.ts";
-export * from "./harness/subagent-toolset.ts";
+export * from "./agent-protocol/index.ts";
+export * from "./agent.ts";
+export * from "./subagent-toolset.ts";
 export {
   AgentWorkflowRunner,
   ToolApprovalDenied,
   CallbackToolError,
   type HandlerDecl,
   type HandlerImpl,
-} from "./harness/agent-workflow.ts";
-export { ClaimedSteering, type SteeringMessage } from "./harness/steering.ts";
-export { state, StateRef, HarnessStateError, type StateDecl } from "./harness/state/index.ts";
+} from "./agent-workflow.ts";
+export { ClaimedSteering, type SteeringMessage } from "./steering.ts";
+export { state, StateRef, AgentStateError, type StateDecl } from "./state/index.ts";
 export {
   codeModeTool,
   codeModeTypeCheck,
@@ -26,17 +26,17 @@ export {
   FsError,
   type OsErrorType,
   type Seed,
-} from "./harness/code-mode/index.ts";
+} from "./code-mode/index.ts";
 export {
   activityFilesystem,
   activityName,
   MAX_VIEW_BYTES,
   type ActivityFilesystem,
-} from "./harness/code-mode/activity-fs.ts";
-export { FileIndex, indexTrack } from "./harness/code-mode/vfs.ts";
-export { okfBundleVfsMount, vfsMount } from "./harness/code-mode/mount-decl.ts";
-export { OKF_VERSION } from "./harness/code-mode/okf.ts";
-export { okfCodeModeTool } from "./harness/code-mode/okf-tool.ts";
+} from "./code-mode/activity-fs.ts";
+export { FileIndex, indexTrack } from "./code-mode/vfs.ts";
+export { okfBundleVfsMount, vfsMount } from "./code-mode/mount-decl.ts";
+export { OKF_VERSION } from "./code-mode/okf.ts";
+export { okfCodeModeTool } from "./code-mode/okf-tool.ts";
 export {
   jevEvaluator,
   buildRequest as jevBuildRequest,

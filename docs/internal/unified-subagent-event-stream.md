@@ -1,7 +1,7 @@
 # Unified Subagent Event Stream (client-side stream merge)
 
 **Status:** ✅ **Implemented** (W1–W4 landed; see [Workstreams](#workstreams)). The merge layer
-lives in [`harness/stream_merge/`](../temporal_agent_harness/harness/stream_merge) and is wired into
+lives in [`stream_merge/`](../temporal_agent_kit/stream_merge) and is wired into
 `AgentClient.send_message` / `attach`; the protocol deltas + the in-workflow `subagent_reply_received`
 publish shipped. **One known caveat:** the merge can only read a subagent stream while that subagent
 is LIVE — `workflow_streams` cannot yet subscribe to a *completed* (e.g. `stop_subagent`'d) workflow's
@@ -19,7 +19,7 @@ assemble them … only the *consuming* of the child streams is deferred").
 
 **Scope (planned):** a new `agent_client`-side merge layer (its own subdirectory — see
 [Code layout](#code-layout)) consumed transparently by `AgentClient.send_message` / `attach`; small
-protocol deltas in `harness/agent_protocol/` (`SubagentMessageSent.from_offset`, a new
+protocol deltas in `agent_protocol/` (`SubagentMessageSent.from_offset`, a new
 `SubagentReplyReceived` event, `AgentMessageReply.accepted_offset`, and an `agent_id` stamped on
 every `AgentEvent`); one in-workflow publish of the new event in `run_subagent_turn`; and an
 in-workflow read of the `WorkflowStream` head via its existing private `_on_offset()` (no
@@ -151,7 +151,7 @@ small.
 
 ## Protocol deltas
 
-Three small additions. All are sandbox-safe pydantic/stdlib changes in `harness/agent_protocol/`,
+Three small additions. All are sandbox-safe pydantic/stdlib changes in `agent_protocol/`,
 plus one publish site and one offset accessor.
 
 > A fourth, follow-on event — **`subagent_stream_unavailable`** — was added for graceful degradation. Unlike
@@ -740,7 +740,7 @@ Status legend: 🧭 not started · 🚧 in progress · ✅ done.
   and `attach` (`_merged_attach`, replay policy); `_stream_turn` removed and the subagent activity
   given its own minimal single-child reader (`_consume_child_turn`). BFF (`app.py`) updated to the
   offset-free API.
-- **W4 — Tests** ✅ — `tests/harness/test_stream_merge.py`: pure gate tests + engine tests over
+- **W4 — Tests** ✅ — `tests/test_stream_merge.py`: pure gate tests + engine tests over
   scripted in-memory streams via a fake client, with a validity checker asserting within-stream
   order + both brackets on every ordering, plus replay determinism, reused-child, concurrent
   subagents, grandchild recursion, the resume/skip-preamble cases, and the per-child stall-deadline

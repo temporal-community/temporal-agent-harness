@@ -20,7 +20,7 @@ import {
   diagnose,
   projectName,
   skillDestinations,
-} from "../bin/agent-harness.mjs";
+} from "../bin/agent-kit.mjs";
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "harness-skill-"));
@@ -64,9 +64,9 @@ test("refuses symlinks and path traversal in ownership manifests", (t) => {
   assert.equal(readFileSync(outside, "utf8"), "mine");
   unlinkSync(join(root, "old.md"));
   writeFileSync(
-    join(root, ".harness-skill.json"),
+    join(root, ".agent-kit-skill.json"),
     JSON.stringify({
-      name: "temporal-harness-typescript",
+      name: "temporal-agent-kit-typescript",
       files: { "../../outside": "x" },
     }),
   );
@@ -107,7 +107,7 @@ test("starter pins installed SDK version and refuses existing files", (t) => {
   const { dir, source } = fixture(t);
   writeFileSync(
     join(source, "package.json.tmpl"),
-    '{"name":"__PROJECT_NAME__","version":"__HARNESS_VERSION__"}',
+    '{"name":"__PROJECT_NAME__","version":"__AGENT_KIT_VERSION__"}',
   );
   writeFileSync(join(source, "gitignore.tmpl"), ".env.local\n");
   const root = createStarter(source, join(dir, "My App"), "0.9.0");

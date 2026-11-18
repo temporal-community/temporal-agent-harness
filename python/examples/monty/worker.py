@@ -19,7 +19,7 @@ Env vars:
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
 agents) — not the session manager. The packaged session manager is hosted by
-`temporal-agent-harness session-manager`; because it launches agents by registered name,
+`temporal-agent-kit session-manager`; because it launches agents by registered name,
 it dispatches these agents to this queue without this worker hosting it.
 """
 
@@ -35,9 +35,9 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
-from temporal_agent_harness.utils.task_queue import task_queue_name
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
+from temporal_agent_kit.utils.task_queue import task_queue_name
 
 from examples.monty import activities
 from examples.monty.conversational_subagent_workflow import MontyChatSubagentWorkflow
@@ -69,9 +69,9 @@ async def main() -> None:
     if not api_key:
         sys.exit("error: GEMINI_API_KEY env var not set")
 
-    # Two plugins, harness LAST so the Gemini plugin's payload converter wins:
+    # Two plugins, AgentKitPlugin LAST so the Gemini plugin's payload converter wins:
     #   * GoogleGenAIPlugin  — the Gemini interactions activity.
-    #   * AgentHarnessPlugin — everything the harness itself needs on this worker: the
+    #   * AgentKitPlugin — everything Agent Kit itself needs on this worker: the
     #     large-payload offload converter (every process reading a payload must use the SAME
     #     converter, which is exactly what adding this plugin everywhere guarantees), the
     #     subagent-turn activity (drives the script-runner child for MontyChatSubagentAgent),
@@ -82,7 +82,7 @@ async def main() -> None:
         **connect_config,
         plugins=[
             GoogleGenAIPlugin(GeminiClient(api_key=api_key)),
-            AgentHarnessPlugin(tools=activities.ALL_TOOLS),
+            AgentKitPlugin(tools=activities.ALL_TOOLS),
         ],
     )
 

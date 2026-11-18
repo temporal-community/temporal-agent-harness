@@ -2,7 +2,7 @@
 
 From this example's directory, `just serve` is the easy path.
 
-The shim fronts the durable `CodingAgent` workflow via the packaged harness server (`--server`,
+The shim fronts the durable `CodingAgent` workflow via the packaged Agent Kit server (`--server`,
 default http://localhost:8000). That server + the session-manager + the CodingAgent worker must be
 running (see the justfile). `working_dir` is the project the agent works on (defaults to the
 current directory).
@@ -14,7 +14,7 @@ import argparse
 
 import uvicorn
 
-from examples.callback_tools.coding_agent.opencode_shim.harness_backend import HarnessBackend
+from examples.callback_tools.coding_agent.opencode_shim.agent_kit_backend import AgentKitBackend
 from examples.callback_tools.coding_agent.opencode_shim.server import create_app
 
 
@@ -26,11 +26,11 @@ def main() -> None:
     parser.add_argument(
         "--server",
         default="http://localhost:8000",
-        help="Packaged harness HTTP server URL.",
+        help="Packaged Agent Kit HTTP server URL.",
     )
     args = parser.parse_args()
 
-    backend = HarnessBackend(server_url=args.server, working_dir=args.working_dir or ".")
+    backend = AgentKitBackend(server_url=args.server, working_dir=args.working_dir or ".")
     app = create_app(backend=backend, working_dir=args.working_dir)
     uvicorn.run(app, host=args.host, port=args.port)
 

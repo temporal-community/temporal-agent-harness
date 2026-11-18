@@ -11,10 +11,10 @@ import type {
   SessionTransport,
   SubmitMessageResponse,
   WorkflowExecutionState
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 import {
-  HarnessProvider,
+  KitProvider,
   useAgentSession,
   useAgentSessionSelector,
   useSteering,
@@ -159,10 +159,10 @@ describe("useAgentSession", () => {
 
     function Both(props: { showA: boolean }) {
       return (
-        <HarnessProvider>
+        <KitProvider>
           {props.showA && <Messages sessionId="s1" transport={transport} onSession={(s) => (a = s)} />}
           <Messages sessionId="s1" transport={transport} onSession={(s) => (b = s)} />
-        </HarnessProvider>
+        </KitProvider>
       );
     }
     const { rerender, unmount } = render(<Both showA />);
@@ -284,10 +284,10 @@ describe("useAgentSession", () => {
       return null;
     }
     const { unmount } = render(
-      <HarnessProvider>
+      <KitProvider>
         <Connection />
         <Everything />
-      </HarnessProvider>
+      </KitProvider>
     );
     await until(() => connections.at(-1) === "idle");
 
@@ -324,10 +324,10 @@ describe("useAgentSession", () => {
       return null;
     }
     const { unmount } = render(
-      <HarnessProvider>
+      <KitProvider>
         <Steering />
         <Everything />
-      </HarnessProvider>
+      </KitProvider>
     );
     await until(() => seen.at(-1)?.claimed.length === 1);
     await released();

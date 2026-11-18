@@ -32,7 +32,7 @@ app-install:
 app-check:
     bazel test //typescript/apps/ui/...
 
-# Releases publish from CI (.github/workflows/publish.yml), which runs the same targets.
+# Releases publish from CI (.github/workflows/publish-agent-kit.yml), which runs the same targets.
 #
 # Test the Python package and the console, then build the wheel and sdist (//python:dists).
 package:
@@ -61,7 +61,7 @@ temporal:
     temporal server start-dev
 
 # Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
-session-manager: (_run "//python/temporal_agent_harness/web:cli" "session-manager")
+session-manager: (_run "//python/temporal_agent_kit/web:cli" "session-manager")
 
 # Serves the console as Bazel builds it from typescript/apps/ui/, so a change there shows up on the
 # next run. An agent only runs if its worker is up — see the worker recipes below.

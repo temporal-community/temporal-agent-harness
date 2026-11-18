@@ -1,0 +1,35 @@
+{
+  "name": "__PROJECT_NAME__",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "agent-kit:schema": "npm run build && agent-kit schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json",
+    "agent-kit:dev": "uvx --from 'temporal-agent-kit[ui]==0.11.0' temporal-agent-kit dev agents.toml",
+    "start": "node --env-file-if-exists=.env.local dist/worker.js",
+    "agent-kit:skill": "agent-kit skills install",
+    "agent-kit:doctor": "agent-kit doctor --schema agent.schema.json"
+  },
+  "dependencies": {
+    "@temporalio/agent-kit": "__AGENT_KIT_VERSION__",
+    "@temporalio/agent-kit-worker": "__AGENT_KIT_VERSION__",
+    "@temporalio/agent-kit-client": "__AGENT_KIT_VERSION__",
+    "@temporalio/activity": "1.24.0",
+    "@temporalio/client": "1.24.0",
+    "@temporalio/common": "1.24.0",
+    "@temporalio/envconfig": "1.24.0",
+    "@temporalio/plugin": "1.24.0",
+    "@temporalio/worker": "1.24.0",
+    "@temporalio/workflow": "1.24.0",
+    "@temporalio/workflow-streams": "1.24.0",
+    "@temporalio/openai-agents": "1.24.0",
+    "@openai/agents-core": "0.14.3",
+    "@openai/agents-openai": "0.14.3",
+    "openai": "6.46.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/node": "22.20.4"
+  }
+}

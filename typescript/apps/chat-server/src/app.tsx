@@ -625,7 +625,7 @@ export function createChatServer(opts: ChatServerOptions): Chat {
     const agent = agents.find((a) => a.key === agentKey);
     if (!agent) {
       throw new Error(
-        `No agent with key "${agentKey}". The harness offers: ${agents.map((a) => a.key).join(', ') || '(none)'}`,
+        `No agent with key "${agentKey}". The Agent Kit server offers: ${agents.map((a) => a.key).join(', ') || '(none)'}`,
       );
     }
     log.debug('ensureSession', { sessionId, workflowType: agent.workflow_type });

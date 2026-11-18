@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from temporal_agent_harness.web.temporal_ui import temporal_workflows_url
+from temporal_agent_kit.web.temporal_ui import temporal_workflows_url
 
 
 @pytest.fixture(autouse=True)

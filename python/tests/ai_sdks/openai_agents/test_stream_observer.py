@@ -32,8 +32,8 @@ from openai.types.responses.response_usage import (
     ResponseUsage,
 )
 
-from temporal_agent_harness.ai_sdks import openai_agents_harness as h
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.ai_sdks.openai_agents import _kit as h
+from temporal_agent_kit.agent_protocol import (
     AgentEventType,
     ModelInteractionEnded,
     ModelInteractionStarted,
@@ -42,8 +42,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     ThoughtSummaryDelta,
     ToolRequested,
 )
-from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
+from temporal_agent_kit.stream_context import TurnStreamContext
 
 
 class _FakePublisher:
@@ -270,9 +270,9 @@ async def test_factory_threads_batch_interval_to_the_publisher(
     # silently do nothing on the harness path (each flush is one Signal, so this is the
     # knob that trades UI snappiness for workflow-history volume).
     ctx = TurnStreamContext(turn_id="t-5", turn_number=1, agent_id="agent-abc")
-    token = h._HarnessStreamToken(context=ctx, model="gpt-5.1")
+    token = h._KitStreamToken(context=ctx, model="gpt-5.1")
 
-    observer = h.harness_observer_factory(
+    observer = h.kit_observer_factory(
         token.model_dump(mode="json"), batch_interval=timedelta(milliseconds=750)
     )
     async with observer:
@@ -288,9 +288,9 @@ async def test_factory_without_interval_defers_to_the_harness_default(
     # Called by hand (no cadence): pass None through, so publisher_from_activity applies
     # DEFAULT_PUBLISH_BATCH_INTERVAL rather than the observer duplicating that value.
     ctx = TurnStreamContext(turn_id="t-6", turn_number=1, agent_id="agent-abc")
-    token = h._HarnessStreamToken(context=ctx, model="gpt-5.1")
+    token = h._KitStreamToken(context=ctx, model="gpt-5.1")
 
-    async with h.harness_observer_factory(token):
+    async with h.kit_observer_factory(token):
         pass
 
     assert fake_publisher.opened_with == [{"batch_interval": None}]

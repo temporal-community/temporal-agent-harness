@@ -11,7 +11,7 @@ import type {
   InvokeStatefulModelResult,
   InvokeStatefulModelStreamingInput,
   ModelConfigInfo,
-} from '@temporalio/agent-harness/ai-sdks/strands-agents';
+} from '@temporalio/agent-kit/ai-sdks/strands-agents';
 import { autoHeartbeat } from './heartbeat-decorator.ts';
 // Harness: the live observer for calls that carry a routing token.
 import { observeStream, type ObserverFactory } from '../integration-helpers/stream-observer.ts';

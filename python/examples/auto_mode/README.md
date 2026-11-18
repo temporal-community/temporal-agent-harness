@@ -18,7 +18,7 @@ board. This directory adds only the workflow (`workflow.py`, a copy of Monty's
 - **The rules** — `_AUTO_APPROVAL_CRITERIA`, named criteria sets (`read_only`,
   `books_travel`, `run_travel_code`, and a `cautious` catch-all), each written as plain-language
   `approve_when` / `deny_when` / `escalate_when` rules.
-- **The mechanism** — `jev_evaluator()` from `temporal_agent_harness.ai_sdks.jev`. The
+- **The mechanism** — `jev_evaluator()` from `temporal_agent_kit.ai_sdks.jev`. The
   worker registers `TypeSafePlugin`, which makes the Jev call.
 
 Monty's travel tools are reused **unchanged**. They don't name a criteria set themselves, so

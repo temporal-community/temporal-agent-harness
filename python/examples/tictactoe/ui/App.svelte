@@ -2,7 +2,7 @@
      typed AgentSession: the board is its `board` state, a move is a `play` message, and the
      ledger is its raw frames. The rest of this file only draws what those give it. -->
 <script lang="ts">
-  import { AgentSession, HttpTransport, startSession } from "@temporalio/agent-harness-svelte";
+  import { AgentSession, HttpTransport, startSession } from "@temporalio/agent-kit-svelte";
   import { scale } from "svelte/transition";
 
   import type { TicTacToeAgent } from "../client_sdk/TicTacToeAgent";
@@ -23,7 +23,7 @@
   const play = (cell: number) => agent.sendMessage("play", { cell });
   const newGame = (agent_goes_first: boolean) => agent.sendMessage("new_game", { agent_goes_first });
 
-  // Creating a session is the harness API, not the agent's: the one call made without `agent`.
+  // Creating a session is Agent Kit API, not the agent's: the one call made without `agent`.
   // The agent's init data is optional (`settings: MatchSettings | None = None`), so the typed
   // start lets this omit it. The definition is written inline because the generated
   // TicTacToeAgent value is TypeScript, which this page loads without a build step.

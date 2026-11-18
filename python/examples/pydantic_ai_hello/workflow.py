@@ -1,15 +1,15 @@
-"""A hello-world Pydantic AI agent on the harness, with one tool call.
+"""A hello-world Pydantic AI agent on Agent Kit, with one tool call.
 
 A conversational agent that answers in plain text and can call a single tool (``get_weather``).
-The agent is made durable with ``TemporalAgentHarnessDurability``, so each streamed model call routes
-through Pydantic AI's model activity, where the harness translates raw ``AgentStreamEvent``s into
+The agent is made durable with ``TemporalAgentKitDurability``, so each streamed model call routes
+through Pydantic AI's model activity, where Agent Kit translates raw ``AgentStreamEvent``s into
 the turn-stream events an attached client sees. The tool is a normal
-harness tool adapted onto the SDK with ``build_harness_toolset``, so the harness still owns approval
+Agent Kit tool adapted onto the SDK with ``build_kit_toolset``, so Agent Kit still owns approval
 and its ``tool_start`` / ``tool_end`` / ``tool_error`` events.
 
 The agent is built ONCE at module load — its activities are registered on the worker via
 ``AgentPlugin`` (see worker.py). It carries no runner: the per-turn runner is threaded EXPLICITLY
-through ``deps`` at each ``run(...)`` call (``HarnessDeps(runner=...)``, which snapshots the turn's
+through ``deps`` at each ``run(...)`` call (``KitDeps(runner=...)``, which snapshots the turn's
 stream context from it), so one shared agent serves every concurrent workflow correctly — no
 ``self._runner`` assumption.
 
@@ -26,19 +26,19 @@ with workflow.unsafe.imports_passed_through():
     from pydantic_ai import Agent
     from pydantic_ai.messages import ModelMessage
 
-    from temporal_agent_harness.ai_sdks.pydantic_ai_harness import (
-        HarnessDeps,
-        TemporalAgentHarnessDurability,
-        build_harness_toolset,
+    from temporal_agent_kit.ai_sdks.pydantic_ai import (
+        KitDeps,
+        TemporalAgentKitDurability,
+        build_kit_toolset,
     )
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 
 TASK_QUEUE = "pydantic-ai-hello"
@@ -61,20 +61,20 @@ async def get_weather(city: str) -> str:
     return f"It's 72°F and sunny in {city}."
 
 
-# Built once at module load: harness tools adapted into a Pydantic AI FunctionToolset whose tools
-# run in-workflow (where the harness approval gate + tool events live, and the runner is on deps).
-_TOOLSET = build_harness_toolset([get_weather], id=TOOLSET_ID)
+# Built once at module load: Agent Kit tools adapted into a Pydantic AI FunctionToolset whose tools
+# run in-workflow (where Agent Kit approval gate + tool events live, and the runner is on deps).
+_TOOLSET = build_kit_toolset([get_weather], id=TOOLSET_ID)
 
 # The durable agent. Its activities (model_request(_stream) and event_stream_handler) are registered
-# on the worker via AgentPlugin(_AGENT). deps_type=HarnessDeps lets Temporal (de)serialize the
+# on the worker via AgentPlugin(_AGENT). deps_type=KitDeps lets Temporal (de)serialize the
 # per-turn stream context that rides on deps into the model activity.
 _AGENT = Agent(
     DEFAULT_MODEL,
     name=AGENT_NAME,
     instructions=SYSTEM_INSTRUCTION,
-    deps_type=HarnessDeps,
+    deps_type=KitDeps,
     toolsets=[_TOOLSET],
-    capabilities=[TemporalAgentHarnessDurability()],
+    capabilities=[TemporalAgentKitDurability()],
 )
 
 
@@ -99,12 +99,12 @@ class PydanticAIHelloAgentWorkflow:
         """Chat with the assistant. Ask it anything; ask about the weather in a city and it calls
         its `get_weather` tool and tells you what it found."""
         # Thread the runner EXPLICITLY through deps (not assumed off the workflow instance). Passing
-        # just the runner is enough: HarnessDeps snapshots the in-flight turn's stream context from
+        # just the runner is enough: KitDeps snapshots the in-flight turn's stream context from
         # it — the live runner is read in-workflow by the adapted tools, and the snapshotted context
         # rides into the model activity where the streaming handler publishes.
         result = await _AGENT.run(
             message.text,
-            deps=HarnessDeps(runner=self._runner),
+            deps=KitDeps(runner=self._runner),
             message_history=self._history,
         )
         self._history = result.all_messages()

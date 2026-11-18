@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, TypeVar
 
-from temporal_agent_harness.harness.state import HarnessState, StateRef
-from temporal_agent_harness.harness.state.events import StateEvent, StateSnapshot
+from temporal_agent_kit.state import AgentState, StateRef
+from temporal_agent_kit.state.events import StateEvent, StateSnapshot
 
-T = TypeVar("T", bound=HarnessState)
+T = TypeVar("T", bound=AgentState)
 
 
 class StateHost:

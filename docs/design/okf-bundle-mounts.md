@@ -166,7 +166,7 @@ It says nothing about memory: that is the agent's own skill or system prompt.
 Subclassing `ActivityFileSystem` already generates `vfs.<name>.view`, which builds the
 developer's filesystem from a config and calls its own methods. The harness also generates
 `vfs.<name>.okf_graph`, for **every** `ActivityFileSystem`, and
-`AgentHarnessPlugin(filesystems=[...])` registers it with the rest. It runs harness code
+`AgentKitPlugin(filesystems=[...])` registers it with the rest. It runs harness code
 against the developer's `list`, `stat` and `read`; no model-written code is involved, so no
 sandbox is needed.
 

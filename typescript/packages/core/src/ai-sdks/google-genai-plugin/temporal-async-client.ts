@@ -2,7 +2,7 @@
 // runs its network calls in activities on the worker's real client.
 
 import type { ActivityOptions } from "@temporalio/workflow";
-import type { AgentWorkflowRunner } from "../../harness/agent-workflow.ts";
+import type { AgentWorkflowRunner } from "../../agent-workflow.ts";
 import { TemporalAsyncInteractions } from "./temporal-interactions.ts";
 
 export class TemporalAsyncClient {

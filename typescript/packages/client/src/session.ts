@@ -3,7 +3,7 @@
 // batch updates — whose fields it makes reactive; the core writes to it once per flush.
 
 import type { AgentSseFrame } from "./frames.ts";
-import type { HarnessMessage, ToolPart } from "./messages.ts";
+import type { KitMessage, ToolPart } from "./messages.ts";
 import { SessionProjection, type AgentInfo } from "./projection.ts";
 import type { AgentSchema, HandlerInput, HandlerName, UntypedAgent } from "./schema.ts";
 import {
@@ -45,7 +45,7 @@ export interface SessionState<A extends AgentSchema> {
    *  `agent_id`. The root's is typed `AgentView<A>`; read it with `rootView`. */
   agents: Readonly<Record<string, AgentView>>;
   /** Messages sent from this client that the server has not admitted yet, and failed sends. */
-  pending: readonly HarnessMessage<A>[];
+  pending: readonly KitMessage<A>[];
   /** Every frame received, from every agent, for views that inspect the raw stream. */
   frames: readonly AgentSseFrame[];
   /** Apply one flush's changes, one entry per agent that changed. */
@@ -58,7 +58,7 @@ export interface SessionFlush<A extends AgentSchema = UntypedAgent> {
   /** Each agent that changed, with what changed, as given to `updateAgents`. */
   agents: ReadonlyArray<readonly [string, AgentUpdate]>;
   /** The whole `pending` list, when it changed; otherwise null. */
-  pending: readonly HarnessMessage<A>[] | null;
+  pending: readonly KitMessage<A>[] | null;
 }
 
 /** Requests a session has made since it was created, and its recent frame rate. */
@@ -94,7 +94,7 @@ export interface AgentSessionOptions<A extends AgentSchema> {
    *  with `provideToolOutput` or `provideToolError`. */
   callbackTools?: Readonly<Record<string, (call: ToolCall) => unknown>>;
   /** A message sent from this client finished: its handler returned or raised. */
-  onFinish?: (message: HarnessMessage<A>) => void;
+  onFinish?: (message: KitMessage<A>) => void;
   onError?: (error: Error) => void;
   /** Waits before each retry of a dropped stream; the budget resets whenever it delivers. */
   reconnectBackoffMs?: readonly number[];
@@ -516,7 +516,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
       }
     ]);
     if (updates.length > 0) state.updateAgents(updates);
-    const pending = changes.pending as readonly HarnessMessage<A>[] | null;
+    const pending = changes.pending as readonly KitMessage<A>[] | null;
     if (pending !== null) state.pending = pending;
     if (updates.length > 0 || pending !== null) {
       for (const listener of this.#flushListeners) {
@@ -536,7 +536,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
       if (message.status !== "done" && message.status !== "error") continue;
       if (!this.#sentIds.has(message.id) || this.#finished.has(message.id)) continue;
       this.#finished.add(message.id);
-      this.#options.onFinish?.(message as HarnessMessage<A>);
+      this.#options.onFinish?.(message as KitMessage<A>);
     }
     if (this.#tabs && !this.#tabs.leader) return;
     for (const { part, agent } of this.#projection.awaitingClient()) this.#dispatchCall(part, agent);
@@ -547,7 +547,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
   /** Follow the session through whichever tab holds its lock, and take the lock, and with it
    *  the stream, when that tab lets go. */
   #joinTabs(): void {
-    const name = `agent-harness:${this.sessionId}`;
+    const name = `agent-kit:${this.sessionId}`;
     const page = this.#page;
     const tabs: Tabs = {
       id: Math.random().toString(36).slice(2),

@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from temporal_agent_harness.harness.agent_protocol.events import (
+from temporal_agent_kit.agent_protocol.events import (
     AgentEventType,
     AgentStreamItem,
     ModelInteractionEnded,

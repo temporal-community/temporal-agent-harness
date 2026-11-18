@@ -1,5 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
 py_library(
     name = "__init__",
@@ -15,9 +15,9 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//python/examples/agent_dag:workflow",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "@pypi//temporalio",
     ],
 )
@@ -30,37 +30,37 @@ py_library(
     deps = [
         "//python/examples/agent_dag:models",
         "//python/examples/agent_dag:step_agent",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "@pypi//temporalio",
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_check_code",
     srcs = ["test_check_code.py"],
     imports = ["../../.."],
     deps = [
         ":_check_parent",
         ":test_execute_flow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "//python/tests:conftest",
         "@pypi//pytest_asyncio",
         "@pypi//temporalio",
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_execute_flow",
     srcs = ["test_execute_flow.py"],
     imports = ["../../.."],
     deps = [
         ":_echo_step_agent",
         "//python/examples/agent_dag:workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "//python/tests:conftest",
         "@pypi//pytest_asyncio",
         "@pypi//temporalio",

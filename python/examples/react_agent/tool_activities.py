@@ -1,11 +1,11 @@
-"""Location and weather tools for the ReAct agent, as harness activity tools.
+"""Location and weather tools for the ReAct agent, as Agent Kit activity tools.
 
 Four durable, activity-backed tools (``@agent.activity_tool_defn``) that call real public APIs
 over httpx. Because they do network I/O they run as Temporal activities, never inline in the
 workflow. Each is adapted onto the OpenAI Agents SDK in ``workflow.py`` via
-``as_openai_agent_tools``, so the harness still owns the approval gate and each tool's
+``as_openai_agent_tools``, so Agent Kit still owns the approval gate and each tool's
 ``tool_start`` / ``tool_end`` / ``tool_error`` events; the worker registers each activity body
-by handing ``ALL_TOOLS`` to ``AgentHarnessPlugin(tools=...)`` (see ``worker.py``).
+by handing ``ALL_TOOLS`` to ``AgentKitPlugin(tools=...)`` (see ``worker.py``).
 
 The tool schema the model sees (name, description, parameters) is derived from each function's
 signature and docstring, so the first docstring line becomes the tool description and the
@@ -22,7 +22,7 @@ from urllib.parse import quote
 import httpx
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 # Per-tool execution ceiling for these quick HTTP calls (mirrors demo2's 30s).
 _TOOL_TIMEOUT = timedelta(seconds=30)
@@ -97,6 +97,6 @@ async def get_weather(latitude: float, longitude: float) -> str:
 
 
 # The in-workflow tool dispatchers (what workflow.py adapts onto the SDK via
-# as_openai_agent_tools). The worker hands this same list to ``AgentHarnessPlugin(tools=...)``,
+# as_openai_agent_tools). The worker hands this same list to ``AgentKitPlugin(tools=...)``,
 # which registers each dispatcher's durable @activity.defn body.
 ALL_TOOLS = [get_ip_address, get_location_info, get_coordinates, get_weather]

@@ -1,6 +1,6 @@
 # Tic-tac-toe (TypeSafe) example
 
-A harness agent with **no LLM in the loop**. Every other example here puts a generative model
+An Agent Kit agent with **no LLM in the loop**. Every other example here puts a generative model
 in a tool-calling loop; this one replaces the model call with a
 [TypeSafe](https://docs.typesafe.ai) System One call — a fast, typed judgment (a probability
 distribution, not text) that the workflow's own code turns into an action.
@@ -26,9 +26,9 @@ chooses among cells the code offers, so an illegal move is impossible by constru
 - **The TypeSafe exchange.** Because the model call is a tool, its `tool_start` carries the
   exact `state` + `questions` sent to TypeSafe and its `tool_end` the answers (choice,
   per-cell probabilities, confidence, token usage) — expand the `typesafe_system_one` activity
-  row to read both. (The harness's model-interaction events carry only a model id and usage,
+  row to read both. (Agent Kit's model-interaction events carry only a model id and usage,
   which is why the call is modeled as a tool rather than a model span for now.)
-- **The board as observable state.** The workflow declares `board.py`'s `Board` `HarnessState`
+- **The board as observable state.** The workflow declares `board.py`'s `Board` `AgentState`
   as `board = agent.state(game.Board)`; open the **AGENT STATE** pane and each move lands as
   `replace /cells/4 "O"` + `add /moves/-` in one commit, ordered against the `tool_end` that
   made it. Your move is a patch too (applied in the handler); the agent's arrives via the tool.
@@ -45,7 +45,7 @@ chooses among cells the code offers, so an illegal move is impossible by constru
 - `workflow.py` — `TicTacToeAgent`: the `new_game` / `play` handlers, the question design, and
   the two `run_tool` dispatches (judge, then act).
 - `models.py` — the accepted messages and the activity's request/result shapes.
-- `ui/` — a Svelte board for playing it, one component on `@temporalio/agent-harness-svelte` (see below).
+- `ui/` — a Svelte board for playing it, one component on `@temporalio/agent-kit-svelte` (see below).
 - `client_sdk/TicTacToeAgent.ts` — the agent's TypeScript types, generated from its Python
   models by `bazel run //python/examples/tictactoe:client_sdk_update`.
 

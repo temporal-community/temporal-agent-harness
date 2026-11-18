@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from temporal_agent_harness.utils.task_queue import task_queue_name
-from temporal_agent_harness.web.registry import load_agent_registry
+from temporal_agent_kit.utils.task_queue import task_queue_name
+from temporal_agent_kit.web.registry import load_agent_registry
 
 REGISTRY_TOML = """
 [[agents]]

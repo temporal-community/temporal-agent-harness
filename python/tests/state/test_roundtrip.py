@@ -11,14 +11,14 @@ import pickle
 
 import pytest
 
-from temporal_agent_harness.harness.state.containers import FrozenDict, FrozenList
+from temporal_agent_kit.state.containers import FrozenDict, FrozenList
 
-from tests.state.models import AgentState, Group, Todo
+from tests.state.models import PlanState, Group, Todo
 
 
 @pytest.fixture
-def value() -> AgentState:
-    return AgentState(
+def value() -> PlanState:
+    return PlanState(
         model="m",
         groups=[Group(name="g", todos=[Todo(id="t", tags=["a"])], meta={"k": "v"})],
         index={"a": [Todo(id="x")]},
@@ -28,7 +28,7 @@ def value() -> AgentState:
     )
 
 
-def test_deepcopy(value: AgentState):
+def test_deepcopy(value: PlanState):
     clone = copy.deepcopy(value)
     assert clone == value
     assert clone is not value
@@ -38,12 +38,12 @@ def test_deepcopy(value: AgentState):
     assert clone.groups[0] is not value.groups[0]
 
 
-def test_shallow_copy(value: AgentState):
+def test_shallow_copy(value: PlanState):
     assert copy.copy(value) == value
     assert copy.copy(value.groups) == value.groups
 
 
-def test_pickle(value: AgentState):
+def test_pickle(value: PlanState):
     clone = pickle.loads(pickle.dumps(value))
     assert clone == value
     assert type(clone.groups) is FrozenList
@@ -58,19 +58,19 @@ def test_pickle_containers_directly():
         assert type(clone) is type(container)
 
 
-def test_model_copy_deep(value: AgentState):
+def test_model_copy_deep(value: PlanState):
     clone = value.model_copy(deep=True)
     assert clone == value
     assert type(clone.groups[0].todos) is FrozenList
 
 
-def test_json_round_trip(value: AgentState):
+def test_json_round_trip(value: PlanState):
     dumped = value.model_dump_json()
-    assert AgentState.model_validate_json(dumped) == value
+    assert PlanState.model_validate_json(dumped) == value
     assert json.loads(dumped) == value.model_dump(mode="json")
 
 
-def test_frozen_containers_compare_equal_to_plain_ones(value: AgentState):
+def test_frozen_containers_compare_equal_to_plain_ones(value: PlanState):
     assert value.groups[0].meta == {"k": "v"}
     assert value.index["a"] == [Todo(id="x")]
     assert value.tags == ["one", "two"]
@@ -93,5 +93,5 @@ def test_list_serialization_keeps_the_order_the_author_chose():
     now (see test_schema), which is why there is nothing here to normalize: a list's order is a
     fact the author wrote down, and it round-trips as itself.
     """
-    value = AgentState(tags=["zebra", "alpha", "mid"])
+    value = PlanState(tags=["zebra", "alpha", "mid"])
     assert value.model_dump(mode="json")["tags"] == ["zebra", "alpha", "mid"]

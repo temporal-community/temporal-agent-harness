@@ -3,7 +3,7 @@
 //
 // The user chats in plain text; a *model in the loop* converses to gather what it needs, then
 // **writes a Python script and runs it** to search and book flights/hotels, and replies in prose.
-// It does this through the harness Code Mode feature: `codeModeTool` turns the travel activity
+// It does this through Agent Kit Code Mode feature: `codeModeTool` turns the travel activity
 // tools into a single `run_travel_code` tool that executes a model-authored script in a sandbox,
 // where each tool is an async host function the script calls. Every host call runs as a durable,
 // approval-gated activity, and the script can combine many with real control flow (loops,
@@ -29,14 +29,14 @@ import {
   state,
   type AgentWorkflowRunner,
   type CodeModeTool,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   InteractionConversation,
   functionParam,
   googleGenaiClient,
   type FunctionCallStep,
   type FunctionResultStepParam,
-} from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+} from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 import { ALL_TOOLS } from "./activities.ts";
 import { askUser } from "./ask-user.ts";
 import { BOARD_TOOLS, BOARD_TOOL_NAMES, TripBoard } from "./trip-board.ts";

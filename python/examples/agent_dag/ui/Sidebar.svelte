@@ -1,6 +1,6 @@
 <!-- Every DagBuilderAgent session the server knows about, newest first. -->
 <script lang="ts">
-  import type { SessionSummary } from "@temporalio/agent-harness-svelte";
+  import type { SessionSummary } from "@temporalio/agent-kit-svelte";
 
   interface Props {
     sessions: readonly SessionSummary[];
@@ -54,7 +54,7 @@
   <h3>Sessions <span>{sessions.length}</span></h3>
   <nav>
     {#if apiDown}
-      <p class="note bad">Can't reach the harness API. Are <code>just server</code> and <code>just worker</code> running?</p>
+      <p class="note bad">Can't reach Agent Kit API. Are <code>just server</code> and <code>just worker</code> running?</p>
     {:else if shown.length === 0}
       <p class="note">{sessions.length ? "No flows match." : "Your flows will appear here."}</p>
     {/if}
@@ -68,7 +68,7 @@
   </nav>
 
   <footer>
-    <span>Temporal · agent harness</span>
+    <span>Temporal · Agent Kit</span>
   </footer>
 </aside>
 

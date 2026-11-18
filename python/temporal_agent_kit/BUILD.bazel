@@ -1,0 +1,190 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:committed_files.bzl", "committed_files")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent",
+        ":agent_workflow",
+    ],
+)
+
+py_library(
+    name = "plugin",
+    srcs = ["plugin.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":subagent_activities",
+        "//python/temporal_agent_kit/code_mode:__init__",
+        "//python/temporal_agent_kit/code_mode:activity_fs",
+        "//python/temporal_agent_kit/utils:large_payload",
+        "@pypi//temporalio",
+    ],
+)
+
+# The published package: its entry points, the modules nothing else in the package imports.
+# Everything they reach under temporal_agent_kit/, with the console their data brings, is what
+# the wheel and sdist ship (//python:dists). scripts/check-python-package-entry-points.sh fails
+# while a library in the package is outside this target's dependencies.
+py_library(
+    name = "temporal_agent_kit",  # keep
+    data = [":development_resources"],  # keep
+    visibility = [
+        "//python:__pkg__",
+        "//python/tests:__pkg__",
+    ],
+    deps = [
+        ":__init__",
+        "//python/temporal_agent_kit/ai_sdks:__init__",
+        "//python/temporal_agent_kit/ai_sdks:pydantic_ai",
+        "//python/temporal_agent_kit/ai_sdks:typesafe",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_kit/ai_sdks/jev:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
+        "//python/temporal_agent_kit/ai_sdks/strands_agents:__init__",
+        "//python/temporal_agent_kit/nexus_agent_adapter:__init__",
+        "//python/temporal_agent_kit/nexus_agent_adapter:worker_lib",
+        "//python/temporal_agent_kit/utils:__init__",
+        "//python/temporal_agent_kit/web:cli_lib",
+    ],
+)
+
+filegroup(
+    name = "development_resources",
+    srcs = glob(
+        ["skills/**"],
+        exclude = ["skills/**/BUILD.bazel"],
+    ),
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "development",
+    srcs = ["development.py"],
+    data = [":development_resources"],  # keep
+    imports = [".."],
+    visibility = ["//python:__subpackages__"],
+)
+
+committed_files(
+    name = "shared_skill_files",
+    srcs = [
+        "skills/temporal-agent-kit-python/assets/starter/env.example.tmpl",
+        "skills/temporal-agent-kit-python/assets/starter/gitignore.tmpl",
+        "skills/temporal-agent-kit-python/references/api.md",
+        "skills/temporal-agent-kit-python/references/verification.md",
+    ],
+    generated = {
+        "skills/temporal-agent-kit-python/assets/starter/env.example.tmpl": "//docs:agent-resources/env.example.tmpl",
+        "skills/temporal-agent-kit-python/assets/starter/gitignore.tmpl": "//docs:agent-resources/gitignore.tmpl",
+        "skills/temporal-agent-kit-python/references/api.md": "//docs:api/README.md",
+        "skills/temporal-agent-kit-python/references/verification.md": "//docs:agent-resources/verification.md",
+    },
+)
+
+py_library(
+    name = "agent",
+    srcs = ["agent.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        ":subagent_toolset",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/code_mode:__init__",
+        "//python/temporal_agent_kit/state:decl",
+    ],
+)
+
+py_library(
+    name = "agent_client",
+    srcs = ["agent_client.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/stream_merge:__init__",
+        "//python/temporal_agent_kit/stream_merge:cursor",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "agent_schema",
+    srcs = ["agent_schema.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:events",
+        "//python/temporal_agent_kit/state:__init__",
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "agent_workflow",
+    srcs = ["agent_workflow.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":steering",
+        ":stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/state:__init__",
+        "//python/temporal_agent_kit/state:decl",
+        "//python/temporal_agent_kit/state:events",
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "steering",
+    srcs = ["steering.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+)
+
+py_library(
+    name = "stream_context",
+    srcs = ["stream_context.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "subagent_activities",
+    srcs = ["subagent_activities.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_client",
+        ":agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "subagent_toolset",
+    srcs = ["subagent_toolset.py"],
+    imports = [".."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)

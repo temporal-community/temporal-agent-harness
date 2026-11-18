@@ -1,7 +1,7 @@
 <!-- Agent DAG Studio: the session picker, and the studio for the chosen flow. Each session is one
      DagBuilderAgent; "New flow" opens a draft that becomes a session on its first prompt. -->
 <script lang="ts">
-  import { HttpTransport, startSession, type SessionSummary } from "@temporalio/agent-harness-svelte";
+  import { HttpTransport, startSession, type SessionSummary } from "@temporalio/agent-kit-svelte";
 
   import type { DagBuilderAgent } from "../client_sdk/DagBuilderAgent";
   import Sidebar from "./Sidebar.svelte";

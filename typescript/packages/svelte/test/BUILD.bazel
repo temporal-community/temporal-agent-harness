@@ -18,7 +18,7 @@ vitest_test(
     name = "session.svelte_test",
     src = "session.svelte.test.ts",
     deps = [
-        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-kit-client",
         "//typescript/packages/svelte:node_modules/svelte",
         "//typescript/packages/svelte/src/lib:index",
     ],

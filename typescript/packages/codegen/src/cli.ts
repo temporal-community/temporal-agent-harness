@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// harness-codegen <schema.json | -> [-o <out.ts>] [--name TypeName] [--json-schemas] [--protocol]
+// agent-kit-codegen <schema.json | -> [-o <out.ts>] [--name TypeName] [--json-schemas] [--protocol]
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -11,14 +11,14 @@ import {
   type ProtocolSchemaDocument
 } from "./generate.ts";
 
-const USAGE = `usage: harness-codegen <schema.json | -> [-o <out.ts>] [--name <TypeName>] [--json-schemas] [--protocol]
+const USAGE = `usage: agent-kit-codegen <schema.json | -> [-o <out.ts>] [--name <TypeName>] [--json-schemas] [--protocol]
 
-Reads the document \`temporal-agent-harness schema module:Class\` prints (from a file, or
+Reads the document \`temporal-agent-kit schema module:Class\` prints (from a file, or
 stdin for -) and writes TypeScript types for the agent: one interface per model, and a
 mapping type naming each handler's input and output and each declared state. With
 --json-schemas, also writes each handler's input and output JSON Schema as a constant.
 
-With --protocol, reads \`temporal-agent-harness schema --protocol\` instead and writes the
+With --protocol, reads \`temporal-agent-kit schema --protocol\` instead and writes the
 event stream's types.`;
 
 async function main(): Promise<void> {
@@ -50,6 +50,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(`harness-codegen: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`agent-kit-codegen: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

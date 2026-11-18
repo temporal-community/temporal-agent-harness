@@ -25,10 +25,10 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 with workflow.unsafe.imports_passed_through():
     from pydantic import BaseModel, Field
 
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import AgentConfig, TextReply, ToolApprovalPolicy
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-    from temporal_agent_harness.harness.subagent_toolset import _resolve_workflow_type
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import AgentConfig, TextReply, ToolApprovalPolicy
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.subagent_toolset import _resolve_workflow_type
 
     from examples.monty.workflow import MontyDynamicAgentWorkflow
 

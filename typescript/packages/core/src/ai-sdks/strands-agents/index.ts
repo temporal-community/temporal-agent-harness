@@ -4,7 +4,7 @@
 import './load-polyfills.ts';
 
 // Harness: StrandsPlugin and the model and MCP activities are the worker half of this package:
-// `@temporalio/agent-harness-worker/ai-sdks/strands-agents`.
+// `@temporalio/agent-kit-worker/ai-sdks/strands-agents`.
 export { TemporalAgent, type TemporalAgentOptions } from './temporal-agent.ts';
 export {
   TemporalModel,
@@ -42,3 +42,4 @@ export type {
   ModelConfigInfo,
 } from './model-activity.ts';
 export * as workflow from './workflow.ts';
+export * from './kit.ts';
