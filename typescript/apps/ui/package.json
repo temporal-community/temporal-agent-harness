@@ -1,5 +1,5 @@
 {
-  "name": "temporal-agent-harness-ui",
+  "name": "temporal-agent-kit-ui",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -21,7 +21,7 @@
     "@tanstack/svelte-store": "0.12.3",
     "@tanstack/svelte-table": "9.3.1",
     "@tanstack/svelte-virtual": "3.13.47",
-    "@temporalio/agent-harness-client": "workspace:^",
+    "@temporalio/agent-kit-client": "workspace:^",
     "@xyflow/svelte": "^1.6.0",
     "d3-force": "^3.0.0",
     "remend": "^1.4.0",

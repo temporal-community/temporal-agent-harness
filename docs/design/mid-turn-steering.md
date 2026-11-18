@@ -294,16 +294,16 @@ Same design, same names in camelCase, at the mirrored paths:
   client `protocol.ts`, which `core/src/harness/agent-protocol/events.ts` re-exports.
 - `ClaimedSteering` / `SteeringMessage` in `core/src/harness/steering.ts`, exported from the
   package root for hand-written loops.
-- Adapter changes in `core/src/ai-sdks/openai-agents-harness.ts`, including its MCP wrapper.
+- Adapter changes in `core/src/ai-sdks/openai-agents.ts`, including its MCP wrapper.
 
 ## Implementation touch points
 
-- `harness/agent_workflow.py`: the queue in runner state, `steer`, `claim_steering`, and the
+- `agent_workflow.py`: the queue in runner state, `steer`, `claim_steering`, and the
   drop in the turn-completion path before `turn_end` is published.
-- `harness/agent_protocol/events.py` and `events.ts`: `SteeringEnqueued`, `SteeringClaimed`,
+- `agent_protocol/events.py` and `events.ts`: `SteeringEnqueued`, `SteeringClaimed`,
   `SteeringDropped`; regenerate `contract/protocol.schema.json`.
-- `ai_sdks/openai_agents_harness.py`, `ai_sdks/pydantic_ai_harness.py`, and the TS adapter.
-- `harness/agent_protocol/agent_interface.py`: replace the `self._steering.append(...)`
+- `ai_sdks/openai_agents/_kit.py`, `ai_sdks/pydantic_ai.py`, and the TS adapter.
+- `agent_protocol/agent_interface.py`: replace the `self._steering.append(...)`
   sketch in the `MessageContext` docstring with `self._runner.steer(...)`.
 - The `code_mode_memory` and Monty chat examples, to show `claim_steering` in a loop the
   author owns.

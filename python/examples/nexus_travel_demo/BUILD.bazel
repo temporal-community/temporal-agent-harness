@@ -1,12 +1,12 @@
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "caller",
     srcs = ["caller.py"],
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/nexus_agent_adapter/generated:__init__",
+        "//python/temporal_agent_kit/nexus_agent_adapter/generated:__init__",
         "@pypi//temporalio",
     ],
 )

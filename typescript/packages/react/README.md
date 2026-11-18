@@ -1,11 +1,11 @@
-# @temporalio/agent-harness-react
+# @temporalio/agent-kit-react
 
-A React binding for `@temporalio/agent-harness-client`: `useAgentSession`, a hook that follows one
-harness agent session. React 18.2 or later.
+A React binding for `@temporalio/agent-kit-client`: `useAgentSession`, a hook that follows one
+Agent Kit agent session. React 18.2 or later.
 
 ```tsx
-import { useAgentSession } from "@temporalio/agent-harness-react";
-import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
+import { useAgentSession } from "@temporalio/agent-kit-react";
+import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from agent-kit-codegen
 
 function Board({ sessionId }: { sessionId: string }) {
   const agent = useAgentSession<TicTacToeAgent>({ sessionId });
@@ -27,7 +27,7 @@ function Board({ sessionId }: { sessionId: string }) {
   that only adds frames or messages. It reads the raw `SessionSnapshot`, not the `AgentSession`
   view.
 - **A changed `sessionId` moves the connection.** Pass it as a prop or state like any other value.
-- **One connection per session.** Put a `<HarnessProvider>` above your components and every
+- **One connection per session.** Put a `<KitProvider>` above your components and every
   `useAgentSession` below it with the same session id shares one connection and one state.
   Without one, each component gets its own.
 - **The first component to open a session decides its options** (`callbackTools`, transport and
@@ -50,7 +50,7 @@ the text reaches the model with the next tool result, or is dropped if the turn 
 when it changes, not on the reply streaming around it.
 
 ```tsx
-import { useSteering } from "@temporalio/agent-harness-react";
+import { useSteering } from "@temporalio/agent-kit-react";
 
 function SteeringStatus({ sessionId }: { sessionId: string }) {
   const { queued, claimed, dropped } = useSteering<MyAgent>({ sessionId });
@@ -87,14 +87,14 @@ Query. Sends, approvals, callbacks and status stay in the session: they go throu
 
 ```tsx
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HttpTransport, startSession } from "@temporalio/agent-harness-react";
-import { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
+import { HttpTransport, startSession } from "@temporalio/agent-kit-react";
+import { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from agent-kit-codegen
 
 const transport = new HttpTransport({ baseUrl: "/api/" });
 
 export const sessionsQuery = () =>
   queryOptions({
-    queryKey: ["agent-harness", "sessions"],
+    queryKey: ["agent-kit", "sessions"],
     queryFn: ({ signal }) => transport.listSessions(signal)
   });
 
@@ -159,9 +159,9 @@ import {
   type AgentSchema,
   type HandlerName,
   type HandlerOutput,
-  type HarnessMessage
-} from "@temporalio/agent-harness-client";
-import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
+  type KitMessage
+} from "@temporalio/agent-kit-client";
+import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from agent-kit-codegen
 
 type Cards<A extends AgentSchema> = {
   [H in HandlerName<A>]?: ComponentType<{ output: Partial<HandlerOutput<A, H>> }>;
@@ -172,10 +172,10 @@ const cards: Cards<TicTacToeAgent> = {
 };
 
 /** The reply text streamed so far: a data handler streams its output as JSON. */
-const streamed = (message: HarnessMessage<TicTacToeAgent>) =>
+const streamed = (message: KitMessage<TicTacToeAgent>) =>
   message.parts.map((part) => (part.type === "reply_delta" ? part.text : "")).join("");
 
-export function Reply({ message }: { message: HarnessMessage<TicTacToeAgent> }) {
+export function Reply({ message }: { message: KitMessage<TicTacToeAgent> }) {
   // TypeScript can't tie the lookup to the narrowed message, so it is cast once here.
   const Card = cards[message.handler] as ComponentType<{ output: unknown }> | undefined;
   const text = message.output == null && Card ? streamed(message) : "";
@@ -205,8 +205,8 @@ With native inputs, the schema's constraints become attributes the browser check
 
 ```tsx
 import { useState, type FormEvent } from "react";
-import { buildPayload, describeSchema, emptyValues, validate, type SchemaField } from "@temporalio/agent-harness-client";
-import { useAgentSession } from "@temporalio/agent-harness-react";
+import { buildPayload, describeSchema, emptyValues, validate, type SchemaField } from "@temporalio/agent-kit-client";
+import { useAgentSession } from "@temporalio/agent-kit-react";
 
 /** One entry of `GET /api/agent-interface/{sessionId}`. */
 type Handler = { name: string; parameters: Record<string, unknown> };
@@ -276,7 +276,7 @@ import { useForm, type StandardSchemaV1 } from "@tanstack/react-form";
 const standardSchema = (fields: SchemaField[]): StandardSchemaV1<Record<string, unknown>> => ({
   "~standard": {
     version: 1,
-    vendor: "agent-harness",
+    vendor: "agent-kit",
     validate: (input) => {
       const value = input as Record<string, unknown>;
       const problems = Object.entries(validate(fields, value));
@@ -364,7 +364,7 @@ the row now at the same index, or to the list itself (hence its `tabIndex={-1}`)
 
 A session's state can also feed TanStack Store's `useSelector`, which reads any `get()` and
 `subscribe()` source. Hold the session open with `useAgentSession` (or the selector hook)
-somewhere under the same `<HarnessProvider store={store}>`:
+somewhere under the same `<KitProvider store={store}>`:
 
 ```tsx
 import { useSelector } from "@tanstack/react-store";
@@ -382,7 +382,7 @@ const busy = useSelector(source, (s) => s.agents[s.rootAgentId ?? ""]?.agentStat
 ## Development
 
 This package is part of the pnpm workspace in `typescript/`, and builds and tests against the
-`@temporalio/agent-harness-client` in the working tree; its published dependency is the
+`@temporalio/agent-kit-client` in the working tree; its published dependency is the
 `^<version>` range in `package.json`. `bazel test //typescript/packages/react/...` builds and
 tests it. Without Bazel, build the client first, then run these commands from
 `typescript/packages/react` (see

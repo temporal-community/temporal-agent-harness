@@ -2,7 +2,7 @@
 // it. Shared by every SessionState implementation, so a binding only chooses where to keep the
 // result.
 
-import type { HarnessMessage, Steering, ToolPart } from "./messages.ts";
+import type { KitMessage, Steering, ToolPart } from "./messages.ts";
 import type { AgentInfo } from "./projection.ts";
 import type { AgentSchema, HandlerInput, HandlerName, UntypedAgent } from "./schema.ts";
 
@@ -11,7 +11,7 @@ export interface AgentView<A extends AgentSchema = UntypedAgent> extends AgentIn
   /** Whether it has a turn open. */
   agentStatus: "idle" | "busy";
   /** Every message admitted to it, in the order its stream admitted them. */
-  messages: readonly HarnessMessage<A>[];
+  messages: readonly KitMessage<A>[];
   /** Its observable state documents, by state id, once their snapshots arrive. */
   states: Readonly<Partial<A["states"]>>;
   /** The latest turn it opened; 0 before its first. */
@@ -70,7 +70,7 @@ const NO_STEERING: SteeringView = Object.freeze({
  * the view itself wherever nothing in them changed.
  */
 export function steeringView(
-  messages: readonly HarnessMessage[],
+  messages: readonly KitMessage[],
   turnNumber: number,
   previous: SteeringView = NO_STEERING
 ): SteeringView {
@@ -125,7 +125,7 @@ export function steeringView(
 export interface AgentUpdate {
   info?: AgentInfo;
   /** Replace or append messages by index. An index equal to the current length appends. */
-  messages?: ReadonlyArray<readonly [number, HarnessMessage]>;
+  messages?: ReadonlyArray<readonly [number, KitMessage]>;
   states?: ReadonlyArray<readonly [string, unknown]>;
   agentStatus?: "idle" | "busy";
   turnNumber?: number;
@@ -195,7 +195,7 @@ const EMPTY_ROOT: AgentView = Object.freeze({
   unavailable: null,
   closeReason: null,
   agentStatus: "idle",
-  messages: Object.freeze([]) as readonly HarnessMessage[],
+  messages: Object.freeze([]) as readonly KitMessage[],
   states: Object.freeze({}),
   turnNumber: 0,
   steering: NO_STEERING

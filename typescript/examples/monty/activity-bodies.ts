@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "@temporalio/activity";
-import { toolActivity } from "@temporalio/agent-harness-worker";
+import { toolActivity } from "@temporalio/agent-kit-worker";
 import {
   bookFlight,
   bookHotel,
@@ -103,7 +103,7 @@ const latency = (low: number, high: number) => sleep((low + Math.random() * (hig
 // Activity implementations
 // ---------------------------------------------------------------------------------------------
 
-/** The bodies of the tools in activities.ts, for the worker's `AgentHarnessPlugin({ tools })`. */
+/** The bodies of the tools in activities.ts, for the worker's `AgentKitPlugin({ tools })`. */
 export const TOOL_ACTIVITIES = [
   toolActivity(searchFlights, async ({ request }) => {
     log.info(`Searching flights ${request.origin} -> ${request.destination} on ${request.date}`);

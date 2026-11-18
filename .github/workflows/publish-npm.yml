@@ -1,6 +1,6 @@
 name: Publish to npm
 
-# Publishes every public @temporalio/agent-harness* package at the tag's version, in dependency
+# Publishes every public @temporalio/agent-kit* package at the tag's version, in dependency
 # order, using npm trusted publishing (OIDC): each package's trusted publisher names THIS repo,
 # THIS workflow file and THIS environment, so the three must match. Dispatched by
 # finish-release.yml against an npm-v<version> tag; rerun it against the same tag to retry.

@@ -22,7 +22,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     AGENT_ID_LENGTH,
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
@@ -33,9 +33,9 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessageReply,
     MessageDisposition,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
-from temporal_agent_harness.harness.agent_client import AgentClient
+from temporal_agent_kit.agent_client import AgentClient
 
 from examples.monty import activities
 from examples.monty.workflow import MontyDynamicAgentWorkflow
@@ -63,7 +63,7 @@ async def client_and_queue():
             ApprovalGatedSubagentParentWorkflow,
             MontyDynamicAgentWorkflow,
         ],
-        plugins=[AgentHarnessPlugin(tools=activities.ALL_TOOLS)],
+        plugins=[AgentKitPlugin(tools=activities.ALL_TOOLS)],
     ):
         try:
             yield env.client, task_queue
@@ -414,7 +414,7 @@ async def test_attach_after_stopped_subagent_replays_its_turns_in_brackets(clien
     # closed run's workflow stream stays readable, so the replay merge mounts the stopped child and
     # nests its turns in the parent's brackets exactly as the live merge does, with no
     # subagent_stream_unavailable marker. The marker for a child whose reads fail is covered in
-    # tests/harness/test_stream_merge.py.
+    # tests/test_stream_merge.py.
     client, task_queue = client_and_queue
     parent_id, live = await _merged_send(
         client, task_queue, [_const_script(42), _const_script(99)], stop=True

@@ -7,22 +7,22 @@ import {
   CODE_START_BATCH_ACTIVITY,
   CODE_TYPE_CHECK_ACTIVITY,
   type CodeModeActivities,
-} from "@temporalio/agent-harness/harness/code-mode";
+} from "@temporalio/agent-kit/code-mode";
 import { DEFAULT_PAYLOAD_STORAGE, checkPayloadStorage } from "./utils/large-payload.ts";
-import { JEV_TOOL_APPROVAL_ACTIVITY } from "@temporalio/agent-harness/ai-sdks/jev/evaluator";
-import { RUN_SUBAGENT_TURN_ACTIVITY } from "@temporalio/agent-harness/harness/agent-protocol";
+import { JEV_TOOL_APPROVAL_ACTIVITY } from "@temporalio/agent-kit/ai-sdks/jev/evaluator";
+import { RUN_SUBAGENT_TURN_ACTIVITY } from "@temporalio/agent-kit/agent-protocol";
 import { jevToolApproval } from "./ai-sdks/jev/evaluator.ts";
-import type { ToolActivity } from "./harness/agent-workflow.ts";
+import type { ToolActivity } from "./agent-workflow.ts";
 import {
   collectFilesystemActivities,
   type FilesystemRegistration,
-} from "./harness/code-mode/activity-fs.ts";
-import { runSubagentTurn } from "./harness/subagent-activities.ts";
+} from "./code-mode/activity-fs.ts";
+import { runSubagentTurn } from "./subagent-activities.ts";
 
 type Activities = Record<string, (...args: never[]) => Promise<unknown>>;
 
 /** The harness's own activities, keyed by their wire names. */
-export function harnessActivities(): Activities {
+export function kitActivities(): Activities {
   return {
     [RUN_SUBAGENT_TURN_ACTIVITY]: runSubagentTurn,
     [JEV_TOOL_APPROVAL_ACTIVITY]: jevToolApproval,
@@ -68,7 +68,7 @@ const montyInstalled = (): boolean => {
 function codeModeActivities(): Activities {
   let stepper: Promise<CodeModeActivities> | undefined;
   const load = () =>
-    (stepper ??= import("./harness/code-mode/monty-stepper.ts").then(({ codeModeActivities }) =>
+    (stepper ??= import("./code-mode/monty-stepper.ts").then(({ codeModeActivities }) =>
       codeModeActivities(),
     ));
   return Object.fromEntries(
@@ -85,17 +85,17 @@ function toolActivities(tools: readonly ToolActivity[]): Activities {
   for (const tool of tools) {
     if (tool?.kind !== "tool-activity")
       throw new TypeError(
-        `AgentHarnessPlugin({ tools }) got ${String(tool)}, which is not a toolActivity(...)`,
+        `AgentKitPlugin({ tools }) got ${String(tool)}, which is not a toolActivity(...)`,
       );
     if (tool.name in activities)
-      throw new TypeError(`AgentHarnessPlugin({ tools }) has two tools named '${tool.name}'`);
+      throw new TypeError(`AgentKitPlugin({ tools }) has two tools named '${tool.name}'`);
     activities[tool.name] = tool.activity;
   }
   return activities;
 }
 
 /**
- * Registers what a worker needs to run harness agents (Python's AgentHarnessPlugin): the harness's
+ * Registers what a worker needs to run harness agents (Python's AgentKitPlugin): the harness's
  * own activities, each tool's activity body, Code Mode (where @pydantic/monty is installed),
  * activity filesystems, and offload of
  * payloads over 1.5 MB to `largePayloadOffload` (default: Python's local-file store; pass
@@ -103,7 +103,7 @@ function toolActivities(tools: readonly ToolActivity[]): Activities {
  * first-one-wins, as in Python: an activity or external storage the worker configures itself is
  * never displaced by the plugin's.
  */
-export class AgentHarnessPlugin extends SimplePlugin {
+export class AgentKitPlugin extends SimplePlugin {
   constructor({
     tools = [],
     filesystems = [],
@@ -118,12 +118,12 @@ export class AgentHarnessPlugin extends SimplePlugin {
     // Resolved here, so a bad option fails at the developer's own call rather than in Worker.create.
     const pluginActivities = {
       ...(montyInstalled() ? codeModeActivities() : codeModeUnavailable),
-      ...harnessActivities(),
+      ...kitActivities(),
       ...toolActivities(tools),
       ...collectFilesystemActivities(filesystems),
     };
     super({
-      name: "temporal-agent-harness",
+      name: "temporal-agent-kit",
       activities: (existing) => ({ ...pluginActivities, ...existing }),
       ...(largePayloadOffload
         ? {

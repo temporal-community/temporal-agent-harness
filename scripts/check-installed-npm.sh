@@ -48,48 +48,48 @@ if [ -n "$nested" ]; then
 fi
 
 echo "The bindings use the installed client, at one version"
-version="$(node -p "require('./node_modules/@temporalio/agent-harness-client/package.json').version")"
+version="$(node -p "require('./node_modules/@temporalio/agent-kit-client/package.json').version")"
 for binding in react svelte; do
-  installed="$(node -p "require('./node_modules/@temporalio/agent-harness-$binding/package.json').version")"
+  installed="$(node -p "require('./node_modules/@temporalio/agent-kit-$binding/package.json').version")"
   if [ "$installed" != "$version" ]; then
-    echo "@temporalio/agent-harness-$binding is $installed but the client is $version" >&2; exit 1
+    echo "@temporalio/agent-kit-$binding is $installed but the client is $version" >&2; exit 1
   fi
-  nested="node_modules/@temporalio/agent-harness-$binding/node_modules/@temporalio/agent-harness-client"
+  nested="node_modules/@temporalio/agent-kit-$binding/node_modules/@temporalio/agent-kit-client"
   if [ -e "$nested" ]; then
-    echo "@temporalio/agent-harness-$binding installed its own client instead of the tarball's" >&2; exit 1
+    echo "@temporalio/agent-kit-$binding installed its own client instead of the tarball's" >&2; exit 1
   fi
 done
 
 echo "The SDK and its OpenAI Agents plugin load from the install"
 node --input-type=module -e '
-import "@temporalio/agent-harness";
-import "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
-import "@temporalio/agent-harness-worker";
-import "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
-import "@temporalio/agent-harness-worker/harness/agent-client";
+import "@temporalio/agent-kit";
+import "@temporalio/agent-kit/ai-sdks/openai-agents";
+import "@temporalio/agent-kit-worker";
+import "@temporalio/agent-kit-worker/ai-sdks/openai-agents";
+import "@temporalio/agent-kit-worker/agent-client";
 '
 
 echo "A TypeScript consumer of every package type-checks"
 cat > probe.ts <<'TS'
-import { AgentSessionCore, startSession } from "@temporalio/agent-harness-client";
-import { HarnessProvider, ReactSessionState, useAgentSession } from "@temporalio/agent-harness-react";
-import { AgentSession, SvelteSessionState, createHarnessContext } from "@temporalio/agent-harness-svelte";
-import { TextMessage, TextReply, ToolApprovalPolicy, defineAgent, handler, tool } from "@temporalio/agent-harness";
-import { asOpenAIAgentTool, runStreamed } from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
-import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
-import { AgentClient } from "@temporalio/agent-harness-worker/harness/agent-client";
+import { AgentSessionCore, startSession } from "@temporalio/agent-kit-client";
+import { KitProvider, ReactSessionState, useAgentSession } from "@temporalio/agent-kit-react";
+import { AgentSession, SvelteSessionState, createKitContext } from "@temporalio/agent-kit-svelte";
+import { TextMessage, TextReply, ToolApprovalPolicy, defineAgent, handler, tool } from "@temporalio/agent-kit";
+import { asOpenAIAgentTool, runStreamed } from "@temporalio/agent-kit/ai-sdks/openai-agents";
+import { AgentKitPlugin } from "@temporalio/agent-kit-worker";
+import { OpenAIAgentsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/openai-agents";
+import { AgentClient } from "@temporalio/agent-kit-worker/agent-client";
 import type { WorkerOptions } from "@temporalio/worker";
 
 export const exports = [
   AgentSessionCore, startSession,
-  HarnessProvider, ReactSessionState, useAgentSession,
-  AgentSession, SvelteSessionState, createHarnessContext,
+  KitProvider, ReactSessionState, useAgentSession,
+  AgentSession, SvelteSessionState, createKitContext,
   TextMessage, TextReply, ToolApprovalPolicy, defineAgent, handler, tool,
   asOpenAIAgentTool, runStreamed, AgentClient,
 ];
 // A worker registering both plugins: the line a second Temporal SDK version fails on.
-export const plugins: WorkerOptions["plugins"] = [new OpenAIAgentsPlugin(), new AgentHarnessPlugin()];
+export const plugins: WorkerOptions["plugins"] = [new OpenAIAgentsPlugin(), new AgentKitPlugin()];
 TS
 cat > tsconfig.json <<'JSON'
 {
@@ -110,15 +110,15 @@ JSON
 echo "Installed packages work at $version"
 
 echo "The installed SDK creates a starter, activates its skill, and generates application types"
-./node_modules/.bin/agent-harness init "$starter"
+./node_modules/.bin/agent-kit init "$starter"
 # A sibling directory prevents the parent probe's node_modules from hiding a missing dependency.
 cd "$starter"
 starter_temporal="$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).dependencies["@temporalio/worker"]')"
 npm install --no-package-lock --no-audit --no-fund --loglevel=error \
   "$tarballs"/*.tgz "@temporalio/testing@$starter_temporal"
-npm run harness:schema
-npm run harness:skill -- --for agents
-./node_modules/.bin/harness-codegen agent.schema.json -o Agent.ts
+npm run agent-kit:schema
+npm run agent-kit:skill -- --for agents
+./node_modules/.bin/agent-kit-codegen agent.schema.json -o Agent.ts
 ./node_modules/.bin/tsc --ignoreConfig --noEmit --skipLibCheck --module nodenext --target es2022 Agent.ts
 node --input-type=module - <<'PROBE'
 import assert from 'node:assert/strict';
@@ -126,8 +126,8 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
-import { AgentClient } from '@temporalio/agent-harness-worker/harness/agent-client';
-assert(existsSync('.agents/skills/temporal-harness-typescript/references/api.md'));
+import { AgentClient } from '@temporalio/agent-kit-worker/agent-client';
+assert(existsSync('.agents/skills/temporal-agent-kit-typescript/references/api.md'));
 const schema = JSON.parse(readFileSync('agent.schema.json', 'utf8'));
 assert.equal(schema.agent, 'OpenAIHelloAgentTs');
 const env = await TestWorkflowEnvironment.createLocal({

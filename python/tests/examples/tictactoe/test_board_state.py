@@ -16,7 +16,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -25,7 +25,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from examples.tictactoe import activities
 from examples.tictactoe.workflow import TicTacToeAgentWorkflow
@@ -41,7 +41,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[TicTacToeAgentWorkflow],
-        plugins=[AgentHarnessPlugin(tools=activities.ALL_TOOLS)],
+        plugins=[AgentKitPlugin(tools=activities.ALL_TOOLS)],
     ):
         try:
             yield env.client, task_queue

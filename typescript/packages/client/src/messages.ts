@@ -64,7 +64,7 @@ export interface Steering {
 }
 
 /** One inbound message and its answer, narrowed on `handler` to that handler's types. */
-export type HarnessMessage<A extends AgentSchema = UntypedAgent> = {
+export type KitMessage<A extends AgentSchema = UntypedAgent> = {
   [H in HandlerName<A>]: MessageFields & {
     handler: H;
     input: HandlerInput<A, H>;

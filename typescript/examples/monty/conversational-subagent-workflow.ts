@@ -30,12 +30,12 @@ import {
   defineAgent,
   handler,
   subagentToolset,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   InteractionConversation,
   functionParam,
   googleGenaiClient,
-} from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+} from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 import { workflowInfo } from "@temporalio/workflow";
 import {
   SET_MODEL_DESCRIPTION,

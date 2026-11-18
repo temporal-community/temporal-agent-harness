@@ -14,7 +14,7 @@ from moto.server import ThreadedMotoServer
 from temporalio.api.common.v1 import Payload
 from temporalio.contrib.pydantic import pydantic_data_converter
 
-from temporal_agent_harness.utils.large_payload import (
+from temporal_agent_kit.utils.large_payload import (
     DEFAULT_PAYLOAD_SIZE_THRESHOLD,
     DEFAULT_PAYLOAD_STORAGE,
     LocalFileStorageDriver,

@@ -1,12 +1,12 @@
 """The backend seam.
 
-Implement `AgentBackend.run_turn` against your Temporal harness:
+Implement `AgentBackend.run_turn` against Agent Kit:
 start/signal the workflow with the prompt, then translate your durable
 event stream into calls on the `AgentTurn` helper. The shim takes care of
 OpenCode wire formats, event broadcasting, and message bookkeeping.
 
-This example's implementation is `HarnessBackend` (see `harness_backend.py`),
-which fronts the `CodingAgent` workflow through the packaged harness HTTP server.
+This example's implementation is `AgentKitBackend` (see `agent_kit_backend.py`),
+which fronts the `CodingAgent` workflow through the packaged Agent Kit HTTP server.
 """
 
 from __future__ import annotations
@@ -255,7 +255,7 @@ class AgentTurn:
 
 
 class AgentBackend(Protocol):
-    """Implement this against your Temporal harness."""
+    """Implement this against Agent Kit."""
 
     async def run_turn(self, turn: AgentTurn) -> None:
         """Handle one user prompt.

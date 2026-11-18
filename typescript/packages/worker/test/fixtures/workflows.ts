@@ -37,7 +37,7 @@ import {
   type AutoApprovalContext,
   type AutoApprovalDecision,
   type AutoModeEvaluator,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 
 const TextInput = z.object({ text: z.string() });
 const lastReplyQuery = defineQuery<string | null>("last_reply");

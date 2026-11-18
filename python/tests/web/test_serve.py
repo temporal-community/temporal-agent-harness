@@ -1,4 +1,4 @@
-"""``run_server``: the process around the web app that ``temporal-agent-harness serve`` runs."""
+"""``run_server``: the process around the web app that ``temporal-agent-kit serve`` runs."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from temporal_agent_harness.web import serve
+from temporal_agent_kit.web import serve
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def test_serve_without_a_console_says_how_to_get_one_and_still_serves(
     err = capsys.readouterr().err
     assert "No browser console" in err
     assert "PyPI" in err
-    assert "bazel run //python/temporal_agent_harness/web:cli -- serve" in err
+    assert "bazel run //python/temporal_agent_kit/web:cli -- serve" in err
     assert len(served_apps) == 1
 
 

@@ -4,13 +4,13 @@ Most agents call tools one at a time — a round-trip per call. **Code Mode** ha
 single tool that runs a Python *script* over your tools, so one turn can search, filter, branch,
 and act across many calls with ordinary control flow and `asyncio.gather` concurrency.
 
-`agent.code_mode_tool(tools, name=...)` takes any list of harness tools and returns one inline
+`agent.code_mode_tool(tools, name=...)` takes any list of Agent Kit tools and returns one inline
 tool. Its generated description tells the model the sandbox contract and every host function's
 signature + result shape — derived from your tools, so you never hand-write or maintain it. Hand
 the returned tool to your model's tool-calling loop like any other tool.
 
 ```python
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 # Any @agent.activity_tool_defn / @agent.tool_defn tools — including a subagent toolset.
 run_code = agent.code_mode_tool(
@@ -51,7 +51,7 @@ run_code = agent.code_mode_tool(
   plain `open()` and `pathlib`. A mount's backend is any async `FileSystem` your workflow can
   await (an activity, a Nexus operation, a child workflow), the built-in
   `agent.InMemoryFileSystem` (optionally seeded by an activity), or an `agent.ActivityFileSystem`:
-  plain async methods the harness runs as activities for you. Every file operation goes through
+  plain async methods Agent Kit runs as activities for you. Every file operation goes through
   the runner as an `fs_*` tool call, keeping the approval policy and tool events.
 - **Files you can watch.** The console's **VFS File Mounts** pane shows a mount's tree as the agent works.
   Declare the mount on the agent class with `agent.vfs_mount(...)` and bind it in `@agent.init`.
@@ -116,7 +116,7 @@ class Bucket(agent.ActivityFileSystem[BucketConfig], name="bucket"):
     # write / mkdir / delete / rename, for a writable mount
 
 # workflow:  files = agent.vfs_mount("/files", Bucket, ...); self.files.bind(BucketConfig(...))
-# worker:    AgentHarnessPlugin(filesystems=[Bucket])   # registers vfs.bucket.stat, .read, ...
+# worker:    AgentKitPlugin(filesystems=[Bucket])   # registers vfs.bucket.stat, .read, ...
 ```
 
 Viewing an `ActivityFileSystem` file in the console needs a Temporal server that runs
@@ -160,12 +160,12 @@ The [memory example](../../python/examples/code_mode_memory) keeps a user's memo
 A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
 [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and
 the durable bodies of any activity-backed host tools, which
-[`AgentHarnessPlugin`](../../python/README.md#running-a-worker--one-plugin) registers. Code Mode has no activities of
+[`AgentKitPlugin`](../../python/README.md#running-a-worker--one-plugin) registers. Code Mode has no activities of
 its own. A worker without the extra fails the workflow task that builds the tool, so Temporal
 retries it until a worker with the extra picks it up:
 
 ```python
-client = await Client.connect(..., plugins=[AgentHarnessPlugin(tools=my_tools)])
+client = await Client.connect(..., plugins=[AgentKitPlugin(tools=my_tools)])
 worker = Worker(client, task_queue=..., workflows=[MyAgent])
 ```
 

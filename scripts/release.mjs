@@ -12,8 +12,8 @@
 //
 // Units:
 //   pypi    python/pyproject.toml; branch release/pypi-v<version>; tag <version> (bare, as the
-//           `pypi` GitHub environment's tag policy requires); publish.yml.
-//   npm     every typescript/packages/* manifest named @temporalio/agent-harness[-*], at one
+//           `pypi-agent-kit` GitHub environment's tag policy requires); publish-agent-kit.yml.
+//   npm     every typescript/packages/* manifest named @temporalio/agent-kit[-*], at one
 //           shared version (lockstep); branch release/npm-v<version>; tag npm-v<version>;
 //           publish-npm.yml publishes those that are not private, in dependency order.
 
@@ -25,10 +25,10 @@ import { pathToFileURL } from 'node:url';
 
 export const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const units = ['pypi', 'npm'];
-const bumps = ['patch', 'minor', 'major'];
+const bumps = ['patch', 'minor'];
 export const PACKAGES_DIR = 'typescript/packages';
 const WORKSPACE_DIRS = ['typescript/packages', 'typescript/apps', 'typescript/examples'];
-const SCOPE = '@temporalio/agent-harness';
+const SCOPE = '@temporalio/agent-kit';
 const PYPROJECT = 'python/pyproject.toml';
 const README = 'README.md';
 
@@ -43,27 +43,28 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function bumpVersion(version, bump) {
   assert(stableVersion.test(version), `Current version must be stable, not ${version}`);
-  assert(bumps.includes(bump), 'Select patch, minor, or major');
+  assert(bumps.includes(bump), 'Select patch or minor');
   const [major, minor, patch] = version.split('.').map(Number);
-  if (bump === 'major') return `${major + 1}.0.0`;
   if (bump === 'minor') return `${major}.${minor + 1}.0`;
   return `${major}.${minor}.${patch + 1}`;
 }
 
 export function validateInputs(unit, bump) {
   assert(units.includes(unit), 'Select pypi or npm');
-  assert(bumps.includes(bump), 'Select patch, minor, or major');
+  assert(bumps.includes(bump), 'Select patch or minor');
 }
 
 export function unitDetails(unit, version) {
   assert(units.includes(unit), `Unknown release unit ${unit}`);
   assert(stableVersion.test(version), `Release version must be stable, not ${version}`);
+  // 1.0 is a deliberate stability decision, made by changing this check, never by a bump.
+  assert(version.startsWith('0.'), `Releases stay below 1.0.0, not ${version}`);
   return {
     unit,
     version,
     branch: `release/${unit}-v${version}`,
     tag: unit === 'pypi' ? version : `npm-v${version}`,
-    publishWorkflow: unit === 'pypi' ? 'publish.yml' : 'publish-npm.yml',
+    publishWorkflow: unit === 'pypi' ? 'publish-agent-kit.yml' : 'publish-npm.yml',
     testTargets: unit === 'pypi'
       ? '//python/tests:test_packaged_distributions'
       : `//${PACKAGES_DIR}/...`,
@@ -119,12 +120,12 @@ export function updateDevelopmentPins(unit, previous, next, root = '.') {
       else if (/\.(md|tmpl)$/.test(entry.name)) paths.push(path);
     }
   }
-  for (const directory of ['docs', 'python/temporal_agent_harness/skills', 'typescript/packages/core/skills']) walk(directory);
+  for (const directory of ['docs', 'python/temporal_agent_kit/skills', 'typescript/packages/core/skills']) walk(directory);
   for (const pkg of lockstepPackages(root)) paths.push(`${pkg.directory}/README.md`);
   const escaped = escapeRegExp(previous);
   const pattern = unit === 'pypi'
-    ? new RegExp(`(temporal-agent-harness(?:\\[[^\\]]+\\])?==)${escaped}(?![\\d.])`, 'g')
-    : new RegExp(`(@temporalio/agent-harness(?:-[a-z-]+)?@)${escaped}(?![\\d.])`, 'g');
+    ? new RegExp(`(temporal-agent-kit(?:\\[[^\\]]+\\])?==)${escaped}(?![\\d.])`, 'g')
+    : new RegExp(`(@temporalio/agent-kit(?:-[a-z-]+)?@)${escaped}(?![\\d.])`, 'g');
   for (const relative of new Set(paths)) {
     const path = join(root, relative);
     if (!existsSync(path)) continue;
@@ -274,9 +275,9 @@ export function prepare(env = process.env, run = execute) {
     version = bumpVersion(previous, bump);
     writeFileSync(PYPROJECT, setPythonVersion(pyproject, version));
     run('uv', ['lock'], { cwd: 'python' });
-    assert(readFileSync(README, 'utf8').includes(`temporal-agent-harness[ui]==${previous}`),
+    assert(readFileSync(README, 'utf8').includes(`temporal-agent-kit[ui]==${previous}`),
       `${README} must pin the current Python package version`);
-    lines.push(`Release \`temporal-agent-harness\` ${previous} → **${version}** to PyPI.`, '',
+    lines.push(`Release \`temporal-agent-kit\` ${previous} → **${version}** to PyPI.`, '',
       `Changed: \`${PYPROJECT}\`, \`python/uv.lock\` (\`uv lock\`), the README's install pins.`,
       'Review the lockfile diff for dependency changes beyond the version.');
   } else {

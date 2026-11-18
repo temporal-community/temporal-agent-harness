@@ -5,9 +5,9 @@
 - ``SkillsDisk``: this example's ``skills/`` folder. Read-only: it implements no write methods,
   so no activity can change it, whatever config is sent.
 
-Their methods are plain async code that touches the disk; the harness runs each one as an
+Their methods are plain async code that touches the disk; Agent Kit runs each one as an
 activity (``vfs.local-disk.stat``, ``vfs.skills-disk.read``, ...) on whichever worker registers
-it with ``AgentHarnessPlugin(filesystems=[LocalDisk, SkillsDisk])``, and the console's file
+it with ``AgentKitPlugin(filesystems=[LocalDisk, SkillsDisk])``, and the console's file
 viewer calls ``vfs.<name>.view`` the same way.
 
 A config is untrusted input: anyone who can reach the file viewer chooses one. So the only
@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 # Beside this file's real location: under Bazel it is a symlink in a runfiles tree, which neither
 # holds the example's folders nor is a place to keep memories.

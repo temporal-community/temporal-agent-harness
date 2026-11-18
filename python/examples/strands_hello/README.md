@@ -1,19 +1,19 @@
 # Hello-world Strands Agents agent
 
-A conversational agent built with **Strands Agents** on the harness. It chats in plain text and
-uses every kind of tool a harness Strands agent takes. It shows the Strands integration end to
-end: the model call, the Strands model activity where the harness translates the raw stream, and
+A conversational agent built with **Strands Agents** on Agent Kit. It chats in plain text and
+uses every kind of tool an Agent Kit Strands agent takes. It shows the Strands integration end to
+end: the model call, the Strands model activity where Agent Kit translates the raw stream, and
 the live turn stream the web UI draws.
 
 The integration is the Temporal Strands plugin from
-[`temporalio/ai-integrations`](https://github.com/temporalio/ai-integrations), vendored into the
-harness as `temporal_agent_harness.ai_sdks.strands_agents` with a streaming seam added, plus the
-glue in `temporal_agent_harness.ai_sdks.strands_agents_harness`.
+[`temporalio/ai-integrations`](https://github.com/temporalio/ai-integrations), vendored into
+Agent Kit as `temporal_agent_kit.ai_sdks.strands_agents` with a streaming seam and the Agent Kit
+glue added.
 
 ## What it demonstrates
 
-- **`harness_strands_agent(runner, ...)`** builds a Strands `TemporalAgent` wired to the harness.
-  Each model call runs in the plugin's model activity. There the harness observer turns the raw
+- **`kit_strands_agent(runner, ...)`** builds a Strands `TemporalAgent` wired to Agent Kit.
+  Each model call runs in the plugin's model activity. There the Agent Kit observer turns the raw
   Strands stream into `model_interaction_started` → `thought_summary` / `reply_delta` /
   `tool_requested` → `model_interaction_ended` (with token usage) on the current turn.
 - **One tool of each kind**, all adapted with `as_strands_tool(runner, ...)` so each call runs
@@ -27,13 +27,13 @@ glue in `temporal_agent_harness.ai_sdks.strands_agents_harness`.
   | `ask_user` | `@agent.callback_tool_defn` | in the console: the call waits in the workflow until you answer |
   | `sandbox_shell`, `sandbox_file_editor` | vended by `TemporalSandbox("scratch")` | on the worker's `scratch` sandbox, one activity per operation |
 
-- **Human input without Strands interrupts.** `ask_user` is a harness callback tool: it publishes
+- **Human input without Strands interrupts.** `ask_user` is an Agent Kit callback tool: it publishes
   `callback_requested`, waits durably in the workflow, and returns your answer as the tool's
-  result. A harness Strands agent refuses Strands interrupts; callback tools and the approval
+  result. An Agent Kit Strands agent refuses Strands interrupts; callback tools and the approval
   policy take their place.
 - **Mid-turn steering.** `ask` accepts messages mid-turn (`MidTurn.ACCEPT`). A message sent
   while the agent is working joins the open turn, and the handler queues it with
-  `runner.steer(...)` instead of starting another run. The harness appends it to the next tool
+  `runner.steer(...)` instead of starting another run. Agent Kit appends it to the next tool
   result the model sees, so the agent changes course without stopping. `tool_end` keeps the
   tool's own output, and the turn stream shows `steering_enqueued` then `steering_claimed`.
 - **Approvals.** The agent's policy is `ToolApprovalPolicy.allow_inherently_safe()`. The weather,
@@ -52,8 +52,8 @@ workflow code does not change.
 
 | File | Role |
 |---|---|
-| `workflow.py` | `StrandsHelloAgent`: the harness agent, its tools, and the `TemporalSandbox`. |
-| `worker.py` | Worker hosting the workflow: `StrandsPlugin` (OpenAI model, `scratch` sandbox, harness observer) and `AgentHarnessPlugin` (with `get_local_time`'s activity). |
+| `workflow.py` | `StrandsHelloAgent`: the Agent Kit agent, its tools, and the `TemporalSandbox`. |
+| `worker.py` | Worker hosting the workflow: `StrandsPlugin` (OpenAI model, `scratch` sandbox, Agent Kit observer) and `AgentKitPlugin` (with `get_local_time`'s activity). |
 | `agents.toml`, `StrandsHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 ## Run it

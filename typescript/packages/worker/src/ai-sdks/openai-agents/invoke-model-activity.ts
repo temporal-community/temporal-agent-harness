@@ -15,12 +15,12 @@ import { APIError } from "openai";
 import { activityInfo, heartbeat } from "@temporalio/activity";
 import { ApplicationFailure, type Duration } from "@temporalio/common";
 import { z } from "zod";
-import { TurnStreamContextSchema } from "@temporalio/agent-harness/harness/agent-protocol";
+import { TurnStreamContextSchema } from "@temporalio/agent-kit/agent-protocol";
 import {
   observeStream,
   type ObserverFactory,
 } from "../integration-helpers/stream-observer.ts";
-import type { HarnessStreamToken } from "../openai-agents-harness.ts";
+import type { KitStreamToken } from "./kit.ts";
 
 /** The activity name the official workflow-side model stub schedules for a streamed call. */
 export const INVOKE_MODEL_STREAM_ACTIVITY = "invokeModelStreamActivity";
@@ -80,7 +80,7 @@ function fromSerializedModelRequest(wire: SerializedModelRequest): ModelRequest 
 }
 
 /** The harness route out of `streamingTopic`, or a non-retryable failure naming the mistake. */
-function routeOf(streamingTopic: string): HarnessStreamToken["context"] {
+function routeOf(streamingTopic: string): KitStreamToken["context"] {
   let json: unknown;
   try {
     json = JSON.parse(streamingTopic);
@@ -90,12 +90,12 @@ function routeOf(streamingTopic: string): HarnessStreamToken["context"] {
   const route = HarnessStreamRouteSchema.safeParse(json);
   if (route.success) return route.data.context;
   throw ApplicationFailure.create({
-    type: "HarnessStreamRouteMissing",
+    type: "KitStreamRouteMissing",
     nonRetryable: true,
     message:
-      `The streamed model call's streamingTopic (${JSON.stringify(streamingTopic)}) is not a ` +
-      "harness stream route. Run the agent with runStreamed() from " +
-      "@temporalio/agent-harness/ai-sdks/openai-agents-harness, and leave the plugin's " +
+      `The streamed model call's streamingTopic (${JSON.stringify(streamingTopic)}) is not an ` +
+      "Agent Kit stream route. Run the agent with runStreamed() from " +
+      "@temporalio/agent-kit/ai-sdks/openai-agents, and leave the plugin's " +
       "modelParams.streamingTopic unset.",
   });
 }
@@ -177,7 +177,7 @@ function startAdaptiveHeartbeat(): () => void {
  */
 export function createInvokeModelStreamActivity(
   modelProvider: ModelProvider,
-  observerFactory: ObserverFactory<HarnessStreamToken, StreamEvent>,
+  observerFactory: ObserverFactory<KitStreamToken, StreamEvent>,
 ): (input: InvokeModelStreamActivityInput) => Promise<SerializedStreamEvent[]> {
   return async function invokeModelStreamActivity(input) {
     const context = routeOf(input.streamingTopic);

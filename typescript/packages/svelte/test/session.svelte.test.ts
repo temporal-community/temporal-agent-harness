@@ -9,7 +9,7 @@ import type {
   SessionTransport,
   SubmitMessageResponse,
   WorkflowExecutionState
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 import { AgentSession, SessionStore } from "../src/lib/index.js";
 

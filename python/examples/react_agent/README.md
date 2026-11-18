@@ -1,10 +1,10 @@
 # ReAct agent
 
-A conversational agent on the harness with the **OpenAI Agents SDK** in the **ReAct pattern**:
+A conversational agent on Agent Kit with the **OpenAI Agents SDK** in the **ReAct pattern**:
 it *reasons*, then *acts* by calling a tool, and loops on the result until it can answer. It's the
-harness form of workshop **demo2 + demo3** (OpenAI Agents SDK + Temporal integration, then MCP):
-the Agents SDK drives the reason-act loop, Temporal makes it durable, and the harness standardizes
-it behind the same contract, streaming path, and (later) approval policy as every other harness
+Agent Kit form of workshop **demo2 + demo3** (OpenAI Agents SDK + Temporal integration, then MCP):
+the Agents SDK drives the reason-act loop, Temporal makes it durable, and Agent Kit standardizes
+it behind the same contract, streaming path, and (later) approval policy as every other Agent Kit
 agent.
 
 ## What it does
@@ -30,24 +30,24 @@ Ask it a question and it chains tools to find the answer:
 - **A real ReAct loop.** The model reasons about the question, calls a tool, reads the result, and
   decides the next action — chaining several real API calls (and picking the right chain) until it
   can answer, all driven by the SDK's `Runner`.
-- **Harness-owned, activity-backed tools.** The weather/geo/IP tools are durable
+- **Agent Kit-owned, activity-backed tools.** The weather/geo/IP tools are durable
   `@agent.activity_tool_defn`s (they do network I/O, so they run as Temporal activities, never
   inline), adapted onto the SDK with `as_openai_agent_tools(...)`. Every call flows through the
-  harness's `run_tool`, so the harness keeps the approval policy and each tool's `tool_start` /
-  `tool_end` / `tool_error` events. Registering the tools through the harness now is what makes a
+  Agent Kit's `run_tool`, so Agent Kit keeps the approval policy and each tool's `tool_start` /
+  `tool_end` / `tool_error` events. Registering the tools through Agent Kit now is what makes a
   future HITL demo **a policy change, not a rewiring**.
 - **A durable MCP server.** The F1 tools come from an external MCP server registered on the worker
   with `StatelessMCPServerProvider` and referenced in the workflow with
   `stateless_mcp_server("f1-data")`. Each MCP `list_tools` / `call_tool` runs as a Temporal
   activity — durable, retryable, and visible in the Temporal Web UI.
-  - **MCP tools are under harness governance too.** Pass `runner=self._runner` to the
-    factory. The SDK calls `MCPServer.call_tool` directly rather than the harness's
+  - **MCP tools are under Agent Kit governance too.** Pass `runner=self._runner` to the
+    factory. The SDK calls `MCPServer.call_tool` directly rather than Agent Kit's
     `run_tool`, so the factory wraps the server with the runner it needs. Each MCP call is
     then approval-gateable and publishes `tool_start` / `tool_end` / `tool_error` under the
     same `tool_id` as its `tool_requested`, so its turn-stream card resolves like any other
     tool's.
 - **Streaming is a toggle.** By default (`REACT_AGENT_STREAM` unset/`1`) the turn runs
-  `Runner.run_streamed(...)`, so model calls route through the streaming activity and the harness
+  `Runner.run_streamed(...)`, so model calls route through the streaming activity and Agent Kit
   observer translates raw OpenAI events into the live turn stream (`model_interaction_started` →
   `reply_delta` … `tool_requested` … `tool_start` / `tool_end` → `model_interaction_ended`). Set
   `REACT_AGENT_STREAM=0` (in the **worker's** environment) and the turn runs `Runner.run(...)`
@@ -55,7 +55,7 @@ Ask it a question and it chains tools to find the answer:
   still appear on the turn stream; token-by-token `reply_delta` and the `model_interaction_*`
   brackets do not. (The terminal client renders either mode.)
 - **Human-in-the-loop via a callback tool.** `ask_user` is an `@agent.callback_tool_defn` tool: it
-  has **no server-side body**. When the model calls it, the harness publishes a `callback_requested`
+  has **no server-side body**. When the model calls it, Agent Kit publishes a `callback_requested`
   event and **parks the turn in-workflow** (durably — no activity timeout) until an external client
   returns the user's answer, which becomes the tool result and the same turn continues. This is the
   *participation* form of HITL (the model asks the human a question), distinct from tool *approval*
@@ -63,22 +63,22 @@ Ask it a question and it chains tools to find the answer:
   update (`provide_callback_result`), reachable over HTTP at `POST /api/callback-result`. Our
   terminal `client.py` is one such fulfiller; the packaged web UI does not implement one (see below).
 - **No approvals yet.** The approval policy is `dangerously_skip_all()` — tool calls run without a
-  human gate. A future HITL demo flips this to gate the harness-wrapped tools. (`ask_user` is marked
+  human gate. A future HITL demo flips this to gate the Agent Kit-wrapped tools. (`ask_user` is marked
   `inherently_safe`, so even then, *asking* a question is never itself gated.)
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `workflow.py` | `ReactAgent` — the harness agent; one `ask` handler, local tools + `ask_user` adapted onto the SDK plus the F1 MCP server, driven by `Runner.run_streamed`. |
-| `tool_activities.py` | The four location/weather tools as `@agent.activity_tool_defn` activities (httpx), plus `ALL_TOOLS` — the list the worker hands to `AgentHarnessPlugin(tools=...)`. |
+| `workflow.py` | `ReactAgent` — the Agent Kit agent; one `ask` handler, local tools + `ask_user` adapted onto the SDK plus the F1 MCP server, driven by `Runner.run_streamed`. |
+| `tool_activities.py` | The four location/weather tools as `@agent.activity_tool_defn` activities (httpx), plus `ALL_TOOLS` — the list the worker hands to `AgentKitPlugin(tools=...)`. |
 | `human_tools.py` | The `ask_user` human-in-the-loop **callback tool** (`@agent.callback_tool_defn`), plus `HUMAN_TOOLS`. No activity body — fulfilled by a client. |
-| `worker.py` | Worker hosting the workflow. Declares no activities: `AgentHarnessPlugin(tools=...)` registers the four tool bodies (skipping the bodiless `ask_user`) and the OpenAI plugin registers the model activities. Also registers the F1 MCP provider and wires the harness streaming seam. |
+| `worker.py` | Worker hosting the workflow. Declares no activities: `AgentKitPlugin(tools=...)` registers the four tool bodies (skipping the bodiless `ask_user`) and the OpenAI plugin registers the model activities. Also registers the F1 MCP provider and wires the Agent Kit streaming seam. |
 | `client.py` | A terminal client: a session picker that shows which sessions are **waiting on an `ask_user`**, then lets you answer open questions, chat, or create a session — all over HTTP. |
 | `agents.toml`, `ReactAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 The agent is driven by the shared example stack — the packaged `SessionManagerWorkflow` worker plus
-the FastAPI app and web UI (`temporal-agent-harness serve`); registering it (its `harness_agent` in `BUILD.bazel`, which generates `agents.toml`) is all that takes.
+the FastAPI app and web UI (`temporal-agent-kit serve`); registering it (its `agent_kit_agent` in `BUILD.bazel`, which generates `agents.toml`) is all that takes.
 Unlike the simpler examples, it **also ships a terminal `client.py`** — needed to answer `ask_user`,
 since the packaged web UI has no affordance for fulfilling a callback tool.
 
@@ -92,7 +92,7 @@ Prereqs, from the repo root:
 
 ### The F1 MCP server
 
-An external dependency, not bundled here — this example is the harness port of the workshop's
+An external dependency, not bundled here — this example is the Agent Kit port of the workshop's
 [demo3-mcp](https://github.com/temporal-community/ai-agents-workshop-python/blob/main/demo3-mcp/README.md),
 and the F1 tools come from [`rakeshgangwar/f1-mcp-server`](https://github.com/rakeshgangwar/f1-mcp-server).
 It's a Node.js (TypeScript) MCP server that shells out to `python3` for FastF1 data, so it needs
@@ -136,7 +136,7 @@ with `/api` proxied to the server on :8000.)
 
 **Two ways to drive it.** The **web UI** (open http://localhost:8000, pick **ReAct Agent**) is
 great for the tool-chaining demo — each tool call appears live and the reply streams in token by
-token; weather tools show as harness tool cards, F1 MCP calls appear as activities in the Temporal
+token; weather tools show as Agent Kit tool cards, F1 MCP calls appear as activities in the Temporal
 Web UI (see the caveat above). But the web UI **cannot answer `ask_user`** — it has no fulfillment
 affordance — so use the **terminal client** (`just client`) to exercise the human-in-the-loop tool.
 
@@ -159,8 +159,8 @@ exits.
 Without `just`, the equivalent commands (from the repo root):
 
 ```sh
-uv run --group examples temporal-agent-harness session-manager
-uv run --group examples temporal-agent-harness serve examples/react_agent/agents.toml --host 0.0.0.0 --port 8000
+uv run --group examples temporal-agent-kit session-manager
+uv run --group examples temporal-agent-kit serve examples/react_agent/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.react_agent.worker
 uv run --group examples python -m examples.react_agent.client
 ```

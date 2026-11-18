@@ -6,9 +6,9 @@ booked so far, and what is still left to do.
 
 It is deliberately *not* an activity. The board is the agent's own notes, not an action
 on the outside world, so every tool here is an ``@agent.tool_defn`` that runs INLINE in
-the workflow and writes to a :class:`~temporal_agent_harness.harness.state.StateRef` the
+the workflow and writes to a :class:`~temporal_agent_kit.state.StateRef` the
 workflow owns. That is what makes it observable: the workflow declares it once, as the class
-attribute ``trip_board = agent.state(TripBoard)``, and from then on the harness publishes a
+attribute ``trip_board = agent.state(TripBoard)``, and from then on Agent Kit publishes a
 snapshot and then one RFC 6902 patch per committed ``mutate()`` block onto the agent's
 ``turn_events`` stream. The console's AGENT STATE pane folds those back into the document
 and marks exactly what each commit touched — so a booking landing on the board shows up as
@@ -33,8 +33,8 @@ from typing import Literal
 from pydantic import BaseModel
 from temporalio import workflow
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.state import HarnessState, StateRef
+from temporal_agent_kit import agent
+from temporal_agent_kit.state import AgentState, StateRef
 
 
 TripStatus = Literal["collecting", "booked", "cancelled"]
@@ -56,19 +56,19 @@ DEFAULT_TASKS = (
 # The observable state
 # ---------------------------------------------------------------------------
 #
-# Plain HarnessState models: immutable at rest, mutable only inside `ref.mutate()`.
+# Plain AgentState models: immutable at rest, mutable only inside `ref.mutate()`.
 # Every field below is addressable by JSON pointer, which is the whole point — ticking one
 # task emits `replace /trips/0/remaining/2/done`, not a re-send of the trip.
 
 
-class TripTask(HarnessState):
+class TripTask(AgentState):
     """One thing the trip still needs, and whether it has been done."""
 
     text: str
     done: bool = False
 
 
-class Booking(HarnessState):
+class Booking(AgentState):
     """A flight or hotel this trip has actually booked."""
 
     kind: BookingKind
@@ -79,7 +79,7 @@ class Booking(HarnessState):
     price_usd: float = 0.0
 
 
-class Trip(HarnessState):
+class Trip(AgentState):
     """One trip the agent is collecting."""
 
     trip_id: str
@@ -91,7 +91,7 @@ class Trip(HarnessState):
     remaining: list[TripTask] = []
 
 
-class TripBoard(HarnessState):
+class TripBoard(AgentState):
     """Every trip this session is working on, newest last."""
 
     trips: list[Trip] = []

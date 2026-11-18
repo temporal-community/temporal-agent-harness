@@ -1,19 +1,19 @@
-# @temporalio/agent-harness-codegen
+# @temporalio/agent-kit-codegen
 
-Generate TypeScript application types from a Python or TypeScript harness agent's JSON Schema.
+Generate TypeScript application types from a Python or TypeScript Agent Kit agent's JSON Schema.
 The generator is a public npm package starting with the next npm release; it was previously
 repository-only tooling. No checkout or Bazel installation is needed to use the package.
 
 ```bash
-npm install --save-dev --save-exact @temporalio/agent-harness-codegen@0.5.0
+npm install --save-dev --save-exact @temporalio/agent-kit-codegen@0.5.0
 # Export the schema using the SDK that defines your agent:
-uv run temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
-# or: npx agent-harness-schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
-npx harness-codegen agent.schema.json -o Agent.ts
+uv run temporal-agent-kit schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
+# or: npx agent-kit-schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
+npx agent-kit-codegen agent.schema.json -o Agent.ts
 ```
 
 The version above tracks this development branch and becomes installable when released.
-Use the same release version as your other npm harness packages.
+Use the same release version as your other npm Agent Kit packages.
 
 The output has an interface per model the agent exposes (its `@agent.accepts` input and output
 models and its `agent.state(...)` types) and one mapping type naming them:
@@ -54,7 +54,7 @@ It is off by default, so the generated files examples commit stay as they are.
 
 ## The event protocol
 
-With `--protocol`, it reads `temporal-agent-harness schema --protocol` instead and writes the
+With `--protocol`, it reads `temporal-agent-kit schema --protocol` instead and writes the
 event stream's types. The client package (`typescript/packages/client`) commits that output as
 its `src/protocol.ts`; `bazel run //typescript/packages/client/src:protocol_codegen_update` regenerates it.
 

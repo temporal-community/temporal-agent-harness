@@ -15,8 +15,8 @@ from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 
-from temporal_agent_harness.harness.agent_client import MidTurnRejectedError
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_client import MidTurnRejectedError
+from temporal_agent_kit.agent_protocol import (
     AGENT_ID_LENGTH,
     AgentConfig,
     AgentMessageReply,
@@ -29,8 +29,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingTurn,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.harness.agent_protocol.agent_interface import CallbackResultAck
-from temporal_agent_harness.nexus_agent_adapter.generated import (
+from temporal_agent_kit.agent_protocol.agent_interface import CallbackResultAck
+from temporal_agent_kit.nexus_agent_adapter.generated import (
     ApprovalPolicy,
     PollMessagesOutput,
     ProvideCallbackResultInput,
@@ -43,7 +43,7 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
     StartConfigAutoApprovalCriteria,
     StreamItem,
 )
-from temporal_agent_harness.nexus_agent_adapter.handler import (
+from temporal_agent_kit.nexus_agent_adapter.handler import (
     AgentServiceHandler,
     Config,
     _is_workflow_already_completed,
@@ -129,7 +129,7 @@ async def _forwarded_callback_result(
     return mock_agent_client.provide_callback_result.await_args.kwargs["result"]
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_kit.nexus_agent_adapter.handler.AgentClient")
 async def test_provide_callback_result_forwards_an_object_result_as_is(
     mock_agent_client_cls: MagicMock,
 ) -> None:
@@ -139,7 +139,7 @@ async def test_provide_callback_result_forwards_an_object_result_as_is(
     assert forwarded == {"answer": 42}
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_kit.nexus_agent_adapter.handler.AgentClient")
 async def test_provide_callback_result_unwraps_a_scalar_result(
     mock_agent_client_cls: MagicMock,
 ) -> None:
@@ -149,7 +149,7 @@ async def test_provide_callback_result_unwraps_a_scalar_result(
     assert forwarded == "Ada Lovelace"
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_kit.nexus_agent_adapter.handler.AgentClient")
 async def test_send_agent_message_starts_the_session_with_the_callers_config_and_data(
     mock_agent_client_cls: MagicMock,
 ) -> None:
@@ -205,7 +205,7 @@ async def test_send_agent_message_starts_the_session_with_the_callers_config_and
     assert out.stream_head_offset == 17
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_kit.nexus_agent_adapter.handler.AgentClient")
 async def test_send_agent_message_without_start_config_uses_the_agents_defaults(
     mock_agent_client_cls: MagicMock,
 ) -> None:
@@ -236,7 +236,7 @@ async def test_send_agent_message_rejects_an_invalid_start_config_as_bad_request
     assert "startConfig" in str(raised.value)
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_kit.nexus_agent_adapter.handler.AgentClient")
 async def test_send_agent_message_reports_a_mid_turn_rejection_as_a_typed_bad_request(
     mock_agent_client_cls: MagicMock,
 ) -> None:
@@ -255,7 +255,7 @@ async def test_send_agent_message_reports_a_mid_turn_rejection_as_a_typed_bad_re
     assert cause.type == "MidTurnRejected"
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_kit.nexus_agent_adapter.handler.AgentClient")
 async def test_query_agent_status_carries_every_status_field(
     mock_agent_client_cls: MagicMock,
 ) -> None:

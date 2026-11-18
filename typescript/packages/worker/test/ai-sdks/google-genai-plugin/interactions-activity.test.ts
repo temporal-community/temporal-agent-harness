@@ -7,12 +7,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Interactions } from "@google/genai";
-import type { AgentStreamItem } from "@temporalio/agent-harness/harness/agent-protocol";
+import type { AgentStreamItem } from "@temporalio/agent-kit/agent-protocol";
 import {
   InteractionsStreamObserver,
   makeGeminiInteractionsCreateStreamed,
 } from "../../../src/ai-sdks/google-genai-plugin/index.ts";
-import type { TurnEventPublisher } from "../../../src/harness/agent-workflow.ts";
+import type { TurnEventPublisher } from "../../../src/agent-workflow.ts";
 import { observeStream } from "../../../src/ai-sdks/integration-helpers/stream-observer.ts";
 import { ScriptedGemini, call, completed, created, text, type Event } from "./script.ts";
 

@@ -3,7 +3,7 @@
 There is one server (HTTP API, session manager, console) for agents written with either SDK. Here
 it serves ``BriefedTsAgent`` from //typescript/packages/worker/test/serving: the TypeScript worker
 runs as a subprocess on the dev server, the registry and schema document are the committed ones
-the TypeScript ``agent-harness-schema`` bin wrote, and the session goes through the same routes
+the TypeScript ``agent-kit-schema`` bin wrote, and the session goes through the same routes
 the console uses.
 """
 
@@ -19,8 +19,8 @@ import pytest
 import pytest_asyncio
 from pydantic import JsonValue
 
-from temporal_agent_harness.web import (
-    create_agent_harness_app,
+from temporal_agent_kit.web import (
+    create_agent_kit_app,
     create_session_manager_worker,
     load_agent_registry,
 )
@@ -48,7 +48,7 @@ async def http(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[httpx.
             env.delenv("TEMPORAL_PROFILE", raising=False)
             env.setenv("TEMPORAL_ADDRESS", client.service_client.config.target_host)
             env.setenv("TEMPORAL_NAMESPACE", client.namespace)
-            app = create_agent_harness_app(registry=registry)
+            app = create_agent_kit_app(registry=registry)
             async with app.router.lifespan_context(app):
                 async with create_session_manager_worker(app.state.temporal):
                     async with httpx.AsyncClient(

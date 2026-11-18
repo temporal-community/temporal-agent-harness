@@ -1,7 +1,7 @@
 // ABOUTME: Pins that a failed request keeps the server's `error` code, not just its message. The
 // approval card needs it to tell "someone already answered this" — another tab, or an "Always
 // allow" rule — from a real failure: the first is a muted "Already decided", the second is red.
-// The code string is what temporal_agent_harness/web/app.py forwards from the workflow's update
+// The code string is what temporal_agent_kit/web/app.py forwards from the workflow's update
 // validator, so a rename on either side is caught here.
 //
 // Also pins how a failed body becomes the message a card shows. FastAPI answers a 422 with

@@ -1,14 +1,14 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
-load("//bazel:codegen.bzl", "harness_client_sdk")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
+load("//bazel:codegen.bzl", "agent_kit_client_sdk")
 
 py_library(
     name = "editor_tools",
     srcs = ["editor_tools.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
-    deps = ["//python/temporal_agent_harness/harness:agent"],
+    deps = ["//python/temporal_agent_kit:agent"],
 )
 
 py_library(
@@ -17,7 +17,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_kit/state:__init__",
         "@pypi//pydantic",
     ],
 )
@@ -30,10 +30,10 @@ py_library(
     deps = [
         ":models",
         ":step_tools",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "@pypi//openai_agents",
         "@pypi//temporalio",
     ],
@@ -51,7 +51,7 @@ py_library(
     ],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
@@ -60,10 +60,9 @@ harness_module_binary(
         ":step_agent",
         ":step_tools",
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//temporalio",
     ],
 )
@@ -78,16 +77,16 @@ py_library(
         ":models",
         ":step_agent",
         ":step_tools",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "@pypi//openai_agents",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "DagBuilderAgent",
     agent = "examples.agent_dag.workflow:DagBuilderAgentWorkflow",
     description = """
@@ -104,7 +103,7 @@ Mode, where each `run_agent` call starts a DagStepAgent subagent. Best driven fr
 
 # Step agents are started by a running flow, as its subagents, never as sessions of their own, so
 # the registry does not list one; its schema is for its client SDK.
-harness_agent(
+agent_kit_agent(
     name = "DagStepAgent",
     agent = "examples.agent_dag.step_agent:DagStepAgentWorkflow",
     deps = [":step_agent"],
@@ -112,7 +111,7 @@ harness_agent(
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/agent_dag:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "DagBuilderAgent.schema.json",
@@ -124,7 +123,7 @@ harness_agent_registry(
 
 # Both agents' typed TypeScript clients, client_sdk/<Agent>.ts:
 # `bazel run //python/examples/agent_dag:client_sdk_update` rewrites them.
-harness_client_sdk(
+agent_kit_client_sdk(
     name = "client_sdk",
     srcs = [
         "client_sdk/DagBuilderAgent.ts",

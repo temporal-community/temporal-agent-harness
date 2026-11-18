@@ -9,9 +9,9 @@ never touches Temporal — it just calls a plain function.
 Each is an ``@agent.activity_tool_defn``, so when the workflow dispatches it (via
 ``run_tool``) the activity publishes its own ``tool_start``/``tool_end`` lifecycle events
 on the turn stream — each host call the script makes shows up as a distinct tool
-invocation, like any other harness tool. The decorated object is the in-workflow
+invocation, like any other Agent Kit tool. The decorated object is the in-workflow
 dispatcher; the worker registers each one's durable activity body by handing ``ALL_TOOLS``
-to ``AgentHarnessPlugin(tools=...)``.
+to ``AgentKitPlugin(tools=...)``.
 
 No ``from __future__ import annotations`` here, for consistency with the rest of the
 agent's Temporal-facing modules (stringized annotations trip the pydantic converter).
@@ -25,7 +25,7 @@ from datetime import timedelta
 from temporalio import activity
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 from examples.monty.travel_models import (
     Flight,
@@ -239,7 +239,7 @@ async def get_trip_summary_activity(request: TripSummaryRequest) -> TripSummaryR
 
 # The agent's toolset, declared once. The module-level names above are the in-workflow
 # dispatchers; each workflow wraps this list in a Code Mode tool (exposing them to the script
-# as host functions), and the worker hands the same list to ``AgentHarnessPlugin(tools=...)``,
+# as host functions), and the worker hands the same list to ``AgentKitPlugin(tools=...)``,
 # which registers each one's durable activity body.
 ALL_TOOLS = [
     search_flights_activity,

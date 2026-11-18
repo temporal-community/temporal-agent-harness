@@ -16,14 +16,14 @@ import pytest
 from pydantic import TypeAdapter
 
 from tests.state.support import StateHost
-from temporal_agent_harness.harness.state import HarnessState
-from temporal_agent_harness.harness.state.errors import StateSchemaError
-from temporal_agent_harness.harness.state.session import escape
+from temporal_agent_kit.state import AgentState
+from temporal_agent_kit.state.errors import StateSchemaError
+from temporal_agent_kit.state.session import escape
 
 from tests.state.replay import apply_ops
 
 
-class Weird(HarnessState):
+class Weird(AgentState):
     """A field whose Python name needs escaping in a JSON pointer."""
 
     plain: int = 0
@@ -32,7 +32,7 @@ class Weird(HarnessState):
 # `a/b` is not a legal identifier, so the field has to be built dynamically.
 Slashed = type(
     "Slashed",
-    (HarnessState,),
+    (AgentState,),
     {"__annotations__": {"a/b": int, "c~d": str}, "a/b": 0, "c~d": ""},
 )
 
@@ -45,7 +45,7 @@ class Rank(enum.IntEnum):
     ONE = 1
 
 
-class Keyed(HarnessState):
+class Keyed(AgentState):
     by_str: dict[str, int] = {}
     by_int: dict[int, str] = {}
     by_date: dict[datetime.date, str] = {}
@@ -181,8 +181,8 @@ def test_a_pointer_segment_is_the_key_pydantic_would_serialize(key, sample):
     on a bool-keyed dict at a key that does not exist. This is the pin that catches the
     next such divergence in whichever type introduces it.
     """
-    from temporal_agent_harness.harness.state.base import AdapterNode
-    from temporal_agent_harness.harness.state.containers import DraftDict
+    from temporal_agent_kit.state.base import AdapterNode
+    from temporal_agent_kit.state.containers import DraftDict
 
     pydantic_key = next(iter(TypeAdapter(dict[key, str]).dump_python({sample: "v"}, mode="json")))
     drafted = DraftDict.__new__(DraftDict)
@@ -205,7 +205,7 @@ def test_union_dict_keys_are_rejected(key):
     with pytest.raises(StateSchemaError):
         type(
             "Ambiguous",
-            (HarnessState,),
+            (AgentState,),
             {"__annotations__": {"m": dict[key, str]}, "m": {}},
         )
 
@@ -220,7 +220,7 @@ def test_a_literal_key_whose_members_collide_as_json_is_rejected():
     with pytest.raises(StateSchemaError):
         type(
             "Colliding",
-            (HarnessState,),
+            (AgentState,),
             {"__annotations__": {"m": dict[Literal[1, "1"], str]}, "m": {}},
         )
 
@@ -228,7 +228,7 @@ def test_a_literal_key_whose_members_collide_as_json_is_rejected():
 def test_a_literal_key_whose_members_stay_distinct_is_fine():
     """The rule is about collisions, not about Literal keys."""
 
-    class Sized(HarnessState):
+    class Sized(AgentState):
         m: dict[Literal["small", "large"], int] = {}
 
     events: list = []
@@ -246,13 +246,13 @@ def test_model_dict_keys_are_rejected():
     a dict was addressed at a key no consumer has.
     """
 
-    class Todo(HarnessState):
+    class Todo(AgentState):
         id: str = ""
 
     with pytest.raises(StateSchemaError):
         type(
             "ByModel",
-            (HarnessState,),
+            (AgentState,),
             {"__annotations__": {"m": dict[Todo, str]}, "m": {}},
         )
 
@@ -261,6 +261,6 @@ def test_container_dict_keys_are_rejected():
     with pytest.raises(StateSchemaError):
         type(
             "ByList",
-            (HarnessState,),
+            (AgentState,),
             {"__annotations__": {"m": dict[tuple[int, int], str]}, "m": {}},
         )

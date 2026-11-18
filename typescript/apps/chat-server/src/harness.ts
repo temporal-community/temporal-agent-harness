@@ -71,7 +71,7 @@ export class HarnessClient {
       });
     } catch (err) {
       throw new Error(
-        `Cannot reach the harness at ${this.baseUrl} (${String(err)}). ` +
+        `Cannot reach the Agent Kit server at ${this.baseUrl} (${String(err)}). ` +
           'Is `just server` running at the repo root?',
       );
     }

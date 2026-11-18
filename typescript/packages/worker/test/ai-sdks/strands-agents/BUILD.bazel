@@ -1,27 +1,27 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
-load("//bazel:js_test.bzl", "harness_js_test")
+load("//bazel:js_test.bzl", "agent_kit_js_test")
 
-# Tests of the Strands Agents integration (core's src/ai-sdks/strands-agents-harness.ts and
-# strands-agents/, worker's src/ai-sdks/strands-agents-harness.ts and strands-agents/). One target
+# Tests of the Strands Agents integration (core's src/ai-sdks/strands-agents.ts and
+# strands-agents/, worker's src/ai-sdks/strands-agents.ts and strands-agents/). One target
 # per file.
 
 ts_project(
-    name = "strands-agents-harness.test",
+    name = "kit.test",
     testonly = True,
-    srcs = ["strands-agents-harness.test.ts"],
+    srcs = ["kit.test.ts"],
     declaration = True,
     tsconfig = "//typescript/packages/worker:tsconfig",
     deps = [
         # The hoisted copy core's Strands modules load, as an optional peer of core.
         "//typescript:node_modules/@strands-agents/sdk",
         "//typescript/packages/worker:node_modules/@strands-agents/sdk",
-        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-kit",
         "//typescript/packages/worker:node_modules/@temporalio/common",
         "//typescript/packages/worker:node_modules/zod",
-        "//typescript/packages/worker/src/ai-sdks:strands-agents-harness",
+        "//typescript/packages/worker/src/ai-sdks/strands-agents:kit",
         "//typescript/packages/worker/src/ai-sdks/integration-helpers:stream-observer",
-        "//typescript/packages/worker/src/harness:agent-workflow",
+        "//typescript/packages/worker/src:agent-workflow",
     ],
 )
 
@@ -38,14 +38,14 @@ ts_project(
         ":tools",
         ":workflows",
         "//typescript/packages/worker:node_modules/@strands-agents/sdk",
-        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-kit",
         "//typescript/packages/worker:node_modules/@temporalio/client",
         "//typescript/packages/worker:node_modules/@temporalio/worker",
         "//typescript/packages/worker/src:index",
-        "//typescript/packages/worker/src/ai-sdks:strands-agents-harness",
+        "//typescript/packages/worker/src/ai-sdks/strands-agents:kit",
         "//typescript/packages/worker/src/ai-sdks/openai-agents:index",
         "//typescript/packages/worker/src/ai-sdks/strands-agents:index",
-        "//typescript/packages/worker/src/harness:agent-client",
+        "//typescript/packages/worker/src:agent-client",
         "//typescript/packages/worker/test:match",
         "//typescript/packages/worker/test:support",
         "//typescript/packages/worker/test/ai-sdks/openai-agents:scripted-model",
@@ -68,7 +68,7 @@ ts_project(
     declaration = True,
     tsconfig = "//typescript/packages/worker:tsconfig",
     deps = [
-        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-kit",
         "//typescript/packages/worker:node_modules/zod",
     ],
 )
@@ -84,19 +84,19 @@ ts_project(
     deps = [
         ":tools",
         "//typescript/packages/worker:node_modules/@strands-agents/sdk",
-        "//typescript/packages/worker:node_modules/@temporalio/agent-harness",
+        "//typescript/packages/worker:node_modules/@temporalio/agent-kit",
         "//typescript/packages/worker:node_modules/zod",
         "//typescript/packages/worker/test/ai-sdks/openai-agents:workflows",
     ],
 )
 
 js_test(
-    name = "strands-agents-harness_test",
-    data = [":strands-agents-harness.test"],
-    entry_point = "strands-agents-harness.test.js",
+    name = "kit_test",
+    data = [":kit.test"],
+    entry_point = "kit.test.js",
 )
 
-harness_js_test(
+agent_kit_js_test(
     name = "strands-agents_test",
     data = [":strands-agents.test"],
     entry_point = "strands-agents.test.js",

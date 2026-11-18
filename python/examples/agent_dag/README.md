@@ -99,7 +99,7 @@ haven't). Then, each in its own terminal from this directory:
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
 just session-manager   # 2. session-manager worker
-just server            # 3. harness API on http://localhost:8000
+just server            # 3. Agent Kit API on http://localhost:8000
 just worker            # 4. both agents
 just studio            # 5. the studio on http://127.0.0.1:5173
 ```

@@ -1,7 +1,7 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
-load("//bazel:codegen.bzl", "harness_client_sdk")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
+load("//bazel:codegen.bzl", "agent_kit_client_sdk")
 
 py_library(
     name = "activities",
@@ -10,7 +10,7 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":models",
-        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_kit:agent",
         "@pypi//temporalio",
         "@pypi//typesafe_sdk",
     ],
@@ -22,8 +22,8 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit/state:__init__",
         "@pypi//pydantic",
     ],
 )
@@ -36,7 +36,7 @@ py_library(
     deps = ["@pypi//pydantic"],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
@@ -44,8 +44,8 @@ harness_module_binary(
     deps = [
         ":activities",
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//temporalio",
     ],
 )
@@ -59,14 +59,14 @@ py_library(
         ":activities",
         ":board",
         ":models",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "TicTacToeAgent",
     agent = "examples.tictactoe.workflow:TicTacToeAgentWorkflow",
     description = """
@@ -84,7 +84,7 @@ Send `new_game` to start, then `play` with a cell number 1-9.""",
 
 # agents.toml and TicTacToeAgent.schema.json. `bazel test` fails when either is out of date;
 # `bazel run //python/examples/tictactoe:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "TicTacToeAgent.schema.json",
@@ -92,7 +92,7 @@ harness_agent_registry(
     ],
     agents = [":TicTacToeAgent"],
     visibility = [
-        "//python/tests/harness:__pkg__",
+        "//python/tests:__pkg__",
         "//python/tests/web:__pkg__",
         "//typescript/packages/codegen/test:__pkg__",
     ],
@@ -100,7 +100,7 @@ harness_agent_registry(
 
 # The agent's typed TypeScript client, client_sdk/TicTacToeAgent.ts:
 # `bazel run //python/examples/tictactoe:client_sdk_update` rewrites it.
-harness_client_sdk(
+agent_kit_client_sdk(
     name = "client_sdk",
     srcs = ["client_sdk/TicTacToeAgent.ts"],
     agents = [":TicTacToeAgent"],

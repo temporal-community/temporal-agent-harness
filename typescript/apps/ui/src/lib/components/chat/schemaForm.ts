@@ -1,5 +1,5 @@
 // The console's half of the schema form. Describing, validating and building the payload are in
-// @temporalio/agent-harness-client; these two are DOM and wording only the console needs.
+// @temporalio/agent-kit-client; these two are DOM and wording only the console needs.
 
 import { tick } from "svelte";
 

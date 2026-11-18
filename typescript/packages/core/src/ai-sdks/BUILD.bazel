@@ -4,8 +4,8 @@ load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
 # reach it.
 
 ts_project(
-    name = "openai-agents-harness",
-    srcs = ["openai-agents-harness.ts"],
+    name = "openai-agents",
+    srcs = ["openai-agents.ts"],
     declaration = True,
     tsconfig = "//typescript/packages/core:tsconfig",
     visibility = ["//visibility:public"],
@@ -13,28 +13,9 @@ ts_project(
         "//typescript/packages/core:node_modules/@openai/agents-core",
         "//typescript/packages/core:node_modules/@temporalio/openai-agents",
         "//typescript/packages/core:node_modules/@temporalio/workflow",
-        "//typescript/packages/core/src/harness:agent-workflow",
-        "//typescript/packages/core/src/harness/agent-protocol:index",
-        "//typescript/packages/core/src/harness/agent-workflow:errors",
-        "//typescript/packages/core/src/harness/agent-workflow:types",
-    ],
-)
-
-ts_project(
-    name = "strands-agents-harness",
-    srcs = ["strands-agents-harness.ts"],
-    declaration = True,
-    tsconfig = "//typescript/packages/core:tsconfig",
-    visibility = ["//visibility:public"],
-    deps = [
-        "//typescript/packages/core:node_modules/@strands-agents/sdk",
-        "//typescript/packages/core:node_modules/@temporalio/workflow",
-        "//typescript/packages/core:node_modules/zod",
-        "//typescript/packages/core/src/ai-sdks/strands-agents:index",
-        "//typescript/packages/core/src/harness:agent",
-        "//typescript/packages/core/src/harness:agent-workflow",
-        "//typescript/packages/core/src/harness/agent-protocol:index",
-        "//typescript/packages/core/src/harness/agent-workflow:errors",
-        "//typescript/packages/core/src/harness/agent-workflow:types",
+        "//typescript/packages/core/src:agent-workflow",
+        "//typescript/packages/core/src/agent-protocol:index",
+        "//typescript/packages/core/src/agent-workflow:errors",
+        "//typescript/packages/core/src/agent-workflow:types",
     ],
 )

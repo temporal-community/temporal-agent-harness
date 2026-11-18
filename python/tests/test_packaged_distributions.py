@@ -15,7 +15,7 @@ import pytest
 
 # //python:dists, relative to the runfiles root the test starts in.
 DISTS = Path(os.environ["PYTHON_DISTS"]).resolve()
-WHEEL_UI_PREFIX = "temporal_agent_harness/ui/dist/"
+WHEEL_UI_PREFIX = "temporal_agent_kit/ui/dist/"
 
 
 @pytest.fixture(scope="module")
@@ -33,14 +33,14 @@ def test_built_distributions_include_packaged_ui_assets(
     with zipfile.ZipFile(wheel_path) as wheel:
         names = set(wheel.namelist())
         _assert_ui_assets_present(names)
-        assert "temporal_agent_harness/web/session_manager_worker.py" in names
+        assert "temporal_agent_kit/web/session_manager_worker.py" in names
 
         # The dist-info directory name embeds the package version, so match it rather than
         # hardcoding it — cutting a release shouldn't require editing this test.
         (metadata_name,) = [
             name
             for name in names
-            if re.fullmatch(r"temporal_agent_harness-[^/]+\.dist-info/METADATA", name)
+            if re.fullmatch(r"temporal_agent_kit-[^/]+\.dist-info/METADATA", name)
         ]
         metadata = wheel.read(metadata_name).decode()
         assert "Provides-Extra: ui" in metadata
@@ -52,15 +52,15 @@ def test_built_distributions_include_packaged_ui_assets(
 
     with tarfile.open(sdist_path) as sdist:
         names = set(sdist.getnames())
-        assert any(name.endswith("/temporal_agent_harness/web/session_manager_worker.py") for name in names)
-        assert any(name.endswith("/temporal_agent_harness/ui/dist/index.html") for name in names)
-        assert any(name.endswith("/temporal_agent_harness/ui/dist/temporal-logo.svg") for name in names)
+        assert any(name.endswith("/temporal_agent_kit/web/session_manager_worker.py") for name in names)
+        assert any(name.endswith("/temporal_agent_kit/ui/dist/index.html") for name in names)
+        assert any(name.endswith("/temporal_agent_kit/ui/dist/temporal-logo.svg") for name in names)
         assert any(
-            name.endswith(".js") and "/temporal_agent_harness/ui/dist/assets/" in name
+            name.endswith(".js") and "/temporal_agent_kit/ui/dist/assets/" in name
             for name in names
         )
         assert any(
-            name.endswith(".css") and "/temporal_agent_harness/ui/dist/assets/" in name
+            name.endswith(".css") and "/temporal_agent_kit/ui/dist/assets/" in name
             for name in names
         )
 
@@ -75,28 +75,28 @@ def test_built_distributions_expose_ui_server_console_script(
         names = set(wheel.namelist())
         # The CLI is parsing only; the work it dispatches to must ship alongside it.
         for module in (
-            "temporal_agent_harness/web/cli.py",
-            "temporal_agent_harness/web/serve.py",
-            "temporal_agent_harness/web/client.py",
-            "temporal_agent_harness/web/session_manager_worker.py",
+            "temporal_agent_kit/web/cli.py",
+            "temporal_agent_kit/web/serve.py",
+            "temporal_agent_kit/web/client.py",
+            "temporal_agent_kit/web/session_manager_worker.py",
         ):
             assert module in names
 
         (entry_points_name,) = [
             name
             for name in names
-            if re.fullmatch(r"temporal_agent_harness-[^/]+\.dist-info/entry_points.txt", name)
+            if re.fullmatch(r"temporal_agent_kit-[^/]+\.dist-info/entry_points.txt", name)
         ]
         entry_points = wheel.read(entry_points_name).decode()
 
     assert "[console_scripts]" in entry_points
-    assert "temporal-agent-harness = temporal_agent_harness.web.cli:main" in entry_points
+    assert "temporal-agent-kit = temporal_agent_kit.web.cli:main" in entry_points
 
 
 def test_built_distributions_ship_the_nexus_adapter_but_not_the_nexus_projects(
     built_distributions: tuple[Path, Path],
 ) -> None:
-    """``temporal_agent_harness/nexus_agent_adapter/`` ships; the repo's top-level ``nexus/``
+    """``temporal_agent_kit/nexus_agent_adapter/`` ships; the repo's top-level ``nexus/``
     does not.
 
     ``nexus/`` holds the separate Go/Nexus projects (``nexus/mcp`` is wired in only as a
@@ -110,7 +110,7 @@ def test_built_distributions_ship_the_nexus_adapter_but_not_the_nexus_projects(
         # sdist members are prefixed with "<name>-<version>/"; strip it before checking.
         sdist_names = {name.split("/", 1)[-1] for name in sdist.getnames()}
 
-    adapter = "temporal_agent_harness/nexus_agent_adapter/"
+    adapter = "temporal_agent_kit/nexus_agent_adapter/"
     for names in (wheel_names, sdist_names):
         assert not [name for name in names if name.startswith("nexus/")]
         assert {
@@ -153,7 +153,7 @@ def test_extracted_wheel_can_resolve_packaged_ui_dist(
     env = os.environ.copy()
     env["PYTHONPATH"] = str(extracted)
     script = """
-from temporal_agent_harness.ui import packaged_ui_dist
+from temporal_agent_kit.ui import packaged_ui_dist
 
 dist = packaged_ui_dist()
 assert dist is not None
@@ -181,7 +181,7 @@ def test_every_module_in_the_wheel_imports_from_the_wheel_alone(
 ) -> None:
     """The wheel holds every first-party module its modules import at load time.
 
-    What ships is what //python/temporal_agent_harness reaches in Bazel's graph, so a module
+    What ships is what //python/temporal_agent_kit reaches in Bazel's graph, so a module
     imported without a dependency edge (an import Gazelle cannot see, say) would be missing
     from it while every other test, importing from the source tree, still passed. Third-party
     packages come from this test's environment, which has every extra the package declares.
@@ -193,7 +193,7 @@ def test_every_module_in_the_wheel_imports_from_the_wheel_alone(
 
     modules = sorted(
         ".".join(path.relative_to(extracted).with_suffix("").parts).removesuffix(".__init__")
-        for path in (extracted / "temporal_agent_harness").rglob("*.py")
+        for path in (extracted / "temporal_agent_kit").rglob("*.py")
     )
     script = """
 import importlib, json, sys, traceback
@@ -226,7 +226,7 @@ print(json.dumps(failures))
     failures = json.loads(result.stdout.splitlines()[-1])
     # Needs the `nexus-mcp` extra's distribution, which Bazel does not build (nexus/ is outside
     # it); the module says how to install it. Any other failure there still fails this test.
-    nexus_mcp = failures.pop("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp", "")
+    nexus_mcp = failures.pop("temporal_agent_kit.ai_sdks.openai_agents._nexus_mcp", "")
     assert "No module named 'nexus_mcp'" in nexus_mcp, nexus_mcp
     assert failures == {}, "\n\n".join(f"{name}:\n{error}" for name, error in failures.items())
     assert len(modules) > 50
@@ -252,11 +252,11 @@ def _assert_ui_assets_present(names: set[str]) -> None:
 def test_built_distributions_include_development_resources(built_distributions):
     wheel_path, sdist_path = built_distributions
     required = {
-        "temporal_agent_harness/development.py",
-        "temporal_agent_harness/web/dev.py",
-        "temporal_agent_harness/web/doctor.py",
+        "temporal_agent_kit/development.py",
+        "temporal_agent_kit/web/dev.py",
+        "temporal_agent_kit/web/doctor.py",
         *{
-            f"temporal_agent_harness/skills/temporal-harness-python/{path}"
+            f"temporal_agent_kit/skills/temporal-agent-kit-python/{path}"
             for path in ("SKILL.md", "agents/openai.yaml", "references/api.md",
                          "references/authoring.md", "references/verification.md", "references/advanced.md",
                          "assets/starter/README.md.tmpl", "assets/starter/pyproject.toml.tmpl",

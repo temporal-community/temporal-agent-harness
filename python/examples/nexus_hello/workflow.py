@@ -29,18 +29,18 @@ with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
     from agents import Runner, TResponseInputItem
 
-    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+    from temporal_agent_kit.ai_sdks.openai_agents.workflow import (
         nexus_native_mcp_server,
         nexus_tools_gateway,
     )
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 TASK_QUEUE = "nexus-hello"
 DEFAULT_MODEL = "gpt-5.1"

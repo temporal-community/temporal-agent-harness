@@ -16,8 +16,8 @@ import {
 } from "@temporalio/openai-agents";
 import { MockActivityEnvironment } from "@temporalio/testing";
 import { NativeConnection, Worker, type WorkerOptions } from "@temporalio/worker";
-import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentClient } from "../../../src/harness/agent-client.ts";
+import type { AgentEvent } from "@temporalio/agent-kit/agent-protocol";
+import { AgentClient } from "../../../src/agent-client.ts";
 import {
   INVOKE_MODEL_STREAM_ACTIVITY,
   OpenAIAgentsPlugin,
@@ -25,10 +25,10 @@ import {
 } from "../../../src/ai-sdks/openai-agents/index.ts";
 import type { ObserverFactory } from "../../../src/ai-sdks/integration-helpers/stream-observer.ts";
 import {
-  harnessObserverFactory,
-  type HarnessStreamToken,
-} from "../../../src/ai-sdks/openai-agents-harness.ts";
-import { AgentHarnessPlugin, toolActivity } from "../../../src/index.ts";
+  kitObserverFactory,
+  type KitStreamToken,
+} from "../../../src/ai-sdks/openai-agents/kit.ts";
+import { AgentKitPlugin, toolActivity } from "../../../src/index.ts";
 import { assertMatch } from "../../match.ts";
 import { collect, one, send, startServer, typesFor, type TemporalServer } from "../../support.ts";
 import {
@@ -124,14 +124,14 @@ describe("OpenAIAgentsPlugin", () => {
         ) => Promise<unknown>,
         badRouteInput,
       ),
-      (e: unknown) => e instanceof ApplicationFailure && e.type === "HarnessStreamRouteMissing",
+      (e: unknown) => e instanceof ApplicationFailure && e.type === "KitStreamRouteMissing",
     );
   });
 
-  it("keeps the harness's streamed activity beside AgentHarnessPlugin, in either order", () => {
+  it("keeps the harness's streamed activity beside AgentKitPlugin, in either order", () => {
     const plugin = new OpenAIAgentsPlugin({ modelProvider });
     const ours = registeredBy(plugin)[INVOKE_MODEL_STREAM_ACTIVITY];
-    const harness = new AgentHarnessPlugin({ largePayloadOffload: null });
+    const harness = new AgentKitPlugin({ largePayloadOffload: null });
     assert.equal(registeredBy(plugin, harness)[INVOKE_MODEL_STREAM_ACTIVITY], ours);
     assert.equal(registeredBy(harness, plugin)[INVOKE_MODEL_STREAM_ACTIVITY], ours);
   });
@@ -177,18 +177,18 @@ describe("an Agents SDK turn on a dev server", () => {
     [SCRIPTED_MCP_ERROR_MODEL]: mcpErrorScript,
   });
   const observed: {
-    token: HarnessStreamToken;
+    token: KitStreamToken;
     batchInterval: Duration | undefined;
     startToCloseTimeoutMs: number | undefined;
   }[] = [];
   // Runs in the model activity, so it reads the options the activity was scheduled with.
-  const spyingFactory: ObserverFactory<HarnessStreamToken, StreamEvent> = (token, options) => {
+  const spyingFactory: ObserverFactory<KitStreamToken, StreamEvent> = (token, options) => {
     observed.push({
       token,
       batchInterval: options.batchInterval,
       startToCloseTimeoutMs: Context.current().info.startToCloseTimeoutMs,
     });
-    return harnessObserverFactory(token, options);
+    return kitObserverFactory(token, options);
   };
 
   before(async () => {
@@ -205,7 +205,7 @@ describe("an Agents SDK turn on a dev server", () => {
           observerFactory: spyingFactory,
           mcpServerProviders: [new StatelessMCPServerProvider(PROBE_MCP_SERVER, lookupServer)],
         }),
-        new AgentHarnessPlugin({
+        new AgentKitPlugin({
           largePayloadOffload: null,
           tools: [toolActivity(getWeatherActivity, async ({ city }) => `activity: sunny in ${city}`)],
         }),

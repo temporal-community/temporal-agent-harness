@@ -27,7 +27,7 @@ the actual problem. The Monty example (examples/monty) is the same agent without
 and needs only the Gemini key.
 
 This worker hosts only the auto-mode agent, not the session manager. The packaged session
-manager is hosted by `temporal-agent-harness session-manager`; because it launches agents by
+manager is hosted by `temporal-agent-kit session-manager`; because it launches agents by
 registered name, it dispatches this agent to this queue without this worker hosting it.
 """
 
@@ -45,9 +45,9 @@ from temporalio.typesafe import TypeSafePlugin
 from temporalio.worker import Worker
 from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
 
-from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.utils.task_queue import task_queue_name
+from temporal_agent_kit.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.utils.task_queue import task_queue_name
 
 from examples.monty import activities
 from examples.auto_mode.workflow import TASK_QUEUE, AutoModeTravelAgentWorkflow
@@ -79,11 +79,11 @@ async def main() -> None:
             "Jev. For the same agent without auto mode, run examples/monty instead."
         )
 
-    # Three plugins, harness LAST so the Gemini plugin's payload converter wins:
+    # Three plugins, AgentKitPlugin LAST so the Gemini plugin's payload converter wins:
     #   * GoogleGenAIPlugin  — the Gemini interactions activity.
     #   * TypeSafePlugin     — the TypeSafe system_one activity that `jev_evaluator()` calls.
     #     Temporal owns retries, so the SDK client's own are off.
-    #   * AgentHarnessPlugin — the large-payload offload converter, and the durable body of
+    #   * AgentKitPlugin — the large-payload offload converter, and the durable body of
     #     every travel tool in ALL_TOOLS.
     connect_config = ClientConfig.load_client_connect_config()
     async with AsyncTypeSafeClient(
@@ -94,7 +94,7 @@ async def main() -> None:
             plugins=[
                 GoogleGenAIPlugin(GeminiClient(api_key=gemini_api_key)),
                 TypeSafePlugin(typesafe),
-                AgentHarnessPlugin(tools=activities.ALL_TOOLS),
+                AgentKitPlugin(tools=activities.ALL_TOOLS),
             ],
         )
 

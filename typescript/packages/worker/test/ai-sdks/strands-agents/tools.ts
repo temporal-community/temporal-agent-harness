@@ -2,7 +2,7 @@
 // body without importing the Strands SDK.
 
 import { z } from "zod";
-import { activityTool } from "@temporalio/agent-harness";
+import { activityTool } from "@temporalio/agent-kit";
 
 export const convertToCelsius = activityTool({
   name: "convert_to_celsius",

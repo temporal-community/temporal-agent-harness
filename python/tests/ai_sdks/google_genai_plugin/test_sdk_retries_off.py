@@ -21,13 +21,13 @@ from google.genai import types
 from google.genai.types import HttpOptions, HttpRetryOptions
 from temporalio.testing import ActivityEnvironment
 
-from temporal_agent_harness.ai_sdks.google_genai_plugin._gemini_activity import (
+from temporal_agent_kit.ai_sdks.google_genai_plugin._gemini_activity import (
     GeminiApiCaller,
 )
-from temporal_agent_harness.ai_sdks.google_genai_plugin._interactions_activity import (
+from temporal_agent_kit.ai_sdks.google_genai_plugin._interactions_activity import (
     make_gemini_interactions_create_streamed,
 )
-from temporal_agent_harness.ai_sdks.google_genai_plugin._models import (
+from temporal_agent_kit.ai_sdks.google_genai_plugin._models import (
     _GeminiApiRequest,
     _GeminiUploadFileRequest,
     _GeminiUploadToFileSearchStoreRequest,

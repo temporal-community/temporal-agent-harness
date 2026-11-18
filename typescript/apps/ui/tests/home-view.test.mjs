@@ -83,8 +83,8 @@ describe("the console with no session open", () => {
     assert.doesNotMatch(setup, />\s*Examples\s*<|>\s*PyPI\s*</, "setup keeps only its quickstart; examples and the package page live elsewhere");
     assert.match(setup, /Start the three services[\s\S]*?Quickstart/, "the quickstart link sits on the step it mirrors");
     const releases = part("releases");
-    assert.match(releases, /href="https:\/\/pypi\.org\/project\/temporal-agent-harness\/"[\s\S]*?temporal-agent-harness on PyPI/, "each package links its registry page");
-    assert.match(releases, /href="https:\/\/www\.npmjs\.com\/package\/@temporalio\/agent-harness"[\s\S]*?@temporalio\/agent-harness on npm/);
+    assert.match(releases, /href="https:\/\/pypi\.org\/project\/temporal-agent-kit\/"[\s\S]*?temporal-agent-kit on PyPI/, "each package links its registry page");
+    assert.match(releases, /href="https:\/\/www\.npmjs\.com\/package\/@temporalio\/agent-kit"[\s\S]*?@temporalio\/agent-kit on npm/);
     assert.match(releases, /href="https:\/\/github\.com\/[^"]+\/releases"[\s\S]*?Release notes/);
     assert.doesNotMatch(releases, /\d+\.\d+\.\d+/, "no version is typed in: the registries and GitHub have the current one");
     assert.match(part("status"), /aria-label="Examples"/, "examples join the status line's other links");

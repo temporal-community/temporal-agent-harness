@@ -26,17 +26,17 @@ with workflow.unsafe.imports_passed_through():
 
     from temporalio.api.common.v1 import Payload
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import AgentWorkflowRunner, agent
+from temporal_agent_kit.agent_protocol import (
     AGENT_ID_LENGTH,
     AgentConfig,
     MidTurn,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.nexus_agent_adapter.generated import (
+from temporal_agent_kit.nexus_agent_adapter.generated import (
     AgentService as AgentServiceDefinition,
 )
-from temporal_agent_harness.nexus_agent_adapter.generated import (
+from temporal_agent_kit.nexus_agent_adapter.generated import (
     ApproveToolCallInput,
     PollMessagesInput,
     QuerySessionInput,
@@ -45,7 +45,7 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
     SendAgentMessageInputStartData,
     StartConfig,
 )
-from temporal_agent_harness.nexus_agent_adapter.handler import AgentServiceHandler, Config
+from temporal_agent_kit.nexus_agent_adapter.handler import AgentServiceHandler, Config
 
 _DEV_SERVER_ARGS = [
     "--dynamic-config-value",

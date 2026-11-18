@@ -1,7 +1,7 @@
 // Workflow utilities for the Gemini integration (Python's google_genai_plugin/workflow.py).
 
 import type { ActivityOptions } from "@temporalio/workflow";
-import type { AgentWorkflowRunner } from "../../harness/agent-workflow.ts";
+import type { AgentWorkflowRunner } from "../../agent-workflow.ts";
 import { TemporalAsyncClient } from "./temporal-async-client.ts";
 
 /**

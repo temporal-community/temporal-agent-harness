@@ -5,7 +5,7 @@ server-side, but its human-in-the-loop tool, ``ask_user``, has no server-side bo
 needs clarification it parks the turn and publishes a ``callback_requested`` event. THIS client —
 running wherever the human is — is how those questions get answered.
 
-It talks only to the packaged harness HTTP server (``app.py``); it needs no Temporal client of its
+It talks only to the packaged Agent Kit HTTP server (``app.py``); it needs no Temporal client of its
 own. It opens a session picker that lists the ReAct agent's sessions and shows which are waiting on
 an ``ask_user``; from there you can:
 
@@ -240,7 +240,7 @@ async def _session_view(http: httpx.AsyncClient, session_id: str) -> None:
     print(f"\nSession {session_id}")
     await _answer_open_questions(http, session_id)  # surface questions waiting from before we attached
     # Client-local navigation is keyed off ':' — deliberately NOT '/', which is reserved for the
-    # harness's own slash commands (operator commands sent to the agent). ':' actions never touch
+    # Agent Kit's own slash commands (operator commands sent to the agent). ':' actions never touch
     # the agent; they just move around this CLI.
     print("\nChat with the agent. Commands: :questions  :sessions  :quit\n")
     while True:
@@ -324,7 +324,7 @@ async def _pick_session(http: httpx.AsyncClient) -> str | None:
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--server", default="http://localhost:8000", help="Harness server URL."
+        "--server", default="http://localhost:8000", help="Agent Kit server URL."
     )
     parser.add_argument(
         "--session",

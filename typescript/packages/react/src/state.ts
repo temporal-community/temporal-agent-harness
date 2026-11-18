@@ -9,17 +9,17 @@ import {
   type AgentUpdate,
   type AgentView,
   type ConnectionStatus,
-  type HarnessMessage,
+  type KitMessage,
   type SessionState,
   type UntypedAgent
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 export interface SessionSnapshot<A extends AgentSchema = UntypedAgent> {
   readonly connection: ConnectionStatus;
   readonly error: Error | undefined;
   readonly rootAgentId: string | null;
   readonly agents: Readonly<Record<string, AgentView>>;
-  readonly pending: readonly HarnessMessage<A>[];
+  readonly pending: readonly KitMessage<A>[];
   readonly frames: readonly AgentSseFrame[];
 }
 
@@ -33,7 +33,7 @@ class Snapshot<A extends AgentSchema> implements SessionSnapshot<A> {
   declare readonly error: Error | undefined;
   declare readonly rootAgentId: string | null;
   declare readonly agents: Readonly<Record<string, AgentView>>;
-  declare readonly pending: readonly HarnessMessage<A>[];
+  declare readonly pending: readonly KitMessage<A>[];
   declare readonly frameCount: number;
   readonly #log: readonly AgentSseFrame[];
   #frames: readonly AgentSseFrame[] | undefined;
@@ -92,10 +92,10 @@ export class ReactSessionState<A extends AgentSchema = UntypedAgent> implements 
     this.#set("agents", agents);
   }
 
-  get pending(): readonly HarnessMessage<A>[] {
+  get pending(): readonly KitMessage<A>[] {
     return this.#snapshot.pending;
   }
-  set pending(pending: readonly HarnessMessage<A>[]) {
+  set pending(pending: readonly KitMessage<A>[]) {
     this.#set("pending", pending);
   }
 

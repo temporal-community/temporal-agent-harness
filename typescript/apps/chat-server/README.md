@@ -1,8 +1,8 @@
 # chat-server
 
-An **optional** front end that puts your harness agents on Slack or Discord.
+An **optional** front end that puts your Agent Kit agents on Slack or Discord.
 
-Nothing about the harness depends on this directory. The Python web app is the primary
+Nothing about Agent Kit depends on this directory. The Python web app is the primary
 surface; it runs, builds and packages without ever entering here, and this process is one you
 start only when you want a chat platform in the loop. It needs only Bazel (bazelisk), which
 brings the pinned Node and pnpm — no Python.
@@ -22,9 +22,9 @@ and is a little quicker to set up. Both are documented below; do whichever you n
 
 ---
 
-# Step 1 — run the harness
+# Step 1 — run Agent Kit
 
-This server is a client of the harness API, so that has to be up before any of it means
+This server is a client of the Agent Kit API, so that has to be up before any of it means
 anything. From the **repo root**, four terminals:
 
 ```bash
@@ -34,7 +34,7 @@ cp .env.example .env.local     # repo root — set GEMINI_API_KEY
 ```bash
 just temporal           # 1. Temporal dev server
 just session-manager    # 2. session manager worker
-just server             # 3. harness API on :8000
+just server             # 3. Agent Kit API on :8000
 just worker-monty       # 4. the agent itself
 ```
 
@@ -178,8 +178,8 @@ Fill in `BOT_AGENT_ROUTES=monty-chat` and the credentials for whichever platform
 up. Every variable is annotated in `.env.example`; the rest can stay blank. Both platforms
 can run side by side in one process — set both sets of credentials and each connects.
 
-This file is separate from the harness's own `.env.local` on purpose — nothing here leaks into
-the harness, and the harness never reads it.
+This file is separate from Agent Kit's own `.env.local` on purpose — nothing here leaks into
+Agent Kit, and Agent Kit never reads it.
 
 ```bash
 just run
@@ -242,7 +242,7 @@ refused. See `settleApprovalPrompt` in `src/app.tsx`.
 
 Prompts are settled by whichever path gets there first — the click, which is the only one that
 knows *who* decided, or the turn's own `tool_approval_resolved`. The second path is what makes
-a decision taken **somewhere else** land here too: approving in the harness UI, the cascade
+a decision taken **somewhere else** land here too: approving in the Agent Kit UI, the cascade
 behind an earlier "Always allow", and the auto-denial when a session closes all retire their
 prompt instead of leaving live buttons on an answered question.
 
@@ -277,13 +277,13 @@ platforms cap message size — Slack answers `msg_too_long`, which loses the who
 than degrading. That split waits for every in-flight call to finish: `shouldRollOver` treats an
 open card as a hard veto.
 
-The guide appears on first contact because a chat surface has no equivalent of the harness
+The guide appears on first contact because a chat surface has no equivalent of the Agent Kit
 UI's always-visible interface — without it, every typed handler would be invisible unless you
 already knew its name.
 
 `DEFAULT_HANDLER` / `DEFAULT_HANDLER_FIELD` decide where un-prefixed text goes. Most agents
-spell it `ask(TextMessage)` with a `text` field, which is the default, but nothing in the
-harness enforces either name.
+spell it `ask(TextMessage)` with a `text` field, which is the default, but nothing in
+Agent Kit enforces either name.
 
 # When it doesn't work
 
@@ -299,9 +299,9 @@ instead of going quiet.
 
 | symptom | cause |
 |---|---|
-| an error posted AND a normal reply | two independent harness calls; the optional first-contact guide is no longer fatal, so this should not recur |
+| an error posted AND a normal reply | two independent Agent Kit calls; the optional first-contact guide is no longer fatal, so this should not recur |
 | bot goes silent, no `-> mention` log line | a message was routed away before the mention handler — check `isSubscribed` is still constant `false` |
-| the guide reappears on every message | `isSessionLive` could not see the session — check the harness is up and `GET /api/workflow-status/<session>` returns `closed: false` |
+| the guide reappears on every message | `isSessionLive` could not see the session — check Agent Kit is up and `GET /api/workflow-status/<session>` returns `closed: false` |
 | a handler succeeds but says nothing | it emits no `reply_delta`; its reply is `message_handler_end.output`, which is rendered only when nothing streamed |
 | "No agent is configured for this bot." | `BOT_AGENT_ROUTES` is unset or names an unknown key |
 | `Unknown agent key` | the key is not in `GET /api/agents`, or that worker is not running |
@@ -366,7 +366,7 @@ Schema. `src/schema-to-modal.ts` projects that onto a form and decodes the submi
 into the payload the schema describes.
 
 Messages are sent with `submit_message` (`POST /api/messages`) and observed on a separate
-`attach` stream, filtered to the dispatch's own `message_id`. That is the harness's documented
+`attach` stream, filtered to the dispatch's own `message_id`. That is Agent Kit's documented
 client contract, and following it is what makes **mid-turn handlers work**: `POST /api/chat`
 streams the turn it opens and therefore rejects a `mid_turn: accept` message with
 `joined_turn` the moment it joins a running turn — exactly when you want one, e.g. changing
@@ -409,7 +409,7 @@ by the agent workflow:
 | message dedupe | `request_id` → `update_id` makes a redelivery a durable no-op → `deduplicate: false`, and the dedupe key always answers "not seen" (see below) |
 | `callbackUrl` tokens | we set `Button.value` ourselves, so no 7-day token is stored |
 | modal context | `{threadId, agentKey, handler}` rides in `privateMetadata`, and `chat.thread(id)` rebuilds the handle |
-| external-id → session-id table | the harness lets the caller choose the session id, so the mapping is a pure function |
+| external-id → session-id table | Agent Kit lets the caller choose the session id, so the mapping is a pure function |
 
 Not everything is refused. Adapters use the state adapter as a **cache** — Slack memoises
 `users.info` per user plus a reverse name index — and those get a bounded in-process TTL
@@ -447,7 +447,7 @@ for it — only Slack does, and only with `agentView` — and Chat SDK catches t
 a warning, so it degrades to "cancellation unavailable" rather than breaking a turn.
 
 That leaves nothing at all on the inbound path: an inbound message touches no store and makes
-no extra network call. The first-contact question is asked directly of the harness, where it
+no extra network call. The first-contact question is asked directly of Agent Kit, where it
 is actually needed. Every other method **throws**, so if a future `chat` release starts depending on one
 it fails loudly in a test rather than degrading quietly in production. If you hit
 `TemporalState.<method> was called`, that error names the exact path that turned out to need a

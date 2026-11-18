@@ -1,8 +1,8 @@
 """The TypeSafe System One call, as an activity-backed agent TOOL.
 
-This is the agent's *model call*, but the harness sees it as a tool: an
+This is the agent's *model call*, but Agent Kit sees it as a tool: an
 ``@agent.activity_tool_defn`` the workflow dispatches through ``runner.run_tool`` like any
-other. That is a deliberate choice for now — the harness's model-interaction events carry
+other. That is a deliberate choice for now — Agent Kit's model-interaction events carry
 only a model id and token usage, whereas a tool's ``tool_start`` publishes its full input and
 ``tool_end`` its output. Modeling the call as a tool is what puts the exact ``state`` and
 ``questions`` sent to TypeSafe, and the answers that came back, in the console's activity
@@ -29,7 +29,7 @@ from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 from typesafe_sdk import AsyncTypeSafeClient
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 from examples.tictactoe.models import ChoiceResult, ScoreResult, SystemOneRequest, SystemOneResult
 
@@ -93,5 +93,5 @@ async def typesafe_system_one(request: SystemOneRequest) -> SystemOneResult:
     )
 
 
-# Handed to `AgentHarnessPlugin(tools=...)` so the worker registers the durable activity body.
+# Handed to `AgentKitPlugin(tools=...)` so the worker registers the durable activity body.
 ALL_TOOLS = [typesafe_system_one]

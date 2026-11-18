@@ -1,8 +1,8 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "client",
     srcs = ["client.py"],
     imports = ["../.."],
@@ -15,7 +15,7 @@ py_library(
     srcs = ["human_tools.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
-    deps = ["//python/temporal_agent_harness/harness:agent"],
+    deps = ["//python/temporal_agent_kit:agent"],
 )
 
 py_library(
@@ -24,13 +24,13 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_kit:agent",
         "@pypi//httpx",
         "@pypi//temporalio",
     ],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
@@ -39,10 +39,9 @@ harness_module_binary(
         ":human_tools",
         ":tool_activities",
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//openai_agents",
         "@pypi//temporalio",
     ],
@@ -56,17 +55,16 @@ py_library(
     deps = [
         ":human_tools",
         ":tool_activities",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "@pypi//openai_agents",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "ReactAgent",
     agent = "examples.react_agent.workflow:ReactAgentWorkflow",
     description = """
@@ -85,7 +83,7 @@ model_interaction_*).""",
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/react_agent:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "ReactAgent.schema.json",

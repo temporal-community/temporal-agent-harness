@@ -1,4 +1,4 @@
-"""harness_dev: the example programs to run together during development, chosen at run time."""
+"""agent_kit_dev: the example programs to run together during development, chosen at run time."""
 
 load("@bazel_skylib//lib:shell.bzl", "shell")
 
@@ -15,7 +15,7 @@ def _program(target):
 def _example_dir(ctx, example):
     return "%s/%s" % (ctx.label.package, example)
 
-def _harness_dev_rule_impl(ctx):
+def _agent_kit_dev_rule_impl(ctx):
     instructions = ctx.actions.declare_file(ctx.label.name + ".json")
     ctx.actions.write(instructions, json.encode_indent({
         "cli": _program(ctx.attr.cli) if ctx.attr.cli else None,
@@ -51,8 +51,8 @@ def _harness_dev_rule_impl(ctx):
         runfiles = runfiles.merge(target[DefaultInfo].default_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
-_harness_dev_rule = rule(
-    implementation = _harness_dev_rule_impl,
+_agent_kit_dev_rule = rule(
+    implementation = _agent_kit_dev_rule_impl,
     executable = True,
     attrs = {
         "cli": attr.label(executable = True, cfg = "target"),
@@ -64,10 +64,10 @@ _harness_dev_rule = rule(
     },
 )
 
-def _harness_dev_impl(name, visibility, examples, cli, session_manager, server, workers):
+def _agent_kit_dev_impl(name, visibility, examples, cli, session_manager, server, workers):
     if (session_manager or server) and not cli:
-        fail("harness_dev: the session manager and server run `cli`")
-    _harness_dev_rule(
+        fail("agent_kit_dev: the session manager and server run `cli`")
+    _agent_kit_dev_rule(
         name = name,
         visibility = visibility,
         cli = cli,
@@ -77,7 +77,7 @@ def _harness_dev_impl(name, visibility, examples, cli, session_manager, server, 
         workers = {"//%s/%s:worker" % (native.package_name(), example): example for example in examples} if workers else {},
     )
 
-harness_dev = macro(
+agent_kit_dev = macro(
     doc = """Runs examples' programs together: `bazel run <name> -- [example ...]`.
 
     For each example named at run time (its directory under this package, or that path's last
@@ -86,10 +86,10 @@ harness_dev = macro(
     `session_manager` and `server` are set. Every output line carries its program's label, and
     Ctrl-C stops them all (bazel/dev_runner.py).
     """,
-    implementation = _harness_dev_impl,
+    implementation = _agent_kit_dev_impl,
     attrs = {
         "examples": attr.string_list(mandatory = True, configurable = False, doc = "Directories under this package that can be run."),
-        "cli": attr.label(configurable = False, doc = "The temporal-agent-harness CLI, able to import every example's agents."),
+        "cli": attr.label(configurable = False, doc = "The temporal-agent-kit CLI, able to import every example's agents."),
         "session_manager": attr.bool(configurable = False, doc = "Run `cli session-manager`."),
         "server": attr.bool(configurable = False, doc = "Run `cli serve` over the chosen examples' registries on :8000."),
         "workers": attr.bool(configurable = False, doc = "Run each chosen example's `:worker`."),

@@ -1,10 +1,10 @@
 {
-  "name": "@temporalio/agent-harness-codegen",
+  "name": "@temporalio/agent-kit-codegen",
   "version": "0.5.0",
   "type": "module",
-  "description": "Generate TypeScript types for a temporal-agent-harness agent from its `temporal-agent-harness schema` document.",
+  "description": "Generate TypeScript types for a temporal-agent-kit agent from its `temporal-agent-kit schema` document.",
   "bin": {
-    "harness-codegen": "dist/src/cli.js"
+    "agent-kit-codegen": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --outDir dist",

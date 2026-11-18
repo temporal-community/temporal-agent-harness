@@ -12,12 +12,12 @@ import {
   defineAgent,
   handler,
   tool,
-} from "@temporalio/agent-harness";
-import { TemporalMCPClient } from "@temporalio/agent-harness/ai-sdks/strands-agents";
+} from "@temporalio/agent-kit";
+import { TemporalMCPClient } from "@temporalio/agent-kit/ai-sdks/strands-agents";
 import {
   asStrandsTool,
-  harnessStrandsAgent,
-} from "@temporalio/agent-harness/ai-sdks/strands-agents-harness";
+  kitStrandsAgent,
+} from "@temporalio/agent-kit/ai-sdks/strands-agents";
 import { ECHO_MCP_SERVER, convertToCelsius } from "./tools.ts";
 
 export { OpenAIWeatherAgent } from "../openai-agents/workflows.ts";
@@ -61,7 +61,7 @@ function strandsAgent(name: string, model: string, interruptBeforeTools = false)
     handlers: { ask },
     approvalPolicyDefault: ToolApprovalPolicy.dangerouslySkipAll(),
     create: ({ runner }) => {
-      const agent = harnessStrandsAgent(runner, {
+      const agent = kitStrandsAgent(runner, {
         model,
         activityOptions: { startToCloseTimeout: "30 seconds" },
         printer: false,
@@ -105,7 +105,7 @@ function mcpAgent(name: string, model: string) {
     handlers: { ask },
     approvalPolicyDefault: ToolApprovalPolicy.alwaysRequireHumanApproval(),
     create: ({ runner }) => {
-      const agent = harnessStrandsAgent(runner, {
+      const agent = kitStrandsAgent(runner, {
         model,
         activityOptions: { startToCloseTimeout: "30 seconds" },
         printer: false,

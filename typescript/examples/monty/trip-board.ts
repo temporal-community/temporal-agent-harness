@@ -7,7 +7,7 @@
 // It is deliberately *not* an activity. The board is the agent's own notes, not an action on the
 // outside world, so every tool here is an inline `tool` that runs in the workflow and writes to a
 // StateRef the workflow owns. That is what makes it observable: the agent declares it once, as
-// `states: { trip_board: state(TripBoard) }`, and from then on the harness publishes a snapshot and
+// `states: { trip_board: state(TripBoard) }`, and from then on Agent Kit publishes a snapshot and
 // then one RFC 6902 patch per committed `mutate()` onto the agent's turn_events stream. The
 // console's AGENT STATE pane folds those back into the document and marks exactly what each
 // commit touched.
@@ -18,7 +18,7 @@
 // stubs, so a script never passes it and cannot address it.
 
 import { uuid4 } from "@temporalio/workflow";
-import { StateRef, injected, tool } from "@temporalio/agent-harness";
+import { StateRef, injected, tool } from "@temporalio/agent-kit";
 import { z } from "zod";
 
 const TripStatus = z.enum(["collecting", "booked", "cancelled"]);

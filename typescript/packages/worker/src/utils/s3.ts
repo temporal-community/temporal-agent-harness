@@ -13,7 +13,7 @@ import { DEFAULT_PAYLOAD_SIZE_THRESHOLD } from "./large-payload.ts";
  * Offload oversized payloads to `bucket`; every client, worker and server of the deployment must
  * use the same one. Region and credentials come from the standard AWS chain, and
  * `AWS_ENDPOINT_URL_S3` overrides the endpoint; pass `client` for anything else (an S3-compatible
- * server usually needs `forcePathStyle: true`). Pass the result as `AgentHarnessPlugin`'s
+ * server usually needs `forcePathStyle: true`). Pass the result as `AgentKitPlugin`'s
  * `largePayloadOffload` and as `externalStorage` in your clients' `dataConverter`.
  */
 export function s3PayloadStorage({

@@ -14,7 +14,7 @@ Both halves of a turn are TOOL calls dispatched through ``runner.run_tool``:
 1. ``typesafe_system_one`` (``activities.py``) — the model call itself, as an activity-backed
    tool. Its ``tool_start`` carries the exact state + questions sent to TypeSafe and its
    ``tool_end`` the answers, so the console's activity detail shows the whole exchange.
-   (The harness's model-interaction events carry only a model id and usage, which is why the
+   (Agent Kit's model-interaction events carry only a model id and usage, which is why the
    call is a tool and not a model span for now.)
 2. ``place_mark`` (``board.py``) — the action: an inline workflow tool that mutates the
    observable :class:`~.board.Board` state, so the AGENT STATE pane shows the move land.
@@ -29,14 +29,14 @@ from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         MidTurn,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
     from examples.tictactoe import activities
     from examples.tictactoe import board as game
@@ -126,7 +126,7 @@ class TicTacToeAgentWorkflow:
         move = judgment.choices["move"]
         cell = int(move.choice.removeprefix("cell_"))
 
-        # The action: the judgment becomes a tool call, dispatched the normal harness way. The
+        # The action: the judgment becomes a tool call, dispatched the normal Agent Kit way. The
         # call id correlates its tool_start/tool_end (and the board patch it commits).
         result = await self._runner.run_tool(
             str(workflow.uuid4()),

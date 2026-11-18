@@ -1,9 +1,9 @@
-# @temporalio/agent-harness-worker
+# @temporalio/agent-kit-worker
 
-The worker side of the Temporal agent harness: `AgentHarnessPlugin` and the harness's activities,
-the agent client, Code Mode's Monty activities, and the `agent-harness` command
-(`init`, `schema`, `skills`, `doctor`; `agent-harness-schema` is the same `schema` command). Agents themselves are written against
-[`@temporalio/agent-harness`](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/packages/core/README.md), which runs in the workflow.
+The worker side of the Temporal Agent Kit: `AgentKitPlugin` and Agent Kit's activities,
+the agent client, Code Mode's Monty activities, and the `agent-kit` command
+(`init`, `schema`, `skills`, `doctor`; `agent-kit-schema` is the same `schema` command). Agents themselves are written against
+[`@temporalio/agent-kit`](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/packages/core/README.md), which runs in the workflow.
 
 ## Getting started
 
@@ -11,23 +11,23 @@ Follow the [TypeScript quickstart](https://github.com/temporal-community/tempora
 for a complete npm install, agent, worker, registry, and first console session. It includes the
 pinned Temporal and OpenAI dependencies and explains the startup processes.
 
-The harness has one server, session manager, and console for both SDKs. They come from the
-`temporal-agent-harness` Python package; `uvx` runs them without a Python project of your own.
+Agent Kit has one server, session manager, and console for both SDKs. They come from the
+`temporal-agent-kit` Python package; `uvx` runs them without a Python project of your own.
 Your agents run on your TypeScript worker.
 
 ## Worker configuration
 
 The worker is an ordinary Temporal worker, so it can host other workflows and activities too.
-`AgentHarnessPlugin` adds the harness's activities, payload offload, activity tool bodies
+`AgentKitPlugin` adds Agent Kit's activities, payload offload, activity tool bodies
 (`tools: [toolActivity(tool, impl), ...]`), and Code Mode when `@pydantic/monty` is installed.
 Register it after your model integration's plugin, such as `OpenAIAgentsPlugin`,
 `GoogleGenAIPlugin` or `StrandsPlugin`. The OpenAI plugin must be imported from this package's
-`/ai-sdks/openai-agents` entry point to enable harness streaming. `StrandsPlugin` comes from
-`/ai-sdks/strands-agents`; pass it `observerFactory: harnessObserverFactory` from
-`/ai-sdks/strands-agents-harness` to stream onto the turn.
+`/ai-sdks/openai-agents` entry point to enable Agent Kit streaming. `StrandsPlugin` comes from
+`/ai-sdks/strands-agents`; pass it `observerFactory: kitObserverFactory` from
+`/ai-sdks/strands-agents` to stream onto the turn.
 
 Keep the underlying Temporal SDK packages at the version required by the model integration.
-The `@temporalio/agent-harness*` packages have their own, separate version. The quickstart
+The `@temporalio/agent-kit*` packages have their own, separate version. The quickstart
 lists a complete pinned installation.
 
 ## Schema CLI and init data
@@ -42,7 +42,7 @@ import {
   ToolApprovalPolicy,
   defineAgent,
   handler,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 
 export const BriefedAgent = defineAgent({
   name: "BriefedAgent",
@@ -67,7 +67,7 @@ Its worker, in `worker.ts` (compile both files before running):
 import { fileURLToPath } from "node:url";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
+import { AgentKitPlugin } from "@temporalio/agent-kit-worker";
 
 const { connectionOptions, namespace } = loadClientConnectConfig();
 const worker = await Worker.create({
@@ -75,7 +75,7 @@ const worker = await Worker.create({
   namespace: namespace ?? "default",
   taskQueue: "briefed-agent-task-queue",
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
-  plugins: [new AgentHarnessPlugin()],
+  plugins: [new AgentKitPlugin()],
 });
 await worker.run();
 ```
@@ -98,7 +98,7 @@ starting a session; the server never imports your code. Write it, and again when
 init data changes:
 
 ```bash
-npx agent-harness schema ./dist/agents.js#BriefedAgent -o BriefedAgent.schema.json
+npx agent-kit schema ./dist/agents.js#BriefedAgent -o BriefedAgent.schema.json
 ```
 
 It takes `<module>#<export>`: a module path relative to the current directory, TypeScript

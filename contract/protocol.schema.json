@@ -132,20 +132,20 @@
       "type": "object"
     },
     "AgentEvent": {
-      "description": "Transport envelope for one stream event.\n\nThe single concrete type published on — and subscribed to from — the\n``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload\n(``event``) and adds the routing metadata the harness stamps at publish time.\nProducers never build this — they construct a payload and the publisher wraps\nit — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp``\ncan only ever be set by the harness. Being a concrete type (not a bare union), it is\nalso a clean ``type`` for the workflow-stream topic and subscribe ``result_type``.",
+      "description": "Transport envelope for one stream event.\n\nThe single concrete type published on — and subscribed to from — the\n``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload\n(``event``) and adds the routing metadata Agent Kit stamps at publish time.\nProducers never build this — they construct a payload and the publisher wraps\nit — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp``\ncan only ever be set by Agent Kit. Being a concrete type (not a bare union), it is\nalso a clean ``type`` for the workflow-stream topic and subscribe ``result_type``.",
       "properties": {
         "agent_id": {
-          "description": "The short, TREE-UNIQUE id of the agent that PUBLISHED this event (``AgentConfig.agent_id`` / ``AgentStatus.agent_id`` — see ``AgentId`` for the segment shape; NOT the full workflow_id) — stamped by the harness at publish time; producers never set it. Every event carries it so a merged multi-agent stream is self-describing: because the id is unique across the whole subagent tree, a consumer can filter to one agent's events, or group the merged stream by agent, with no risk of conflating two agents. For a subagent it equals the ``handle`` its parent references it by (the parent's own id plus a fresh segment, pushed down as the child's ``agent_id``), so a consumer can attribute child events to the subagent shown in the parent's status/events.",
+          "description": "The short, TREE-UNIQUE id of the agent that PUBLISHED this event (``AgentConfig.agent_id`` / ``AgentStatus.agent_id`` — see ``AgentId`` for the segment shape; NOT the full workflow_id) — stamped by Agent Kit at publish time; producers never set it. Every event carries it so a merged multi-agent stream is self-describing: because the id is unique across the whole subagent tree, a consumer can filter to one agent's events, or group the merged stream by agent, with no risk of conflating two agents. For a subagent it equals the ``handle`` its parent references it by (the parent's own id plus a fresh segment, pushed down as the child's ``agent_id``), so a consumer can attribute child events to the subagent shown in the parent's status/events.",
           "title": "Agent Id",
           "type": "string"
         },
         "turn_id": {
-          "description": "The id of the turn this event belongs to — stamped by the harness at publish time; producers never set it.",
+          "description": "The id of the turn this event belongs to — stamped by Agent Kit at publish time; producers never set it.",
           "title": "Turn Id",
           "type": "string"
         },
         "turn_number": {
-          "description": "The monotonic number of the turn this event belongs to — stamped by the harness at publish time; producers never set it.",
+          "description": "The monotonic number of the turn this event belongs to — stamped by Agent Kit at publish time; producers never set it.",
           "title": "Turn Number",
           "type": "integer"
         },
@@ -159,11 +159,11 @@
             }
           ],
           "default": null,
-          "description": "The id of the ONE inbound message whose dispatch produced this event — minted at admission (also returned on ``AgentMessageReply.message_id``) and stamped by the harness; producers never set it. It lives on the envelope rather than in event bodies so EVERY event of a message's dispatch is attributable for free — deltas, tool lifecycle, approvals, subagent brackets — exactly the way ``turn_id`` is.\n\n``turn_id`` does NOT substitute for it: a turn is refcounted, so a ``MidTurn.ACCEPT`` message can join one already open and several messages then publish under one ``turn_id``. Pair a reply, or attribute a streamed delta, by THIS field.\n\n``None`` for events that genuinely are not about one message: ``turn_started`` and ``turn_end`` (pure turn lifecycle), and the approval/callback resolutions published from an update handler driving a policy cascade — which is no more bound to one message than it is to one turn.",
+          "description": "The id of the ONE inbound message whose dispatch produced this event — minted at admission (also returned on ``AgentMessageReply.message_id``) and stamped by Agent Kit; producers never set it. It lives on the envelope rather than in event bodies so EVERY event of a message's dispatch is attributable for free — deltas, tool lifecycle, approvals, subagent brackets — exactly the way ``turn_id`` is.\n\n``turn_id`` does NOT substitute for it: a turn is refcounted, so a ``MidTurn.ACCEPT`` message can join one already open and several messages then publish under one ``turn_id``. Pair a reply, or attribute a streamed delta, by THIS field.\n\n``None`` for events that genuinely are not about one message: ``turn_started`` and ``turn_end`` (pure turn lifecycle), and the approval/callback resolutions published from an update handler driving a policy cascade — which is no more bound to one message than it is to one turn.",
           "title": "Message Id"
         },
         "timestamp": {
-          "description": "When the harness published this envelope (epoch seconds).",
+          "description": "When Agent Kit published this envelope (epoch seconds).",
           "title": "Timestamp",
           "type": "number"
         },
@@ -331,7 +331,7 @@
       "type": "object"
     },
     "AgentStatePatch": {
-      "description": "What one committed ``mutate()`` block changed, as RFC 6902 ops.\n\nThe harness derives these; nothing in the author's workflow code builds or sees\nthem. Ops are applied in order, and a version is produced only by a block that\nactually touched something — a no-op ``mutate()`` publishes nothing at all.",
+      "description": "What one committed ``mutate()`` block changed, as RFC 6902 ops.\n\nAgent Kit derives these; nothing in the author's workflow code builds or sees\nthem. Ops are applied in order, and a version is produced only by a block that\nactually touched something — a no-op ``mutate()`` publishes nothing at all.",
       "properties": {
         "type": {
           "const": "state_patch",
@@ -350,7 +350,7 @@
           "type": "integer"
         },
         "ops": {
-          "description": "RFC 6902 operations, applied in order to the `version - 1` document. The harness only ever emits ``add`` / ``replace`` / ``remove``.",
+          "description": "RFC 6902 operations, applied in order to the `version - 1` document. Agent Kit only ever emits ``add`` / ``replace`` / ``remove``.",
           "items": {
             "additionalProperties": true,
             "type": "object"
@@ -499,7 +499,7 @@
           "type": "string"
         },
         "message": {
-          "description": "The failure, as text. The harness substitutes an escalate, so the call falls through to the human gate rather than being approved or failing the turn.",
+          "description": "The failure, as text. Agent Kit substitutes an escalate, so the call falls through to the human gate rather than being approved or failing the turn.",
           "title": "Message",
           "type": "string"
         }
@@ -609,7 +609,7 @@
       "type": "object"
     },
     "AutoApprovalVerdict": {
-      "description": "What an auto mode evaluator decided about one gated tool call.\n\nThree-valued on purpose. An evaluator is not merely an \"extra yes\": it is a\n*decision-maker*, and the interesting case — an AI auto-approver judging a call it has\nnever seen before — needs to be able to say \"no\" as loudly as it says \"yes\", and to\nabstain when it is not sure enough to say either.\n\n  * ``APPROVE`` — dispatch the call now, with no human gate.\n  * ``DENY`` — the call ends here. It never executes; the tool raises\n    :class:`~temporal_agent_harness.harness.agent_workflow.ToolApprovalDenied`, which\n    the agent loop surfaces to the model as an error result, so the turn continues.\n  * ``ESCALATE`` — abstain. The call stays PENDING and waits for a human decision on\n    the ``tool_approval`` update, exactly as if auto mode were off.\n\n``ESCALATE`` — not ``DENY`` — is the safe answer to \"I don't know\": denying on\nuncertainty trains operators to disable the guardrail, while escalating puts the call\nin front of the person who can actually judge it.",
+      "description": "What an auto mode evaluator decided about one gated tool call.\n\nThree-valued on purpose. An evaluator is not merely an \"extra yes\": it is a\n*decision-maker*, and the interesting case — an AI auto-approver judging a call it has\nnever seen before — needs to be able to say \"no\" as loudly as it says \"yes\", and to\nabstain when it is not sure enough to say either.\n\n  * ``APPROVE`` — dispatch the call now, with no human gate.\n  * ``DENY`` — the call ends here. It never executes; the tool raises\n    :class:`~temporal_agent_kit.agent_workflow.ToolApprovalDenied`, which\n    the agent loop surfaces to the model as an error result, so the turn continues.\n  * ``ESCALATE`` — abstain. The call stays PENDING and waits for a human decision on\n    the ``tool_approval`` update, exactly as if auto mode were off.\n\n``ESCALATE`` — not ``DENY`` — is the safe answer to \"I don't know\": denying on\nuncertainty trains operators to disable the guardrail, while escalating puts the call\nin front of the person who can actually judge it.",
       "enum": [
         "approve",
         "deny",
@@ -809,7 +809,7 @@
         },
         "output": {
           "additionalProperties": true,
-          "description": "The handler's return model serialized to JSON (the harness publishes ``result.model_dump(mode=\"json\")``). Carrying a plain dict keeps the reply trivially round-trippable on the stream regardless of the concrete output type; a consumer that knows the expected type (e.g. from ``agent_interface``) re-validates the dict into it.",
+          "description": "The handler's return model serialized to JSON (Agent Kit publishes ``result.model_dump(mode=\"json\")``). Carrying a plain dict keeps the reply trivially round-trippable on the stream regardless of the concrete output type; a consumer that knows the expected type (e.g. from ``agent_interface``) re-validates the dict into it.",
           "title": "Output",
           "type": "object"
         }
@@ -994,7 +994,7 @@
       "type": "object"
     },
     "SteeringDropped": {
-      "description": "The turn ended with steering still queued, and the harness discarded it.\n\nIt never reached the model: no outermost tool call resolved after it was queued, or the\nhandler running the model loop returned first. Steering does not carry into the next turn,\nbecause it is about the work that just finished. A client should tell the user and offer to\nresubmit the text as a new message. The envelope's ``message_id`` is ``None``, like\n:class:`TurnEnded`'s, which follows it.",
+      "description": "The turn ended with steering still queued, and Agent Kit discarded it.\n\nIt never reached the model: no outermost tool call resolved after it was queued, or the\nhandler running the model loop returned first. Steering does not carry into the next turn,\nbecause it is about the work that just finished. A client should tell the user and offer to\nresubmit the text as a new message. The envelope's ``message_id`` is ``None``, like\n:class:`TurnEnded`'s, which follows it.",
       "properties": {
         "type": {
           "const": "steering_dropped",
@@ -1028,7 +1028,7 @@
           "type": "string"
         },
         "steering_id": {
-          "description": "Minted by the harness for this steering; exactly one later ``steering_claimed`` or ``steering_dropped`` lists it in its ``steering_ids``.",
+          "description": "Minted by Agent Kit for this steering; exactly one later ``steering_claimed`` or ``steering_dropped`` lists it in its ``steering_ids``.",
           "title": "Steering Id",
           "type": "string"
         },
@@ -1305,7 +1305,7 @@
       "type": "object"
     },
     "TokenUsage": {
-      "description": "Provider-agnostic token accounting for one model interaction.\n\nA neutral summary the harness understands without knowing any model SDK — a\nproducer (e.g. the Gemini plugin) maps its own usage shape onto these fields. Every\nfield is optional: a provider that doesn't report a given count, or an interaction\nthat ends before usage is known, simply leaves it ``None``. ``total_tokens`` is the\nprovider's own grand total when given (not necessarily the sum of the parts, since\nproviders count cached/tool-use tokens differently).\n\nEvery field is optional: a provider that doesn't report a given count, or an\ninteraction that ends before usage is known, simply leaves it ``None``.",
+      "description": "Provider-agnostic token accounting for one model interaction.\n\nA neutral summary Agent Kit understands without knowing any model SDK — a\nproducer (e.g. the Gemini plugin) maps its own usage shape onto these fields. Every\nfield is optional: a provider that doesn't report a given count, or an interaction\nthat ends before usage is known, simply leaves it ``None``. ``total_tokens`` is the\nprovider's own grand total when given (not necessarily the sum of the parts, since\nproviders count cached/tool-use tokens differently).\n\nEvery field is optional: a provider that doesn't report a given count, or an\ninteraction that ends before usage is known, simply leaves it ``None``.",
       "properties": {
         "input_tokens": {
           "anyOf": [

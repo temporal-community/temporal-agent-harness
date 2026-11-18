@@ -1,6 +1,6 @@
 # typescript/apps/ui/
 
-The console: a Svelte 5 app that replays and drives harness sessions. The workspace and SDK notes
+The console: a Svelte 5 app that replays and drives Agent Kit sessions. The workspace and SDK notes
 are in [typescript/AGENTS.md](../../AGENTS.md); serving and embedding the build are in
 [README.md](README.md). The rules below are each enforced by the test beside it.
 

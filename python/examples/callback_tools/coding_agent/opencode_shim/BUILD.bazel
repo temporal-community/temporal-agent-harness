@@ -1,5 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
 py_library(
     name = "_identifiers",
@@ -29,8 +29,8 @@ py_library(
 )
 
 py_library(
-    name = "harness_backend",
-    srcs = ["harness_backend.py"],
+    name = "agent_kit_backend",
+    srcs = ["agent_kit_backend.py"],
     imports = ["../../../.."],
     visibility = ["//:__subpackages__"],
     deps = [
@@ -74,14 +74,14 @@ py_library(
     ],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "opencode_shim_bin",
     srcs = ["__main__.py"],
     imports = ["../../../.."],
     main = "__main__.py",
     visibility = ["//:__subpackages__"],
     deps = [
-        ":harness_backend",
+        ":agent_kit_backend",
         ":server",
         "@pypi//uvicorn",
     ],

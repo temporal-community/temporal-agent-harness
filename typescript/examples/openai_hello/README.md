@@ -1,9 +1,9 @@
 # Hello-world OpenAI Agents agent (TypeScript)
 
 The TypeScript twin of [`python/examples/openai_hello`](../../../python/examples/openai_hello):
-the smallest interesting agent you can build on the harness with the **OpenAI Agents SDK**
+the smallest interesting agent you can build on Agent Kit with the **OpenAI Agents SDK**
 (`@openai/agents-core`). It chats in plain text and can call one tool (`get_weather`). It's here to
-show the harness **streaming** path for the OpenAI integration end to end — from the model call,
+show Agent Kit's **streaming** path for the OpenAI integration end to end — from the model call,
 through the streaming activity, to the live turn stream the web UI consumes.
 
 Its workflow type (`OpenAIHelloAgentTs`), registry key (`openai-hello-ts`) and task queue
@@ -21,39 +21,39 @@ example; Bazel supplies its toolchains and dependencies.
 ## What it demonstrates
 
 - **Streaming, not blocking.** The turn runs `runStreamed(runner, agent, input)` from
-  `@temporalio/agent-harness/ai-sdks/openai-agents-harness`, which runs the agent on the
+  `@temporalio/agent-kit/ai-sdks/openai-agents`, which runs the agent on the
   `TemporalOpenAIRunner` with streaming on and routes every model call's events to the current
-  turn. It's the streamed model activity that feeds each raw OpenAI event to the harness observer.
-- **The observer seam.** The worker registers the harness's plugin:
+  turn. It's the streamed model activity that feeds each raw OpenAI event to the Agent Kit observer.
+- **The observer seam.** The worker registers Agent Kit's plugin:
   ```ts
-  import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
+  import { OpenAIAgentsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/openai-agents";
 
   const worker = await Worker.create({
     connection,
     taskQueue,
     workflowsPath,
-    plugins: [new OpenAIAgentsPlugin(), new AgentHarnessPlugin()],
+    plugins: [new OpenAIAgentsPlugin(), new AgentKitPlugin()],
   });
   ```
-  Its streamed model activity builds the harness observer for each call, which translates raw
-  OpenAI events into harness vocabulary — `model_interaction_started` → `reply_delta` …
+  Its streamed model activity builds the Agent Kit observer for each call, which translates raw
+  OpenAI events into Agent Kit vocabulary — `model_interaction_started` → `reply_delta` …
   `tool_requested` … `model_interaction_ended`. There are **no run hooks**: the
   model-interaction bracket comes from the observer.
-- **Harness-owned tools.** `get_weather` is a normal harness `tool(...)`, adapted onto the SDK with
-  `asOpenAIAgentTool(runner, getWeather)`, so the harness keeps approval + `tool_start`/`tool_end`.
+- **Agent Kit-owned tools.** `get_weather` is a normal Agent Kit `tool(...)`, adapted onto the SDK with
+  `asOpenAIAgentTool(runner, getWeather)`, so Agent Kit keeps approval + `tool_start`/`tool_end`.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `agents.ts` | `OpenAIHelloAgentTs` — the harness agent; one `ask` handler, one `get_weather` tool, driven by `runStreamed`. |
-| `worker.ts` | A plain Temporal worker hosting the agent, with the OpenAI plugin and then `AgentHarnessPlugin` for the harness's own converter and activities. |
+| `agents.ts` | `OpenAIHelloAgentTs` — the Agent Kit agent; one `ask` handler, one `get_weather` tool, driven by `runStreamed`. |
+| `worker.ts` | A plain Temporal worker hosting the agent, with the OpenAI plugin and then `AgentKitPlugin` for Agent Kit's own converter and activities. |
 | `agents.toml`, `OpenAIHelloAgentTs.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :registry_update`). |
 | `agents.test.ts` | The agent on a dev server against a scripted model (no network): a weather question gets a `get_weather` call and a streamed reply. |
 
 There is **no per-example client**: this agent is driven by the shared example stack — the packaged
-`SessionManagerWorkflow` worker plus the FastAPI app and web UI (`temporal-agent-harness serve`),
-which send messages and stream turns through the harness's built-in `AgentClient`. Both come from
+`SessionManagerWorkflow` worker plus the FastAPI app and web UI (`temporal-agent-kit serve`),
+which send messages and stream turns through Agent Kit's built-in `AgentClient`. Both come from
 the Python package; only the agent and its worker are TypeScript.
 
 ## Run it
@@ -76,15 +76,15 @@ just worker            # 4. the agent worker
 (If the UI build reports missing modules, run `just app-install` once. For UI hot-reloading,
 `just ui-dev` runs it on Vite with `/api` proxied to the server on :8000.)
 
-Follow [Your first session](#your-first-session) below. The harness console is on **8000**;
+Follow [Your first session](#your-first-session) below. The Agent Kit console is on **8000**;
 Temporal's workflow UI is a separate application on **8233**.
 
 Without `just`, the equivalent commands (from the repo root, with `.env.local`'s variables
 exported):
 
 ```sh
-bazel run //python/temporal_agent_harness/web:cli -- session-manager
-bazel run //python/temporal_agent_harness/web:cli -- serve "$PWD/typescript/examples/openai_hello/agents.toml" --host 0.0.0.0 --port 8000
+bazel run //python/temporal_agent_kit/web:cli -- session-manager
+bazel run //python/temporal_agent_kit/web:cli -- serve "$PWD/typescript/examples/openai_hello/agents.toml" --host 0.0.0.0 --port 8000
 bazel run //typescript/examples/openai_hello:worker
 ```
 
@@ -100,7 +100,7 @@ The test runs with `bazel test //typescript/examples/openai_hello/...`.
    is “It's 72°F and sunny in Paris.” — **sample data**, not a live forecast. Model wording varies.
 4. Ask a follow-up, then reload the page to reconnect to the conversation.
 
-![TypeScript weather agent in the harness console](../../../docs/images/typescript-quickstart.png)
+![TypeScript weather agent in the Agent Kit console](../../../docs/images/typescript-quickstart.png)
 
 This capture uses a scripted model response with a real agent, tool execution, Temporal workflows,
 and console. The normal example uses OpenAI. See
@@ -114,7 +114,7 @@ and console. The normal example uses OpenAI. See
 - After changing handler, state, or init schemas, run
   `bazel run //typescript/examples/openai_hello:registry_update` from the repository root.
   This updates the generated schema and registry; review and commit the generated files.
-- For agent labels, descriptions, or queues, edit the `harness_ts_agent` declaration in
+- For agent labels, descriptions, or queues, edit the `agent_kit_ts_agent` declaration in
   `BUILD.bazel` and run the same generator. Keep the worker's queue aligned with the registry.
   The session manager caches its registry; see the quickstart's local-reset guidance before
   replacing a running development registry.

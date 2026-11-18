@@ -1,9 +1,9 @@
-"""A hello-world Strands Agents agent on the harness, with every kind of tool it takes.
+"""A hello-world Strands Agents agent on Agent Kit, with every kind of tool it takes.
 
 A conversational agent that answers in plain text. It is a Strands ``Agent`` built with
-``harness_strands_agent``, so each model call runs in the Strands plugin's model activity, where
-the harness translates raw Strands stream events into the turn-stream events an attached client
-sees. Its tools cover each kind a harness Strands agent accepts:
+``kit_strands_agent``, so each model call runs in the Strands plugin's model activity, where
+Agent Kit translates raw Strands stream events into the turn-stream events an attached client
+sees. Its tools cover each kind an Agent Kit Strands agent accepts:
 
 * ``get_weather`` — an inline workflow tool (``@agent.tool_defn``).
 * ``get_local_time`` — an activity tool (``@agent.activity_tool_defn``): reading the clock is
@@ -14,7 +14,7 @@ sees. Its tools cover each kind a harness Strands agent accepts:
   sandbox operation is an activity against the worker's ``scratch`` sandbox (see worker.py).
 
 A message sent while the agent is working steers it: ``ask`` joins the open turn and queues the
-text with ``runner.steer``, and the harness hands it to the model with the next tool result.
+text with ``runner.steer``, and Agent Kit hands it to the model with the next tool result.
 
 Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is registered
 in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
@@ -29,13 +29,13 @@ from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
-    from temporal_agent_harness.ai_sdks.strands_agents import TemporalSandbox
-    from temporal_agent_harness.ai_sdks.strands_agents_harness import (
+    from temporal_agent_kit.ai_sdks.strands_agents import TemporalSandbox
+    from temporal_agent_kit.ai_sdks.strands_agents import (
         as_strands_tool,
-        harness_strands_agent,
+        kit_strands_agent,
     )
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         MessageContext,
         MidTurn,
@@ -43,7 +43,7 @@ with workflow.unsafe.imports_passed_through():
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner, Injected
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner, Injected
 
 
 TASK_QUEUE = "strands-hello"
@@ -84,7 +84,7 @@ async def ask_user(question: str) -> str:
 
 @agent.defn(name="StrandsHelloAgent")
 class StrandsHelloAgentWorkflow:
-    """A conversational agent driven by Strands Agents, with every kind of harness Strands tool."""
+    """A conversational agent driven by Strands Agents, with every kind of Agent Kit Strands tool."""
 
     @agent.init
     def __init__(self, config: AgentConfig) -> None:
@@ -96,7 +96,7 @@ class StrandsHelloAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
         # Strands keeps the conversation in the agent, which lives as long as the workflow.
-        self._agent = harness_strands_agent(
+        self._agent = kit_strands_agent(
             self._runner,
             model=MODEL,
             start_to_close_timeout=timedelta(minutes=2),

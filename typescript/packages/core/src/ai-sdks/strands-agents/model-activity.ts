@@ -1,6 +1,6 @@
 // The wire types of the Strands model activities, which workflow code sends. The activities
 // themselves (`ModelActivity`) run on the worker:
-// `@temporalio/agent-harness-worker/ai-sdks/strands-agents`.
+// `@temporalio/agent-kit-worker/ai-sdks/strands-agents`.
 import type { JSONValue, Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
 import type { Duration } from '@temporalio/common';
 

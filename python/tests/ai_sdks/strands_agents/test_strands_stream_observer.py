@@ -1,6 +1,6 @@
 # ABOUTME: Unit-tests the Strands live translator (StrandsStreamObserver) in isolation: replays raw
 # Strands stream events through it with an in-memory publisher and checks the harness events it
-# emits. Also checks harness_strands_agent's refusals, which need no worker.
+# emits. Also checks kit_strands_agent's refusals, which need no worker.
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import pytest
 from strands import tool as strands_tool
 from strands.sandbox.not_a_sandbox_local_environment import NotASandboxLocalEnvironment
 
-from temporal_agent_harness.ai_sdks import strands_agents_harness as h
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.ai_sdks.strands_agents import _kit as h
+from temporal_agent_kit.agent_protocol import (
     ModelInteractionEnded,
     ModelInteractionStarted,
     ReplyDelta,
@@ -21,8 +21,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     TokenUsage,
     ToolRequested,
 )
-from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
+from temporal_agent_kit.stream_context import TurnStreamContext
 
 
 class _FakePublisher:
@@ -55,8 +55,8 @@ _CONTEXT = TurnStreamContext(turn_id="t-1", turn_number=1, agent_id="agent-abc")
 
 
 async def _replay(events: list[dict[str, Any]], *, model: str | None = "claude") -> None:
-    token = h._HarnessStreamToken(context=_CONTEXT, model=model).model_dump(mode="json")
-    async with h.harness_observer_factory(token, batch_interval=timedelta(milliseconds=50)) as obs:
+    token = h._KitStreamToken(context=_CONTEXT, model=model).model_dump(mode="json")
+    async with h.kit_observer_factory(token, batch_interval=timedelta(milliseconds=50)) as obs:
         for event in events:
             await obs.on_event(event)
 
@@ -127,9 +127,9 @@ async def test_a_tool_call_streamed_in_fragments_is_one_tool_requested_keyed_by_
 
 
 async def test_the_bracket_closes_when_the_stream_fails(fake_publisher: _FakePublisher):
-    token = h._HarnessStreamToken(context=_CONTEXT, model="claude")
+    token = h._KitStreamToken(context=_CONTEXT, model="claude")
     with pytest.raises(RuntimeError, match="provider down"):
-        async with h.harness_observer_factory(token) as obs:
+        async with h.kit_observer_factory(token) as obs:
             await obs.on_event({"contentBlockDelta": {"delta": {"text": "Hel"}}})
             raise RuntimeError("provider down")
 
@@ -151,24 +151,24 @@ def _roll() -> int:
 
 
 def test_harness_strands_agent_refuses_a_strands_tool():
-    with pytest.raises(TypeError, match="_roll is not a harness tool"):
-        h.harness_strands_agent(_NO_RUNNER, model="m", tools=[_roll])
+    with pytest.raises(TypeError, match="_roll is not an Agent Kit tool"):
+        h.kit_strands_agent(_NO_RUNNER, model="m", tools=[_roll])
 
 
 def test_harness_strands_agent_refuses_a_sandbox_that_is_not_a_temporal_sandbox():
     with pytest.raises(TypeError, match="must be a TemporalSandbox"):
-        h.harness_strands_agent(_NO_RUNNER, model="m", sandbox=NotASandboxLocalEnvironment())
+        h.kit_strands_agent(_NO_RUNNER, model="m", sandbox=NotASandboxLocalEnvironment())
 
 
 @pytest.mark.parametrize("key", ["streaming_topic", "stream_route"])
 def test_harness_strands_agent_refuses_its_own_streaming_settings(key: str):
     with pytest.raises(ValueError, match=key):
-        h.harness_strands_agent(_NO_RUNNER, model="m", **{key: None})
+        h.kit_strands_agent(_NO_RUNNER, model="m", **{key: None})
 
 
 def test_as_strands_tool_refuses_a_callable_that_is_not_a_harness_tool():
     async def plain(city: str) -> str:
         return city
 
-    with pytest.raises(TypeError, match="not a harness tool"):
+    with pytest.raises(TypeError, match="not an Agent Kit tool"):
         h.as_strands_tool(_NO_RUNNER, plain)

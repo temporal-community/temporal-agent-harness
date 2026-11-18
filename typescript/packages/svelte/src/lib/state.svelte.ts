@@ -9,17 +9,17 @@ import {
   type AgentUpdate,
   type AgentView,
   type ConnectionStatus,
-  type HarnessMessage,
+  type KitMessage,
   type SessionState,
   type UntypedAgent
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 export class SvelteSessionState<A extends AgentSchema = UntypedAgent> implements SessionState<A> {
   connection = $state<ConnectionStatus>("stopped");
   error = $state.raw<Error | undefined>(undefined);
   rootAgentId = $state<string | null>(null);
   agents = $state.raw<Readonly<Record<string, AgentView>>>({});
-  pending = $state.raw<readonly HarnessMessage<A>[]>([]);
+  pending = $state.raw<readonly KitMessage<A>[]>([]);
   #frameCount = $state(0);
   readonly #frames: AgentSseFrame[] = [];
   #framesCopy: readonly AgentSseFrame[] = [];

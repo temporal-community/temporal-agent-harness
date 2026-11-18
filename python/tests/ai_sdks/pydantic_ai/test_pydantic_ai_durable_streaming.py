@@ -21,14 +21,14 @@ from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamCl
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.ai_sdks.pydantic_ai_harness import (
-    HarnessDeps,
-    TemporalAgentHarnessDurability,
-    build_harness_toolset,
-    harness_model,
+from temporal_agent_kit.ai_sdks.pydantic_ai import (
+    KitDeps,
+    TemporalAgentKitDurability,
+    build_kit_toolset,
+    kit_model,
 )
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -40,8 +40,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextReply,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 
 @agent.tool_defn(inherently_safe=True)
@@ -51,34 +51,34 @@ async def get_weather(city: str) -> str:
 
 
 def _weather_agent(
-    model: Model | str, name: str, durability: TemporalAgentHarnessDurability | None = None
-) -> Agent[HarnessDeps, str]:
+    model: Model | str, name: str, durability: TemporalAgentKitDurability | None = None
+) -> Agent[KitDeps, str]:
     return Agent(
         model,
         name=name,
-        deps_type=HarnessDeps,
-        toolsets=[build_harness_toolset([get_weather], id="weather-tools")],
-        capabilities=[durability or TemporalAgentHarnessDurability()],
+        deps_type=KitDeps,
+        toolsets=[build_kit_toolset([get_weather], id="weather-tools")],
+        capabilities=[durability or TemporalAgentKitDurability()],
     )
 
 
-def _tenant_models(ctx: ModelResolutionContext[HarnessDeps], model_id: str) -> Model | None:
+def _tenant_models(ctx: ModelResolutionContext[KitDeps], model_id: str) -> Model | None:
     """An author's resolver: builds a name infer_model doesn't know, defers on any other."""
     return TestModel() if model_id == "tenant-model" else None
 
 
 # Pydantic AI's `test` model calls every tool once, then replies with their results as text. As a
 # model-name string it is rebuilt inside the model activity through resolve_model_id; as an
-# instance it is used there as-is, so it is passed wrapped in harness_model. `tenant-model` is a
+# instance it is used there as-is, so it is passed wrapped in kit_model. `tenant-model` is a
 # name only the author's resolver can build, so the run fails unless that resolver is consulted.
 _NAMED_MODEL_AGENT = _weather_agent("test", "pydantic-ai-durable-streaming-named")
 _INSTANCE_MODEL_AGENT = _weather_agent(
-    harness_model(TestModel()), "pydantic-ai-durable-streaming-instance"
+    kit_model(TestModel()), "pydantic-ai-durable-streaming-instance"
 )
 _RESOLVED_MODEL_AGENT = _weather_agent(
     "tenant-model",
     "pydantic-ai-durable-streaming-resolved",
-    TemporalAgentHarnessDurability(model_resolver=_tenant_models),
+    TemporalAgentKitDurability(model_resolver=_tenant_models),
 )
 
 
@@ -90,8 +90,8 @@ class _WeatherAgentBase:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
 
-    async def _ask(self, durable_agent: Agent[HarnessDeps, str], text: str) -> TextReply:
-        result = await durable_agent.run(text, deps=HarnessDeps(runner=self._runner))
+    async def _ask(self, durable_agent: Agent[KitDeps, str], text: str) -> TextReply:
+        result = await durable_agent.run(text, deps=KitDeps(runner=self._runner))
         return TextReply(text=str(result.output))
 
 
@@ -132,10 +132,10 @@ class _ResolvedModelAgent(_WeatherAgentBase):
 
 
 async def _one_turn(
-    workflow_class: type[_WeatherAgentBase], durable_agent: Agent[HarnessDeps, str], text: str
+    workflow_class: type[_WeatherAgentBase], durable_agent: Agent[KitDeps, str], text: str
 ) -> list[AgentEvent]:
     env = await WorkflowEnvironment.start_time_skipping(
-        plugins=[PydanticAIPlugin(), AgentHarnessPlugin()]
+        plugins=[PydanticAIPlugin(), AgentKitPlugin()]
     )
     try:
         task_queue = f"pydantic-ai-durable-streaming-{uuid.uuid4()}"
@@ -182,7 +182,7 @@ async def _one_turn(
     ],
 )
 async def test_each_model_call_is_bracketed_from_the_activity_with_its_usage(
-    workflow_class: type[_WeatherAgentBase], durable_agent: Agent[HarnessDeps, str]
+    workflow_class: type[_WeatherAgentBase], durable_agent: Agent[KitDeps, str]
 ):
     events = await _one_turn(workflow_class, durable_agent, "What's the weather in Paris?")
     types = [e.event.type for e in events]
@@ -216,7 +216,7 @@ async def test_each_model_call_is_bracketed_from_the_activity_with_its_usage(
 
 
 def test_an_unwrapped_model_instance_is_rejected_when_the_agent_is_built():
-    with pytest.raises(UserError, match="harness_model"):
+    with pytest.raises(UserError, match="kit_model"):
         _weather_agent(TestModel(), "pydantic-ai-unwrapped-instance")
 
 
@@ -224,18 +224,18 @@ def test_an_unwrapped_model_instance_is_rejected_when_the_agent_is_built():
 def test_another_model_resolving_capability_is_rejected_when_the_agent_is_built(
     resolver_goes_first: bool,
 ):
-    durability = TemporalAgentHarnessDurability()
+    durability = TemporalAgentKitDurability()
     resolver = ResolveModelId(_tenant_models)
     with pytest.raises(UserError, match="ResolveModelId.*model_resolver"):
         Agent(
             "tenant-model",
             name="pydantic-ai-competing-resolver",
-            deps_type=HarnessDeps,
+            deps_type=KitDeps,
             capabilities=[resolver, durability] if resolver_goes_first else [durability, resolver],
         )
 
 
 def test_a_model_instance_wrapped_further_out_than_harness_model_is_accepted():
     _weather_agent(
-        InstrumentedModel(harness_model(TestModel())), "pydantic-ai-instrumented-instance"
+        InstrumentedModel(kit_model(TestModel())), "pydantic-ai-instrumented-instance"
     )

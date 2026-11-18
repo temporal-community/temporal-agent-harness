@@ -28,16 +28,16 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_client import AgentClient, MidTurnRejectedError
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent_client import AgentClient, MidTurnRejectedError
+from temporal_agent_kit.agent_protocol import (
     TURN_EVENTS_TOPIC,
     AgentConfig,
     AgentEvent,
     AgentEventType,
     MessageDisposition,
 )
-from temporal_agent_harness.harness.subagent_activities import SubagentActivities
+from temporal_agent_kit.subagent_activities import SubagentActivities
 from tests.conformance.script import Handler, Script
 from tests.conformance.scripted_agent import ScriptedAgent, add, lookup
 

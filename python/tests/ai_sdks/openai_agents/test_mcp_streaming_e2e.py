@@ -45,17 +45,17 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.ai_sdks.openai_agents import ModelActivityParameters
-from temporal_agent_harness.ai_sdks.openai_agents._mcp import StatelessMCPServerProvider
-from temporal_agent_harness.ai_sdks.openai_agents._temporal_openai_agents import (
+from temporal_agent_kit.ai_sdks.openai_agents import ModelActivityParameters
+from temporal_agent_kit.ai_sdks.openai_agents._mcp import StatelessMCPServerProvider
+from temporal_agent_kit.ai_sdks.openai_agents._temporal_openai_agents import (
     OpenAIAgentsPlugin,
 )
-from temporal_agent_harness.ai_sdks.openai_agents.testing import TestModelProvider
-from temporal_agent_harness.ai_sdks.openai_agents_harness import (
-    harness_observer_factory,
+from temporal_agent_kit.ai_sdks.openai_agents.testing import TestModelProvider
+from temporal_agent_kit.ai_sdks.openai_agents import (
+    kit_observer_factory,
     stream_to_provider,
 )
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -240,7 +240,7 @@ async def client_and_queue():
         mcp_server_providers=[
             StatelessMCPServerProvider(MCP_SERVER_NAME, _ProbeMCPServer)
         ],
-        observer_factory=harness_observer_factory,
+        observer_factory=kit_observer_factory,
     )
     env = await WorkflowEnvironment.start_time_skipping(plugins=[plugin])
     task_queue = f"mcp-streaming-{uuid.uuid4()}"

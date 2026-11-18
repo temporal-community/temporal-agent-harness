@@ -22,10 +22,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from temporal_agent_harness.harness.state import DraftAliasError, HarnessState
+from temporal_agent_kit.state import DraftAliasError, AgentState
 
 from tests.state.support import StateHost
-from tests.state.models import AgentState, Flat, Group, Priority, Todo
+from tests.state.models import PlanState, Flat, Group, Priority, Todo
 from tests.state.replay import apply_ops, replay
 
 # --------------------------------------------------------------------------- #
@@ -61,8 +61,8 @@ def groups(draw) -> Group:
 
 
 @st.composite
-def agent_states(draw) -> AgentState:
-    return AgentState(
+def agent_states(draw) -> PlanState:
+    return PlanState(
         model=draw(text),
         count=draw(ints),
         ratio=draw(st.none() | floats),
@@ -83,7 +83,7 @@ def agent_states(draw) -> AgentState:
 # --------------------------------------------------------------------------- #
 
 
-def _apply_one(draw, d: AgentState) -> None:
+def _apply_one(draw, d: PlanState) -> None:
     """Perform one randomly chosen mutation on the draft."""
     choices = [
         "model",
@@ -341,7 +341,7 @@ def test_a_dict_key_named_dash_emits_an_ordinary_replace():
     a gap in the state layer, and this test is what keeps those two apart. Nothing here
     calls ``replay()``; there is no workaround in ``replay.py`` and deliberately so."""
     events: list = []
-    initial = AgentState(groups=[Group(name="g", meta={"-": "before"})])
+    initial = PlanState(groups=[Group(name="g", meta={"-": "before"})])
     ref = StateHost(events.append).state("a", initial)
     with ref.mutate() as d:
         d.groups[0].meta["-"] = "after"
@@ -357,7 +357,7 @@ def test_a_dict_key_named_dash_emits_an_ordinary_replace():
 
 def test_append_then_mutate_the_appended_element():
     events: list = []
-    ref = StateHost(events.append).state("a", AgentState(groups=[Group(name="g")]))
+    ref = StateHost(events.append).state("a", PlanState(groups=[Group(name="g")]))
     with ref.mutate() as d:
         d.groups[0].todos.append(Todo(id="t1"))
         d.groups[0].todos[0].done = True
@@ -378,7 +378,7 @@ def test_insert_rekeys_live_child_drafts():
     events: list = []
     ref = StateHost(events.append).state(
         "a",
-        AgentState(groups=[Group(name="g", todos=[Todo(id="a"), Todo(id="b")])]),
+        PlanState(groups=[Group(name="g", todos=[Todo(id="a"), Todo(id="b")])]),
     )
     with ref.mutate() as d:
         todos_ = d.groups[0].todos
@@ -398,7 +398,7 @@ def test_delete_rekeys_live_child_drafts():
     events: list = []
     ref = StateHost(events.append).state(
         "a",
-        AgentState(
+        PlanState(
             groups=[Group(name="g", todos=[Todo(id="a"), Todo(id="b"), Todo(id="c")])]
         ),
     )
@@ -417,7 +417,7 @@ def test_delete_rekeys_live_child_drafts():
 
 def test_whole_subtree_replace_is_one_op():
     events: list = []
-    ref = StateHost(events.append).state("a", AgentState(groups=[Group(name="old")]))
+    ref = StateHost(events.append).state("a", PlanState(groups=[Group(name="old")]))
     with ref.mutate() as d:
         d.groups = [Group(name="new")]
     assert events[-1].ops == [
@@ -428,7 +428,7 @@ def test_whole_subtree_replace_is_one_op():
 
 def test_in_place_operators_go_through_the_container():
     events: list = []
-    ref = StateHost(events.append).state("a", AgentState())
+    ref = StateHost(events.append).state("a", PlanState())
     with ref.mutate() as d:
         d.groups += [Group(name="x"), Group(name="y")]
         d.tags += ["p", "q"]
@@ -451,7 +451,7 @@ def test_in_place_operators_go_through_the_container():
 def test_structural_list_ops_emit_whole_list_replaces():
     events: list = []
     ref = StateHost(events.append).state(
-        "a", AgentState(groups=[Group(name="b"), Group(name="a")])
+        "a", PlanState(groups=[Group(name="b"), Group(name="a")])
     )
     with ref.mutate() as d:
         d.groups.sort(key=lambda g: g.name)
@@ -462,10 +462,10 @@ def test_structural_list_ops_emit_whole_list_replaces():
 
 
 def test_nested_optional_and_union_fields():
-    class Leaf(HarnessState):
+    class Leaf(AgentState):
         n: int = 0
 
-    class Root(HarnessState):
+    class Root(AgentState):
         maybe: Leaf | None = None
         mixed: list[int] | dict[str, int] = []
 
@@ -503,12 +503,12 @@ _DETERMINISM_PROBE = """
 import json
 
 from tests.state.support import StateHost
-from tests.state.models import AgentState, Group, Todo
+from tests.state.models import PlanState, Group, Todo
 
 WORDS = ["juliett", "alpha", "hotel", "charlie", "bravo", "golf", "echo", "delta"]
 
 events = []
-ref = StateHost(events.append).state("agent", AgentState())
+ref = StateHost(events.append).state("agent", PlanState())
 
 # Every container the layer owns, touched every way it can be touched: string-keyed dicts
 # (the shape most likely to pick up hash order), int-keyed dicts, nested models, lists built
@@ -589,8 +589,8 @@ def test_every_op_is_byte_identical_across_processes():
 # __eq__ compares contents, not class), so this is specific to model elements.
 
 
-def _one_group(*ids: str) -> AgentState:
-    return AgentState(groups=[Group(name="g", todos=[Todo(id=i) for i in ids])])
+def _one_group(*ids: str) -> PlanState:
+    return PlanState(groups=[Group(name="g", todos=[Todo(id=i) for i in ids])])
 
 
 def test_value_equality_survives_lazy_wrapping():
@@ -647,7 +647,7 @@ def test_containment_guard_does_not_append_a_duplicate_after_a_read():
 def test_nested_containers_are_immune_to_lazy_wrapping():
     """The counter-case that localises the defect: only model elements are affected."""
 
-    class Nest(HarnessState):
+    class Nest(AgentState):
         rows: list[list[int]] = []
         maps: list[dict[str, int]] = []
         nums: list[int] = []

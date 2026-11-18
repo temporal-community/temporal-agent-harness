@@ -97,7 +97,7 @@ describe("recognizable session history", () => {
   });
 
   it("links through the workflows page the API reports, unless the address bar names one", () => {
-    const reported = "http://localhost:8234/namespaces/temporal-agent-harness/workflows";
+    const reported = "http://localhost:8234/namespaces/temporal-agent-kit/workflows";
     assert.equal(temporalWorkflowUrl("wf", "", reported), `${reported}/wf`);
     assert.equal(
       temporalWorkflowUrl("wf", "?temporal-ui=https%3A%2F%2Fcloud.example%2Fnamespaces%2Fn%2Fworkflows", reported),

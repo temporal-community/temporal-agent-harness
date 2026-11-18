@@ -1,58 +1,58 @@
 # Hello-world Pydantic AI agent
 
-The smallest interesting agent you can build on the harness with **Pydantic AI**: it chats in plain
-text and can call one tool (`get_weather`). It's here to show the harness **streaming** path for the
+The smallest interesting agent you can build on Agent Kit with **Pydantic AI**: it chats in plain
+text and can call one tool (`get_weather`). It's here to show Agent Kit's **streaming** path for the
 Pydantic AI integration end to end — from the model call, through Pydantic AI's model activity, to
 the live turn stream the web UI consumes.
 
-Unlike the OpenAI and Gemini integrations (whose plugins are vendored into the harness so a streaming
+Unlike the OpenAI and Gemini integrations (whose plugins are vendored into Agent Kit so a streaming
 seam could be added), Pydantic AI's Temporal support is used **unmodified** from
-`pydantic_ai.durable_exec.temporal`. The harness adds one capability on top of Pydantic AI's
+`pydantic_ai.durable_exec.temporal`. Agent Kit adds one capability on top of Pydantic AI's
 `TemporalDurability`, plus a thin glue module.
 
 ## What it demonstrates
 
-- **Streaming via `TemporalAgentHarnessDurability`.** The agent is a plain Pydantic AI `Agent` with
-  `capabilities=[TemporalAgentHarnessDurability()]` in place of `TemporalDurability`. When you call
+- **Streaming via `TemporalAgentKitDurability`.** The agent is a plain Pydantic AI `Agent` with
+  `capabilities=[TemporalAgentKitDurability()]` in place of `TemporalDurability`. When you call
   `agent.run(...)`, Pydantic AI streams each model request through its `…__model_request_stream`
-  activity. There the harness wraps the model, so it sees the live stream and translates it into
-  harness vocabulary: `model_interaction_started` → `reply_delta` / `thought_summary` …
+  activity. There Agent Kit wraps the model, so it sees the live stream and translates it into
+  Agent Kit vocabulary: `model_interaction_started` → `reply_delta` / `thought_summary` …
   `tool_requested` … `model_interaction_ended` (with the call's token usage). All of it is
   published from the activity, like the other integrations.
 - **Choosing the model.** Give the agent a model-name string such as `"openai:gpt-5.1"` (as this
   example does), and the capability wraps the model the worker builds from it. A `Model` instance
-  must be passed as `harness_model(instance)`; an unwrapped instance is rejected when the agent is
+  must be passed as `kit_model(instance)`; an unwrapped instance is rejected when the agent is
   built, since it would run without any turn streaming. To build models from their names yourself
   (a custom provider, per-tenant credentials), pass your resolver as
-  `TemporalAgentHarnessDurability(model_resolver=...)`; a separate `ResolveModelId` (or any other
+  `TemporalAgentKitDurability(model_resolver=...)`; a separate `ResolveModelId` (or any other
   capability that resolves model names) is rejected when the agent is built. The resolver also runs in workflow code, so it must be deterministic and do no I/O;
   fetch secrets only inside the activity, and keep them off `deps`.
 - **Explicit per-run threading (no `self._runner` assumption).** The agent is built once at module
   load (its activities are registered on the worker). Each turn threads the runner through
   `deps` — that's all you pass:
   ```python
-  await agent.run(message.text, deps=HarnessDeps(runner=self._runner), message_history=self._history)
+  await agent.run(message.text, deps=KitDeps(runner=self._runner), message_history=self._history)
   ```
-  `HarnessDeps` snapshots `harness_stream_context` from the runner for you. Both handles are needed
+  `KitDeps` snapshots `kit_stream_context` from the runner for you. Both handles are needed
   but consumed in different places: the runner stays a live in-workflow reference the adapted tools
   read off `deps` (excluded from serialization), while the snapshotted stream context rides across
   into the model activity — where the streaming happens and the runner can't follow.
-- **Harness-owned tools.** `get_weather` is a normal `@agent.tool_defn`, adapted onto the SDK with
-  `build_harness_toolset([...])`. Its tools carry `metadata={"temporal": False}`, which tells
-  Pydantic AI not to wrap them in activities, so they run **in-workflow** — where the harness
+- **Agent Kit-owned tools.** `get_weather` is a normal `@agent.tool_defn`, adapted onto the SDK with
+  `build_kit_toolset([...])`. Its tools carry `metadata={"temporal": False}`, which tells
+  Pydantic AI not to wrap them in activities, so they run **in-workflow** — where Agent Kit
   approval gate and `tool_start`/`tool_end` events live.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `workflow.py` | `PydanticAIHelloAgent` — the harness agent; one `ask` handler, one `get_weather` tool, made durable with `TemporalAgentHarnessDurability`. |
-| `worker.py` | Worker hosting the workflow; `PydanticAIPlugin` + `AgentHarnessPlugin` on the client, `AgentPlugin(agent)` on the worker. |
+| `workflow.py` | `PydanticAIHelloAgent` — the Agent Kit agent; one `ask` handler, one `get_weather` tool, made durable with `TemporalAgentKitDurability`. |
+| `worker.py` | Worker hosting the workflow; `PydanticAIPlugin` + `AgentKitPlugin` on the client, `AgentPlugin(agent)` on the worker. |
 | `agents.toml`, `PydanticAIHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 There is **no per-example client**: like the other examples, this agent is driven by the shared
 example stack — the packaged `SessionManagerWorkflow` worker plus the FastAPI app and web UI
-(`temporal-agent-harness serve`). Registering the agent (its `harness_agent` in `BUILD.bazel`, which generates `agents.toml`) is all it takes to make it driveable.
+(`temporal-agent-kit serve`). Registering the agent (its `agent_kit_agent` in `BUILD.bazel`, which generates `agents.toml`) is all it takes to make it driveable.
 
 ## Run it
 
@@ -77,7 +77,7 @@ event translated from a raw Pydantic AI event in the model activity.
 Without `just`, the equivalent commands (from the repo root):
 
 ```sh
-uv run --group examples temporal-agent-harness session-manager
-uv run --group examples temporal-agent-harness serve examples/pydantic_ai_hello/agents.toml --host 0.0.0.0 --port 8000
+uv run --group examples temporal-agent-kit session-manager
+uv run --group examples temporal-agent-kit serve examples/pydantic_ai_hello/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.pydantic_ai_hello.worker
 ```

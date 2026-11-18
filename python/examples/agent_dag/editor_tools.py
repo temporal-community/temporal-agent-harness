@@ -9,7 +9,7 @@ NB: no ``from __future__ import annotations`` — the annotations build the mode
 the result validators.
 """
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 
 @agent.callback_tool_defn(inherently_safe=True)

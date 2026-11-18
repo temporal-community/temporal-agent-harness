@@ -1,5 +1,5 @@
 export {
-  HarnessProvider,
+  KitProvider,
   SessionStore,
   useAgentSession,
   useAgentSessionSelector,
@@ -7,4 +7,4 @@ export {
   type AgentSession
 } from "./session.js";
 export { ReactSessionState, type SessionSnapshot } from "./state.js";
-export * from "@temporalio/agent-harness-client";
+export * from "@temporalio/agent-kit-client";

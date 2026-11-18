@@ -43,9 +43,9 @@ class CodeModeMemoryAgentWorkflow:
 
 `/memory` is [`LocalDisk`](local_disk.py), an `ActivityFileSystem`: a config model plus plain
 async `stat` / `read` / `list` / `write` / `mkdir` / `delete` / `rename` methods that touch the
-disk. The harness runs each method as an activity (`vfs.local-disk.read`, ...) and supplies the
+disk. Agent Kit runs each method as an activity (`vfs.local-disk.read`, ...) and supplies the
 workflow side; the worker registers them with
-`AgentHarnessPlugin(filesystems=[LocalDisk, SkillsDisk])`. `/skills` is `SkillsDisk`, the same
+`AgentKitPlugin(filesystems=[LocalDisk, SkillsDisk])`. `/skills` is `SkillsDisk`, the same
 kind of filesystem over this example's `skills/` folder, with no write methods.
 
 The directory comes from the session's init data, relative to this example's `memories/` folder
@@ -86,7 +86,7 @@ as it is on disk right now, not as it was at the point in the session you're loo
 `/memory` also has a **Graph** button. It draws the **whole bundle**, live: every memory as a
 node colored by type, every link between memories as an edge, with stale, deprecated and
 human-confirmed memories marked. It comes from the `vfs.local-disk.okf_graph` activity, which
-the harness generates for every `ActivityFileSystem`. Click a node to read the memory and see
+Agent Kit generates for every `ActivityFileSystem`. Click a node to read the memory and see
 which memories link to it.
 
 Viewing files and the graph needs a Temporal server that runs standalone activities;

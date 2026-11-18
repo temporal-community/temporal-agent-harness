@@ -7,23 +7,23 @@ shapes.
 
 Source of truth in the current server:
 
-- `temporal_agent_harness/web/app.py`: HTTP routes and SSE flattening.
-- `temporal_agent_harness/web/session_manager.py`: agent registry and session shapes.
-- `harness/agent_protocol/events.py`: stream event payloads.
-- `harness/agent_protocol/agent_interface.py`: status, accepted-message, and
+- `temporal_agent_kit/web/app.py`: HTTP routes and SSE flattening.
+- `temporal_agent_kit/web/session_manager.py`: agent registry and session shapes.
+- `temporal_agent_kit/agent_protocol/events.py`: stream event payloads.
+- `temporal_agent_kit/agent_protocol/agent_interface.py`: status, accepted-message, and
   tool-approval shapes.
 
 ## Static Routes
 
 ### `GET /`
 
-Returns the packaged Vite UI (`temporal_agent_harness/ui/dist/index.html`)
+Returns the packaged Vite UI (`temporal_agent_kit/ui/dist/index.html`)
 when no custom `static_dir` is supplied. In development, run the shared Svelte
 app from `ui` with Vite and let it proxy `/api` to the same FastAPI server.
 
 ### `GET /states`
 
-Only present when `create_agent_harness_app(..., states_file=...)` is used.
+Only present when `create_agent_kit_app(..., states_file=...)` is used.
 The packaged Vite UI does not register this route.
 
 ### `GET /static/*`
@@ -172,14 +172,14 @@ three behave identically when the agent is idle.
 drive it. It is advisory: a parent's own `SubagentToolPolicy` decides what
 actually reaches its model, so never treat this as an access decision.
 
-The two harness-owned updates (`tool_approval`, `provide_callback_result`) are
+The two Agent Kit-owned updates (`tool_approval`, `provide_callback_result`) are
 absent because they are not handlers — they are resolved in-process and are
 reachable only from an out-of-band control plane (`POST /api/approve`,
 `POST /api/callback-result`).
 
 ### `POST /api/sessions/{session_id}/close`
 
-Stops an agent via the harness `close` signal: it winds down its turn loop,
+Stops an agent via Agent Kit's `close` signal: it winds down its turn loop,
 drains in-flight work, and auto-denies pending approvals and callbacks.
 
 A control-plane action rather than a message, so it works on any agent whatever
@@ -294,7 +294,7 @@ render it as a dropdown and the workflow enforces it at the update boundary.
 
 The packaged UI keeps a familiar affordance on top of this: typing `/` in the
 composer opens a picker over the handlers `agent_interface` returned. That is
-purely a client-side convention — the harness has no notion of a slash.
+purely a client-side convention — Agent Kit has no notion of a slash.
 
 ### `GET /api/attach?session_id=...&from_offset=0`
 
@@ -446,7 +446,7 @@ auto_approval_evaluation_ended: {
 
 // The evaluator was CANCELLED because its gate had already been settled — a human
 // answered while it was thinking, a policy cascade released the call, or the agent
-// closed. The harness cancels the coroutine rather than let it keep paying for a model
+// closed. Agent Kit cancels the coroutine rather than let it keep paying for a model
 // call on a settled question, which is why an evaluator must be async.
 auto_approval_evaluation_superseded: {
   tool_id: string
@@ -463,7 +463,7 @@ auto_approval_evaluation_error: {
   tool_name: string
   evaluation_id: string
   evaluator: string
-  message: string          // the harness substitutes an escalate; a human still decides
+  message: string          // Agent Kit substitutes an escalate; a human still decides
 }
 
 tool_approval_resolved: {

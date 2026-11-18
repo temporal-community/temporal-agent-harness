@@ -1,5 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
 py_library(
     name = "__init__",
@@ -14,10 +14,10 @@ py_library(
     imports = ["../../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
-        "//python/temporal_agent_harness/harness:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "@pypi//openai_agents",
         "@pypi//temporalio",
     ],
@@ -31,16 +31,15 @@ py_library(
     visibility = ["//:__subpackages__"],
 )
 
-harness_pytest_test(
-    name = "test_harness_mcp_server",
-    srcs = ["test_harness_mcp_server.py"],
+agent_kit_pytest_test(
+    name = "test_kit_mcp_server",
+    srcs = ["test_kit_mcp_server.py"],
     imports = ["../../.."],
     deps = [
         ":conftest",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "//python/tests:conftest",
         "@pypi//mcp",
         "@pypi//mcp_types",
@@ -49,16 +48,15 @@ harness_pytest_test(
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_mcp_streaming_e2e",
     srcs = ["test_mcp_streaming_e2e.py"],
     imports = ["../../.."],
     deps = [
         ":_mcp_e2e_workflow",
         ":conftest",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "//python/tests:conftest",
         "@pypi//mcp",
         "@pypi//mcp_types",
@@ -69,29 +67,29 @@ harness_pytest_test(
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_stream_observer",
     srcs = ["test_stream_observer.py"],
     imports = ["../../.."],
     deps = [
         ":conftest",
-        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness:stream_context",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "//python/tests:conftest",
         "@pypi//openai",
         "@pypi//pytest",
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_model_activity_credentials",
     srcs = ["test_model_activity_credentials.py"],
     imports = ["../../.."],
     deps = [
         ":conftest",
-        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "//python/tests:conftest",
         "@pypi//openai",
         "@pypi//pytest",

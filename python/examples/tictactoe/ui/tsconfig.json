@@ -16,7 +16,7 @@
     "paths": {
       "svelte": ["../../../../typescript/packages/svelte/node_modules/svelte"],
       "svelte/*": ["../../../../typescript/packages/svelte/node_modules/svelte/*"],
-      "@temporalio/agent-harness-svelte": ["../../../../typescript/packages/svelte/src/lib/index.ts"]
+      "@temporalio/agent-kit-svelte": ["../../../../typescript/packages/svelte/src/lib/index.ts"]
     }
   },
   "include": ["App.svelte"]

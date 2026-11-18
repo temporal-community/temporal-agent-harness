@@ -1,7 +1,7 @@
 // The Temporal worker plugin for the Gemini integration (Python's _google_genai_plugin.py).
 
 import { SimplePlugin } from "@temporalio/plugin";
-import { GEMINI_INTERACTIONS_CREATE_STREAMED_ACTIVITY } from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+import { GEMINI_INTERACTIONS_CREATE_STREAMED_ACTIVITY } from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 import {
   makeGeminiInteractionsCreateStreamed,
   type GeminiInteractionsClient,

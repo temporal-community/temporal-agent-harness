@@ -3258,7 +3258,7 @@ wheels = [
 ]
 
 [[package]]
-name = "temporal-agent-harness"
+name = "temporal-agent-kit"
 version = "0.11.0"
 source = { editable = "." }
 dependencies = [

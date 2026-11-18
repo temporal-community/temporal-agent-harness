@@ -8,7 +8,7 @@
 // Payload protobuf, named by its SHA-256) and claim keys, so both harnesses on one host read each
 // other's offloaded payloads. It only spans processes that share the filesystem: every client,
 // worker and server of a deployment must use the same backend, so use `s3PayloadStorage` (from
-// `@temporalio/agent-harness-worker/utils/s3`) for anything multi-host. Nothing deletes offloaded
+// `@temporalio/agent-kit-worker/utils/s3`) for anything multi-host. Nothing deletes offloaded
 // files.
 
 import { createHash, randomUUID } from "node:crypto";
@@ -130,7 +130,7 @@ export function localPayloadStorage({
   return new ExternalStorage({ drivers: [localFileStorageDriver(baseDir)], payloadSizeThreshold });
 }
 
-/** The default backend of `AgentHarnessPlugin`. */
+/** The default backend of `AgentKitPlugin`. */
 export const DEFAULT_PAYLOAD_STORAGE = localPayloadStorage();
 
 /** Throws the reason if a driver of `storage` that can check itself can't store. */

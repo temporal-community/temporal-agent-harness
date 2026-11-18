@@ -18,7 +18,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from examples.agent_dag.workflow import DagBuilderAgentWorkflow
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -27,7 +27,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from tests.examples.agent_dag._echo_step_agent import EchoStepAgentWorkflow
 
@@ -61,7 +61,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[DagBuilderAgentWorkflow, EchoStepAgentWorkflow],
-        plugins=[AgentHarnessPlugin()],
+        plugins=[AgentKitPlugin()],
     ):
         try:
             yield env.client, task_queue

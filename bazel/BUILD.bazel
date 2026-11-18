@@ -30,7 +30,7 @@ wheel_script(
     whl = "@pypi//pydantic_monty_runtime:whl",
 )
 
-# Runs harness_dev targets' programs (bazel/dev.bzl).
+# Runs agent_kit_dev targets' programs (bazel/dev.bzl).
 py_binary(
     name = "dev_runner",
     srcs = ["dev_runner.py"],
@@ -46,14 +46,14 @@ py_binary(
     deps = ["@pypi//setuptools"],
 )
 
-# Writes harness_agent_registry targets' agents.toml (bazel/agents.bzl).
+# Writes agent_kit_agent_registry targets' agents.toml (bazel/agents.bzl).
 py_binary(
     name = "agents_toml",
     srcs = ["agents_toml.py"],
     main = "agents_toml.py",
 )
 
-# Writes harness_texts targets' modules (bazel/texts.bzl).
+# Writes agent_kit_texts targets' modules (bazel/texts.bzl).
 py_binary(
     name = "texts_module",
     srcs = ["texts_module.py"],

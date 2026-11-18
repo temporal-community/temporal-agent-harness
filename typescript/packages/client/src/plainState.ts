@@ -2,7 +2,7 @@
 // write. For scripts, tests, and bindings to frameworks with an external-store hook.
 
 import type { AgentSseFrame } from "./frames.ts";
-import type { HarnessMessage } from "./messages.ts";
+import type { KitMessage } from "./messages.ts";
 import type { AgentSchema, UntypedAgent } from "./schema.ts";
 import type { ConnectionStatus, SessionState } from "./session.ts";
 import {
@@ -17,7 +17,7 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
   #connection: ConnectionStatus = "stopped";
   #error: Error | undefined = undefined;
   #rootAgentId: string | null = null;
-  #pending: readonly HarnessMessage<A>[] = [];
+  #pending: readonly KitMessage<A>[] = [];
   agents: Readonly<Record<string, AgentView>> = {};
   readonly #frames: AgentSseFrame[] = [];
   #framesCopy: readonly AgentSseFrame[] = [];
@@ -29,7 +29,7 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
   }
 
   /** The root agent's messages. */
-  get messages(): readonly HarnessMessage<A>[] {
+  get messages(): readonly KitMessage<A>[] {
     return rootView<A>(this).messages;
   }
 
@@ -78,10 +78,10 @@ export class PlainSessionState<A extends AgentSchema = UntypedAgent> implements 
     this.#emit();
   }
 
-  get pending(): readonly HarnessMessage<A>[] {
+  get pending(): readonly KitMessage<A>[] {
     return this.#pending;
   }
-  set pending(value: readonly HarnessMessage<A>[]) {
+  set pending(value: readonly KitMessage<A>[]) {
     this.#pending = value;
     this.#emit();
   }

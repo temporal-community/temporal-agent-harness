@@ -1,17 +1,17 @@
 # @generated
 # Input hashes for repository rule npm_translate_lock(name = "npm", pnpm_lock = "@@//typescript:pnpm-lock.yaml").
 # This file should be checked into version control along with the pnpm-lock.yaml file.
-typescript/apps/chat-server/package.json=1658478481
-typescript/apps/ui/package.json=217365086
-typescript/examples/monty/package.json=-1086100674
-typescript/examples/openai_hello/package.json=-1645025492
-typescript/examples/strands_hello/package.json=-1196549045
-typescript/package.json=-1773980838
-typescript/packages/client/package.json=1148216325
-typescript/packages/codegen/package.json=-2146673429
-typescript/packages/core/package.json=-511635675
-typescript/packages/react/package.json=956386342
-typescript/packages/svelte/package.json=1594065325
-typescript/packages/worker/package.json=273045933
-typescript/pnpm-lock.yaml=-499943806
+typescript/apps/chat-server/package.json=-1691838127
+typescript/apps/ui/package.json=-1922519254
+typescript/examples/monty/package.json=1970149941
+typescript/examples/openai_hello/package.json=1015733001
+typescript/examples/strands_hello/package.json=-1745391320
+typescript/package.json=-1403332850
+typescript/packages/client/package.json=-395037627
+typescript/packages/codegen/package.json=-786324953
+typescript/packages/core/package.json=206126977
+typescript/packages/react/package.json=-1688781518
+typescript/packages/svelte/package.json=-138908255
+typescript/packages/worker/package.json=-478984942
+typescript/pnpm-lock.yaml=-730977522
 typescript/pnpm-workspace.yaml=-1916117215

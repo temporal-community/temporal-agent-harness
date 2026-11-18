@@ -17,13 +17,13 @@ import type { Duration } from "@temporalio/common";
 import type {
   GeminiInteractionsActivity,
   InteractionCreateParamsStreaming,
-} from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+} from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 import type {
   AgentStreamItem,
   TokenUsage,
   TurnStreamContext,
-} from "@temporalio/agent-harness/harness/agent-protocol";
-import { publisherFromActivity, type TurnEventPublisher } from "../../harness/agent-workflow.ts";
+} from "@temporalio/agent-kit/agent-protocol";
+import { publisherFromActivity, type TurnEventPublisher } from "../../agent-workflow.ts";
 import {
   observeStream,
   type ObserverFactory,

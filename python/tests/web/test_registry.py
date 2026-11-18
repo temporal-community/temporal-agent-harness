@@ -10,7 +10,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from temporal_agent_harness.web.registry import load_agent_registry
+from temporal_agent_kit.web.registry import load_agent_registry
 
 # Relative to the runfiles root the test starts in.
 REGISTRY_SCHEMA = json.loads(Path("contract/registry.schema.json").read_text())

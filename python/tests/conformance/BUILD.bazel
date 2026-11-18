@@ -1,6 +1,6 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:binary.bzl", "harness_module_binary")
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
 py_library(
     name = "driver",
@@ -10,10 +10,10 @@ py_library(
     deps = [
         ":script",
         ":scripted_agent",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_client",
-        "//python/temporal_agent_harness/harness:subagent_activities",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_client",
+        "//python/temporal_agent_kit:subagent_activities",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "@pypi//pydantic",
         "@pypi//temporalio",
     ],
@@ -27,12 +27,12 @@ py_library(
     deps = [
         ":driver",
         ":script",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
     ],
 )
 
 # Reads conformance/scenarios/ and writes conformance/goldens/ in the workspace.
-harness_module_binary(
+agent_kit_module_binary(
     name = "goldens_update",
     srcs = ["goldens_update.py"],
     data = ["//bazel/temporal:cli"],
@@ -51,7 +51,7 @@ py_library(
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "//python/temporal_agent_kit/agent_protocol:events",
         "@pypi//pydantic",
     ],
 )
@@ -63,17 +63,17 @@ py_library(
     visibility = ["//python:__subpackages__"],
     deps = [
         ":script",
-        "//python/temporal_agent_harness/harness:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
-        "//python/temporal_agent_harness/harness/agent_protocol:events",
-        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_kit:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/agent_protocol:events",
+        "//python/temporal_agent_kit/state:__init__",
         "@pypi//pydantic",
         "@pypi//temporalio",
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_goldens",
     srcs = ["test_goldens.py"],
     data = [
@@ -92,7 +92,7 @@ harness_pytest_test(
 )
 
 # test_goldens against TypeScript's scripted worker: the same scenarios, checks and goldens.
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_typescript_goldens",
     srcs = ["test_goldens.py"],
     data = [

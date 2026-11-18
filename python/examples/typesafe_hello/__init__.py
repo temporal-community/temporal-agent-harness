@@ -1,1 +1,1 @@
-"""Typed decisions with the canonical TypeSafe plugin and harness events."""
+"""Typed decisions with the canonical TypeSafe plugin and Agent Kit events."""

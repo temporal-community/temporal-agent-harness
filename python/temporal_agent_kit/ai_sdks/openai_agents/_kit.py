@@ -1,0 +1,779 @@
+# ABOUTME: Harness-owned glue for the vendored OpenAI Agents integration. Holds everything
+# harness-specific that the vendored `openai_agents/` package deliberately does NOT know about:
+# the live translator (`OpenAIStreamObserver`) that folds raw OpenAI Responses stream events into
+# the harness turn-stream vocabulary, the observer factory + `stream_to_provider` that route those
+# events to the in-flight turn with zero explicit threading, `as_openai_agent_tool(s)` adapting
+# harness tools onto the SDK, and `as_kit_mcp_server(s)` putting an SDK MCP server under the
+# same approval policy and tool lifecycle. Kept a sibling of the vendored tree (not inside it) so
+# that tree stays pristine for future upstream merges. Mirrors the structure of the Gemini plugin's
+# `_interactions_activity._StreamEventPublisher`.
+
+"""Harness integration for the OpenAI Agents SDK.
+
+Wire it onto a worker by building the vendored plugin with the harness seam:
+
+>>> from temporal_agent_kit.ai_sdks.openai_agents import (
+...     ModelActivityParameters,
+...     OpenAIAgentsPlugin,
+... )
+>>> from temporal_agent_kit.ai_sdks.openai_agents import (
+...     kit_observer_factory,
+...     stream_to_provider,
+... )
+>>> plugin = OpenAIAgentsPlugin(
+...     model_params=ModelActivityParameters(stream_to_provider=stream_to_provider),
+...     observer_factory=kit_observer_factory,
+... )
+
+With that in place, an agent's ``Runner.run_streamed(...)`` model calls stream
+``reply_delta`` / ``thought_summary`` / ``text_annotation`` / ``tool_requested`` and
+``model_interaction_started`` / ``…_ended`` onto the harness turn stream live — the same
+vocabulary the Gemini plugin produces.
+
+.. warning::
+    Streaming support is experimental and may change in future versions.
+"""
+
+from __future__ import annotations
+
+import importlib
+import inspect
+import json
+import uuid
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import AsyncExitStack
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Self
+
+from pydantic import BaseModel
+
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseFunctionCallArgumentsDeltaEvent,
+    ResponseFunctionCallArgumentsDoneEvent,
+    ResponseFunctionToolCall,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputTextAnnotationAddedEvent,
+    ResponseReasoningSummaryTextDeltaEvent,
+    ResponseTextDeltaEvent,
+)
+
+from temporalio import workflow
+from temporalio.exceptions import ApplicationError
+
+from temporal_agent_kit.ai_sdks.integration_helpers import StreamObserver
+from temporal_agent_kit.agent_protocol import (
+    ModelInteractionEnded,
+    ModelInteractionStarted,
+    ReplyDelta,
+    TextAnnotationDelta,
+    ThoughtSummaryDelta,
+    TokenUsage,
+    ToolEndEvent,
+    ToolErrorEvent,
+    ToolRequested,
+    ToolStartEvent,
+)
+from temporal_agent_kit.agent_workflow import (
+    AgentWorkflowRunner,
+    ToolApprovalDenied,
+    TurnEventPublisher,
+    _apply_approval_policy,
+)
+from temporal_agent_kit.stream_context import TurnStreamContext
+
+if TYPE_CHECKING:
+    from agents import Tool
+    from agents.items import TResponseStreamEvent
+    from agents.mcp import MCPServer
+    from mcp.types import CallToolResult
+
+__all__ = [
+    "OpenAIStreamObserver",
+    "kit_observer_factory",
+    "stream_to_provider",
+    "as_openai_agent_tool",
+    "as_openai_agent_tools",
+    "as_kit_mcp_server",
+    "as_kit_mcp_servers",
+    "is_kit_mcp_server",
+    "mark_durable_mcp_server",
+    "is_durable_mcp_server",
+]
+
+_INSTALL_MESSAGE = (
+    "OpenAI Agents SDK support requires the optional `openai-agents` extra. "
+    "Install it with `uv sync --extra openai-agents` or "
+    "`pip install 'temporal-agent-kit[openai-agents]'`."
+)
+
+_HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
+
+
+# ---------------------------------------------------------------------------
+# Live streaming: raw OpenAI Responses events -> harness turn vocabulary
+# ---------------------------------------------------------------------------
+#
+# The OpenAI Responses stream is a flat sequence of typed events, not the
+# step.start/delta/stop lifecycle Gemini uses — so the correlation this observer
+# has to maintain is smaller: reply/thought/annotation text arrives already
+# framed as its own delta event (publish straight through), and the only stateful
+# thing is a custom function call, whose name + call_id arrive on
+# ``response.output_item.added`` while its JSON arguments stream over
+# ``response.function_call_arguments.delta`` and finalize on
+# ``…done``. We consolidate those into ONE ``tool_requested`` keyed by the SDK
+# ``call_id`` — the same id ``as_openai_agent_tool`` hands to ``run_tool`` for the
+# execution lifecycle, so ``tool_requested`` and the eventual ``tool_start`` /
+# ``tool_end`` share a ``tool_id`` (spec §4.4).
+#
+# As with Gemini, ``run_tool`` OWNS ``tool_start`` / ``tool_end`` / ``tool_error``
+# for custom tools; this translator only emits ``tool_requested`` (the model's
+# request, as it streams out of the LLM). Hosted/server-side tool spans
+# (web_search, file_search, …) are deferred (spec §11) — Monty uses none, and the
+# exact event shapes must be pinned against a recorded fixture before we bracket
+# them.
+
+
+class OpenAIStreamObserver:
+    """Translate one streamed OpenAI model call into harness turn events, live.
+
+    A :class:`StreamObserver` — one instance per streamed call, so its per-call
+    state (function-call arg buffers, captured usage) never bleeds across the
+    concurrent calls a shared worker runs. Constructed with the call's
+    :class:`TurnStreamContext` and the requested ``model`` id; opens a
+    :class:`TurnEventPublisher` bound to that turn on ``__aenter__`` and publishes
+    ``model_interaction_started`` THERE — at model-call dispatch, before the first
+    event — so the started→ended span measures the true model-call latency
+    (time-to-first-token included). ``on_event`` folds each raw event into harness
+    vocabulary; ``__aexit__`` closes the bracket with ``…_ended`` carrying usage read
+    off the terminal ``response.completed``.
+    """
+
+    def __init__(
+        self,
+        context: TurnStreamContext,
+        *,
+        model: str | None = None,
+        batch_interval: timedelta | None = None,
+    ) -> None:
+        self._context = context
+        # The requested model id, known at dispatch (from the streaming activity input),
+        # so BOTH brackets name it — matching how the Gemini plugin reads the model from
+        # the request. Never read from the stream: doing so would delay `started` past the
+        # first event and corrupt the measured model-call latency.
+        self._model = model
+        self._stack: AsyncExitStack | None = None
+        self._publisher: TurnEventPublisher | None = None
+        # Function-call item id -> (call_id, tool_name), recorded on
+        # response.output_item.added and consumed on the matching …arguments.done.
+        self._fn_calls: dict[str, tuple[str, str]] = {}
+        # Function-call item id -> accumulated JSON-string argument fragments.
+        self._arg_buffers: dict[str, str] = {}
+        # Token usage, captured off the terminal response.completed for the ended bracket.
+        self._usage: TokenUsage | None = None
+        # Publish-flush cadence for this call's publisher — the plugin's configured
+        # ``ModelActivityParameters.streaming_batch_interval``, threaded in by
+        # ``kit_observer_factory``. ``None`` defers to the harness default in
+        # ``publisher_from_activity``.
+        self._batch_interval = batch_interval
+
+    async def __aenter__(self) -> Self:
+        self._stack = AsyncExitStack()
+        self._publisher = await self._stack.enter_async_context(
+            AgentWorkflowRunner.publisher_from_activity(
+                self._context, batch_interval=self._batch_interval
+            )
+        )
+        # Open the model-interaction span at dispatch, before awaiting any event, so the
+        # span duration is the real call latency.
+        self._publisher.publish(ModelInteractionStarted(model=self._model))
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
+        try:
+            if self._publisher is not None:
+                # In a finally-equivalent: always close the started bracket, even if the
+                # stream errored (usage then stays None). Published while the
+                # publisher/stack is still open.
+                self._publisher.publish(
+                    ModelInteractionEnded(model=self._model, usage=self._usage)
+                )
+        finally:
+            if self._stack is not None:
+                await self._stack.aclose()
+                self._stack = None
+            self._publisher = None
+        # Never swallow a stream error: the batched-collect path owns failures.
+        return False
+
+    async def on_event(self, event: "TResponseStreamEvent") -> None:
+        """Fold one raw Responses stream event into harness vocabulary."""
+        pub = self._publisher
+        if pub is None:
+            return
+
+        if isinstance(event, ResponseTextDeltaEvent):
+            if event.delta:
+                pub.publish(ReplyDelta(text=event.delta))
+        elif isinstance(event, ResponseReasoningSummaryTextDeltaEvent):
+            # Reasoning *summary* text (capability-gated, spec §6). The raw
+            # payload is dumped so a consumer can position it like Gemini's.
+            pub.publish(
+                ThoughtSummaryDelta(delta=event.model_dump(exclude_none=True, mode="json"))
+            )
+        elif isinstance(event, ResponseOutputTextAnnotationAddedEvent):
+            pub.publish(
+                TextAnnotationDelta(delta=event.model_dump(exclude_none=True, mode="json"))
+            )
+        elif isinstance(event, ResponseOutputItemAddedEvent):
+            item = event.item
+            if isinstance(item, ResponseFunctionToolCall):
+                # A custom function call is opening. Record name + call_id keyed
+                # by the item id; its args stream next and finalize on …done.
+                item_id = item.id or item.call_id
+                self._fn_calls[item_id] = (item.call_id, item.name)
+                self._arg_buffers.setdefault(item_id, "")
+        elif isinstance(event, ResponseFunctionCallArgumentsDeltaEvent):
+            if event.delta:
+                self._arg_buffers[event.item_id] = (
+                    self._arg_buffers.get(event.item_id, "") + event.delta
+                )
+        elif isinstance(event, ResponseFunctionCallArgumentsDoneEvent):
+            self._emit_tool_requested(event, pub)
+        elif isinstance(event, ResponseCompletedEvent):
+            self._usage = _to_token_usage(getattr(event.response, "usage", None))
+
+    def _emit_tool_requested(
+        self,
+        event: ResponseFunctionCallArgumentsDoneEvent,
+        pub: TurnEventPublisher,
+    ) -> None:
+        """Publish the consolidated ``tool_requested`` for one custom function call.
+
+        Prefers the done event's authoritative ``arguments`` string, falling back
+        to the buffered delta fragments. ``tool_id`` is the SDK ``call_id`` (shared
+        with the execution lifecycle in ``run_tool``); if the opening
+        ``output_item.added`` was somehow missed, we degrade to the item id and the
+        done event's own name rather than dropping the request.
+        """
+        item_id = event.item_id
+        buffered = self._arg_buffers.pop(item_id, "")
+        call_id, name = self._fn_calls.pop(item_id, (item_id, event.name))
+        raw = event.arguments or buffered
+        pub.publish(
+            ToolRequested(
+                tool_id=call_id,
+                tool_name=name,
+                tool_input=_parse_tool_args(raw),
+            )
+        )
+
+
+def _parse_tool_args(raw: str) -> dict[str, Any]:
+    """Best-effort parse of a function call's JSON-string arguments.
+
+    For display/approval only: a malformed or non-object payload yields ``{}``
+    rather than failing the streaming activity (the workflow-side reducer does the
+    authoritative parse on its own copy of the stream)."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _to_token_usage(usage: Any) -> TokenUsage | None:
+    """Map OpenAI's ``ResponseUsage`` onto the harness's provider-agnostic
+    :class:`TokenUsage`. ``None`` in → ``None`` out; OpenAI reports no separate
+    tool-use token count, so that field stays ``None``."""
+    if usage is None:
+        return None
+    input_details = getattr(usage, "input_tokens_details", None)
+    output_details = getattr(usage, "output_tokens_details", None)
+    return TokenUsage(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        total_tokens=getattr(usage, "total_tokens", None),
+        thought_tokens=getattr(output_details, "reasoning_tokens", None),
+        cached_tokens=getattr(input_details, "cached_tokens", None),
+        tool_use_tokens=None,
+    )
+
+
+class _KitStreamToken(BaseModel):
+    """The opaque routing token the harness hands the streaming activity.
+
+    Bundles the in-flight turn's :class:`TurnStreamContext` with the requested model id,
+    so the observer can open the model-interaction bracket — naming the model — at
+    dispatch (``__aenter__``), before any event arrives. Rides the streaming activity
+    input as an untyped field, so the factory rehydrates it from a plain dict.
+    """
+
+    context: TurnStreamContext
+    model: str | None = None
+
+
+def stream_to_provider(model: str | None, run_context: Any) -> _KitStreamToken | None:
+    """Per-call routing-token provider (wired as ``model_params.stream_to_provider``).
+
+    Called once per streamed request, in workflow context, with the requested model id
+    and the object the agent passed as ``Runner.run_streamed(..., context=self._runner)``.
+    Reads the in-flight turn's stream context off that runner and bundles it with the
+    model. Returns ``None`` when the run context is not a harness runner or there is no
+    active turn, so the vendored stub falls back to ``streaming_topic``.
+    """
+    if not isinstance(run_context, AgentWorkflowRunner):
+        return None
+    context = run_context.current_stream_context
+    if context is None:
+        return None
+    return _KitStreamToken(context=context, model=model)
+
+
+def kit_observer_factory(
+    token: Any, *, batch_interval: timedelta | None = None
+) -> StreamObserver[Any]:
+    """Turn a streamed call's opaque routing token into a fresh observer.
+
+    The token is the :class:`_KitStreamToken` produced by :func:`stream_to_provider`;
+    it arrives here rehydrated as a plain dict (it rides the activity input as an untyped
+    ``Any`` field), so we validate it back into the model. Wired onto the plugin as
+    ``observer_factory=...``.
+
+    ``batch_interval`` is the plugin's configured
+    ``ModelActivityParameters.streaming_batch_interval``, handed to every factory by
+    ``select_observer`` and forwarded to the observer's publisher — so raising that one
+    field genuinely coarsens this path's flush cadence (one Signal per flush) instead of
+    being ignored the moment a factory is wired. Defaulted so the factory stays callable
+    by hand (e.g. in tests), where ``None`` means "use the harness default".
+    """
+    tok = (
+        token
+        if isinstance(token, _KitStreamToken)
+        else _KitStreamToken.model_validate(token)
+    )
+    return OpenAIStreamObserver(tok.context, model=tok.model, batch_interval=batch_interval)
+
+
+# ---------------------------------------------------------------------------
+# Tool adapter: harness tools -> OpenAI Agents SDK FunctionTools
+# ---------------------------------------------------------------------------
+
+
+def as_openai_agent_tool(
+    runner: AgentWorkflowRunner,
+    tool_callable: Callable[..., Awaitable[Any]],
+    *,
+    injections: Mapping[str, Any] | None = None,
+    strict_json_schema: bool = True,
+) -> "Tool":
+    """Adapt a harness tool into an OpenAI Agents SDK ``FunctionTool``.
+
+    ``tool_callable`` must be produced by :func:`harness.agent.tool_defn`,
+    :func:`harness.agent.activity_tool_defn`, or :func:`harness.agent.subagent_toolset`.
+    The returned OpenAI tool invokes ``runner.run_tool(...)`` for every model tool
+    call, so the harness remains responsible for:
+
+    - safe-by-default approval policy evaluation;
+    - ``tool_start`` / ``tool_end`` / ``tool_error`` event publication;
+    - injected parameters declared with ``Injected[...]``;
+    - activity-backed execution for ``@agent.activity_tool_defn`` tools.
+
+    Use ``temporal_agent_kit.ai_sdks.openai_agents.workflow.activity_as_tool``
+    directly for plain Temporal activities that do not need harness approval or
+    harness tool lifecycle events.
+    """
+    _require_harness_tool(tool_callable)
+    function_schema, function_tool_cls = _agents_tool_symbols()
+    schema = function_schema(tool_callable)
+
+    async def on_invoke_tool(_ctx: Any, input: str) -> str:
+        try:
+            json_data = json.loads(input or "{}")
+        except Exception as exc:  # noqa: BLE001 - converted to workflow-visible error
+            raise ApplicationError(
+                f"Invalid JSON input for tool {schema.name}: {input}",
+                type="InvalidToolInput",
+                non_retryable=True,
+            ) from exc
+        if not isinstance(json_data, dict):
+            raise ApplicationError(
+                f"Tool {schema.name} expected a JSON object input, "
+                f"got {type(json_data).__name__}.",
+                type="InvalidToolInput",
+                non_retryable=True,
+            )
+
+        try:
+            parsed = schema.params_pydantic_model(**json_data)
+            args, kwargs = schema.to_call_args(parsed)
+        except Exception as exc:  # noqa: BLE001 - preserve a non-retryable model input error
+            raise ApplicationError(
+                f"Payload for tool {schema.name!r} does not match its schema: {exc}",
+                type="InvalidToolInput",
+                non_retryable=True,
+            ) from exc
+
+        tool_call_id = getattr(_ctx, "tool_call_id", None)
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            tool_call_id = _new_tool_call_id(schema.name)
+
+        try:
+            result = await runner.run_tool(
+                tool_call_id,
+                tool_callable,
+                *args,
+                injections=injections,
+                **kwargs,
+            )
+        except Exception as exc:  # noqa: BLE001 - model-visible tool failure
+            return _with_steering(runner, tool_call_id, f"Tool {schema.name!r} failed: {exc}")
+        return _with_steering(runner, tool_call_id, _stringify_tool_result(result))
+
+    return function_tool_cls(
+        name=schema.name,
+        description=schema.description or "",
+        params_json_schema=schema.params_json_schema,
+        on_invoke_tool=on_invoke_tool,
+        strict_json_schema=strict_json_schema,
+    )
+
+
+def as_openai_agent_tools(
+    runner: AgentWorkflowRunner,
+    tool_callables: (
+        Mapping[str, Callable[..., Awaitable[Any]]]
+        | list[Callable[..., Awaitable[Any]]]
+        | tuple[Callable[..., Awaitable[Any]], ...]
+    ),
+    *,
+    injections: Mapping[str, Any] | None = None,
+    strict_json_schema: bool = True,
+) -> list["Tool"]:
+    """Adapt several harness tools into OpenAI Agents SDK tools."""
+    tools = (
+        list(tool_callables.values())
+        if isinstance(tool_callables, Mapping)
+        else list(tool_callables)
+    )
+    return [
+        as_openai_agent_tool(
+            runner,
+            tool,
+            injections=injections,
+            strict_json_schema=strict_json_schema,
+        )
+        for tool in tools
+    ]
+
+
+def _require_harness_tool(tool_callable: Callable[..., Any]) -> None:
+    if any(getattr(tool_callable, attr, False) for attr in _HARNESS_TOOL_ATTRS):
+        return
+    name = getattr(tool_callable, "__name__", repr(tool_callable))
+    raise TypeError(
+        f"{name} is not an Agent Kit tool; decorate it with @agent.tool_defn, "
+        "@agent.activity_tool_defn, or use agent.subagent_toolset(...)."
+    )
+
+
+def _agents_tool_symbols() -> tuple[Callable[[Callable[..., Any]], Any], type[Any]]:
+    function_schema = getattr(
+        _import_optional("agents.function_schema"), "function_schema"
+    )
+    function_tool_cls = getattr(_import_optional("agents.tool"), "FunctionTool")
+    return function_schema, function_tool_cls
+
+
+def _import_optional(module_name: str) -> Any:
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        if missing == module_name or missing.split(".")[0] in {
+            "agents",
+            "openai",
+            "mcp",
+        }:
+            raise RuntimeError(_INSTALL_MESSAGE) from exc
+        raise
+
+
+def _new_tool_call_id(tool_name: str) -> str:
+    if _in_workflow():
+        suffix = workflow.uuid4()
+    else:
+        suffix = uuid.uuid4()
+    return f"openai_agents:{tool_name}:{suffix}"
+
+
+def _in_workflow() -> bool:
+    try:
+        return workflow.in_workflow()
+    except RuntimeError:
+        return False
+
+
+def _with_steering(runner: AgentWorkflowRunner, tool_id: str, output: str) -> str:
+    """``output`` with any queued steering appended, claimed for this tool call."""
+    steering = runner.claim_steering(tool_id=tool_id)
+    return steering.append_to(output) if steering is not None else output
+
+
+def _stringify_tool_result(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if isinstance(result, BaseModel):
+        return result.model_dump_json()
+    if isinstance(result, (dict, list, tuple, int, float, bool)) or result is None:
+        return json.dumps(result, default=str)
+    return str(result)
+
+
+# ---------------------------------------------------------------------------
+# MCP adapter: harness gating + tool lifecycle events for an SDK MCP server
+# ---------------------------------------------------------------------------
+#
+# ``as_kit_mcp_server`` wraps the server's ``call_tool`` so the call funnels
+# through ``run_tool`` exactly like a harness tool: policy gate first, then
+# ``tool_start`` -> ``tool_end`` / ``tool_error``.
+#
+# This allows us to provide tool approval and event emission for MCP tool calls
+# without the user of our harness to manually wire these up.
+
+_MCP_TOOL_CALL_ID_META_KEY = "temporal.agent-kit/tool_call_id"
+_MCP_WRAPPED_ATTR = "__harness_mcp_governed__"
+_MCP_DURABLE_ATTR = "__harness_mcp_durable__"
+
+
+def mark_durable_mcp_server(server: "MCPServer") -> "MCPServer":
+    """Declare that ``server`` replays durably, and return it.
+
+    The runner rejects an ``Agent(mcp_servers=[...])`` entry without this mark. A plain
+    SDK server (stdio, HTTP) re-runs its tool calls on replay. Mark only a server whose
+    calls go through an activity or a Nexus operation.
+
+    The mark is an instance attribute, not a type, so the runner validates a server
+    without importing the package that defines it.
+    """
+    setattr(server, _MCP_DURABLE_ATTR, True)
+    return server
+
+
+def is_durable_mcp_server(server: "MCPServer") -> bool:
+    """Whether ``server`` was marked by :func:`mark_durable_mcp_server`."""
+    return bool(getattr(server, _MCP_DURABLE_ATTR, False))
+
+
+def as_kit_mcp_server(
+    server: "MCPServer",
+    runner: AgentWorkflowRunner,
+    *,
+    inherently_safe: bool = False,
+    auto_approval_criteria: str | None = None,
+) -> "MCPServer":
+    """Put an OpenAI Agents SDK MCP server under harness tool governance.
+
+    Returns the same server object with its ``call_tool`` wrapped so every MCP tool call:
+
+    - is evaluated against the agent's `ToolApprovalPolicy`, and waits for HITL when the
+      policy does not auto-approve it;
+    - publishes ``tool_start`` and then ``tool_end`` or ``tool_error``, under the same
+      ``tool_id`` as the ``tool_requested`` the model stream produced.
+
+    ``runner`` is the agent's own runner. The SDK calls ``call_tool`` with no run
+    context, so the wrapper closes over it here rather than resolving it per call.
+
+    ``inherently_safe`` is the same static safety hint as present in ``@agent.tool_defn(...)``
+    decorator, so that it can be forwarded to ``_apply_approval_policy(...)``
+
+    ``auto_approval_criteria`` is the default criteria-set name AUTO MODE judges this server's
+    tools against — one name for the whole server, since its tools arrive already defined and
+    have no decorator to carry their own. Per-tool precision is still available without touching
+    code: ``AutoApprovalCriteria.tools`` assigns by tool NAME, which is exactly the case
+    addressing-by-name exists to serve.
+
+    A denied call returns an ``is_error`` result to the model instead of raising, so the
+    agent loop can continue.
+
+    Wrapping an already-wrapped server is a no-op, so it is safe to call twice.
+    """
+    if getattr(server, _MCP_WRAPPED_ATTR, False):
+        return server
+    inner_call_tool = server.call_tool
+    inner_meta_resolver = getattr(server, "tool_meta_resolver", None)
+
+    async def tool_meta_resolver(context: Any) -> dict[str, Any] | None:
+        """Add the SDK call id to the request ``_meta``. Chains any existing resolver."""
+        meta: dict[str, Any] = {}
+        if inner_meta_resolver is not None:
+            resolved = inner_meta_resolver(context)
+            if inspect.isawaitable(resolved):
+                resolved = await resolved
+            if resolved:
+                meta.update(resolved)
+        call_id = getattr(getattr(context, "run_context", None), "tool_call_id", None)
+        if isinstance(call_id, str) and call_id:
+            meta[_MCP_TOOL_CALL_ID_META_KEY] = call_id
+        return meta or None
+
+    async def call_tool(
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
+    ) -> "CallToolResult":
+        forwarded_meta, tool_id = _take_mcp_tool_call_id(meta, tool_name)
+
+        async def forward() -> "CallToolResult":
+            if forwarded_meta is None:
+                return await inner_call_tool(tool_name, arguments)
+            return await inner_call_tool(tool_name, arguments, meta=forwarded_meta)
+
+        tool_input = dict(arguments or {})
+
+        async def invoke() -> "CallToolResult":
+            try:
+                await _apply_approval_policy(
+                    tool_name,
+                    tool_input,
+                    inherently_safe=inherently_safe,
+                    auto_approval_criteria=auto_approval_criteria,
+                )
+            except ToolApprovalDenied as denied:
+                # The gate already published tool_approval_resolved(approved=False); the
+                # call never starts, so it gets no tool_start/tool_error bracket.
+                return _mcp_error_result(str(denied))
+
+            runner.publish(
+                ToolStartEvent(
+                    tool_id=tool_id, tool_name=tool_name, tool_input=tool_input
+                )
+            )
+            try:
+                result = await forward()
+            except Exception as exc:
+                # Close the bracket, then let the error travel on. Same shape as the
+                # tool_defn / activity_tool_defn wrappers.
+                runner.publish(
+                    ToolErrorEvent(
+                        tool_id=tool_id, tool_name=tool_name, message=str(exc)
+                    )
+                )
+                raise
+            # An MCP server reports a failed call in the result, not by raising.
+            if _mcp_result_is_error(result):
+                runner.publish(
+                    ToolErrorEvent(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        message=_mcp_result_text(result),
+                    )
+                )
+            else:
+                runner.publish(
+                    ToolEndEvent(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_output=_mcp_result_text(result),
+                    )
+                )
+            return result
+
+        result = await runner.run_tool(tool_id, invoke)
+        steering = runner.claim_steering(tool_id=tool_id)
+        if steering is None:
+            return result
+        from mcp import types
+
+        return result.model_copy(
+            update={
+                "content": [*result.content, types.TextContent(type="text", text=steering.render())]
+            }
+        )
+
+    server.tool_meta_resolver = tool_meta_resolver
+    server.call_tool = call_tool  # type: ignore[method-assign]
+    setattr(server, _MCP_WRAPPED_ATTR, True)
+    return server
+
+
+def is_kit_mcp_server(server: "MCPServer") -> bool:
+    """Whether ``server`` is already under harness governance."""
+    return bool(getattr(server, _MCP_WRAPPED_ATTR, False))
+
+
+def as_kit_mcp_servers(
+    servers: "Iterable[MCPServer]",
+    runner: AgentWorkflowRunner,
+    *,
+    inherently_safe: bool = False,
+    auto_approval_criteria: str | None = None,
+) -> "list[MCPServer]":
+    """Put several MCP servers under harness tool governance. See
+    :func:`as_kit_mcp_server`."""
+    return [
+        as_kit_mcp_server(
+            server,
+            runner,
+            inherently_safe=inherently_safe,
+            auto_approval_criteria=auto_approval_criteria,
+        )
+        for server in servers
+    ]
+
+
+def _take_mcp_tool_call_id(
+    meta: dict[str, Any] | None, tool_name: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Split the harness call id out of a request ``_meta``.
+
+    Returns the meta to forward (``None`` when nothing else is left, matching what the
+    SDK sends for an empty meta) and the ``tool_id`` for the lifecycle events. Falls back
+    to a fresh id if the resolver did not run -- the events then form their own card
+    rather than being dropped.
+    """
+    forwarded = dict(meta) if meta else None
+    call_id = forwarded.pop(_MCP_TOOL_CALL_ID_META_KEY, None) if forwarded else None
+    if not forwarded:
+        forwarded = None
+    if isinstance(call_id, str) and call_id:
+        return forwarded, call_id
+    return forwarded, _new_tool_call_id(tool_name)
+
+
+def _mcp_result_is_error(result: "CallToolResult") -> bool:
+    """Whether an MCP result reports a failed call. The field is ``is_error`` on the
+    MCP v2 types and ``isError`` on v1, so read both."""
+    flag = getattr(result, "is_error", None)
+    if flag is None:
+        flag = getattr(result, "isError", None)
+    return bool(flag)
+
+
+def _mcp_result_text(result: "CallToolResult") -> str:
+    """Render an MCP result as the single string a ``tool_end`` / ``tool_error`` carries.
+
+    Joins the text blocks. A result with no text block (an image, say) falls back to its
+    JSON form so the UI shows something rather than an empty card.
+    """
+    texts = [
+        block.text
+        for block in getattr(result, "content", None) or []
+        if getattr(block, "type", None) == "text"
+    ]
+    if texts:
+        return "\n".join(texts)
+    dump = getattr(result, "model_dump_json", None)
+    return str(dump(exclude_none=True)) if callable(dump) else str(result)
+
+
+def _mcp_error_result(message: str) -> "CallToolResult":
+    """An ``is_error`` MCP result carrying ``message`` -- what the model sees."""
+    from mcp import types
+
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=message)],
+        is_error=True,
+    )

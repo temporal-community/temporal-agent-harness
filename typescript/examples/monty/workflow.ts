@@ -1,12 +1,12 @@
 // Monty dynamic agent: each turn runs a caller-supplied Python script, no model in the loop
 // (Python's workflow.py).
 //
-// A deliberately minimal harness agent. Each turn carries an arbitrary Python *script* (RunScript)
+// A deliberately minimal Agent Kit agent. Each turn carries an arbitrary Python *script* (RunScript)
 // that runs in a sandbox whose only escape hatches are the travel host functions, each backed by a
 // durable Temporal activity. There is no model in the loop: the "plan" arrives pre-written as the
 // script.
 //
-// It's a thin consumer of the harness Code Mode feature: `codeModeTool` turns the travel activity
+// It's a thin consumer of Agent Kit Code Mode feature: `codeModeTool` turns the travel activity
 // tools into a single run-a-script tool, and the `run_script` handler dispatches the caller's
 // script straight through it. The script calls the tools as async host functions; each host call
 // runs as a durable, approval-gated activity, and independent calls can run concurrently via
@@ -23,7 +23,7 @@ import {
   defineAgent,
   handler,
   state,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import { ALL_TOOLS } from "./activities.ts";
 import { RunScript } from "./models.ts";
 import { BOARD_TOOLS, TripBoard } from "./trip-board.ts";

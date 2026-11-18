@@ -1,0 +1,1260 @@
+# ABOUTME: The agent's workflow-stream event vocabulary — the AgentEventType enum,
+# the typed payload models a producer emits, the AgentStreamItem discriminated union
+# over them, the AgentEvent transport envelope Agent Kit wraps them in, and the
+# ``turn_events`` topic they are published on.
+#
+# A producer constructs a StreamEvent payload (e.g. ``ReplyDelta(text=…)``) that
+# carries ONLY its ``type`` discriminator and semantic fields — never routing
+# metadata. The publisher wraps it in an :class:`AgentEvent` envelope, stamping
+# ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp`` — so those can only
+# ever be set by Agent Kit, never a caller. :data:`AgentStreamItem` is the
+# discriminated union of payloads and the type of ``AgentEvent.event``, so Temporal's
+# Pydantic converter reconstructs the concrete payload subtype on read.
+#
+# CORRELATION. Two ids on the envelope answer "what is this event about": ``turn_id``
+# (the interval the agent was non-idle) and ``message_id`` (the ONE inbound message whose
+# dispatch produced it). They are not interchangeable — a turn is refcounted, so several
+# messages can share one — which is why ``message_id`` is what pairs a reply, a delta, a
+# tool call, etc. with the message that caused it. ``tool_id`` plays the same role one level
+# down, across the events of a single tool call.
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Annotated, Any, Generic, Literal, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+
+from temporal_agent_kit.agent_protocol.agent_interface import (
+    AutoApprovalVerdict,
+    CloseReason,
+    MessageDisposition,
+)
+
+# The pubsub topic the agent publishes its turn events on. The workflow must use
+# this exact name when publishing and clients when subscribing.
+TURN_EVENTS_TOPIC = "turn_events"
+
+
+class AgentEventType(StrEnum):
+    """Every kind of event the agent publishes on the ``turn_events`` topic.
+
+    The single source of truth for the event vocabulary. Each concrete
+    :class:`AgentEvent` subtype pins its ``type`` to one member of this enum (as a
+    ``Literal``), and :data:`AgentStreamItem` is the discriminated union over them
+    keyed on ``type``. It is a ``StrEnum``, so members compare equal to their wire
+    string (``AgentEventType.TOOL_START == "tool_start"``) and serialize as that
+    plain string.
+
+    Document the semantics of each event HERE, not in scattered string literals.
+    """
+
+    MESSAGE_ACCEPTED = "message_accepted"
+    """One inbound message passed admission — the FIRST event of any message's life.
+
+    Published synchronously by the ``send_agent_message`` update as it admits the message,
+    so it precedes everything that message goes on to cause (and, for a message that opens
+    or queues a turn, precedes that turn's TURN_STARTED). Carries what was sent
+    (``handler`` + ``payload``) and what it did to the turn (``disposition``: opened a new
+    one, joined the open one, or queued behind it). The envelope's ``message_id`` is minted
+    here and stamped on every later event of this message's dispatch — it is also returned
+    on ``AgentMessageReply.message_id``, so a sender can correlate without parsing the
+    stream. See :class:`MessageAccepted`."""
+
+    MESSAGE_HANDLER_START = "message_handler_start"
+    """The ``@agent.accepts`` handler for this message has BEGUN RUNNING.
+
+    Separate from MESSAGE_ACCEPTED on purpose: admission and execution are two halves
+    joined by a queue, and only a queued message's pair differs — the gap between them IS
+    the queue latency, directly observable per message rather than reverse-engineered from
+    turn timestamps. Exactly one MESSAGE_HANDLER_END or MESSAGE_HANDLER_ERROR closes it.
+    See :class:`MessageHandlerStart`."""
+
+    MESSAGE_HANDLER_END = "message_handler_end"
+    """This message's handler returned — its output is the message's reply. Terminal for
+    the MESSAGE, not necessarily for the turn: a turn ends only when its LAST participant
+    finishes. See :class:`MessageHandlerEnd`."""
+
+    MESSAGE_HANDLER_ERROR = "message_handler_error"
+    """This message's handler raised. Terminal for the MESSAGE (mirroring
+    MESSAGE_HANDLER_END; the pair is exactly TOOL_END / TOOL_ERROR one level up), and never
+    for the session — the runner surfaces the failure and keeps going. Other participants
+    of the same turn are unaffected, which is why a consumer must attribute this by
+    ``message_id`` rather than by ``turn_id``. See :class:`MessageHandlerError`."""
+
+    STEERING_ENQUEUED = "steering_enqueued"
+    """A message handler queued steering text for the model (``runner.steer``). The text waits
+    for the next result of an outermost tool call — one not made inside another tool, so never a
+    Code Mode host call — and is attached to its end. Exactly one STEERING_CLAIMED or
+    STEERING_DROPPED later lists its ``steering_id``. See :class:`SteeringEnqueued`."""
+
+    STEERING_CLAIMED = "steering_claimed"
+    """Queued steering was taken by code building model input (``runner.claim_steering``),
+    normally the AI-SDK adapter appending it to a tool result. "Claimed" rather than
+    "delivered": Agent Kit sees the text attached, not the model reading it. See
+    :class:`SteeringClaimed`."""
+
+    STEERING_DROPPED = "steering_dropped"
+    """The turn ended with steering still queued, so Agent Kit discarded it: it never reached
+    the model. Published just before TURN_END. A client should tell the user and offer to
+    resubmit the text as a new message. See :class:`SteeringDropped`."""
+
+    TURN_STARTED = "turn_started"
+    """A turn has begun — the agent went from idle to busy. A pure lifecycle bracket: it
+    says nothing about WHICH message opened it (that is the preceding MESSAGE_ACCEPTED,
+    correlated by ``turn_id``), because a turn can carry several messages. Its envelope
+    ``message_id`` is therefore ``None``. See :class:`TurnStarted`."""
+
+    TURN_END = "turn_end"
+    """A turn has fully completed and the agent has returned to idle, awaiting the next
+    message — closing the bracket opened by TURN_STARTED. Emitted for EVERY turn, whatever
+    its participants did: the runner publishes it when the LAST participant leaves, after
+    that participant's MESSAGE_HANDLER_END or MESSAGE_HANDLER_ERROR. It is therefore the
+    agent's true quiescence signal — the single reliable point a consumer can terminate on.
+    Like TURN_STARTED it belongs to no one message, so its ``message_id`` is ``None``.
+    See :class:`TurnEnded`."""
+
+    AGENT_CLOSED = "agent_closed"
+    """The agent has closed and its turn loop has exited. ``reason`` says why: a ``close``
+    signal, or ``close_after_idle`` running out while nothing was running or queued. From the
+    moment it closes the agent rejects new messages with ``AgentClosed``; this event follows
+    once any participant still running has finished, so it comes after that participant's
+    events. Published outside any turn (``turn_number`` 0, empty ``turn_id``, ``message_id``
+    ``None``). See :class:`AgentClosed`."""
+
+    MODEL_INTERACTION_STARTED = "model_interaction_started"
+    """The agent has begun ONE interaction with the model — a single streaming
+    model call has started.
+
+    Brackets, with MODEL_INTERACTION_ENDED, the spans in which the MODEL itself is
+    doing work, as distinct from the AGENT doing other work around it (running
+    tools, applying policy, waiting on a worker). A single turn typically contains
+    SEVERAL such interactions — model → requested tool calls → model again with the
+    results → … — and each model call publishes exactly one started/ended pair. A
+    consumer can therefore tell "the model is generating right now" from "the agent
+    is busy but the model is idle". See :class:`ModelInteractionStarted`."""
+
+    MODEL_INTERACTION_ENDED = "model_interaction_ended"
+    """One interaction with the model has finished — its streaming call completed
+    (or failed). After this the agent may execute the tools the model requested, do
+    other work, then open the next MODEL_INTERACTION_STARTED, or finish the turn.
+    Published exactly once for each MODEL_INTERACTION_STARTED. See
+    :class:`ModelInteractionEnded`."""
+
+    TOOL_REQUESTED = "tool_requested"
+    """The model has requested a tool call, but execution has NOT begun yet.
+
+    Published when the agent decides to invoke a tool, BEFORE the call is actually
+    dispatched to / picked up by a worker — so a UI can show the call as *requested*
+    while it waits. The wait may be benign (an activity worker is briefly
+    unavailable / redeploying) or deliberate (in future, a tool-approval policy or
+    human-in-the-loop decision sits in exactly this gap). A request need not reach
+    TOOL_START: one that is rejected by policy, or interrupted before it runs, ends
+    without ever executing. Meaningful for Agent Kit-scheduled (custom-tool) calls
+    that cross an activity boundary; built-in server-side tools have no such gap.
+    See :class:`ToolRequested`."""
+
+    TOOL_APPROVAL_REQUESTED = "tool_approval_requested"
+    """A gated tool call is awaiting a human approval decision.
+
+    Published in the gap between TOOL_REQUESTED and TOOL_START, carrying the same
+    ``tool_id``, when the agent's :class:`ToolApprovalPolicy` does not auto-approve the
+    call (safe-by-default — see :class:`ToolApprovalPolicy`). The agent
+    parks on an in-workflow wait condition until a ``tool_approval`` update resolves it;
+    a UI renders an approve/deny affordance off this event. Outstanding requests are
+    also discoverable via the ``agent_status`` query (``pending_approvals``) so a client
+    that attaches late can still act on them. See :class:`ToolApprovalRequested`."""
+
+    AUTO_APPROVAL_EVALUATION_STARTED = "auto_approval_evaluation_started"
+    """An automatic approval evaluator has BEGUN judging a gated call — opening a bracket.
+
+    Published when the runner consults the agent's ``auto_mode_evaluator`` for a call
+    the :class:`ToolApprovalPolicy` did not auto-approve, BEFORE the evaluator runs. It
+    names the evaluator (and an ``evaluation_id`` pairing it with its terminal event) and
+    nothing else — at this instant the evaluator has not been called, so there is nothing
+    it could have said yet.
+
+    A BRACKET rather than a single terminal event because an evaluator does real,
+    arbitrarily slow work — an AI approver spends a model round-trip per gated call. Only a
+    bracket makes that work visible WHILE it happens (a consumer can distinguish "an
+    approver is deliberating" from "this is waiting for a person", which the pending gate
+    alone cannot), gives its duration exactly from the two envelope timestamps rather than
+    by inference, and surfaces a hung or timing-out evaluator as an open bracket instead of
+    silence. It also splits the approval span a UI already draws from
+    TOOL_APPROVAL_REQUESTED → TOOL_APPROVAL_RESOLVED, which otherwise conflates model
+    latency with human latency in one bar.
+
+    Exactly one of AUTO_APPROVAL_EVALUATION_ENDED, AUTO_APPROVAL_EVALUATION_SUPERSEDED or
+    AUTO_APPROVAL_EVALUATION_ERROR closes it.
+    Several may nest under one ``tool_id`` if an agent chains evaluators; pair them by
+    ``evaluation_id``, never by ``tool_id`` alone. See :class:`AutoApprovalEvaluationStarted`."""
+
+    AUTO_APPROVAL_EVALUATION_ENDED = "auto_approval_evaluation_ended"
+    """An automatic approval evaluator returned a verdict, closing its bracket.
+
+    Published for EVERY verdict, including ``escalate`` — which is the whole point. An
+    escalate resolves nothing, so without this event the only trace of an evaluator that
+    ran, cost a round-trip, and declined to decide would be the human decision that
+    eventually follows it, attributed to the human. ``details`` carries the evaluator's own
+    structured reasoning (for the builtin Jev evaluator: the model id, the verdict's
+    confidence and full distribution, the irreversibility judgment, token usage, and the
+    thresholds that were applied) so an automatic decision is auditable, filterable, and
+    replayable against different thresholds without re-running inference.
+
+    A verdict published here was ACTED ON. An evaluator whose answer arrived too late to
+    matter does not end here — it ends at AUTO_APPROVAL_EVALUATION_SUPERSEDED. See
+    :class:`AutoApprovalEvaluationEnded`."""
+
+    AUTO_APPROVAL_EVALUATION_SUPERSEDED = "auto_approval_evaluation_superseded"
+    """An automatic approval evaluator was CANCELLED because the gate it was judging had
+    already been settled by someone else, closing its bracket.
+
+    A human answering while an approver is still thinking is the whole reason the gate is
+    published before the evaluator is consulted — but the evaluator should then stop, not
+    keep burning a model call on a question nobody is waiting for. Agent Kit cancels the
+    evaluator's coroutine (which is why an evaluator MUST be async) and publishes this.
+
+    Also covers the agent closing mid-evaluation, which settles the gate by auto-denial.
+
+    ``verdict`` is almost always ``None`` — the evaluator was cut off before answering. It
+    is set only in the narrow race where the answer landed in the same workflow activation
+    as the decision that beat it, and is kept because a verdict that disagrees with what a
+    human just did is exactly what an audit is looking for. See
+    :class:`AutoApprovalEvaluationSuperseded`."""
+
+    AUTO_APPROVAL_EVALUATION_ERROR = "auto_approval_evaluation_error"
+    """An automatic approval evaluator raised instead of returning a verdict, closing its
+    bracket.
+
+    Agent Kit substitutes ``escalate`` — the guardrail fails SAFE, never open, and never
+    wedges a turn a person could still unblock — so a TOOL_APPROVAL_RESOLVED from a human
+    normally follows. This event is how "the approver was broken and everything silently
+    went to humans for three hours" is visible at all. Terminal for the bracket, mirroring
+    TOOL_ERROR against TOOL_END. See :class:`AutoApprovalEvaluationError`."""
+
+    TOOL_APPROVAL_RESOLVED = "tool_approval_resolved"
+    """A pending tool approval was resolved — approved or denied.
+
+    Published once per :data:`TOOL_APPROVAL_REQUESTED`, including the auto-denial that
+    happens if the agent closes while the approval is still pending. On approval,
+    TOOL_START follows as the call dispatches; on denial, the call ends here without ever
+    executing (and the model receives an error result). See :class:`ToolApprovalResolved`."""
+
+    TOOL_START = "tool_start"
+    """A tool invocation has begun EXECUTING. Published ONCE per call with the tool
+    name and full args; built-in tools defer it to their call step's completion so
+    any streamed args are consolidated. Follows :class:`ToolRequested` and marks the
+    transition from requested to actually running. See :class:`ToolStartEvent`."""
+
+    TOOL_END = "tool_end"
+    """A tool invocation completed successfully, carrying the final single
+    payload. See :class:`ToolEndEvent`."""
+
+    TOOL_PROGRESS_DELTA = "tool_progress_delta"
+    """An intermediate progress chunk from a tool mid-execution — for tools doing
+    genuine multi-step work that report progress BEFORE their terminal TOOL_END
+    payload, NOT for how a transport happens to chunk one logical output. No tool
+    emits this yet. See :class:`ToolProgressDelta`."""
+
+    TOOL_ERROR = "tool_error"
+    """A tool invocation failed. Terminal for that tool call; the turn itself may
+    continue. See :class:`ToolErrorEvent`."""
+
+    CALLBACK_REQUESTED = "callback_requested"
+    """A callback tool is awaiting a result from an external client.
+
+    Published by a callback tool's in-workflow body (an ``@agent.callback_tool_defn`` tool)
+    after it has passed the approval gate and emitted TOOL_START — the tool has no worker-side
+    implementation, so it hands the call to an attached client to fulfill on its own machine
+    (read a local file, snap a photo, run a shell command). Carries the same ``tool_id`` +
+    ``tool_name`` as the surrounding tool lifecycle, plus the call args (``tool_input``) and the
+    JSON schema of the expected result (``output_schema``) so the client knows what to return.
+    The agent parks on an in-workflow wait condition (with an optional timeout) until a
+    ``provide_callback_result`` update resolves it; a client renders a fulfillment affordance off
+    this event. Outstanding requests are also discoverable via the ``agent_status`` query
+    (``pending_callbacks``) so a client that attaches late can still act on them. Nests between
+    TOOL_START and TOOL_END for the same call. See :class:`CallbackRequested`."""
+
+    CALLBACK_RESOLVED = "callback_resolved"
+    """A pending callback tool call was resolved — the client returned a result, reported an
+    error, or the wait timed out (or the agent closed while it was pending).
+
+    Published once per :data:`CALLBACK_REQUESTED`, carrying the same ``tool_id`` + ``tool_name``.
+    On ``ok`` the client-supplied result (validated against the tool's declared output type)
+    becomes the tool's return value and TOOL_END follows; on ``error`` / ``timeout`` the call
+    fails and TOOL_ERROR follows (the model receives an error result). See
+    :class:`CallbackResolved`."""
+
+    SUBAGENT_STARTED = "subagent_started"
+    """This agent started a subagent (a child agent it drives), carrying the subagent's
+    short ``subagent_id`` and its real ``workflow_id``. Analogous to TOOL_START but for a
+    whole child agent's lifecycle rather than one tool call.
+
+    The ``workflow_id`` is the load-bearing field: a consumer that wants a single
+    consolidated view can use it to dynamically mount the subagent's OWN event stream
+    (the subagent's stream is never mirrored onto this one — see the stream-isolation
+    design — so the consumer attaches to the child directly). Mount on this event,
+    unmount on SUBAGENT_STOPPED (or when the child workflow completes).
+    See :class:`SubagentStarted`."""
+
+    SUBAGENT_STOPPED = "subagent_stopped"
+    """This agent stopped a subagent it was driving (sent it the ``close`` signal and
+    dropped it). Carries the same ``subagent_id`` / ``workflow_id`` so a consumer can unmount
+    the subagent's stream. Terminal for that subagent from this agent's perspective.
+    See :class:`SubagentStopped`."""
+
+    SUBAGENT_MESSAGE_SENT = "subagent_message_sent"
+    """This agent sent a message (one turn) to a downstream subagent it is driving.
+    Published whenever the agent communicates with a subagent, naming the target subagent
+    (``subagent_id`` / ``workflow_id``), the ``handler`` the message is addressed to, and the
+    ``subagent_turn`` it starts (the turn number on the SUBAGENT — distinct from this event's
+    envelope ``turn_number``, which is the parent's turn) — so a consumer can correlate it with
+    the matching turn on the subagent's OWN stream (mounted via the SUBAGENT_STARTED
+    ``workflow_id``). Analogous to
+    SUBAGENT_STARTED, but for a single message rather than the subagent's lifecycle. The
+    subagent's reply is NOT mirrored onto this stream (stream isolation).
+    See :class:`SubagentMessageSent`."""
+
+    SUBAGENT_REPLY_RECEIVED = "subagent_reply_received"
+    """This agent received a subagent's reply for one turn it dispatched — the CLOSE marker of
+    the ``[subagent_message_sent … subagent_reply_received]`` bracket that
+    ``SUBAGENT_MESSAGE_SENT`` opens. Carries the same correlation fields (``subagent_id`` /
+    ``agent_key`` / ``workflow_id`` / ``handler`` / ``subagent_turn``) plus an ``outcome``
+    (``ok``/``error``). Published IN-WORKFLOW by the parent's ``run_subagent_turn`` once the
+    activity returns — i.e. once the AGENT (workflow) actually has the reply in hand — and
+    published for EVERY accepted child turn (including an accepted-but-errored one, which still
+    emitted its own ``turn_end``), but NEVER for a pre-acceptance rejection (no child turn ran,
+    so no bracket to close). The reply *payload* is not carried here (it rides the child's own
+    ``message_handler_end`` event and the send-tool's ``tool_end``); this is a thin
+    close/correlation marker.
+    A client merging the parent + subagent streams uses it to guarantee a subagent's whole turn
+    is ordered before the reply is observed on the parent. See :class:`SubagentReplyReceived`."""
+
+    SUBAGENT_STREAM_UNAVAILABLE = "subagent_stream_unavailable"
+    """A client merging the parent + subagent streams could NOT obtain a subagent's events, so it
+    gave up on that subagent's DETAIL and rendered the parent's view without it.
+
+    Unlike every other event here, this one is **never published by a workflow** — it is
+    SYNTHESIZED CLIENT-SIDE by the stream merge and injected into the merged logical stream. It is
+    emitted when a mounted subagent stream can't be read (an over-subscribed workflow, a closed run
+    whose history has expired or that no compatible worker can answer the read query for)
+    or stalls without delivering its turn. It is purely informational and **non-fatal**: the parent's
+    own stream is self-sufficient (it already carries the subagent's ``subagent_reply_received`` and 
+    the send-tool's result), so the parent renders fully; only the subagent's own turn DETAIL is
+    missing. The merge does NOT retry — recovery is a fresh ``attach`` (a full page refresh in a
+    UI). A drill-in UI keys off the carried ``subagent_id`` to mark that subagent's view degraded.
+    See :class:`SubagentStreamUnavailable`."""
+
+    REPLY_DELTA = "reply_delta"
+    """An incremental text chunk (word/token) of the agent's reply. See
+    :class:`ReplyDelta`."""
+
+    THOUGHT_SUMMARY = "thought_summary"
+    """A streamed thought-summary delta from the model. See
+    :class:`ThoughtSummaryDelta`."""
+
+    TEXT_ANNOTATION = "text_annotation"
+    """A streamed citation/annotation delta, interleaved with REPLY_DELTA so each
+    citation sits next to the text it supports. See :class:`TextAnnotationDelta`."""
+
+
+    STATE_SNAPSHOT = "state_snapshot"
+    """A whole-document snapshot of one piece of observable agent state, published
+    once when the workflow author registers it with ``AgentWorkflowRunner.state()``.
+    Every later change to that state arrives as :attr:`STATE_PATCH`, so a consumer
+    needs exactly one snapshot to start applying. See :class:`AgentStateSnapshot`."""
+
+    STATE_PATCH = "state_patch"
+    """The changes one ``with ref.mutate() as d:`` block made to a piece of state,
+    as ordered RFC 6902 JSON Patch ops. Applying every patch for a ``state_id`` in
+    version order to its snapshot reproduces the state exactly — which is the whole
+    point: a consumer tracks agent state without polling and without missing
+    anything between polls. See :class:`AgentStatePatch`."""
+
+
+EventTypeT = TypeVar("EventTypeT", bound=AgentEventType)
+
+
+class StreamEvent(BaseModel, Generic[EventTypeT]):
+    """Base for every stream-event payload the agent emits.
+
+    Generic over the ``type`` discriminator, so each subclass narrows ``type`` to
+    its own :class:`AgentEventType` member (as a ``Literal``) — making the
+    discriminator both mandatory (you cannot define a payload without it) and
+    statically pinned to one value per event. Carries NO routing metadata: that
+    lives on the :class:`AgentEvent` envelope and is set only by Agent Kit, so a
+    producer cannot set (or accidentally override) it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    type: EventTypeT
+
+    @model_validator(mode="after")
+    def _pin_discriminator(self) -> StreamEvent[EventTypeT]:
+        """Keep ``type`` in the model's fields-set so it always serializes.
+
+        Every event pins ``type`` to a single ``Literal`` with a default, so it is
+        normally left implicit at construction (``TurnStarted(user_message=...)``).
+        A serializer run with ``exclude_unset=True`` — notably the OpenAI Agents
+        plugin's payload converter — would then DROP the discriminator, and the read
+        side could no longer resolve the :data:`AgentStreamItem` union (a
+        ``union_tag_not_found`` error). Marking ``type`` as explicitly set makes the
+        discriminator survive any such lossy serialization, so Agent Kit stream events
+        round-trip regardless of which AI-SDK plugin's converter is installed.
+
+        ``model_fields_set`` is pydantic's public accessor and returns the live
+        fields-set (not a copy), so adding to it in place is the supported way to do
+        this; it works on a frozen model because it mutates a set rather than assigning
+        an attribute. The round-trip regression test exercises the real converter, so a
+        future pydantic change here fails loudly rather than silently.
+        """
+        self.model_fields_set.add("type")
+        return self
+
+
+class MessageAccepted(StreamEvent[Literal[AgentEventType.MESSAGE_ACCEPTED]]):
+    """One inbound message passed admission — what was sent, and what it did to the turn.
+
+    The first event of a message's life, published from the synchronous admission prologue
+    of ``send_agent_message``. It is the ONLY event carrying the message's content, which is
+    why it is standalone rather than folded into :class:`TurnStarted`: a message that JOINS
+    an open turn starts no turn of its own, so there would be nothing to fold it into.
+    """
+
+    type: Literal[AgentEventType.MESSAGE_ACCEPTED] = AgentEventType.MESSAGE_ACCEPTED
+    handler: str = Field(
+        description="Which ``@agent.accepts`` handler the message is addressed to — the "
+        "``AgentMessage.type`` envelope field, named for what it actually is."
+    )
+    payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The message's payload as sent — the JSON of the handler's input model. "
+        "Carried structurally rather than pre-rendered so a consumer can display it however "
+        "it likes (and validate it against the handler's ``parameters`` schema).",
+    )
+    disposition: MessageDisposition = Field(
+        description="What this message did to the agent's turn: OPENED a new one, JOINED the "
+        "turn already open, or QUEUED behind it. The envelope's ``turn_id`` / ``turn_number`` "
+        "name the turn in question — already running for JOINED, still to start for the other "
+        "two."
+    )
+
+
+class MessageHandlerStart(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_START]]):
+    """This message's ``@agent.accepts`` handler has begun running.
+
+    Empty by design: everything about the message was already published on
+    :class:`MessageAccepted`, and the envelope's ``message_id`` pairs the two. The gap
+    between them is the message's queue latency.
+    """
+
+    type: Literal[AgentEventType.MESSAGE_HANDLER_START] = (
+        AgentEventType.MESSAGE_HANDLER_START
+    )
+
+
+class TurnStarted(StreamEvent[Literal[AgentEventType.TURN_STARTED]]):
+    """A turn has begun — the agent went from idle to busy. A pure lifecycle bracket.
+
+    Carries no message: a turn is the interval the agent is non-idle, not the span of one
+    message, and several messages can share it. The message that opened this turn is the
+    :class:`MessageAccepted` published just before it with the same ``turn_id``.
+    """
+
+    type: Literal[AgentEventType.TURN_STARTED] = AgentEventType.TURN_STARTED
+
+
+class TurnEnded(StreamEvent[Literal[AgentEventType.TURN_END]]):
+    """A turn has fully completed and the agent is idle, awaiting the next message.
+
+    Closes the bracket opened by :class:`TurnStarted`. Published for EVERY turn, when its
+    LAST participant leaves — after that participant's :class:`MessageHandlerEnd` or
+    :class:`MessageHandlerError` — so it is the agent's true quiescence signal and the
+    single reliable point a consumer can disconnect on. The envelope's ``turn_id`` /
+    ``turn_number`` identify which turn ended; its ``message_id`` is ``None``, since the
+    turn belongs to no single message.
+    """
+
+    type: Literal[AgentEventType.TURN_END] = AgentEventType.TURN_END
+
+
+class TokenUsage(BaseModel):
+    """Provider-agnostic token accounting for one model interaction.
+
+    A neutral summary Agent Kit understands without knowing any model SDK — a
+    producer (e.g. the Gemini plugin) maps its own usage shape onto these fields. Every
+    field is optional: a provider that doesn't report a given count, or an interaction
+    that ends before usage is known, simply leaves it ``None``. ``total_tokens`` is the
+    provider's own grand total when given (not necessarily the sum of the parts, since
+    providers count cached/tool-use tokens differently).
+
+    Every field is optional: a provider that doesn't report a given count, or an
+    interaction that ends before usage is known, simply leaves it ``None``."""
+
+    input_tokens: int | None = Field(
+        default=None, description="Tokens in the prompt/input to the model, or None if unreported."
+    )
+    output_tokens: int | None = Field(
+        default=None,
+        description="Tokens the model generated as output, or None if unreported.",
+    )
+    thought_tokens: int | None = Field(
+        default=None,
+        description="Tokens spent on the model's reasoning/thinking, or None if unreported.",
+    )
+    cached_tokens: int | None = Field(
+        default=None,
+        description="Input tokens served from the provider's prompt cache, or None if unreported.",
+    )
+    tool_use_tokens: int | None = Field(
+        default=None,
+        description="Tokens attributed to tool use, or None if unreported.",
+    )
+    total_tokens: int | None = Field(
+        default=None,
+        description="The provider's own grand total when given (not necessarily the sum of the "
+        "parts, since providers count cached/tool-use tokens differently), or None if unreported.",
+    )
+
+
+class ModelInteractionStarted(
+    StreamEvent[Literal[AgentEventType.MODEL_INTERACTION_STARTED]]
+):
+    """One streaming model call has begun — opening a span of MODEL work.
+
+    The envelope's ``turn_id`` / ``turn_number`` say which turn it belongs to; within a
+    turn there may be many.
+    """
+
+    type: Literal[AgentEventType.MODEL_INTERACTION_STARTED] = (
+        AgentEventType.MODEL_INTERACTION_STARTED
+    )
+    model: str | None = Field(
+        default=None,
+        description="The model the call was issued against (the requested id), when the "
+        "producer knows it — None otherwise.",
+    )
+
+
+class ModelInteractionEnded(
+    StreamEvent[Literal[AgentEventType.MODEL_INTERACTION_ENDED]]
+):
+    """One streaming model call has ended, closing a MODEL_INTERACTION_STARTED.
+
+    Published exactly once for each :class:`ModelInteractionStarted`.
+    """
+
+    type: Literal[AgentEventType.MODEL_INTERACTION_ENDED] = (
+        AgentEventType.MODEL_INTERACTION_ENDED
+    )
+    model: str | None = Field(
+        default=None,
+        description="The model the call was issued against (the same id as on the matching "
+        "ModelInteractionStarted), or None if the producer didn't report it.",
+    )
+    usage: TokenUsage | None = Field(
+        default=None,
+        description="The call's TokenUsage when the provider reported it, or None if unavailable "
+        "— e.g. the stream errored before completing.",
+    )
+
+
+class ToolEvent(StreamEvent[EventTypeT], Generic[EventTypeT]):
+    """Base for every tool-lifecycle event.
+
+    Correlates all the events of ONE tool invocation — requested → start →
+    progress → end/error — via a shared :attr:`tool_id` chosen once when the call is
+    requested and echoed by every later event. ``tool_name`` ALONE cannot
+    disambiguate two parallel calls to the same tool, so every tool event carries
+    both. The id must be stable and re-derivable wherever the events are produced
+    (e.g. the same value in the streaming activity that emits ``tool_requested`` and
+    in the workflow that emits ``tool_start``/``tool_end``); for the Gemini
+    integration it is the API's per-call id.
+    """
+
+    tool_id: str = Field(
+        description="Stable correlation id chosen once when the call is requested and echoed by "
+        "every later event of the SAME tool invocation (requested → start → progress → end/error)."
+    )
+    tool_name: str = Field(
+        description="The name of the invoked tool. Cannot ALONE disambiguate two parallel calls "
+        "to the same tool, hence the separate tool_id."
+    )
+
+
+class ToolRequested(ToolEvent[Literal[AgentEventType.TOOL_REQUESTED]]):
+    """The model has requested a tool call that has not begun executing yet.
+
+    Precedes :class:`ToolStartEvent` in the tool lifecycle (requested → start →
+    end/error). Carries the same ``tool_id`` + ``tool_name`` as the eventual start,
+    so a UI can render the pending call and a future approval policy can evaluate it
+    before it runs.
+    """
+
+    type: Literal[AgentEventType.TOOL_REQUESTED] = AgentEventType.TOOL_REQUESTED
+    tool_input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The full arguments of the requested call, so a UI can render the pending "
+        "call and a future approval policy can evaluate it before it runs.",
+    )
+
+
+class ToolApprovalRequested(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_REQUESTED]]):
+    """A gated tool call is awaiting a human approval decision.
+
+    Sits between :class:`ToolRequested` and :class:`ToolStartEvent`, sharing their
+    ``tool_id`` + ``tool_name``.
+    """
+
+    type: Literal[AgentEventType.TOOL_APPROVAL_REQUESTED] = (
+        AgentEventType.TOOL_APPROVAL_REQUESTED
+    )
+    tool_input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The model-facing arguments of the gated call (injected parameters are "
+        "excluded — they are not the model's choice) so an approver sees exactly what the model "
+        "asked for.",
+    )
+
+
+class AutoApprovalEvaluationEvent(ToolEvent[EventTypeT], Generic[EventTypeT]):
+    """Base for the three events of ONE automatic approval evaluation.
+
+    Sits inside a tool's approval gate: every one of these also carries the gated call's
+    ``tool_id`` / ``tool_name`` from :class:`ToolEvent`, so an evaluation is always
+    attributable to the call it is about.
+    """
+
+    evaluation_id: str = Field(
+        description="Correlates this evaluation's started event with its ended/error event. "
+        "``tool_id`` is NOT enough: an agent may chain several evaluators over one gated call "
+        "(a cheap check, then an expensive one), and two evaluations of the same call would be "
+        "indistinguishable without this."
+    )
+    evaluator: str = Field(
+        description="What is doing the judging — ``jev_evaluator`` for the builtin AI "
+        "approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE "
+        "(its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so "
+        "the started event and the error event can both name it — neither has a decision to "
+        "read it from."
+    )
+
+
+class AutoApprovalEvaluationStarted(
+    AutoApprovalEvaluationEvent[Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED]]
+):
+    """An automatic approval evaluator has begun judging a gated call.
+
+    Deliberately carries no judgment: it is published before the evaluator is invoked, so
+    there is nothing for it to carry. Its value is the opening of the bracket — see
+    :data:`AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED`.
+    """
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED
+    )
+
+
+class AutoApprovalEvaluationEnded(
+    AutoApprovalEvaluationEvent[Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED]]
+):
+    """An automatic approval evaluator returned a verdict, closing its bracket."""
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED
+    )
+    verdict: AutoApprovalVerdict = Field(
+        description="What the evaluator SAID — approve, deny, or escalate to a human. This is "
+        "the evaluator's answer, not necessarily the call's outcome: see ``applied``."
+    )
+    reason: str | None = Field(
+        default=None,
+        description="The evaluator's one-line summary. On an approve or deny this is also the "
+        "reason published on the resulting ToolApprovalResolved (and, on a deny, the error the "
+        "model receives); on an escalate this event is the ONLY place it appears, because an "
+        "escalate resolves nothing.",
+    )
+    details: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The evaluator's own structured reasoning, free-form by design so an "
+        "evaluator can record whatever makes its decision reviewable. The builtin Jev approver "
+        "records the model id and request id, the verdict's confidence and full probability "
+        "distribution, the irreversibility judgment, token usage, and the thresholds applied — "
+        "the thresholds being what lets a stored decision be replayed against different ones "
+        "without re-running inference. Empty when the evaluator recorded none.",
+    )
+
+
+class AutoApprovalEvaluationSuperseded(
+    AutoApprovalEvaluationEvent[
+        Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED]
+    ]
+):
+    """An automatic approval evaluator was cancelled because its gate was settled first."""
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED
+    )
+    verdict: AutoApprovalVerdict | None = Field(
+        default=None,
+        description="What the evaluator had concluded before it was cut off, in the narrow "
+        "race where its answer arrived in the same workflow activation as the decision that "
+        "beat it. Normally None: a cancelled evaluator never reaches a verdict.",
+    )
+
+
+class AutoApprovalEvaluationError(
+    AutoApprovalEvaluationEvent[Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR]]
+):
+    """An automatic approval evaluator raised instead of returning a verdict."""
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR
+    )
+    message: str = Field(
+        description="The failure, as text. Agent Kit substitutes an escalate, so the call "
+        "falls through to the human gate rather than being approved or failing the turn."
+    )
+
+
+class ToolApprovalResolved(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_RESOLVED]]):
+    """A pending tool approval was resolved — approved or denied."""
+
+    type: Literal[AgentEventType.TOOL_APPROVAL_RESOLVED] = (
+        AgentEventType.TOOL_APPROVAL_RESOLVED
+    )
+    approved: bool = Field(
+        description="True if the call is approved (it will now execute), False if denied (it "
+        "ends here without ever executing and the model receives an error result)."
+    )
+    reason: str | None = Field(
+        default=None,
+        description="An optional human-supplied note, also set to the auto-denial reason when "
+        "the agent closes while the approval is still pending.",
+    )
+    remember: bool = Field(
+        default=False,
+        description="Whether THIS decision asked to be remembered — i.e. an 'approve, and stop "
+        "asking me about this tool' decision that allow-lists the tool on the live "
+        "ToolApprovalPolicy. False for a one-off decision and for a call swept up by a policy "
+        "change (e.g. the cascade that auto-approves other pending calls of a now-allow-listed "
+        "tool, whose reason is the auto-approval note).",
+    )
+
+
+class ToolStartEvent(ToolEvent[Literal[AgentEventType.TOOL_START]]):
+    """A tool invocation has begun executing."""
+
+    type: Literal[AgentEventType.TOOL_START] = AgentEventType.TOOL_START
+    tool_input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The full arguments the tool began executing with.",
+    )
+
+
+class ToolEndEvent(ToolEvent[Literal[AgentEventType.TOOL_END]]):
+    """A tool invocation has completed."""
+
+    type: Literal[AgentEventType.TOOL_END] = AgentEventType.TOOL_END
+    tool_output: JsonValue = Field(
+        default=None,
+        description="The tool's final, single result, as JSON: the value as the worker's data "
+        "converter encodes it. A string result is a JSON string; a tool with no result gives null.",
+    )
+
+
+class ToolProgressDelta(ToolEvent[Literal[AgentEventType.TOOL_PROGRESS_DELTA]]):
+    """An intermediate progress chunk emitted by a tool mid-execution.
+
+    Distinct from :class:`ToolEndEvent`'s final payload: this is for tools doing
+    genuine multi-step work (e.g. a custom tool that connects to a service,
+    issues several requests, then returns) that want to report progress as they
+    go. Whether a tool streams these is a property of the tool's semantics, not
+    of how a transport happens to chunk its output. No tool emits this yet; see
+    the producer note in ``google_genai_plugin/_interactions_activity.py``.
+    """
+
+    type: Literal[AgentEventType.TOOL_PROGRESS_DELTA] = AgentEventType.TOOL_PROGRESS_DELTA
+    progress_delta: str = Field(
+        description="One intermediate progress chunk emitted mid-execution, before the terminal "
+        "TOOL_END payload."
+    )
+
+
+class ToolErrorEvent(ToolEvent[Literal[AgentEventType.TOOL_ERROR]]):
+    """A tool invocation has failed.
+
+    Terminal for that specific tool call — the UI can resolve the card out of its
+    "running" state. The turn itself may continue if the caller (e.g. Gemini AFC)
+    decides to retry or surface the failure back to the model.
+    """
+
+    type: Literal[AgentEventType.TOOL_ERROR] = AgentEventType.TOOL_ERROR
+    message: str = Field(description="A description of why the tool invocation failed.")
+
+
+class CallbackRequested(ToolEvent[Literal[AgentEventType.CALLBACK_REQUESTED]]):
+    """A callback tool call is awaiting a result from an external client.
+
+    Sits between :class:`ToolStartEvent` and :class:`ToolEndEvent` for the same call, sharing
+    their ``tool_id`` + ``tool_name``. The tool has no worker-side body: an attached client
+    fulfills it on its own machine and returns the result via a ``provide_callback_result``
+    update keyed on ``tool_id``.
+    """
+
+    type: Literal[AgentEventType.CALLBACK_REQUESTED] = AgentEventType.CALLBACK_REQUESTED
+    tool_input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The model-facing arguments of the callback call (injected parameters "
+        "excluded), so the fulfilling client sees exactly what the model asked for.",
+    )
+    output_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description="JSON schema of the result the client must return — derived from the "
+        "callback tool's declared output type. The client's result is validated against this "
+        "before it resolves the call.",
+    )
+
+
+class CallbackResolved(ToolEvent[Literal[AgentEventType.CALLBACK_RESOLVED]]):
+    """A pending callback tool call was resolved — result returned, error, or timeout."""
+
+    type: Literal[AgentEventType.CALLBACK_RESOLVED] = AgentEventType.CALLBACK_RESOLVED
+    outcome: Literal["ok", "error", "timeout"] = Field(
+        description="'ok' if the client returned a result (validated against the tool's output "
+        "type) — TOOL_END follows; 'error' if the client reported a failure fulfilling the call; "
+        "'timeout' if the wait elapsed (or the agent closed) before any result arrived. On "
+        "'error'/'timeout' the call fails and TOOL_ERROR follows."
+    )
+    error: str | None = Field(
+        default=None,
+        description="The client-reported failure message ('error'), the timeout/close note "
+        "('timeout'), or None on 'ok'.",
+    )
+
+
+class SubagentStarted(StreamEvent[Literal[AgentEventType.SUBAGENT_STARTED]]):
+    """This agent started a subagent (a child agent it drives)."""
+
+    type: Literal[AgentEventType.SUBAGENT_STARTED] = AgentEventType.SUBAGENT_STARTED
+    subagent_id: str = Field(
+        description="The short id of the SUBAGENT this event is about — the id the parent "
+        "references it by AND the ``agent_id`` the subagent stamps on its own events (the parent "
+        "pushes it down as the child's id). Distinct from the enclosing envelope's ``agent_id``, "
+        "which is THIS (the parent) agent."
+    )
+    agent_key: str = Field(description="Which wired agent type this subagent is.")
+    workflow_id: str = Field(
+        description="The subagent's real child workflow id — what a consumer uses to "
+        "dynamically mount the subagent's OWN event stream for a consolidated view (subagent "
+        "streams are never mirrored onto this one)."
+    )
+
+
+class SubagentStopped(StreamEvent[Literal[AgentEventType.SUBAGENT_STOPPED]]):
+    """This agent stopped a subagent it was driving (signalled ``close`` + dropped it), or
+    dropped one that something else had closed or ended."""
+
+    type: Literal[AgentEventType.SUBAGENT_STOPPED] = AgentEventType.SUBAGENT_STOPPED
+    subagent_id: str = Field(
+        description="The short id of the stopped SUBAGENT (matches the prior SubagentStarted). "
+        "Distinct from the envelope's ``agent_id`` (this parent agent)."
+    )
+    agent_key: str = Field(description="Which wired agent type the stopped subagent was.")
+    workflow_id: str = Field(
+        description="The stopped subagent's real child workflow id — what a consumer uses to "
+        "unmount the subagent's event stream (matches the prior SubagentStarted)."
+    )
+
+
+class SubagentMessageSent(StreamEvent[Literal[AgentEventType.SUBAGENT_MESSAGE_SENT]]):
+    """This agent dispatched one message (a turn) to a subagent it is driving."""
+
+    type: Literal[AgentEventType.SUBAGENT_MESSAGE_SENT] = (
+        AgentEventType.SUBAGENT_MESSAGE_SENT
+    )
+    subagent_id: str = Field(
+        description="The short id of the SUBAGENT being messaged (matches its SubagentStarted, and "
+        "the ``agent_id`` on that subagent's own events). Distinct from the envelope's ``agent_id`` "
+        "(this parent agent)."
+    )
+    agent_key: str = Field(description="Which wired agent type the messaged subagent is.")
+    workflow_id: str = Field(
+        description="The messaged subagent's real child workflow id — what a consumer uses to "
+        "correlate this dispatch with the matching turn on the subagent's OWN event stream "
+        "(mounted via SubagentStarted; subagent streams are never mirrored onto this one)."
+    )
+    handler: str = Field(
+        description="The ``@agent.accepts`` handler this message is addressed to on the "
+        "subagent (the send_agent_message envelope 'type' — which of the subagent's accepted "
+        "messages it is)."
+    )
+    subagent_turn: int = Field(
+        description="The turn number ON THE SUBAGENT that this dispatch starts — distinct from "
+        "the enclosing AgentEvent's `turn_number`, which is THIS agent's (the parent's) turn. "
+        "Several dispatches in one parent turn share that envelope turn_number but get distinct "
+        "subagent_turn values; pairs with the turn_number on the subagent's OWN stream events."
+    )
+    from_offset: int = Field(
+        default=0,
+        description="The offset in the SUBAGENT's OWN stream at which this turn's events begin "
+        "(the child stream position the parent resumes consumption from for this turn). A client "
+        "merging the parent + subagent streams positions the child cursor here the first time it "
+        "mounts the child — so a merge that starts mid-session (resuming at a parent turn that is "
+        "not the child's first) skips the child's pre-resume history, whose own message_sent "
+        "markers are not on the merged stream and could otherwise never be ordered. Unrelated "
+        "address space from the parent stream's offsets.",
+    )
+
+
+class SubagentReplyReceived(
+    StreamEvent[Literal[AgentEventType.SUBAGENT_REPLY_RECEIVED]]
+):
+    """This agent received a subagent's reply for one turn it dispatched.
+
+    The CLOSE marker of the ``[subagent_message_sent … subagent_reply_received]`` bracket
+    (mirrors :class:`SubagentMessageSent`'s correlation fields), published in-workflow by the
+    parent's ``run_subagent_turn`` once the activity returns and the agent (workflow) actually
+    holds the reply — for EVERY accepted child turn (``outcome`` distinguishes success from an
+    accepted-but-errored turn, which still emitted its own ``turn_end``), but never for a
+    pre-acceptance rejection. Carries no reply payload (that rides the child's own
+    ``message_handler_end`` event + the send-tool's ``tool_end``); it is a thin
+    close/correlation signal a stream-merge uses to order a subagent's whole turn ahead of
+    the parent observing its reply.
+    """
+
+    type: Literal[AgentEventType.SUBAGENT_REPLY_RECEIVED] = (
+        AgentEventType.SUBAGENT_REPLY_RECEIVED
+    )
+    subagent_id: str = Field(
+        description="The short id of the SUBAGENT that replied (matches its SubagentMessageSent, "
+        "and the ``agent_id`` on that subagent's own events). Distinct from the envelope's "
+        "``agent_id`` (this parent agent)."
+    )
+    agent_key: str = Field(description="Which wired agent type the replying subagent is.")
+    workflow_id: str = Field(
+        description="The replying subagent's real child workflow id (matches the opening "
+        "SubagentMessageSent) — the close-gate key a stream-merge correlates against."
+    )
+    handler: str = Field(
+        description="The handler this reply answers (the same send_agent_message envelope "
+        "'type' as the opening SubagentMessageSent)."
+    )
+    subagent_turn: int = Field(
+        description="The turn number ON THE SUBAGENT this reply closes — pairs with the opening "
+        "SubagentMessageSent's subagent_turn, NOT the enclosing envelope's (parent's) turn_number."
+    )
+    outcome: Literal["ok", "error"] = Field(
+        description="'ok' if the child turn produced a reply; 'error' if it was accepted but then "
+        "errored / produced no reply (it still emitted its own turn_end, so the bracket closes "
+        "either way). Never published for a pre-acceptance rejection."
+    )
+
+
+class SubagentStreamUnavailable(StreamEvent[Literal[AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]]):
+    """The stream merge gave up obtaining a subagent's events; its DETAIL is degraded (non-fatal).
+
+    SYNTHESIZED CLIENT-SIDE by the merge (never workflow-published) and injected into the merged
+    logical stream when a mounted subagent stream is unreadable/stalled. The merge stamps the
+    enclosing :class:`AgentEvent`'s ``agent_id`` with this same ``subagent_id`` — so a UI that
+    groups events by ``agent_id`` routes this straight to the affected subagent's view, and a
+    root-only consumer (which filters to the root ``agent_id``) ignores it. The parent stream is
+    unaffected; only the subagent's own turn detail is missing. No retry — a fresh attach recovers.
+    """
+
+    type: Literal[AgentEventType.SUBAGENT_STREAM_UNAVAILABLE] = (
+        AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
+    )
+    subagent_id: str = Field(
+        description="The short id of the subagent whose events couldn't be obtained (matches the "
+        "``subagent_id`` on the parent's SubagentStarted/SubagentMessageSent, and the ``agent_id`` "
+        "that subagent stamps on its own events)."
+    )
+    workflow_id: str = Field(
+        description="The subagent's real child workflow id (the stream the merge couldn't read)."
+    )
+    reason: str = Field(
+        default="",
+        description="A short, human-facing note on why the subagent's events were unavailable "
+        "(e.g. the child workflow has completed and its stream isn't yet replayable).",
+    )
+
+
+class ReplyDelta(StreamEvent[Literal[AgentEventType.REPLY_DELTA]]):
+    """An incremental text chunk of the agent's reply."""
+
+    type: Literal[AgentEventType.REPLY_DELTA] = AgentEventType.REPLY_DELTA
+    text: str = Field(
+        description="One incremental text chunk (word/token) of the agent's reply."
+    )
+
+
+class ThoughtSummaryDelta(StreamEvent[Literal[AgentEventType.THOUGHT_SUMMARY]]):
+    """A streamed thought-summary chunk from the model."""
+
+    type: Literal[AgentEventType.THOUGHT_SUMMARY] = AgentEventType.THOUGHT_SUMMARY
+    delta: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The raw ``DeltaThoughtSummary`` payload dumped to a dict.",
+    )
+
+
+class TextAnnotationDelta(StreamEvent[Literal[AgentEventType.TEXT_ANNOTATION]]):
+    """A streamed annotation/citation delta interleaved with reply text."""
+
+    type: Literal[AgentEventType.TEXT_ANNOTATION] = AgentEventType.TEXT_ANNOTATION
+    delta: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The raw ``DeltaTextAnnotationDelta`` payload dumped to a dict so consumers "
+        "can position citations next to the surrounding ``ReplyDelta`` chunks.",
+    )
+
+
+class MessageHandlerEnd(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_END]]):
+    """One message's handler returned — its reply. Terminal for the MESSAGE.
+
+    Not necessarily terminal for the turn: with several participants sharing a turn there is
+    one of these per message, all under the same ``turn_id``, and :class:`TurnEnded` follows
+    only the last. A consumer pairing a reply with the message that produced it MUST use the
+    envelope's ``message_id``; ``turn_id`` no longer distinguishes them, and reply order is
+    not a workaround (nothing guarantees the turn's opening message replies last).
+    """
+
+    type: Literal[AgentEventType.MESSAGE_HANDLER_END] = (
+        AgentEventType.MESSAGE_HANDLER_END
+    )
+    output: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The handler's return model serialized to JSON (Agent Kit publishes "
+        '``result.model_dump(mode="json")``). Carrying a plain dict keeps the reply trivially '
+        "round-trippable on the stream regardless of the concrete output type; a consumer that "
+        "knows the expected type (e.g. from ``agent_interface``) re-validates the dict into it.",
+    )
+
+
+class MessageHandlerError(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_ERROR]]):
+    """One message's handler raised. Terminal for the MESSAGE, never for the session.
+
+    The error half of the :class:`MessageHandlerEnd` pair (exactly as ``tool_error`` is to
+    ``tool_end``). It ends only this message: sibling participants of the same turn keep
+    running, and :class:`TurnEnded` still follows once the last of them leaves. Attribute it
+    by the envelope's ``message_id`` — treating it as "the turn failed" would blame work that
+    is still in flight.
+    """
+
+    type: Literal[AgentEventType.MESSAGE_HANDLER_ERROR] = (
+        AgentEventType.MESSAGE_HANDLER_ERROR
+    )
+    message: str = Field(
+        description="A description of the error the message's handler raised."
+    )
+
+
+class SteeringEnqueued(StreamEvent[Literal[AgentEventType.STEERING_ENQUEUED]]):
+    """A message handler queued steering text for the model.
+
+    The envelope's ``message_id`` is the message whose handler called ``runner.steer``. The
+    ``steering_id`` names this one piece of steering, which a handler that steers twice needs:
+    the later :class:`SteeringClaimed` or :class:`SteeringDropped` lists it.
+    """
+
+    type: Literal[AgentEventType.STEERING_ENQUEUED] = AgentEventType.STEERING_ENQUEUED
+    steering_id: str = Field(
+        description="Minted by Agent Kit for this steering; exactly one later "
+        "``steering_claimed`` or ``steering_dropped`` lists it in its ``steering_ids``."
+    )
+    text: str = Field(description="The steering text, as the model will see it once claimed.")
+
+
+class SteeringClaimed(StreamEvent[Literal[AgentEventType.STEERING_CLAIMED]]):
+    """Queued steering was taken by code building model input.
+
+    The envelope's ``message_id`` is the CLAIMING participant — the message whose handler runs
+    the model loop. What it claimed is ``steering_ids``, named explicitly so a consumer never
+    infers it from what was enqueued before this event.
+    """
+
+    type: Literal[AgentEventType.STEERING_CLAIMED] = AgentEventType.STEERING_CLAIMED
+    steering_ids: list[str] = Field(
+        description="The ``steering_id`` of each ``steering_enqueued`` claimed, in the order they "
+        "were enqueued."
+    )
+    tool_id: str | None = Field(
+        default=None,
+        description="The tool call whose result carries the steering, so a consumer can show it "
+        "with that call's ``tool_start`` / ``tool_end``. ``None`` when it went to the model some "
+        "other way, e.g. as user input in a hand-written model loop. ``tool_end.tool_output`` "
+        "never includes the steering: it is published before the steering is attached.",
+    )
+
+
+class SteeringDropped(StreamEvent[Literal[AgentEventType.STEERING_DROPPED]]):
+    """The turn ended with steering still queued, and Agent Kit discarded it.
+
+    It never reached the model: no outermost tool call resolved after it was queued, or the
+    handler running the model loop returned first. Steering does not carry into the next turn,
+    because it is about the work that just finished. A client should tell the user and offer to
+    resubmit the text as a new message. The envelope's ``message_id`` is ``None``, like
+    :class:`TurnEnded`'s, which follows it.
+    """
+
+    type: Literal[AgentEventType.STEERING_DROPPED] = AgentEventType.STEERING_DROPPED
+    steering_ids: list[str] = Field(
+        description="The ``steering_id`` of each ``steering_enqueued`` dropped, in the order they "
+        "were enqueued."
+    )
+
+
+class AgentClosed(StreamEvent[Literal[AgentEventType.AGENT_CLOSED]]):
+    """The agent closed: it admits no more messages, and its workflow completes once
+    ``@agent.teardown`` (if any) returns.
+
+    ``AgentStatus.close_reason`` carries the same reason for a client that queries instead.
+    """
+
+    type: Literal[AgentEventType.AGENT_CLOSED] = AgentEventType.AGENT_CLOSED
+    reason: CloseReason = Field(
+        description="Why the agent closed: REQUESTED for a ``close`` signal, "
+        "IDLE_TIMEOUT_EXPIRED when ``close_after_idle`` ran out."
+    )
+
+
+class AgentStateSnapshot(StreamEvent[Literal[AgentEventType.STATE_SNAPSHOT]]):
+    """The full value of one piece of observable agent state.
+
+    Published when the author registers the state, and again on nothing else — the
+    ``version`` here is the base every subsequent :class:`AgentStatePatch` for the
+    same ``state_id`` builds on.
+    """
+
+    type: Literal[AgentEventType.STATE_SNAPSHOT] = AgentEventType.STATE_SNAPSHOT
+    state_id: str = Field(
+        description="The name the workflow author registered this state under. Unique "
+        "per agent; a consumer keys its local copy by it."
+    )
+    version: int = Field(
+        description="The state's version at the moment of the snapshot. Patches carry "
+        "strictly increasing versions from here."
+    )
+    value: dict[str, Any] = Field(
+        description="The whole state, as ``model_dump(mode='json')`` — the same "
+        "serialization the patch ops' values use, so pointers line up."
+    )
+
+
+class AgentStatePatch(StreamEvent[Literal[AgentEventType.STATE_PATCH]]):
+    """What one committed ``mutate()`` block changed, as RFC 6902 ops.
+
+    Agent Kit derives these; nothing in the author's workflow code builds or sees
+    them. Ops are applied in order, and a version is produced only by a block that
+    actually touched something — a no-op ``mutate()`` publishes nothing at all.
+    """
+
+    type: Literal[AgentEventType.STATE_PATCH] = AgentEventType.STATE_PATCH
+    state_id: str = Field(description="Which registered state these ops apply to.")
+    version: int = Field(description="The version this patch produces.")
+    ops: list[dict[str, Any]] = Field(
+        description="RFC 6902 operations, applied in order to the `version - 1` document. "
+        "Agent Kit only ever emits ``add`` / ``replace`` / ``remove``."
+    )
+
+
+# Discriminated union of every concrete payload, keyed on ``type``. This is the
+# type of :attr:`AgentEvent.event`, so Temporal's Pydantic converter reconstructs
+# the right payload subtype when it deserializes an envelope off the stream.
+AgentStreamItem = Annotated[
+    MessageAccepted
+    | MessageHandlerStart
+    | MessageHandlerEnd
+    | MessageHandlerError
+    | SteeringEnqueued
+    | SteeringClaimed
+    | SteeringDropped
+    | TurnStarted
+    | TurnEnded
+    | AgentClosed
+    | ModelInteractionStarted
+    | ModelInteractionEnded
+    | ToolRequested
+    | ToolApprovalRequested
+    | AutoApprovalEvaluationStarted
+    | AutoApprovalEvaluationEnded
+    | AutoApprovalEvaluationSuperseded
+    | AutoApprovalEvaluationError
+    | ToolApprovalResolved
+    | ToolStartEvent
+    | ToolEndEvent
+    | ToolProgressDelta
+    | ToolErrorEvent
+    | CallbackRequested
+    | CallbackResolved
+    | SubagentStarted
+    | SubagentStopped
+    | SubagentMessageSent
+    | SubagentReplyReceived
+    | SubagentStreamUnavailable
+    | ReplyDelta
+    | ThoughtSummaryDelta
+    | TextAnnotationDelta
+    | AgentStateSnapshot
+    | AgentStatePatch,
+    Field(discriminator="type"),
+]
+
+
+class AgentEvent(BaseModel):
+    """Transport envelope for one stream event.
+
+    The single concrete type published on — and subscribed to from — the
+    ``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload
+    (``event``) and adds the routing metadata Agent Kit stamps at publish time.
+    Producers never build this — they construct a payload and the publisher wraps
+    it — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp``
+    can only ever be set by Agent Kit. Being a concrete type (not a bare union), it is
+    also a clean ``type`` for the workflow-stream topic and subscribe ``result_type``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: str = Field(
+        description="The short, TREE-UNIQUE id of the agent that PUBLISHED this event "
+        "(``AgentConfig.agent_id`` / ``AgentStatus.agent_id`` — see ``AgentId`` for the segment "
+        "shape; NOT the full workflow_id) — stamped by Agent Kit at publish time; producers never "
+        "set it. Every event carries it so a merged multi-agent stream is self-describing: because "
+        "the id is unique across the whole subagent tree, a consumer can filter to one agent's "
+        "events, or group the merged stream by agent, with no risk of conflating two agents. For a "
+        "subagent it equals the ``handle`` its parent references it by (the parent's own id plus a "
+        "fresh segment, pushed down as the child's ``agent_id``), so a consumer can attribute child "
+        "events to the subagent shown in the parent's status/events."
+    )
+    turn_id: str = Field(
+        description="The id of the turn this event belongs to — stamped by Agent Kit at "
+        "publish time; producers never set it."
+    )
+    turn_number: int = Field(
+        description="The monotonic number of the turn this event belongs to — stamped by Agent "
+        "Kit at publish time; producers never set it."
+    )
+    message_id: str | None = Field(
+        default=None,
+        description="The id of the ONE inbound message whose dispatch produced this event — "
+        "minted at admission (also returned on ``AgentMessageReply.message_id``) and stamped by "
+        "Agent Kit; producers never set it. It lives on the envelope rather than in event "
+        "bodies so EVERY event of a message's dispatch is attributable for free — deltas, tool "
+        "lifecycle, approvals, subagent brackets — exactly the way ``turn_id`` is.\n\n"
+        "``turn_id`` does NOT substitute for it: a turn is refcounted, so a ``MidTurn.ACCEPT`` "
+        "message can join one already open and several messages then publish under one "
+        "``turn_id``. Pair a reply, or attribute a streamed delta, by THIS field.\n\n"
+        "``None`` for events that genuinely are not about one message: ``turn_started`` and "
+        "``turn_end`` (pure turn lifecycle), and the approval/callback resolutions published "
+        "from an update handler driving a policy cascade — which is no more bound to one "
+        "message than it is to one turn.",
+    )
+    timestamp: float = Field(
+        description="When Agent Kit published this envelope (epoch seconds)."
+    )
+    event: AgentStreamItem = Field(
+        description="The wrapped stream-event payload — a discriminated union over ``type`` that "
+        "Temporal's Pydantic converter reconstructs to the concrete payload subtype on read."
+    )

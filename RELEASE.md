@@ -9,17 +9,28 @@ rest: what to decide, what to write down, and what to do when something fails.
 
 | Unit | Packages | Version source | Tag |
 | --- | --- | --- | --- |
-| `pypi` | `temporal-agent-harness` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
-| `npm` | Every `@temporalio/agent-harness*` package under [typescript/packages](typescript/packages), at **one shared version**: `@temporalio/agent-harness` (core), `-worker`, `-client`, `-react`, `-svelte`, and `-codegen` | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
+| `pypi` | `temporal-agent-kit` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi-agent-kit` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
+| `npm` | Every `@temporalio/agent-kit*` package under [typescript/packages](typescript/packages), at **one shared version**: `@temporalio/agent-kit` (core), `-worker`, `-client`, `-react`, `-svelte`, and `-codegen` | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
 
-`@temporalio/agent-harness-codegen` ships in the same npm lockstep release. Configure its npm
-trusted publisher before its first publication. Examples ship in the
+`@temporalio/agent-kit-codegen` ships in the same npm lockstep release. Examples ship in the
 repository: release notes name the tag to check out. The small `init` starters and language
 skills are bundled in the SDK packages.
 
 The TypeScript runtime uses the Python server, session manager and console, so a server or console
 change needs a `pypi` release even when the motivating feature is TypeScript. The two units
 release independently otherwise; nothing requires their version numbers to match.
+
+The project was renamed from Temporal Agent Harness. `temporal-agent-harness` on PyPI and the
+`@temporalio/agent-harness*` npm packages get no further releases; their successors continue the
+version lines (PyPI from 0.12.0, npm from 0.6.0). The `@temporalio/agent-kit*` names were
+reserved with `0.0.0` placeholders, so each needs its npm trusted publisher (repository
+`temporal-community/temporal-agent-harness`, workflow `publish-npm.yml`, environment `npm`)
+before the first npm release under the new names, and the `pypi-agent-kit` environment must
+admit release tags:
+
+```sh
+gh api --method POST repos/temporal-community/temporal-agent-harness/environments/pypi-agent-kit/deployment-branch-policies -f name='[0-9]*.[0-9]*.[0-9]*' -f type=tag
+```
 
 Before the first release of the development commands, remove the “next release” availability
 notices from the READMEs and agent-development guide after the pinned packages are publishable.
@@ -29,9 +40,12 @@ notices from the READMEs and agent-development guide after the pinned packages a
 Pre-1.0, a **patch** is compatible fixes, security updates and packaging corrections; a **minor** is
 new capabilities or breaking changes, with the breaking changes and migrations spelled out in the
 notes. **1.0** is an explicit stability decision, never a way to align the two units' numbers.
+Nothing can release it by accident: the release workflow offers only patch and minor bumps,
+`scripts/release.mjs` refuses any version at or above 1.0.0, and the `pypi-agent-kit` and `npm`
+environments only accept `0.*` tags.
 Package versions say nothing about wire or workflow-history compatibility.
 
-The npm packages move together: a release bumps every `@temporalio/agent-harness*` manifest and
+The npm packages move together: a release bumps every `@temporalio/agent-kit*` manifest and
 every workspace dependency on one of them to `^<version>`, so a binding always requires the client
 it was built and tested with, and publishes them in dependency order. One version number, one tag,
 one PR. (`workspace:` ranges, which pnpm resolves itself, are left alone.)
@@ -48,7 +62,7 @@ one SDK with the reason documented. A gap never excuses a broken shared contract
 
 Every pull request, including a release PR, runs [tests.yml](.github/workflows/tests.yml):
 
-- `bazel test //...` on Python 3.11–3.14: the harness, both SDKs' conformance runs against the
+- `bazel test //...` on Python 3.11–3.14: the Python package, both SDKs' conformance runs against the
   shared scenarios, the replay tests, the examples, and the checks of the built wheel, sdist and
   npm tarballs against what their manifests declare.
 - Generated Bazel files, Python package entry points, TypeScript test targets, and the pytest
@@ -105,11 +119,11 @@ Judgment calls the pipeline cannot make. Put the answers in the release PR descr
    after a failure and it reuses a tag that already points at the merged commit, skips an existing
    Release, and never moves a tag.
 4. Watch the publish run.
-   - [Publish to PyPI](.github/workflows/publish.yml) tests `//python/...`, builds `//python:dists`,
-     checks the archives' version against the tag, and uploads through the `pypi` environment with
-     OIDC. **That environment has a required reviewer**: the job waits until a reviewer listed in
-     the environment's settings approves it under *Review deployments* on the run page. Make sure
-     one is around before merging.
+   - [Publish to PyPI](.github/workflows/publish-agent-kit.yml) tests `//python/...`, builds
+     `//python:dists`, checks the archives' version against the tag, and uploads through the
+     `pypi-agent-kit` environment with OIDC. **That environment has a required reviewer**: the
+     job waits until a reviewer listed in the environment's settings approves it under *Review
+     deployments* on the run page. Make sure one is around before merging.
    - [Publish to npm](.github/workflows/publish-npm.yml) validates every public package against
      the tag, tests `//typescript/packages/...`, builds each `:pkg_tgz`, and publishes them in
      dependency order through the `npm` environment with provenance. A package already at that
@@ -117,9 +131,9 @@ Judgment calls the pipeline cannot make. Put the answers in the release PR descr
 5. Verify from the registries and note it in the PR:
 
    ```sh
-   uv pip install 'temporal-agent-harness[ui]==<version>' && temporal-agent-harness --help
-   npm view @temporalio/agent-harness-client@<version> version
-   npm view @temporalio/agent-harness-react@<version> dependencies
+   uv pip install 'temporal-agent-kit[ui]==<version>' && temporal-agent-kit --help
+   npm view @temporalio/agent-kit-client@<version> version
+   npm view @temporalio/agent-kit-react@<version> dependencies
    ```
 
    The npm clients had one hand-made release, `0.1.0`, before this automation existed; its first
@@ -141,7 +155,7 @@ matching tag yourself (`0.9.0` or `npm-v0.9.0`) is the manual fallback and also 
   branch before preparing that version again.
 - **Release merged PR** fails: rerun it. See step 3 above.
 - **A publish** fails: look at the registry first; an upload can succeed and a later step fail.
-  Then rerun the publish workflow against the same tag (`gh workflow run publish.yml --ref 0.9.0`,
+  Then rerun the publish workflow against the same tag (`gh workflow run publish-agent-kit.yml --ref 0.9.0`,
   `gh workflow run publish-npm.yml --ref npm-v0.9.0`). Never against a branch.
 - **A bad release**: never move a published tag or reuse a version. Stop dependent releases,
   write down the affected versions, release a corrected version, and consider yanking or
@@ -152,7 +166,7 @@ matching tag yourself (`0.9.0` or `npm-v0.9.0`) is the manual fallback and also 
 
 ## First TypeScript SDK release
 
-`@temporalio/agent-harness` and `@temporalio/agent-harness-worker` are already in the lockstep set
+`@temporalio/agent-kit` and `@temporalio/agent-kit-worker` are already in the lockstep set
 (their versions and ranges move with every npm release) and have tarball targets and tests. To
 publish them, in a reviewed PR:
 

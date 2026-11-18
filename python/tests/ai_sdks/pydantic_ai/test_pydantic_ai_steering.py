@@ -21,14 +21,14 @@ from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamCl
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.ai_sdks.pydantic_ai_harness import (
-    HarnessDeps,
-    TemporalAgentHarnessDurability,
-    build_harness_toolset,
-    harness_model,
+from temporal_agent_kit.ai_sdks.pydantic_ai import (
+    KitDeps,
+    TemporalAgentKitDurability,
+    build_kit_toolset,
+    kit_model,
 )
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -41,7 +41,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextReply,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 CALL_ID = "call_pick_city"
 
@@ -68,11 +68,11 @@ async def _echo_tool_result(
 
 
 _STEERED_AGENT = Agent(
-    harness_model(FunctionModel(stream_function=_echo_tool_result)),
+    kit_model(FunctionModel(stream_function=_echo_tool_result)),
     name="pydantic-ai-steering",
-    deps_type=HarnessDeps,
-    toolsets=[build_harness_toolset([pick_city], id="city-tools")],
-    capabilities=[TemporalAgentHarnessDurability()],
+    deps_type=KitDeps,
+    toolsets=[build_kit_toolset([pick_city], id="city-tools")],
+    capabilities=[TemporalAgentKitDurability()],
 )
 
 
@@ -90,7 +90,7 @@ class SteeredPydanticAgent:
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:
         """Plan a trip."""
-        result = await _STEERED_AGENT.run(message.text, deps=HarnessDeps(runner=self.runner))
+        result = await _STEERED_AGENT.run(message.text, deps=KitDeps(runner=self.runner))
         return TextReply(text=str(result.output))
 
     @agent.accepts(mid_turn=MidTurn.ACCEPT)

@@ -16,7 +16,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     PROVIDE_CALLBACK_RESULT_UPDATE,
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
@@ -28,7 +28,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     CallbackResult,
     CallbackResultAck,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from tests.examples.agent_dag._check_parent import CheckCodeParentWorkflow
 from tests.examples.agent_dag.test_execute_flow import FLOW, TYPED_FLOW
@@ -42,7 +42,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[CheckCodeParentWorkflow],
-        plugins=[AgentHarnessPlugin()],
+        plugins=[AgentKitPlugin()],
     ):
         try:
             yield env.client, task_queue

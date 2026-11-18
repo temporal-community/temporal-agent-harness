@@ -5,7 +5,7 @@ import {
   listToolsActivityName,
   type CallToolInput,
   type McpToolInfo,
-} from '@temporalio/agent-harness/ai-sdks/strands-agents';
+} from '@temporalio/agent-kit/ai-sdks/strands-agents';
 
 /**
  * Builds the per-server `{server}-listTools` activity. Enumerates the server's

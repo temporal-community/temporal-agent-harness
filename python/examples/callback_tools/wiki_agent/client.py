@@ -6,7 +6,7 @@ publishes a ``callback_requested`` event and waits. THIS client — running on y
 watches the agent's event stream, executes each requested tool against a LOCAL wiki directory,
 and posts the result back so the agent can continue.
 
-It talks only to the packaged harness HTTP server (``app.py``); it needs no Temporal client of its
+It talks only to the packaged Agent Kit HTTP server (``app.py``); it needs no Temporal client of its
 own. Per user message it:
 
   1. sends the message and streams that turn (``POST /api/chat``, Server-Sent Events);
@@ -252,7 +252,7 @@ def _result_summary(result: Any) -> str:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", default="http://localhost:8000", help="Harness server URL.")
+    parser.add_argument("--server", default="http://localhost:8000", help="Agent Kit server URL.")
     parser.add_argument(
         "--wiki-dir",
         default="./wiki",

@@ -34,7 +34,7 @@
           "type": "string"
         },
         "schema": {
-          "description": "The agent's schema document (`temporal-agent-harness schema`), relative to this file. Its init data becomes the agent's start interface.",
+          "description": "The agent's schema document (`temporal-agent-kit schema`), relative to this file. Its init data becomes the agent's start interface.",
           "title": "Schema",
           "type": "string"
         }
@@ -50,7 +50,7 @@
       "type": "object"
     }
   },
-  "description": "An ``agents.toml`` registry: the agents ``temporal-agent-harness serve`` offers.",
+  "description": "An ``agents.toml`` registry: the agents ``temporal-agent-kit serve`` offers.",
   "properties": {
     "agents": {
       "items": {

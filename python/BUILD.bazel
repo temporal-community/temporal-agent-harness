@@ -8,7 +8,7 @@ load("//bazel:python_dists.bzl", "python_dists")
 #   bazel run //:gazelle                                    # after adding, moving, or re-importing files
 #   bazel run //python:gazelle_python_manifest.update       # after changing uv.lock
 #
-# Module names are relative to this directory (temporal_agent_harness.*, tests.*, examples.*).
+# Module names are relative to this directory (temporal_agent_kit.*, tests.*, examples.*).
 # gazelle:python_root
 # gazelle:python_generation_mode file
 # gazelle:python_test_file_pattern test_*.py
@@ -17,8 +17,8 @@ load("//bazel:python_dists.bzl", "python_dists")
 # rules_py has no pyi_deps; type-checking-only imports stay out of the runtime graph.
 # gazelle:python_generate_pyi_deps false
 # gazelle:map_kind py_library py_library @aspect_rules_py//py:defs.bzl
-# gazelle:map_kind py_binary harness_module_binary //bazel:binary.bzl
-# gazelle:map_kind py_test harness_pytest_test //bazel:pytest.bzl
+# gazelle:map_kind py_binary agent_kit_module_binary //bazel:binary.bzl
+# gazelle:map_kind py_test agent_kit_pytest_test //bazel:pytest.bzl
 #
 # The Nexus projects under nexus/, and the code that imports them, are not built by Bazel.
 # gazelle:exclude examples/nexus_hello
@@ -53,8 +53,8 @@ exports_files([
     "uv.lock",
 ])
 
-# The wheel and sdist PyPI publishes (.github/workflows/publish.yml), with the console's build at
-# temporal_agent_harness/ui/dist.
+# The wheel and sdist PyPI publishes (.github/workflows/publish-agent-kit.yml), with the console's build at
+# temporal_agent_kit/ui/dist.
 python_dists(
     name = "dists",
     srcs = [
@@ -62,9 +62,9 @@ python_dists(
         "pyproject.toml",
         "//:LICENSE",
     ],
-    package = "temporal_agent_harness",
+    package = "temporal_agent_kit",
     visibility = ["//python/tests:__pkg__"],
-    deps = ["//python/temporal_agent_harness"],
+    deps = ["//python/temporal_agent_kit"],
 )
 
 # A virtualenv for IDEs and shells: the interpreter plus every package in the `dev` dependency

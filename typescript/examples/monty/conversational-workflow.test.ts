@@ -11,13 +11,13 @@ import type { Interactions } from "@google/genai";
 import { Client, Connection } from "@temporalio/client";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
-import { AgentClient } from "@temporalio/agent-harness-worker/harness/agent-client";
+import type { AgentEvent } from "@temporalio/agent-kit/agent-protocol";
+import { AgentKitPlugin } from "@temporalio/agent-kit-worker";
+import { AgentClient } from "@temporalio/agent-kit-worker/agent-client";
 import {
   GoogleGenAIPlugin,
   type GeminiInteractionsClient,
-} from "@temporalio/agent-harness-worker/ai-sdks/google-genai-plugin";
+} from "@temporalio/agent-kit-worker/ai-sdks/google-genai-plugin";
 import { TOOL_ACTIVITIES } from "./activity-bodies.ts";
 
 const AGENTS = fileURLToPath(new URL("./agents.js", import.meta.url));
@@ -112,7 +112,7 @@ describe("MontyChatAgentTs", () => {
       workflowsPath: AGENTS,
       plugins: [
         new GoogleGenAIPlugin(gemini),
-        new AgentHarnessPlugin({ tools: TOOL_ACTIVITIES }),
+        new AgentKitPlugin({ tools: TOOL_ACTIVITIES }),
       ],
     });
     running = worker.run();
