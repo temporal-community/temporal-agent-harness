@@ -12,7 +12,7 @@
 // once, each with its own answer box.
 
 import { z } from "zod";
-import { tool } from "@temporalio/agent-harness";
+import { tool } from "@temporalio/agent-kit";
 
 export const askUser = tool({
   name: "ask_user",

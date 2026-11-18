@@ -1,10 +1,10 @@
-// A hello-world Strands Agents agent on the harness, with an inline, an activity and a callback
+// A hello-world Strands Agents agent on Agent Kit, with an inline, an activity and a callback
 // tool.
 //
 // A conversational agent that answers in plain text. It is a Strands agent built with
-// `harnessStrandsAgent`, so each model call runs in the Strands plugin's model activity, where the
-// harness translates raw Strands stream events into the turn-stream events an attached client
-// sees. Its tools cover each kind a harness Strands agent accepts:
+// `kitStrandsAgent`, so each model call runs in the Strands plugin's model activity, where
+// Agent Kit translates raw Strands stream events into the turn-stream events an attached client
+// sees. Its tools cover each kind an Agent Kit Strands agent accepts:
 //
 //   * `get_weather`: an inline workflow tool (`tool` with `execute`).
 //   * `get_local_time`: an activity tool (`activityTool`): reading the clock is nondeterministic,
@@ -13,7 +13,7 @@
 //     the person in the console answers.
 //
 // A message sent while the agent is working steers it: `ask` joins the open turn and queues the
-// text with `runner.steer`, and the harness hands it to the model with the next tool result.
+// text with `runner.steer`, and Agent Kit hands it to the model with the next tool result.
 //
 // Run it with the shared example stack (session-manager worker + server/UI); this agent is
 // registered in `agents.toml` and driven by the packaged web app. See README.md.
@@ -28,11 +28,11 @@ import {
   defineAgent,
   handler,
   tool,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   asStrandsTool,
-  harnessStrandsAgent,
-} from "@temporalio/agent-harness/ai-sdks/strands-agents-harness";
+  kitStrandsAgent,
+} from "@temporalio/agent-kit/ai-sdks/strands-agents";
 
 export const TASK_QUEUE = "strands-hello-ts";
 /** The name the worker's StrandsPlugin registers its model under (see worker.ts). */
@@ -73,7 +73,7 @@ export const askUser = tool({
   inherentlySafe: true,
 });
 
-/** A conversational agent driven by Strands Agents, with every kind of harness Strands tool. */
+/** A conversational agent driven by Strands Agents, with every kind of Agent Kit Strands tool. */
 export const StrandsHelloAgentTs = defineAgent({
   name: "StrandsHelloAgentTs",
   // Every tool here is inherently safe, so it runs without waiting for a person's approval.
@@ -91,7 +91,7 @@ export const StrandsHelloAgentTs = defineAgent({
   },
   create: ({ runner }) => {
     // Strands keeps the conversation in the agent, which lives as long as the workflow.
-    const agent = harnessStrandsAgent(runner, {
+    const agent = kitStrandsAgent(runner, {
       model: MODEL,
       activityOptions: { startToCloseTimeout: "2 minutes" },
       systemPrompt: SYSTEM_PROMPT,

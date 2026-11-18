@@ -1,4 +1,4 @@
-import { describeSchema, singleStringField } from "@temporalio/agent-harness-client";
+import { describeSchema, singleStringField } from "@temporalio/agent-kit-client";
 import type { AgentInterfaceFunction } from "$lib/api/types";
 
 const NATURAL_LANGUAGE = /\b(?:description|instruction|message|prompt|question|query|request|text)\b/i;

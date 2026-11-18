@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from openai import OpenAIError
 
-from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import ModelActivity
+from temporal_agent_kit.ai_sdks.openai_agents._invoke_model_activity import ModelActivity
 
 
 def test_default_provider_is_built_on_first_use(monkeypatch: pytest.MonkeyPatch) -> None:

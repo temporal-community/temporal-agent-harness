@@ -240,7 +240,7 @@ commands again if necessary.
 Open <http://localhost:8000>. Select **Nexus Hello**, and start a chat.
 
 The agent waits on its Nexus operation handle when it calls the delayed tool.
-The harness adapter does not use the MCP Tasks extension. The
+The Agent Kit adapter does not use the MCP Tasks extension. The
 [`test_caller_matrix_integration.py`](../../tests/nexus_mcp/test_caller_matrix_integration.py)
 test covers that protocol path. It uses `NexusMCPBridge` and a task-capable MCP
 client.

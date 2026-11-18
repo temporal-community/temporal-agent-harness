@@ -122,7 +122,7 @@ stream, not the resurrected entries.
   same stream content (it does not reduce the number of events published). Default is
   `DEFAULT_PUBLISH_BATCH_INTERVAL` (50ms) in `publisher_from_activity`; an SDK plugin passes its own
   configured value instead — for OpenAI that is `ModelActivityParameters.streaming_batch_interval`
-  (100ms), threaded to `harness_observer_factory` by `select_observer` and on into the observer's
+  (100ms), threaded to `kit_observer_factory` by `select_observer` and on into the observer's
   publisher. In-workflow publishes are unbuffered (they ride the workflow's own history).
 - **Consumers** subscribe by `workflow_id` (`WorkflowStreamClient.create(...).subscribe(...)`); the
   UI-facing "stream" is a client-side merge of the whole agent tree — see

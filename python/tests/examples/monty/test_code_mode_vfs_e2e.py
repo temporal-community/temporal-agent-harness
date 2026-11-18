@@ -18,7 +18,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -27,7 +27,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from tests.examples.monty import _code_mode_vfs_e2e_parent as parent
 from tests.examples.monty._code_mode_e2e_parent import add_tool
@@ -46,7 +46,7 @@ async def client_and_queue():
         task_queue=task_queue,
         workflows=[CodeModeVfsE2EParentWorkflow],
         activities=VFS_ACTIVITIES,
-        plugins=[AgentHarnessPlugin(tools=[add_tool])],
+        plugins=[AgentKitPlugin(tools=[add_tool])],
     ):
         try:
             yield env.client, task_queue

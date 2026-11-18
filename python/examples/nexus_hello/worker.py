@@ -26,16 +26,16 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.ai_sdks.openai_agents import (
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
 )
-from temporal_agent_harness.ai_sdks.openai_agents_harness import (
-    harness_observer_factory,
+from temporal_agent_kit.ai_sdks.openai_agents import (
+    kit_observer_factory,
     stream_to_provider,
 )
-from temporal_agent_harness.utils.task_queue import task_queue_name
+from temporal_agent_kit.utils.task_queue import task_queue_name
 
 from .workflow import TASK_QUEUE, NexusHelloAgentWorkflow
 
@@ -57,14 +57,14 @@ async def main() -> None:
             heartbeat_timeout=timedelta(seconds=30),
             stream_to_provider=stream_to_provider,
         ),
-        observer_factory=harness_observer_factory,
+        observer_factory=kit_observer_factory,
     )
 
-    # Harness plugin LAST so the OpenAI plugin's payload converter wins; it then adds the
-    # harness's data-converter requirements and activities on top.
+    # AgentKitPlugin LAST so the OpenAI plugin's payload converter wins; it then adds the
+    # Agent Kit's data-converter requirements and activities on top.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
-        **connect_config, plugins=[plugin, AgentHarnessPlugin()]
+        **connect_config, plugins=[plugin, AgentKitPlugin()]
     )
 
     worker = Worker(

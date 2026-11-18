@@ -16,7 +16,7 @@ import {
 import type {
   JevApprovalAnswer,
   JevApprovalRequest,
-} from "@temporalio/agent-harness/ai-sdks/jev/evaluator";
+} from "@temporalio/agent-kit/ai-sdks/jev/evaluator";
 import {
   AGENT_INTERFACE_QUERY,
   AGENT_STATUS_QUERY,
@@ -26,11 +26,11 @@ import {
   type AgentEventType,
   type AgentMessageReply,
   type StreamEventOf,
-} from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentClient } from "../src/harness/agent-client.ts";
-import { subscribe } from "../src/harness/stream-merge/index.ts";
+} from "@temporalio/agent-kit/agent-protocol";
+import { AgentClient } from "../src/agent-client.ts";
+import { subscribe } from "../src/stream-merge/index.ts";
 import { DEFAULT_PAYLOAD_STORAGE } from "../src/utils/large-payload.ts";
-import { AgentHarnessPlugin, toolActivity } from "../src/index.ts";
+import { AgentKitPlugin, toolActivity } from "../src/index.ts";
 import {
   bigResult,
   bookItem,
@@ -78,7 +78,7 @@ function fixtureActivities() {
 }
 
 function fixturePlugin() {
-  return new AgentHarnessPlugin({
+  return new AgentKitPlugin({
     tools: [
       toolActivity(gatedActivityTool, async ({ text }) => `act:${text}`),
       toolActivity(safeActivityTool, async ({ text }) => `safe:${text}`),

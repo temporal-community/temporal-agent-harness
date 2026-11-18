@@ -15,15 +15,15 @@
 //
 // This worker hosts the three Monty agents (MontyDynamicAgentTs + the two conversational agents),
 // not the session manager. The packaged session manager is hosted by
-// `temporal-agent-harness session-manager`; because it launches agents by registered name, it
+// `temporal-agent-kit session-manager`; because it launches agents by registered name, it
 // dispatches these agents to this queue without this worker hosting it.
 
 import { fileURLToPath } from "node:url";
 import { GoogleGenAI } from "@google/genai";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin, taskQueueName } from "@temporalio/agent-harness-worker";
-import { GoogleGenAIPlugin } from "@temporalio/agent-harness-worker/ai-sdks/google-genai-plugin";
+import { AgentKitPlugin, taskQueueName } from "@temporalio/agent-kit-worker";
+import { GoogleGenAIPlugin } from "@temporalio/agent-kit-worker/ai-sdks/google-genai-plugin";
 import { TOOL_ACTIVITIES } from "./activity-bodies.ts";
 import { TASK_QUEUE } from "./workflow.ts";
 
@@ -46,15 +46,15 @@ const worker = await Worker.create({
   // All three Monty agents run here: MontyChatSubagentAgentTs drives MontyDynamicAgentTs as a
   // subagent, so the child runs on this same queue.
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
-  // Two plugins, the harness's last, as in Python:
+  // Two plugins, Agent Kit's last, as in Python:
   //   * GoogleGenAIPlugin  — the Gemini interactions activity.
-  //   * AgentHarnessPlugin — everything the harness itself needs on this worker: the
+  //   * AgentKitPlugin — everything Agent Kit itself needs on this worker: the
   //     large-payload offload converter, the subagent-turn activity (drives the script-runner
   //     child for MontyChatSubagentAgentTs), the durable body of every travel tool, and Code
   //     Mode, from the installed @pydantic/monty, whose sandbox runs in activities here.
   plugins: [
     new GoogleGenAIPlugin(new GoogleGenAI({ apiKey })),
-    new AgentHarnessPlugin({ tools: TOOL_ACTIVITIES }),
+    new AgentKitPlugin({ tools: TOOL_ACTIVITIES }),
   ],
 });
 await worker.run();

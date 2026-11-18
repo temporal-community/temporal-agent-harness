@@ -1,5 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
 py_library(
     name = "__init__",
@@ -8,7 +8,7 @@ py_library(
     visibility = ["//:__subpackages__"],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_criteria",
     srcs = ["test_criteria.py"],
     imports = ["../../.."],

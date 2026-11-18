@@ -1,6 +1,6 @@
 """Drive the Monty travel agent from a Temporal workflow, purely through the AgentService Nexus contract.
 
-``NexusTravelDemoWorkflow`` is the caller: it has no harness client and doesn't import the agent.
+``NexusTravelDemoWorkflow`` is the caller: it has no Agent Kit client and doesn't import the agent.
 Over two turns it sends messages, follows the agent's event stream with ``pollMessages``,
 approves every gated tool call, answers the agent's ``ask_user`` questions, and sends messages
 mid-turn: a steering message (Monty's ``ask`` joins the open turn and steers) and a ``set_model``
@@ -32,7 +32,7 @@ with workflow.unsafe.imports_passed_through():
 
     from temporalio.api.common.v1 import Payload
 
-    from temporal_agent_harness.nexus_agent_adapter.generated import (
+    from temporal_agent_kit.nexus_agent_adapter.generated import (
         AgentService,
         ApproveToolCallInput,
         PollMessagesInput,

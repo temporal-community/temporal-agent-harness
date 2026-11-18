@@ -127,7 +127,7 @@ jobs:
       - name: Every TypeScript test file has a Bazel test target
         run: scripts/check-ts-test-targets.sh
 
-      # The wheel ships what //python/temporal_agent_harness reaches; its entry points are listed
+      # The wheel ships what //python/temporal_agent_kit reaches; its entry points are listed
       # by hand.
       - name: Every library in the Python package ships in the wheel and sdist
         run: scripts/check-python-package-entry-points.sh
@@ -160,8 +160,8 @@ jobs:
           key: bazel-disk-py313-${{ github.sha }}
           restore-keys: bazel-disk-py313-
 
-      # The wheel and sdist publish.yml would publish, and the pinned Temporal CLI for the dev
-      # server the conformance scenarios run on.
+      # The wheel and sdist publish-agent-kit.yml would publish, and the pinned Temporal CLI for the
+      # dev server the conformance scenarios run on.
       - name: Build the wheel and sdist
         id: dists
         run: |
@@ -250,8 +250,8 @@ jobs:
             # Nexus (nexus/, the temporal-nexus-mcp package) is not built by Bazel.
             tests/nexus_mcp
             tests/ai_sdks/openai_agents/test_nexus_mcp.py
-            "tests/ai_sdks/openai_agents/test_harness_mcp_server.py::test_every_nexus_mcp_server_factory_returns_a_governed_server"
-            "tests/ai_sdks/openai_agents/test_harness_mcp_server.py::test_every_nexus_factory_passes_runner_and_inherently_safe"
-            "tests/harness/test_agent_schema.py::test_every_example_agent_has_a_deterministic_self_contained_schema[examples.nexus_hello.workflow:NexusHelloAgentWorkflow]"
+            "tests/ai_sdks/openai_agents/test_kit_mcp_server.py::test_every_nexus_mcp_server_factory_returns_a_governed_server"
+            "tests/ai_sdks/openai_agents/test_kit_mcp_server.py::test_every_nexus_factory_passes_runner_and_inherently_safe"
+            "tests/test_agent_schema.py::test_every_example_agent_has_a_deterministic_self_contained_schema[examples.nexus_hello.workflow:NexusHelloAgentWorkflow]"
           )
           uv run pytest -q "${tests[@]}"

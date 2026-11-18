@@ -9,9 +9,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from temporal_agent_harness.harness.state import HarnessState
+from temporal_agent_kit.state import AgentState
 
-# The tools a step agent may be given. `step_tools.py` maps each name to the harness tool it
+# The tools a step agent may be given. `step_tools.py` maps each name to Agent Kit tool it
 # runs, and checks at import that the two agree.
 StepToolName = Literal[
     "search_flights",
@@ -43,7 +43,7 @@ class StepSpec(BaseModel):
     model: StepModel = DEFAULT_STEP_MODEL
 
 
-class StepProfile(HarnessState):
+class StepProfile(AgentState):
     """The step agent's spec, published so a client can label the step it is watching."""
 
     name: str = ""

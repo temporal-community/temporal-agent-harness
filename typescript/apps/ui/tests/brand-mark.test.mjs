@@ -56,7 +56,7 @@ describe("the mark drawn in the minimap", () => {
       "the mark is decoration and must be hidden from a reader"
     );
     assert.equal(
-      (minimap.match(/Temporal Agent Harness/g) ?? []).length,
+      (minimap.match(/Temporal Agent Kit/g) ?? []).length,
       0,
       "PaneMinimap must not speak the product name; the document title does"
     );

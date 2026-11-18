@@ -1,4 +1,4 @@
-"""Runs the example programs a harness_dev target lists, for the examples named on the command line.
+"""Runs the example programs a agent_kit_dev target lists, for the examples named on the command line.
 
 Every output line is prefixed with the program it came from, and Ctrl-C (or SIGTERM) reaches every
 program. A program that exits on its own is reported; the others keep running.

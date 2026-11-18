@@ -4,8 +4,8 @@
 
 import type { Interactions } from "@google/genai";
 import { proxyActivities, type ActivityOptions } from "@temporalio/workflow";
-import type { TurnStreamContext } from "../../harness/agent-protocol/index.ts";
-import type { AgentWorkflowRunner } from "../../harness/agent-workflow.ts";
+import type { TurnStreamContext } from "../../agent-protocol/index.ts";
+import type { AgentWorkflowRunner } from "../../agent-workflow.ts";
 import type { InteractionResult } from "./interactions-models.ts";
 
 export const GEMINI_INTERACTIONS_CREATE_STREAMED_ACTIVITY = "gemini_interactions_create_streamed";

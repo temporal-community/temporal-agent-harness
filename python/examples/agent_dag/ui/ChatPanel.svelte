@@ -29,11 +29,11 @@
 </script>
 
 <script lang="ts">
-  import type { HarnessMessage, ToolPart } from "@temporalio/agent-harness-svelte";
+  import type { KitMessage, ToolPart } from "@temporalio/agent-kit-svelte";
   import type { DagBuilderAgent } from "../client_sdk/DagBuilderAgent";
   import { readOutput } from "./RunPanel.svelte";
 
-  type Message = HarnessMessage<DagBuilderAgent>;
+  type Message = KitMessage<DagBuilderAgent>;
 
   interface Props {
     messages: readonly Message[];

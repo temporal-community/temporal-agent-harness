@@ -14,10 +14,10 @@ import type {
   ModelResponse,
   StreamEvent,
 } from "@openai/agents-core";
-import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
-import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
-import { AgentClient } from "@temporalio/agent-harness-worker/harness/agent-client";
+import type { AgentEvent } from "@temporalio/agent-kit/agent-protocol";
+import { AgentKitPlugin } from "@temporalio/agent-kit-worker";
+import { OpenAIAgentsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/openai-agents";
+import { AgentClient } from "@temporalio/agent-kit-worker/agent-client";
 import { Client } from "@temporalio/client";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { NativeConnection, Worker } from "@temporalio/worker";
@@ -105,7 +105,7 @@ const modelProvider: ModelProvider = {
     assert.equal(name, DEFAULT_MODEL);
     const model: Model = {
       async getResponse(): Promise<ModelResponse> {
-        throw new Error("the harness only streams");
+        throw new Error("Agent Kit only streams");
       },
       async *getStreamedResponse(request) {
         requests.push(request);
@@ -137,7 +137,7 @@ before(async () => {
     workflowsPath: AGENTS,
     plugins: [
       new OpenAIAgentsPlugin({ modelProvider }),
-      new AgentHarnessPlugin({ largePayloadOffload: null }),
+      new AgentKitPlugin({ largePayloadOffload: null }),
     ],
   });
   running = worker.run();

@@ -29,7 +29,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -38,7 +38,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from tests.examples.monty._code_mode_e2e_parent import CODE_MODE_TOOLS, CodeModeE2EParentWorkflow
 
@@ -80,7 +80,7 @@ async def client_and_queue():
         workflows=[CodeModeE2EParentWorkflow],
         # The plugin supplies the durable bodies of the host tools; Code Mode needs no
         # activities of its own.
-        plugins=[AgentHarnessPlugin(tools=CODE_MODE_TOOLS)],
+        plugins=[AgentKitPlugin(tools=CODE_MODE_TOOLS)],
         interceptors=[_RecordScheduledActivities()],
     ):
         try:

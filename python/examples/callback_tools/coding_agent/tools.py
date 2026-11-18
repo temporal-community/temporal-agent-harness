@@ -24,7 +24,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 
 TodoStatus = Literal["pending", "in_progress", "completed", "cancelled"]

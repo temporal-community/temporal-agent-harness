@@ -1,16 +1,16 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/langgraph:__init__",
         "@pypi//temporalio",
     ],
 )
@@ -21,11 +21,11 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks/langgraph:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
-        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/langgraph:__init__",
+        "//python/temporal_agent_kit/state:__init__",
         "@pypi//langchain_core",
         "@pypi//langchain_openai",
         "@pypi//langgraph",
@@ -35,7 +35,7 @@ py_library(
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "LangGraphHelloAgent",
     agent = "examples.langgraph_hello.workflow:LangGraphHelloAgentWorkflow",
     description = """
@@ -52,7 +52,7 @@ LangGraph integration end to end — model node activity → harness observer �
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/langgraph_hello:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "LangGraphHelloAgent.schema.json",

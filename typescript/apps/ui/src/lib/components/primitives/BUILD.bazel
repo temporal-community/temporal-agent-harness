@@ -92,10 +92,39 @@ js_library(
 )
 
 js_library(
+    name = "SessionGlyph",
+    srcs = ["SessionGlyph.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":StateGlyph",
+        ":StatusChip",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+    ],
+)
+
+js_library(
     name = "StateGlyph",
     srcs = ["StateGlyph.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = ["//typescript/apps/ui:node_modules/@lucide/svelte"],
+)
+
+js_library(
+    name = "DataTable",
+    srcs = ["DataTable.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":placeMenu",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-table",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+js_library(
+    name = "placeMenu",
+    srcs = ["placeMenu.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
 js_library(
@@ -321,6 +350,17 @@ vitest_test(
         "//typescript/apps/ui/src/lib/mock:scaleScenarios",
         "//typescript/apps/ui/src/lib/state:replayLog",
         "//typescript/apps/ui/src/lib/state:transcript",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "DataTable_test",
+    src = "DataTable.test.mjs",
+    deps = [
+        ":DataTable",
+        "//typescript/apps/ui:node_modules/@tanstack/svelte-store",
+        "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

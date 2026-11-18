@@ -21,28 +21,28 @@ from pydantic import BaseModel
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.service import RPCError, RPCStatusCode
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit import AgentWorkflowRunner, agent
+from temporal_agent_kit.agent_protocol import (
     AgentConfig,
     TextMessage,
     TextReply,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.harness.agent_schema import (
+from temporal_agent_kit.agent_schema import (
     agent_init_data_schema,
     dump_agent_schema,
     load_agent_class,
 )
-from temporal_agent_harness.web import (
+from temporal_agent_kit.web import (
     AgentDescriptor,
     AgentRegistry,
     AgentStart,
-    create_agent_harness_app,
+    create_agent_kit_app,
     load_agent_registry,
 )
-from temporal_agent_harness.web.agent_starts import agent_starts
-from temporal_agent_harness.web.task_queue_status import RegistryWorkers
-from temporal_agent_harness.web.session_manager import (
+from temporal_agent_kit.web.agent_starts import agent_starts
+from temporal_agent_kit.web.task_queue_status import RegistryWorkers
+from temporal_agent_kit.web.session_manager import (
     CreateSessionRequest,
     Session,
     SessionManagerWorkflow,
@@ -131,7 +131,7 @@ class _FakeWorkflowHandle:
 
 @pytest.fixture
 def app_and_manager():
-    app = create_agent_harness_app(registry=REGISTRY)
+    app = create_agent_kit_app(registry=REGISTRY)
     manager = _FakeManagerHandle()
     app.state.temporal = _FakeTemporalClient()
     app.state.manager_handle = manager
@@ -153,7 +153,7 @@ def test_agents_list_publishes_each_agents_init_data(app_and_manager, monkeypatc
         list(task_queues)
         return RegistryWorkers()
 
-    monkeypatch.setattr("temporal_agent_harness.web.app.describe_task_queue_workers", no_workers)
+    monkeypatch.setattr("temporal_agent_kit.web.app.describe_task_queue_workers", no_workers)
     agents = {a["key"]: a for a in TestClient(app).get("/api/agents").json()["agents"]}
 
     assert agents["briefed"]["init_data"]["required"] is True
@@ -243,11 +243,11 @@ def test_the_manager_passes_data_as_the_second_workflow_argument(monkeypatch) ->
         started.append({"workflow_type": workflow_type, **kwargs})
 
     monkeypatch.setattr(
-        "temporal_agent_harness.web.session_manager.workflow.start_child_workflow",
+        "temporal_agent_kit.web.session_manager.workflow.start_child_workflow",
         fake_start_child_workflow,
     )
-    monkeypatch.setattr("temporal_agent_harness.web.session_manager.workflow.uuid4", lambda: "u1")
-    monkeypatch.setattr("temporal_agent_harness.web.session_manager.workflow.time", lambda: 0.0)
+    monkeypatch.setattr("temporal_agent_kit.web.session_manager.workflow.uuid4", lambda: "u1")
+    monkeypatch.setattr("temporal_agent_kit.web.session_manager.workflow.time", lambda: 0.0)
     manager = SessionManagerWorkflow(REGISTRY)
     config = AgentConfig()
 

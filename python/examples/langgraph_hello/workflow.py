@@ -3,7 +3,7 @@
 The turn is one run of a two-node ``StateGraph``: the ``agent`` node calls a reasoning chat model
 in an activity, whose stream reaches the turn as ``model_interaction_started``,
 ``thought_summary``, ``reply_delta`` and ``model_interaction_ended`` (with token usage); the
-``tools`` node is a prebuilt ``ToolNode`` whose calls go through ``harness_tool_call``, so the
+``tools`` node is a prebuilt ``ToolNode`` whose calls go through ``kit_tool_call``, so the
 harness owns approval and the ``tool_start`` / ``tool_end`` / ``tool_error`` events. Its tools:
 
 * ``get_weather``: an activity tool (``@agent.activity_tool_defn``), inherently safe.
@@ -38,9 +38,9 @@ with workflow.unsafe.imports_passed_through():
     from langgraph.graph import END, START, MessagesState, StateGraph
     from langgraph.prebuilt import ToolNode, tools_condition
 
-    from temporal_agent_harness.ai_sdks.langgraph import graph
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit.ai_sdks.langgraph import graph
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         MessageContext,
         MidTurn,
@@ -48,8 +48,8 @@ with workflow.unsafe.imports_passed_through():
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner, Injected
-    from temporal_agent_harness.harness.state import HarnessState, StateRef
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner, Injected
+    from temporal_agent_kit.state import AgentState, StateRef
 
 
 TASK_QUEUE = "langgraph-hello"
@@ -65,7 +65,7 @@ note the user asks you to keep; confirm what you saved. `ask_user` asks the user
 when a request is ambiguous, such as which city they mean. For anything else, reply directly."""
 
 
-class Notes(HarnessState):
+class Notes(AgentState):
     """What the user asked the agent to remember, shown live in the console's state pane."""
 
     items: list[str] = []

@@ -24,20 +24,20 @@ bazel run //typescript:pnpm -- --dir "$PWD/typescript/packages/client" run test
 
 | Package | Use it for |
 | --- | --- |
-| [`@temporalio/agent-harness-client`](packages/client) | Transport, `startSession`, message and state types, schema forms, and `AgentSessionCore` with `PlainSessionState` for code with no framework |
-| [`@temporalio/agent-harness-react`](packages/react) | `useAgentSession`, `useAgentSessionSelector` and `HarnessProvider` |
-| [`@temporalio/agent-harness-svelte`](packages/svelte) | `AgentSession` and `createHarnessContext` |
-| [`@temporalio/agent-harness-codegen`](packages/codegen) | `harness-codegen`: an agent's handlers, states and init data as TypeScript types |
+| [`@temporalio/agent-kit-client`](packages/client) | Transport, `startSession`, message and state types, schema forms, and `AgentSessionCore` with `PlainSessionState` for code with no framework |
+| [`@temporalio/agent-kit-react`](packages/react) | `useAgentSession`, `useAgentSessionSelector` and `KitProvider` |
+| [`@temporalio/agent-kit-svelte`](packages/svelte) | `AgentSession` and `createKitContext` |
+| [`@temporalio/agent-kit-codegen`](packages/codegen) | `agent-kit-codegen`: an agent's handlers, states and init data as TypeScript types |
 
 Each binding re-exports the client, so an app imports from one package.
 
 ## Build an app on the SDK (React or Svelte)
 
-1. **Generate the agent's types.** For an agent in this repo, declare a `harness_client_sdk` beside
-   its `harness_agent`, as [tictactoe's BUILD file](../python/examples/tictactoe/BUILD.bazel) does,
+1. **Generate the agent's types.** For an agent in this repo, declare a `agent_kit_client_sdk` beside
+   its `agent_kit_agent`, as [tictactoe's BUILD file](../python/examples/tictactoe/BUILD.bazel) does,
    and run its `client_sdk_update` target (`bazel run //python/examples/tictactoe:client_sdk_update`
    writes `python/examples/tictactoe/client_sdk/TicTacToeAgent.ts`). For any other agent, pipe
-   `temporal-agent-harness schema module:Class` into `harness-codegen` as
+   `temporal-agent-kit schema module:Class` into `agent-kit-codegen` as
    [packages/codegen/README.md](packages/codegen/README.md) shows. Commit the output; never edit it.
 2. **The rest** (connecting, starting or attaching, reading selectively, sending, answering the
    agent, testing) is in the application walkthrough,

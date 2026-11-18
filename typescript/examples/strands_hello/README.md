@@ -1,23 +1,22 @@
 # Hello-world Strands Agents agent (TypeScript)
 
-A conversational agent built with **Strands Agents** on the TypeScript harness. It chats in plain
-text and uses every kind of tool a harness Strands agent takes. It shows the Strands integration
-end to end: the model call, the Strands model activity where the harness translates the raw stream,
+A conversational agent built with **Strands Agents** on Agent Kit for TypeScript. It chats in plain
+text and uses every kind of tool an Agent Kit Strands agent takes. It shows the Strands integration
+end to end: the model call, the Strands model activity where Agent Kit translates the raw stream,
 and the live turn stream the web UI draws. It is the TypeScript twin of
 [`python/examples/strands_hello`](../../../python/examples/strands_hello), without the sandbox: the
 Temporal Strands plugin for TypeScript has no `TemporalSandbox`.
 
 The integration is the Temporal Strands plugin from
-[`temporalio/ai-integrations`](https://github.com/temporalio/ai-integrations), vendored into the
-harness with a streaming seam added: the workflow half at
-`@temporalio/agent-harness/ai-sdks/strands-agents`, the worker half at
-`@temporalio/agent-harness-worker/ai-sdks/strands-agents`, and the harness glue at
-`.../ai-sdks/strands-agents-harness` in each package.
+[`temporalio/ai-integrations`](https://github.com/temporalio/ai-integrations), vendored into
+Agent Kit with a streaming seam and the Agent Kit glue added: the workflow half at
+`@temporalio/agent-kit/ai-sdks/strands-agents` and the worker half at
+`@temporalio/agent-kit-worker/ai-sdks/strands-agents`.
 
 ## What it demonstrates
 
-- **`harnessStrandsAgent(runner, ...)`** builds a Strands `TemporalAgent` wired to the harness.
-  Each model call runs in the plugin's model activity. There the harness observer turns the raw
+- **`kitStrandsAgent(runner, ...)`** builds a Strands `TemporalAgent` wired to Agent Kit.
+  Each model call runs in the plugin's model activity. There the Agent Kit observer turns the raw
   Strands stream into `model_interaction_started` → `thought_summary` / `reply_delta` /
   `tool_requested` → `model_interaction_ended` (with token usage) on the current turn.
 - **One tool of each kind**, all adapted with `asStrandsTool(runner, ...)` so each call runs
@@ -30,13 +29,13 @@ harness with a streaming seam added: the workflow half at
   | `get_local_time` | `activityTool` | on the worker, as a durable activity (reading the clock is nondeterministic); its body is in `worker.ts` |
   | `ask_user` | `tool` without `execute` (a callback tool) | in the console: the call waits in the workflow until you answer |
 
-- **Human input without Strands interrupts.** `ask_user` is a harness callback tool: it publishes
+- **Human input without Strands interrupts.** `ask_user` is an Agent Kit callback tool: it publishes
   `callback_requested`, waits durably in the workflow, and returns your answer as the tool's
-  result. A harness Strands agent refuses Strands interrupts; callback tools and the approval
+  result. An Agent Kit Strands agent refuses Strands interrupts; callback tools and the approval
   policy take their place.
 - **Mid-turn steering.** `ask` accepts messages mid-turn (`MidTurn.ACCEPT`). A message sent while
   the agent is working joins the open turn, and the handler queues it with `runner.steer(...)`
-  instead of starting another run. The harness appends it to the next tool result the model sees,
+  instead of starting another run. Agent Kit appends it to the next tool result the model sees,
   so the agent changes course without stopping.
 - **The reply text.** A Strands `AgentResult`'s `toString()` also prints the model's reasoning, so
   `ask` returns the text blocks of `result.lastMessage`.
@@ -45,8 +44,8 @@ harness with a streaming seam added: the workflow half at
 
 | File | Role |
 |---|---|
-| `agents.ts` | `StrandsHelloAgentTs`: the harness agent and its tools. |
-| `worker.ts` | Worker hosting the workflow: `StrandsPlugin` (OpenAI model, harness observer) and `AgentHarnessPlugin` (with `get_local_time`'s activity). |
+| `agents.ts` | `StrandsHelloAgentTs`: the Agent Kit agent and its tools. |
+| `worker.ts` | Worker hosting the workflow: `StrandsPlugin` (OpenAI model, Agent Kit observer) and `AgentKitPlugin` (with `get_local_time`'s activity). |
 | `agents.test.ts` | The agent end to end on a dev server with a scripted model: a message sent while `ask_user` waits steers the turn. |
 | `agents.toml`, `StrandsHelloAgentTs.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema; generated from `BUILD.bazel` (`bazel run :registry_update`). |
 

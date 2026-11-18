@@ -16,9 +16,9 @@ import type {
   JsonValue
 } from "./frames.ts";
 import { applyOps } from "./jsonPatch.ts";
-import type { HarnessMessage, MessagePart, Steering, ToolPart } from "./messages.ts";
+import type { KitMessage, MessagePart, Steering, ToolPart } from "./messages.ts";
 
-type Message = HarnessMessage;
+type Message = KitMessage;
 
 export interface StateDocument {
   value: JsonValue;

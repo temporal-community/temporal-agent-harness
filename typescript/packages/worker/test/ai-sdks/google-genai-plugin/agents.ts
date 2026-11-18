@@ -13,14 +13,14 @@ import {
   handler,
   tool,
   type AgentWorkflowRunner,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   InteractionConversation,
   functionParam,
   googleGenaiClient,
   type FunctionCallStep,
   type FunctionResultStepParam,
-} from "@temporalio/agent-harness/ai-sdks/google-genai-plugin";
+} from "@temporalio/agent-kit/ai-sdks/google-genai-plugin";
 
 export const MODEL = "gemini-test-model";
 

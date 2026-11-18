@@ -1,6 +1,6 @@
 # Monty travel-agent example
 
-A Temporal-native agent example built on the harness. A "Monty" agent runs a sandboxed Python
+A Temporal-native agent example built on Agent Kit. A "Monty" agent runs a sandboxed Python
 script ([pydantic-monty](https://pypi.org/project/pydantic-monty/)) whose only escape hatches are
 host functions backed by durable Temporal activities (simulated flight/hotel search + booking).
 Three variants ship here:
@@ -10,7 +10,7 @@ Three variants ship here:
 - **MontyChatAgent** — conversational: you chat in plain text, a model writes its own script and
   runs it via a tool, then replies in prose.
 - **MontyChatSubagentAgent** — same conversational experience, but it drives `MontyDynamicAgent`
-  as a *subagent* (the first end-to-end exercise of the harness subagent toolset).
+  as a *subagent* (the first end-to-end exercise of the Agent Kit subagent toolset).
 
 The agents are driven through the packaged session-manager workflow and shared
 Svelte UI (`ui`). The Monty example owns the local app, registry, and recipes, so

@@ -22,7 +22,7 @@ import {
   type InvokeModelStreamingInput,
   type InvokeStatefulModelInput,
   type InvokeStatefulModelStreamingInput,
-} from '@temporalio/agent-harness/ai-sdks/strands-agents';
+} from '@temporalio/agent-kit/ai-sdks/strands-agents';
 import { ModelActivity } from './model-activity.ts';
 import type { ObserverFactory } from '../integration-helpers/stream-observer.ts';
 import {
@@ -111,7 +111,7 @@ function packageVersion(): string {
       const path = join(dir, 'package.json');
       if (existsSync(path)) {
         const pkg = JSON.parse(readFileSync(path, 'utf8')) as { name?: string; version?: string };
-        if (pkg.name === '@temporalio/agent-harness-worker') return pkg.version ?? '';
+        if (pkg.name === '@temporalio/agent-kit-worker') return pkg.version ?? '';
       }
       const parent = dirname(dir);
       if (parent === dir) return '';

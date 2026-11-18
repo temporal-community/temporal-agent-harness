@@ -4,10 +4,10 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 with workflow.unsafe.imports_passed_through():
     from pydantic import BaseModel
     from typesafe_sdk import Choice, SystemOneResponse
-    from temporal_agent_harness.ai_sdks.typesafe_harness import HarnessTypeSafe
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import AgentConfig, ToolApprovalPolicy
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.ai_sdks.typesafe import KitTypeSafe
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import AgentConfig, ToolApprovalPolicy
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 
 class Classify(BaseModel):
@@ -29,7 +29,7 @@ class TypeSafeHelloAgent:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all())
-        self._typesafe = HarnessTypeSafe(runner=self._runner)
+        self._typesafe = KitTypeSafe(runner=self._runner)
 
     @agent.accepts
     async def classify(self, message: Classify) -> Classified:

@@ -13,7 +13,7 @@ js_library(
     deps = [
         ":session.svelte",
         ":state.svelte",
-        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-kit-client",
     ],
 )
 
@@ -23,7 +23,7 @@ js_library(
     visibility = ["//typescript/packages/svelte:__subpackages__"],
     deps = [
         ":state.svelte",
-        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-kit-client",
         "//typescript/packages/svelte:node_modules/svelte",
     ],
 )
@@ -33,7 +33,7 @@ js_library(
     srcs = ["state.svelte.ts"],
     visibility = ["//typescript/packages/svelte:__subpackages__"],
     deps = [
-        "//typescript/packages/svelte:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/svelte:node_modules/@temporalio/agent-kit-client",
         "//typescript/packages/svelte:node_modules/svelte",
     ],
 )

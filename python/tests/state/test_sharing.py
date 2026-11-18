@@ -5,16 +5,16 @@
 
 from __future__ import annotations
 
-from temporal_agent_harness.harness.state import HarnessState
+from temporal_agent_kit.state import AgentState
 
 from tests.state.support import StateHost
-from tests.state.models import AgentState, Group, Todo
+from tests.state.models import PlanState, Group, Todo
 
 
 def _seeded():
     ref = StateHost().state(
         "agent",
-        AgentState(
+        PlanState(
             groups=[
                 Group(name=f"g{i}", todos=[Todo(id=f"t{i}{j}") for j in range(4)])
                 for i in range(4)
@@ -86,14 +86,14 @@ def test_old_values_survive_later_commits():
 
 
 def test_deeply_nested_sharing():
-    class Leaf(HarnessState):
+    class Leaf(AgentState):
         n: int = 0
 
-    class Mid(HarnessState):
+    class Mid(AgentState):
         leaf: Leaf = Leaf()
         other: Leaf = Leaf()
 
-    class Top(HarnessState):
+    class Top(AgentState):
         mid: Mid = Mid()
         spare: Mid = Mid()
 

@@ -36,13 +36,13 @@ with workflow.unsafe.imports_passed_through():
     from google.genai._interactions.types.function_result_step_param import (
         FunctionResultStepParam,
     )
-    from temporal_agent_harness.ai_sdks.google_genai_plugin import (
+    from temporal_agent_kit.ai_sdks.google_genai_plugin import (
         InteractionConversation,
         function_param,
         google_genai_client,
     )
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         MessageContext,
         MidTurn,
@@ -50,8 +50,8 @@ with workflow.unsafe.imports_passed_through():
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner, Injected
-    from temporal_agent_harness.harness.code_mode.vfs import VFSMount
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner, Injected
+    from temporal_agent_kit.code_mode.vfs import VFSMount
 
     from examples.code_mode_memory.local_disk import (
         LocalDisk,

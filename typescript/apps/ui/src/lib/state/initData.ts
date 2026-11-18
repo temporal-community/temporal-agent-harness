@@ -9,7 +9,7 @@ import {
   emptyValues,
   validate,
   type SchemaField
-} from "@temporalio/agent-harness-client";
+} from "@temporalio/agent-kit-client";
 
 /** Whether starting `agent` needs a form first: it takes init data, required or not. */
 export function takesInitData(agent: AgentDescriptor): boolean {
@@ -19,16 +19,6 @@ export function takesInitData(agent: AgentDescriptor): boolean {
 /** Whether a session for `agent` cannot start without init data. */
 export function requiresInitData(agent: AgentDescriptor): boolean {
   return agent.init_data?.required === true;
-}
-
-/**
- * The agent the console starts a session for on boot, when there is no session to reopen: the
- * `qa` agent, else the first registered one — skipping any that require init data, since boot
- * has nobody to ask for it. `null` when every agent requires it.
- */
-export function defaultBootAgent(agents: AgentDescriptor[]): AgentDescriptor | null {
-  const startable = agents.filter((agent) => !requiresInitData(agent));
-  return startable.find((agent) => agent.key === "qa") ?? startable[0] ?? null;
 }
 
 export interface InitDataForm {

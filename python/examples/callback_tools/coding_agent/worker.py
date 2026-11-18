@@ -29,8 +29,8 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 
 from examples.callback_tools.coding_agent.workflow import TASK_QUEUE, CodingAgentWorkflow
 
@@ -51,12 +51,12 @@ async def main() -> None:
         sys.exit("error: GEMINI_API_KEY env var not set")
     plugin = GoogleGenAIPlugin(GeminiClient(api_key=api_key))
 
-    # AgentHarnessPlugin last: it leaves the Gemini plugin's payload converter in place and
-    # adds the harness's large-payload offload, so this worker, the session-manager worker,
+    # AgentKitPlugin last: it leaves the Gemini plugin's payload converter in place and
+    # adds Agent Kit's large-payload offload, so this worker, the session-manager worker,
     # and the web server all read the same payloads.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
-        **connect_config, plugins=[plugin, AgentHarnessPlugin()]
+        **connect_config, plugins=[plugin, AgentKitPlugin()]
     )
 
     worker = Worker(
@@ -64,8 +64,8 @@ async def main() -> None:
         task_queue=task_queue,
         workflows=[CodingAgentWorkflow],
         # No activities to declare: the coding tools are callback tools fulfilled by the shim,
-        # the Gemini interactions activity comes from the Gemini plugin, and the harness's own
-        # activities come from AgentHarnessPlugin.
+        # the Gemini interactions activity comes from the Gemini plugin, and Agent Kit's own
+        # activities come from AgentKitPlugin.
     )
     print(
         f"Coding agent worker ready: "

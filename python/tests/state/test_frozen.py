@@ -9,16 +9,16 @@ import random
 
 import pytest
 
-from temporal_agent_harness.harness.state import FrozenError
-from temporal_agent_harness.harness.state.containers import FrozenDict, FrozenList
+from temporal_agent_kit.state import FrozenError
+from temporal_agent_kit.state.containers import FrozenDict, FrozenList
 
 from tests.state.support import StateHost
-from tests.state.models import AgentState, Group, Todo
+from tests.state.models import PlanState, Group, Todo
 
 
 @pytest.fixture
-def value() -> AgentState:
-    return AgentState(
+def value() -> PlanState:
+    return PlanState(
         groups=[Group(name="g", todos=[Todo(id="t")], meta={"k": "v"})],
         index={"a": [Todo(id="x")]},
         tags=["one", "two"],
@@ -26,7 +26,7 @@ def value() -> AgentState:
     )
 
 
-def test_containers_are_frozen_subclasses(value: AgentState):
+def test_containers_are_frozen_subclasses(value: PlanState):
     assert type(value.groups) is FrozenList
     assert type(value.groups[0].todos) is FrozenList
     assert type(value.groups[0].meta) is FrozenDict
@@ -39,14 +39,14 @@ def test_containers_are_frozen_subclasses(value: AgentState):
     assert isinstance(value.index, dict)
 
 
-def test_containers_inside_a_tuple_are_frozen(value: AgentState):
+def test_containers_inside_a_tuple_are_frozen(value: PlanState):
     assert isinstance(value.matrix, tuple)
     assert all(type(row) is FrozenList for row in value.matrix)
     with pytest.raises(FrozenError):
         value.matrix[0].append(9)
 
 
-def test_field_assignment_raises(value: AgentState):
+def test_field_assignment_raises(value: PlanState):
     with pytest.raises(FrozenError, match="mutate it inside ref.mutate"):
         value.model = "x"
     with pytest.raises(FrozenError):
@@ -105,14 +105,14 @@ def test_non_mutating_operations_still_work():
     assert FrozenList([1, 2])[0] == 1
 
 
-def test_frozen_containers_are_hashable(value: AgentState):
+def test_frozen_containers_are_hashable(value: PlanState):
     assert isinstance(hash(value), int)
     assert isinstance(hash(value.groups), int)
     assert isinstance(hash(value.groups[0].meta), int)
 
 
 def test_committed_values_are_frozen_too():
-    ref = StateHost().state("a", AgentState())
+    ref = StateHost().state("a", PlanState())
     with ref.mutate() as d:
         d.groups.append(Group(name="g"))
         d.groups[0].todos.append(Todo(id="t"))

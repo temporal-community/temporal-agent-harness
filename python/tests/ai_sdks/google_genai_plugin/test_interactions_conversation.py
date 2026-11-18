@@ -11,8 +11,8 @@ import pytest
 from google.genai._interactions.types import InteractionSSEEvent
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_harness.ai_sdks.google_genai_plugin import InteractionConversation
-from temporal_agent_harness.ai_sdks.google_genai_plugin._temporal_interactions import (
+from temporal_agent_kit.ai_sdks.google_genai_plugin import InteractionConversation
+from temporal_agent_kit.ai_sdks.google_genai_plugin._temporal_interactions import (
     _deserialize_event,
 )
 

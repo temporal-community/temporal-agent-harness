@@ -4,9 +4,9 @@
 //     bazel run //typescript/examples/strands_hello:worker
 //
 // Hosts the StrandsHelloAgentTs workflow. Two plugins:
-//   * `StrandsPlugin`: the Strands model activity, with the harness observer that streams each
+//   * `StrandsPlugin`: the Strands model activity, with Agent Kit observer that streams each
 //     model call onto its turn, and the bundler settings Strands' workflow code needs.
-//   * `AgentHarnessPlugin`, after it: the harness's data converter and activities, plus the
+//   * `AgentKitPlugin`, after it: Agent Kit's data converter and activities, plus the
 //     activity body of `get_local_time`, the agent's activity tool.
 //
 // Env vars (set in .env.local; see .env.example):
@@ -20,12 +20,12 @@ import { OpenAIModel } from "@strands-agents/sdk/models/openai";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import {
-  AgentHarnessPlugin,
+  AgentKitPlugin,
   taskQueueName,
   toolActivity,
-} from "@temporalio/agent-harness-worker";
-import { StrandsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/strands-agents";
-import { harnessObserverFactory } from "@temporalio/agent-harness-worker/ai-sdks/strands-agents-harness";
+} from "@temporalio/agent-kit-worker";
+import { StrandsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/strands-agents";
+import { kitObserverFactory } from "@temporalio/agent-kit-worker/ai-sdks/strands-agents";
 import { MODEL, TASK_QUEUE, getLocalTime } from "./agents.ts";
 
 const OPENAI_MODEL_ID = "gpt-5.1";
@@ -62,14 +62,14 @@ const worker = await Worker.create({
   namespace: namespace ?? "default",
   taskQueue: process.env.STRANDS_HELLO_TS_TASK_QUEUE || taskQueueName(TASK_QUEUE),
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
-  // The harness's plugin goes last, as in Python.
+  // Agent Kit's plugin goes last, as in Python.
   plugins: [
     new StrandsPlugin({
       // Built lazily in the model activity, which reads OPENAI_API_KEY from the environment.
       models: { [MODEL]: () => new OpenAIModel({ modelId: OPENAI_MODEL_ID }) },
-      observerFactory: harnessObserverFactory,
+      observerFactory: kitObserverFactory,
     }),
-    new AgentHarnessPlugin({ tools: [toolActivity(getLocalTime, localTime)] }),
+    new AgentKitPlugin({ tools: [toolActivity(getLocalTime, localTime)] }),
   ],
 });
 await worker.run();

@@ -1,6 +1,6 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
 py_library(
     name = "local_disk",
@@ -10,12 +10,12 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_kit:agent",
         "@pypi//pydantic",
     ],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
@@ -23,9 +23,9 @@ harness_module_binary(
     deps = [
         ":local_disk",
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//google_genai",
         "@pypi//temporalio",
     ],
@@ -38,18 +38,18 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":local_disk",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
-        "//python/temporal_agent_harness/harness/code_mode:vfs",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_kit/code_mode:vfs",
         "@pypi//google_genai",
         "@pypi//pydantic",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "CodeModeMemoryAgent",
     agent = "examples.code_mode_memory.workflow:CodeModeMemoryAgentWorkflow",
     description = """
@@ -65,7 +65,7 @@ the Graph in the VFS File Mounts pane to see how the memories link up.""",
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/code_mode_memory:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "CodeModeMemoryAgent.schema.json",

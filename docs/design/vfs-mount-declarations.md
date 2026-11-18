@@ -16,14 +16,14 @@ The branch adds, on top of `main` (which has #169, the virtual filesystem):
 
 | Piece | Where | What it does |
 |---|---|---|
-| `ActivityFileSystem[Config]` | `temporal_agent_harness/harness/code_mode/activity_fs.py` | A filesystem written as plain async methods (`stat`, `read`, `list`, and optionally `write`, `mkdir`, `delete`, `rename`). Subclassing generates `vfs.<name>.<method>` activities plus a read-only `vfs.<name>.view`. `X.backend(config)` is the workflow-side backend. |
-| `AgentHarnessPlugin(filesystems=[...])` | `temporal_agent_harness/plugin.py` | Registers those activities on a worker. |
+| `ActivityFileSystem[Config]` | `temporal_agent_kit/code_mode/activity_fs.py` | A filesystem written as plain async methods (`stat`, `read`, `list`, and optionally `write`, `mkdir`, `delete`, `rename`). Subclassing generates `vfs.<name>.<method>` activities plus a read-only `vfs.<name>.view`. `X.backend(config)` is the workflow-side backend. |
+| `AgentKitPlugin(filesystems=[...])` | `temporal_agent_kit/plugin.py` | Registers those activities on a worker. |
 | `FileIndex` / `IndexEntry` / `IndexSource` | `code_mode/vfs.py` | Agent state holding a mount's tree as the session has seen it: paths and metadata, never contents. `IndexSource` (filesystem name, config as `dict[str, JsonValue]`, task queue) says where the console can read a file. |
 | `Mount(index=...)` | `code_mode/vfs.py` | Opts a mount into a `FileIndex`. `ToolCalls` records every successful `fs_*` call into it (`_Index`). |
 | `FileTree` header fields | `code_mode/vfs.py` | `kind`, `mount`, `description`, `read_only` added to the existing in-memory `FileTree` state, so the console can show it. |
 | `_describe_tracking` | `code_mode/tool.py` | When `code_mode_tool` is built, fills the header fields of each mount's `FileIndex` / `FileTree` with `mutate()`. **This is the cause of the bug.** |
-| `JsonValue` in agent state | `harness/state/base.py` | `_check_annotation` accepts pydantic's `JsonValue`. Drafts and `freeze` already handle nested JSON; only the check was missing. |
-| `POST /api/files/view` | `temporal_agent_harness/web/file_view.py`, `web/app.py` | Runs `vfs.<name>.view` as a **standalone activity** (`Client.execute_activity`) with the index's source. Returns one page (at most 256 KB). Never touches the agent's workflow. 501 when the server can't run standalone activities. |
+| `JsonValue` in agent state | `state/base.py` | `_check_annotation` accepts pydantic's `JsonValue`. Drafts and `freeze` already handle nested JSON; only the check was missing. |
+| `POST /api/files/view` | `temporal_agent_kit/web/file_view.py`, `web/app.py` | Runs `vfs.<name>.view` as a **standalone activity** (`Client.execute_activity`) with the index's source. Returns one page (at most 256 KB). Never touches the agent's workflow. 501 when the server can't run standalone activities. |
 | FILES pane | `ui/src/lib/components/agent/FilesPanel.svelte`, `MountTrees.svelte`, `FileViewerDialog.svelte`, `ui/src/lib/state/fileMounts.ts` | Trees of every tracked mount. Clicking a file opens a large modal (modelled on the flow's node inspector) with the trees beside the file. In-memory files come from state, as of the cursor. Indexed files are fetched live and labelled **Live**, with a warning when the cursor is behind the live edge. |
 | Memory example | `examples/code_mode_memory/` | `/skills` (`InMemoryFileSystem`, tracked by a `FileTree`) and `/memory` (`LocalDisk`, an `ActivityFileSystem` over `examples/code_mode_memory/memories/<memory_dir>`, tracked by a `FileIndex`). `examples/code_mode_vfs/` is deleted. |
 
@@ -69,12 +69,12 @@ box disabled. It shows "Connecting to …" until the page is hard-refreshed.
 **Root cause:**
 
 1. Declared state is published when the runner is constructed
-   (`AgentWorkflowRunner._register_declared_states`, `harness/agent_workflow.py`): one
+   (`AgentWorkflowRunner._register_declared_states`, `agent_workflow.py`): one
    `state_snapshot` per state, stamped `turn_number=0`.
 2. `code_mode_tool` runs after the runner exists and calls `_describe_tracking`, which
    `mutate()`s each tracked state's header. Each of those publishes a `state_patch`, also at
    `turn_number=0`.
-3. `AgentClient.attach` (`harness/agent_client.py`, `_merged_attach.should_stop`) ends a replay
+3. `AgentClient.attach` (`agent_client.py`, `_merged_attach.should_stop`) ends a replay
    only on a `turn_end`, or on a turn-0 **snapshot**: the "registration snapshot" exception,
    added for exactly this hang. A turn-0 **patch** is neither, so a brand-new session's attach
    stream stays open forever.
@@ -100,7 +100,7 @@ an agent whose startup publishes patches.
 Changing `should_stop` to accept any turn-0 state event fixes the hang. **The user rejected
 it**: startup should publish snapshots and nothing else, so allowing patches before turn 1 makes
 a wrong stream acceptable. This change was implemented, then fully reverted. `agent_client.py`
-and `tests/harness/test_observable_state.py` match `main` again.
+and `tests/test_observable_state.py` match `main` again.
 
 ### 3.2 Defer publishing state until `@agent.init` returns (rejected)
 
@@ -145,7 +145,7 @@ writing state, which it has no reason to do (section 4.3).
 ## 4. Design: mounts declared on the class, bound per instance
 
 Tracked state has to be a class attribute so the runner and the generated client types can
-discover it (`declared_states(type(agent))`; see `harness/state/decl.py`: "nothing else can
+discover it (`declared_states(type(agent))`; see `state/decl.py`: "nothing else can
 create published state"). Mounts are **declared on the class the same way**, and the
 declaration owns the tracking state, so the author never wires a state to a mount by hand. The
 parts of a mount that depend on the session (seed, config) are supplied per instance by an
@@ -325,14 +325,14 @@ activity-backed `bind` returns, carrying the index and source for `ToolCalls`.
 
 All present: the regression test is
 `test_a_new_session_with_a_declared_mount_publishes_only_its_snapshot`
-(`tests/harness/test_activity_filesystem.py`, checked to fail when a startup patch is added back),
-and the declaration tests are in `tests/harness/test_vfs_mount_decl.py`. The browser check is
+(`tests/test_activity_filesystem.py`, checked to fail when a startup patch is added back),
+and the declaration tests are in `tests/test_vfs_mount_decl.py`. The browser check is
 still to do.
 
 - A regression test that a brand-new session of an agent with declared mounts publishes **only
   snapshots** before turn 1, and that `AgentClient.attach(from_offset=0)` on it finishes. The
   model is `test_attach_to_a_brand_new_session_delivers_the_snapshot_and_stops`
-  (`tests/harness/test_observable_state.py`).
+  (`tests/test_observable_state.py`).
 - The first recorded `fs_*` call sets `FileIndex.source` in the same patch as the first entry,
   and later calls don't touch it.
 - `bind` typing and errors: wrong config type (pyright), missing `seed`, second `bind()`,
@@ -376,7 +376,7 @@ still to do.
 - **UI toolchain:** `ui/node_modules` in the repo is a macOS install. Build and test the UI from a
   scratch copy with its own Linux `pnpm install`, laid out as `<scratch>/ui` beside a `packages`
   symlink to the repo's `packages/`, because `ui/src/lib/api/types.ts` imports
-  `../../../../packages/client/src/protocol`. Rebuild `temporal_agent_harness/ui/dist` with any UI
+  `../../../../packages/client/src/protocol`. Rebuild `temporal_agent_kit/ui/dist` with any UI
   change (the built bundle is committed). UI unit tests render on the server only, so check
   client-side behaviour in a real browser. Playwright 1.49.1 matches the cached `chromium-1148`.
 - **Tests that need standalone activities** use `WorkflowEnvironment.start_local()`; the

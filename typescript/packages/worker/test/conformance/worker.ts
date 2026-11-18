@@ -8,7 +8,7 @@
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin, toolActivity } from "../../src/index.ts";
+import { AgentKitPlugin, toolActivity } from "../../src/index.ts";
 import { add, lookup } from "./scripted-agent.ts";
 
 const { values } = parseArgs({
@@ -33,7 +33,7 @@ const worker = await Worker.create({
   taskQueue,
   workflowsPath: fileURLToPath(new URL("./scripted-agent.js", import.meta.url)),
   plugins: [
-    new AgentHarnessPlugin({
+    new AgentKitPlugin({
       tools: [
         toolActivity(add, async ({ a, b }) => a + b),
         toolActivity(lookup, async ({ key }) => ({

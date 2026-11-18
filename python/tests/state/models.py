@@ -1,4 +1,4 @@
-# ABOUTME: Representative HarnessState schemas shared by the state-layer tests —
+# ABOUTME: Representative AgentState schemas shared by the state-layer tests —
 # nesting, lists of models, dicts of lists, tuples and enums in one place. No sets: the schema
 # checker rejects them (see test_schema), so a fixture carrying one would not define.
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 import enum
 from typing import Literal
 
-from temporal_agent_harness.harness.state import HarnessState
+from temporal_agent_kit.state import AgentState
 
 
 class Priority(enum.StrEnum):
@@ -17,7 +17,7 @@ class Priority(enum.StrEnum):
     HIGH = "high"
 
 
-class Todo(HarnessState):
+class Todo(AgentState):
     id: str
     text: str = ""
     done: bool = False
@@ -25,13 +25,13 @@ class Todo(HarnessState):
     priority: Priority = Priority.LOW
 
 
-class Group(HarnessState):
+class Group(AgentState):
     name: str
     todos: list[Todo] = []
     meta: dict[str, str] = {}
 
 
-class AgentState(HarnessState):
+class PlanState(AgentState):
     """The kitchen sink: nesting, lists of models, dicts of lists, sets, tuples."""
 
     model: str = "claude-sonnet-5"
@@ -46,16 +46,16 @@ class AgentState(HarnessState):
     matrix: tuple[list[int], ...] = ()
 
 
-class Flat(HarnessState):
+class Flat(AgentState):
     a: int = 0
     b: str = ""
     c: bool = False
 
 
-class Inner(HarnessState):
+class Inner(AgentState):
     value: int = 0
 
 
-class Outer(HarnessState):
+class Outer(AgentState):
     inner: Inner = Inner()
     name: str = ""

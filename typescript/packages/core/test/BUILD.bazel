@@ -8,7 +8,7 @@ ts_project(
     declaration = True,
     tsconfig = "//typescript/packages/core:tsconfig",
     deps = [
-        "//typescript/packages/core:node_modules/@temporalio/agent-harness-client",
-        "//typescript/packages/core/src/harness/agent-protocol:index",
+        "//typescript/packages/core:node_modules/@temporalio/agent-kit-client",
+        "//typescript/packages/core/src/agent-protocol:index",
     ],
 )

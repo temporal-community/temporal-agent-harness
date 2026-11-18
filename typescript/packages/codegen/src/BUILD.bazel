@@ -19,10 +19,10 @@ ts_project(
     deps = ["//typescript/packages/codegen:node_modules/json-schema-to-typescript"],
 )
 
-# harness-codegen (package.json's bin): reads a `temporal-agent-harness schema` document and prints
+# agent-kit-codegen (package.json's bin): reads a `temporal-agent-kit schema` document and prints
 # TypeScript types.
 js_binary(
-    name = "harness-codegen",
+    name = "agent-kit-codegen",
     data = [":cli"],
     entry_point = "cli.js",
     visibility = ["//visibility:public"],

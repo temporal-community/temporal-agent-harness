@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from temporal_agent_harness.ai_sdks.integration_helpers import (
+from temporal_agent_kit.ai_sdks.integration_helpers import (
     ObserverFactory,
     RawTopicObserver,
     StreamObserver,

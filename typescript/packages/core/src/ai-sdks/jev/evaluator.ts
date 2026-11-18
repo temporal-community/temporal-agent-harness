@@ -8,7 +8,7 @@ import {
   type AutoApprovalCriteriaSet,
   type AutoApprovalDecision,
   type AutoModeEvaluator,
-} from "../../harness/agent-protocol/index.ts";
+} from "../../agent-protocol/index.ts";
 
 export const JEV_TOOL_APPROVAL_ACTIVITY = "jev_tool_approval";
 export const DEFAULT_JEV_MODEL = "jev-latest";

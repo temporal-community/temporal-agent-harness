@@ -24,9 +24,9 @@ from examples.strands_hello.workflow import (
     StrandsHelloAgentWorkflow,
     get_local_time,
 )
-from temporal_agent_harness.ai_sdks.strands_agents import StrandsPlugin
-from temporal_agent_harness.ai_sdks.strands_agents_harness import harness_observer_factory
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.ai_sdks.strands_agents import StrandsPlugin
+from temporal_agent_kit.ai_sdks.strands_agents import kit_observer_factory
+from temporal_agent_kit.agent_protocol import (
     PROVIDE_CALLBACK_RESULT_UPDATE,
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
@@ -38,7 +38,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     CallbackResult,
     TextReply,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 
 class _AskThenEchoModel(Model):
@@ -95,10 +95,10 @@ async def test_a_message_sent_mid_turn_steers_the_example_agent():
     plugin = StrandsPlugin(
         models={MODEL: _AskThenEchoModel},
         sandboxes={SANDBOX: lambda _context: NotASandboxLocalEnvironment()},
-        observer_factory=harness_observer_factory,
+        observer_factory=kit_observer_factory,
     )
     env = await WorkflowEnvironment.start_time_skipping(
-        plugins=[plugin, AgentHarnessPlugin(tools=[get_local_time])]
+        plugins=[plugin, AgentKitPlugin(tools=[get_local_time])]
     )
     try:
         task_queue = f"strands-hello-{uuid.uuid4()}"

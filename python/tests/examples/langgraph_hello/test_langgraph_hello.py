@@ -21,12 +21,12 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from examples.langgraph_hello import workflow as hello
-from temporal_agent_harness.ai_sdks.langgraph import (
+from temporal_agent_kit.ai_sdks.langgraph import (
     LangGraphPlugin,
-    harness_observer_factory,
-    harness_tool_call,
+    kit_observer_factory,
+    kit_tool_call,
 )
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     PROVIDE_CALLBACK_RESULT_UPDATE,
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
@@ -38,7 +38,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     CallbackResult,
     TextReply,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 
 def _reply(messages: list[BaseMessage]) -> list[AIMessageChunk]:
@@ -94,10 +94,10 @@ async def test_a_message_sent_mid_turn_steers_the_example_agent(monkeypatch: pyt
         plugins=[
             LangGraphPlugin(
                 graphs={hello.GRAPH: hello.build_graph()},
-                awrap_tool_call=harness_tool_call,
-                observer_factory=harness_observer_factory,
+                awrap_tool_call=kit_tool_call,
+                observer_factory=kit_observer_factory,
             ),
-            AgentHarnessPlugin(tools=[hello.get_weather]),
+            AgentKitPlugin(tools=[hello.get_weather]),
         ]
     )
     try:

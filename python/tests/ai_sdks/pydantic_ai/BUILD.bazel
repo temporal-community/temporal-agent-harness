@@ -1,31 +1,31 @@
-load("//bazel:pytest.bzl", "harness_pytest_test")
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_pydantic_stream_observer",
     srcs = ["test_pydantic_stream_observer.py"],
     imports = ["../../.."],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness:stream_context",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks:pydantic_ai",
         "//python/tests:conftest",
         "@pypi//pydantic_ai_slim",
         "@pypi//pytest",
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_pydantic_ai_durable_streaming",
     srcs = ["test_pydantic_ai_durable_streaming.py"],
     imports = ["../../.."],
     deps = [
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks:pydantic_ai",
         "//python/tests:conftest",
         "@pypi//pydantic_ai_slim",
         "@pypi//pytest",
@@ -33,15 +33,15 @@ harness_pytest_test(
     ],
 )
 
-harness_pytest_test(
+agent_kit_pytest_test(
     name = "test_pydantic_ai_steering",
     srcs = ["test_pydantic_ai_steering.py"],
     imports = ["../../.."],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks:pydantic_ai",
         "//python/tests:conftest",
         "@pypi//pydantic_ai_slim",
         "@pypi//temporalio",

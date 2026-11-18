@@ -1850,6 +1850,19 @@ export function scaleScenario(name: string): MockScenario | undefined {
     case "agents":
     case "agents300":
       return agentsScenario(name === "agents300");
+    /* Nothing to reopen, so the console loads on its welcome. `data=worst` and `worst2` lead with
+       the hostile names, all startable, `data=setup` keeps only agents that need init data, and
+       `data=fail` fails every start. */
+    case "nosession": {
+      const data = new URLSearchParams(globalThis.location?.search).get("data");
+      const worst = data === "worst" || data === "worst2";
+      const fleet = agentsScenario(worst).agents;
+      const hostile = fleet
+        .slice(data === "worst2" ? 14 : 11)
+        .map((agent) => ({ ...agent, init_data: null, worker: { ...agent.worker!, status: "ready" as const } }));
+      const agents = worst ? hostile : data === "setup" ? fleet.filter((agent) => agent.init_data?.required) : fleet;
+      return { agents, sessions: [], frames: [], createError: data === "fail" ? "Session Manager is unreachable: connection refused." : undefined };
+    }
     case "subagents":
       return subagentScenario(new URLSearchParams(globalThis.location?.search).get("data") ?? "demo");
     case "codemode":

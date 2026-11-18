@@ -1,8 +1,8 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "client",
     srcs = ["client.py"],
     imports = ["../../.."],
@@ -15,18 +15,18 @@ py_library(
     srcs = ["tools.py"],
     imports = ["../../.."],
     visibility = ["//:__subpackages__"],
-    deps = ["//python/temporal_agent_harness/harness:agent"],
+    deps = ["//python/temporal_agent_kit:agent"],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../../.."],
     visibility = ["//:__subpackages__"],
     deps = [
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
         "@pypi//google_genai",
         "@pypi//temporalio",
     ],
@@ -39,16 +39,16 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":tools",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
         "@pypi//google_genai",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "WikiAgent",
     agent = "examples.callback_tools.wiki_agent.workflow:WikiAgentWorkflow",
     description = """
@@ -65,7 +65,7 @@ against a local wiki directory and returns the result.""",
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/callback_tools/wiki_agent:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "WikiAgent.schema.json",

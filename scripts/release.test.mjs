@@ -34,28 +34,28 @@ function fixture(fn, version = '0.1.0') {
     mkdirSync(join(root, path, '..'), { recursive: true });
     writeFileSync(join(root, path), typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`);
   };
-  const client = '@temporalio/agent-harness-client';
+  const client = '@temporalio/agent-kit-client';
   write('typescript/packages/client/package.json', manifest(client, version));
   write('typescript/packages/react/package.json',
-    manifest('@temporalio/agent-harness-react', version, { dependencies: { [client]: `^${version}` } }));
+    manifest('@temporalio/agent-kit-react', version, { dependencies: { [client]: `^${version}` } }));
   write('typescript/packages/svelte/package.json',
-    manifest('@temporalio/agent-harness-svelte', version, { dependencies: { [client]: `^${version}` } }));
+    manifest('@temporalio/agent-kit-svelte', version, { dependencies: { [client]: `^${version}` } }));
   write('typescript/packages/core/package.json',
-    manifest('@temporalio/agent-harness', version, { private: true, dependencies: { [client]: `^${version}` } }));
+    manifest('@temporalio/agent-kit', version, { private: true, dependencies: { [client]: `^${version}` } }));
   write('typescript/packages/worker/package.json',
-    manifest('@temporalio/agent-harness-worker', version, { private: true,
-      dependencies: { '@temporalio/agent-harness': `^${version}`, [client]: `^${version}` } }));
+    manifest('@temporalio/agent-kit-worker', version, { private: true,
+      dependencies: { '@temporalio/agent-kit': `^${version}`, [client]: `^${version}` } }));
   write('typescript/packages/codegen/package.json',
-    { name: '@temporal-agent-harness/codegen', version: '0.1.0', private: true });
+    { name: '@temporal-agent-kit/codegen', version: '0.1.0', private: true });
   write('typescript/apps/ui/package.json', { name: 'ui', private: true, dependencies: { [client]: 'workspace:^' } });
   write('typescript/examples/monty/package.json', { name: 'monty', private: true,
-    dependencies: { '@temporalio/agent-harness': `^${version}`, '@temporalio/agent-harness-worker': `^${version}` } });
-  write('python/pyproject.toml', `[project]\nname = "temporal-agent-harness"\nversion = "${version}"\n\n[tool.other]\nversion = "9.9.9"\n`);
+    dependencies: { '@temporalio/agent-kit': `^${version}`, '@temporalio/agent-kit-worker': `^${version}` } });
+  write('python/pyproject.toml', `[project]\nname = "temporal-agent-kit"\nversion = "${version}"\n\n[tool.other]\nversion = "9.9.9"\n`);
   write('README.md', [
     `git clone --branch ${version} https://github.com/x/y.git`,
     '`git diff 0.0.9 ' + version + '`.',
-    `uv add 'temporal-agent-harness[ui]==${version}'`,
-    `pin: temporal-agent-harness==${version}; unrelated 1${version}0 stays`,
+    `uv add 'temporal-agent-kit[ui]==${version}'`,
+    `pin: temporal-agent-kit==${version}; unrelated 1${version}0 stays`,
   ].join('\n'));
   process.chdir(root);
   try { fn(root); } finally { process.chdir(original); rmSync(root, { recursive: true }); }
@@ -76,21 +76,21 @@ function mockGitHub({ tags = [], releases = [] } = {}) {
 test('bumps stable versions and rejects anything else', () => {
   assert.equal(bumpVersion('0.1.9', 'patch'), '0.1.10');
   assert.equal(bumpVersion('0.1.9', 'minor'), '0.2.0');
-  assert.equal(bumpVersion('0.1.9', 'major'), '1.0.0');
   for (const version of ['0.1', '01.1.1', '0.1.1-beta.1', 'v0.1.1']) {
     assert.throws(() => bumpVersion(version, 'patch'));
   }
   assert.throws(() => bumpVersion('0.1.0', 'premajor'));
+  assert.throws(() => bumpVersion('0.1.0', 'major'));
 });
 
 test('release units map to branches, tags and publish workflows', () => {
-  for (const [unit, bump] of [['pypi', 'patch'], ['npm', 'major']]) validateInputs(unit, bump);
-  for (const args of [['client', 'patch'], ['../npm', 'patch'], ['npm', '--help']]) {
+  for (const [unit, bump] of [['pypi', 'patch'], ['npm', 'minor']]) validateInputs(unit, bump);
+  for (const args of [['client', 'patch'], ['../npm', 'patch'], ['npm', '--help'], ['npm', 'major']]) {
     assert.throws(() => validateInputs(...args));
   }
   const python = releaseDetails('release/pypi-v0.9.0');
   assert.equal(python.tag, '0.9.0');
-  assert.equal(python.publishWorkflow, 'publish.yml');
+  assert.equal(python.publishWorkflow, 'publish-agent-kit.yml');
   const npm = releaseDetails('release/npm-v0.2.0');
   assert.equal(npm.tag, 'npm-v0.2.0');
   assert.equal(npm.publishWorkflow, 'publish-npm.yml');
@@ -116,7 +116,7 @@ test('README pins move to the new version and the diff command advances one rele
     assert.match(updated, /git clone --branch 0\.2\.0 /);
     assert.match(updated, /`git diff 0\.1\.0 0\.2\.0`/);
     assert.match(updated, /\[ui\]==0\.2\.0'/);
-    assert.match(updated, /harness==0\.2\.0;/);
+    assert.match(updated, /agent-kit==0\.2\.0;/);
     assert.match(updated, /10\.1\.00 stays/);
     assert.throws(() => updateReadmePins(updated, '0.0.1', '0.3.0'), /pins nothing/);
   });
@@ -131,12 +131,12 @@ test('the real README pins exactly the pyproject version',
   const readme = readFileSync(repoReadme, 'utf8');
   const version = /^version = "([^"]+)"$/m.exec(readFileSync(repoPyproject, 'utf8'))[1];
   const updated = updateReadmePins(readme, version, '99.0.0');
-  assert.match(updated, /temporal-agent-harness\[ui\]==99\.0\.0/);
+  assert.match(updated, /temporal-agent-kit\[ui\]==99\.0\.0/);
   assert.match(updated, /--branch 99\.0\.0 /);
   assert.match(updated, new RegExp(`git diff ${version.replaceAll('.', '\\.')} 99\\.0\\.0`));
 });
 
-test('lockstep set is every @temporalio/agent-harness package, published in dependency order', () => fixture(() => {
+test('lockstep set is every @temporalio/agent-kit package, published in dependency order', () => fixture(() => {
   const packages = lockstepPackages();
   assert.deepEqual(packages.map((pkg) => pkg.name), ['client', 'core', 'react', 'svelte', 'worker']);
   assert.equal(lockstepVersion(packages), '0.1.0');
@@ -163,10 +163,10 @@ test('setting the lockstep version rewrites manifests and caret ranges, not work
   for (const name of ['client', 'core', 'react', 'svelte', 'worker']) {
     assert.equal(read(`typescript/packages/${name}/package.json`).version, '0.2.0');
   }
-  assert.equal(read('typescript/packages/react/package.json').dependencies['@temporalio/agent-harness-client'], '^0.2.0');
-  assert.equal(read('typescript/packages/worker/package.json').dependencies['@temporalio/agent-harness'], '^0.2.0');
-  assert.equal(read('typescript/examples/monty/package.json').dependencies['@temporalio/agent-harness-worker'], '^0.2.0');
-  assert.equal(read('typescript/apps/ui/package.json').dependencies['@temporalio/agent-harness-client'], 'workspace:^');
+  assert.equal(read('typescript/packages/react/package.json').dependencies['@temporalio/agent-kit-client'], '^0.2.0');
+  assert.equal(read('typescript/packages/worker/package.json').dependencies['@temporalio/agent-kit'], '^0.2.0');
+  assert.equal(read('typescript/examples/monty/package.json').dependencies['@temporalio/agent-kit-worker'], '^0.2.0');
+  assert.equal(read('typescript/apps/ui/package.json').dependencies['@temporalio/agent-kit-client'], 'workspace:^');
   assert.equal(read('typescript/packages/codegen/package.json').version, '0.1.0');
   assert(written.some((path) => path.endsWith('examples/monty/package.json')));
   assert(!written.some((path) => path.includes('apps/ui')));
@@ -183,10 +183,10 @@ test('npm release validation checks version, metadata and lockstep ranges', () =
   assert.throws(() => validateNpmRelease('0.1.0', 'someone/fork'), /provenance/);
   const path = 'typescript/packages/react/package.json';
   const react = JSON.parse(readFileSync(path, 'utf8'));
-  react.dependencies['@temporalio/agent-harness-client'] = '^0.0.9';
+  react.dependencies['@temporalio/agent-kit-client'] = '^0.0.9';
   writeFileSync(path, JSON.stringify(react));
   assert.throws(() => validateNpmRelease('0.1.0', repository), /lockstep/);
-  react.dependencies['@temporalio/agent-harness-client'] = 'workspace:^';
+  react.dependencies['@temporalio/agent-kit-client'] = 'workspace:^';
   writeFileSync(path, JSON.stringify(react));
   assert.throws(() => validateNpmRelease('0.1.0', repository), /registry dependencies only/);
 }));
@@ -194,7 +194,7 @@ test('npm release validation checks version, metadata and lockstep ranges', () =
 test('prepare pypi bumps pyproject, locks, repins the README and describes the PR', () => fixture((root) => {
   const env = { RELEASE_UNIT: 'pypi', RELEASE_BUMP: 'minor', GITHUB_REF: 'refs/heads/main',
     GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: join(root, 'outputs'), RUNNER_TEMP: root };
-  writeFileSync('README.md', readFileSync('README.md', 'utf8') + '\n@temporalio/agent-harness@0.1.0\n');
+  writeFileSync('README.md', readFileSync('README.md', 'utf8') + '\n@temporalio/agent-kit@0.1.0\n');
   const calls = [];
   prepare(env, (command, args, options) => {
     calls.push([command, ...args, options?.cwd]);
@@ -204,7 +204,7 @@ test('prepare pypi bumps pyproject, locks, repins the README and describes the P
   assert.deepEqual(calls[1], ['uv', 'lock', 'python']);
   assert.match(readFileSync('python/pyproject.toml', 'utf8'), /^version = "0\.2\.0"$/m);
   assert.match(readFileSync('README.md', 'utf8'), /\[ui\]==0\.2\.0'/);
-  assert.match(readFileSync('README.md', 'utf8'), /@temporalio\/agent-harness@0\.1\.0/);
+  assert.match(readFileSync('README.md', 'utf8'), /@temporalio\/agent-kit@0\.1\.0/);
   const outputs = readFileSync(env.GITHUB_OUTPUT, 'utf8');
   assert.match(outputs, /^unit=pypi$/m);
   assert.match(outputs, /^branch=release\/pypi-v0\.2\.0$/m);
@@ -212,7 +212,7 @@ test('prepare pypi bumps pyproject, locks, repins the README and describes the P
   assert.match(outputs, /^test_targets=\/\/python\/tests:test_packaged_distributions$/m);
   const body = readFileSync(join(root, 'release-body.md'), 'utf8');
   assert.match(body, /0\.1\.0 → \*\*0\.2\.0\*\*/);
-  assert.match(body, /publish\.yml/);
+  assert.match(body, /publish-agent-kit\.yml/);
 }));
 
 test('prepare npm bumps every lockstep package, refreshes the lockfile and lists the publish order', () => fixture((root) => {
@@ -231,8 +231,8 @@ test('prepare npm bumps every lockstep package, refreshes the lockfile and lists
   assert.match(outputs, /^tag=npm-v0\.1\.1$/m);
   assert.match(outputs, /^test_targets=\/\/typescript\/packages\/\.\.\.$/m);
   const body = readFileSync(join(root, 'release-body.md'), 'utf8');
-  assert.match(body, /1\. `@temporalio\/agent-harness-client`\n1\. `@temporalio\/agent-harness-react`\n1\. `@temporalio\/agent-harness-svelte`/);
-  assert.match(body, /`private`, so not published: `@temporalio\/agent-harness`, `@temporalio\/agent-harness-worker`/);
+  assert.match(body, /1\. `@temporalio\/agent-kit-client`\n1\. `@temporalio\/agent-kit-react`\n1\. `@temporalio\/agent-kit-svelte`/);
+  assert.match(body, /`private`, so not published: `@temporalio\/agent-kit`, `@temporalio\/agent-kit-worker`/);
 }));
 
 test('prepare refuses to run off main or beside an open release PR, changing nothing', () => fixture(() => {
@@ -278,13 +278,18 @@ test('finish tags the merged commit, creates a pre-release from the PR body, the
   assert.deepEqual(dispatchCall, ['gh', 'workflow', 'run', 'publish-npm.yml', '--repo', repository, '--ref', 'npm-v0.1.1']);
 }, '0.1.1'));
 
-test('finish releases pypi with a bare tag and publish.yml, and drops --prerelease from 1.0', () => fixture(() => {
+test('finish releases pypi with a bare tag and publish-agent-kit.yml', () => fixture(() => {
   const mock = mockGitHub();
-  assert.equal(finish(event('release/pypi-v1.0.0'), repository, mock.run), '1.0.0');
+  assert.equal(finish(event('release/pypi-v0.12.0'), repository, mock.run), '0.12.0');
   const releaseCall = mock.calls.find((call) => call[1] === 'release' && call[2] === 'create');
-  assert(!releaseCall.includes('--prerelease'));
-  assert.deepEqual(mock.calls.at(-1), ['gh', 'workflow', 'run', 'publish.yml', '--repo', repository, '--ref', '1.0.0']);
-}, '1.0.0'));
+  assert(releaseCall.includes('--prerelease'));
+  assert.deepEqual(mock.calls.at(-1), ['gh', 'workflow', 'run', 'publish-agent-kit.yml', '--repo', repository, '--ref', '0.12.0']);
+}, '0.12.0'));
+
+test('releases stay below 1.0.0', () => {
+  for (const ref of ['release/pypi-v1.0.0', 'release/npm-v2.3.4']) assert.throws(() => releaseDetails(ref), /below 1\.0\.0/);
+  for (const tag of ['1.0.0', 'npm-v1.0.0']) assert.throws(() => tagDetails(tag), /below 1\.0\.0/);
+});
 
 test('a rerun reuses a matching tag and an existing release, but never moves a conflicting tag', () => fixture(() => {
   const ref = { ref: 'refs/tags/npm-v0.1.1', object: { type: 'commit', sha } };
@@ -329,15 +334,15 @@ test('npm-plan accepts only a matching npm release tag and prints the publish or
 
 test('public codegen joins the release and developer docs keep independent SDK pins', () => fixture(() => {
   const path = 'typescript/packages/codegen/package.json';
-  writeFileSync(path, JSON.stringify(manifest('@temporalio/agent-harness-codegen', '0.1.0')));
+  writeFileSync(path, JSON.stringify(manifest('@temporalio/agent-kit-codegen', '0.1.0')));
   assert(publishablePackages(lockstepPackages()).some(pkg => pkg.name === 'codegen'));
   setLockstepVersion('0.2.0');
   assert.equal(JSON.parse(readFileSync(path, 'utf8')).version, '0.2.0');
-  writeFileSync('python/README.md', "uv add 'temporal-agent-harness[ui]==0.1.0'\n--branch 0.1.0 \ngit diff 0.0.9 0.1.0\n");
-  writeFileSync('README.md', "temporal-agent-harness[ui]==0.1.0 @temporalio/agent-harness-codegen@0.1.0");
+  writeFileSync('python/README.md', "uv add 'temporal-agent-kit[ui]==0.1.0'\n--branch 0.1.0 \ngit diff 0.0.9 0.1.0\n");
+  writeFileSync('README.md', "temporal-agent-kit[ui]==0.1.0 @temporalio/agent-kit-codegen@0.1.0");
   updateDevelopmentPins('pypi', '0.1.0', '0.3.0');
   updateDevelopmentPins('npm', '0.1.0', '0.2.0');
-  assert.match(readFileSync('README.md', 'utf8'), /\[ui\]==0\.3\.0 @temporalio\/agent-harness-codegen@0\.2\.0/);
+  assert.match(readFileSync('README.md', 'utf8'), /\[ui\]==0\.3\.0 @temporalio\/agent-kit-codegen@0\.2\.0/);
   assert.match(readFileSync('python/README.md', 'utf8'), /--branch 0\.3\.0/);
   assert.match(readFileSync('python/README.md', 'utf8'), /git diff 0\.1\.0 0\.3\.0/);
 }));

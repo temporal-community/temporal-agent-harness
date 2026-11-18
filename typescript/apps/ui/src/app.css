@@ -849,6 +849,86 @@ pre[data-language]::before,
   }
 }
 
+/* A popover menu of actions or a checklist, opened from a table's column or row or a pane head
+   and placed with `placeMenu`. */
+.table-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 180px;
+  padding: var(--gap-xs);
+  border: 0;
+  background: var(--surface-3);
+  box-shadow: var(--shadow-dropdown);
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.table-menu:popover-open {
+  display: flex;
+  flex-direction: column;
+}
+
+.table-menu > button,
+.menu-check {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  min-height: var(--control-height);
+  padding: 0 var(--gap-md) 0 var(--gap-sm);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.menu-check span:first-of-type {
+  flex: 1;
+}
+
+.menu-check input {
+  accent-color: var(--accent);
+}
+
+.menu-count {
+  color: var(--text-4);
+}
+
+/* One checklist of several in a menu, under the heading that names it. */
+.menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-group + .menu-group {
+  margin-top: var(--gap-xs);
+  border-top: 1px solid var(--border);
+}
+
+.menu-heading {
+  padding: var(--gap-sm) var(--gap-sm) var(--gap-xs);
+  color: var(--text-4);
+}
+
+.menu-clear {
+  border-top: 1px solid var(--border) !important;
+  color: var(--accent-soft) !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .table-menu > button:hover,
+  .menu-check:hover {
+    background: var(--control-hover);
+    color: var(--text-1);
+  }
+}
+
 /* The trace's glyph column: one cell for every state glyph and for the working loader, so
    they and the tree rule AgentChatPanel draws through them share one axis, 8.5px in. Odd,
    so a 13px glyph and the 13px loader both center on whole pixels. */

@@ -9,8 +9,8 @@ import { after, before, describe, it } from "node:test";
 import { Client, Connection } from "@temporalio/client";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { GoogleGenAIPlugin } from "../../../src/ai-sdks/google-genai-plugin/index.ts";
-import { AgentClient } from "../../../src/harness/agent-client.ts";
-import { AgentHarnessPlugin, toolActivity } from "../../../src/index.ts";
+import { AgentClient } from "../../../src/agent-client.ts";
+import { AgentKitPlugin, toolActivity } from "../../../src/index.ts";
 import { assertMatch } from "../../match.ts";
 import { collect, one, send, startServer, typesFor, type TemporalServer } from "../../support.ts";
 import { MODEL, getWeather } from "./agents.ts";
@@ -68,7 +68,7 @@ describe("a Gemini Interactions tool loop", () => {
       workflowsPath: AGENTS,
       plugins: [
         new GoogleGenAIPlugin(gemini),
-        new AgentHarnessPlugin({
+        new AgentKitPlugin({
           tools: [toolActivity(getWeather, async ({ city }) => `sunny in ${city}`)],
         }),
       ],

@@ -25,13 +25,13 @@ from temporalio.workflow import ActivityConfig
 with workflow.unsafe.imports_passed_through():
     from pydantic import BaseModel, Field
 
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
 
 _ACTIVITY_CONFIG = ActivityConfig(start_to_close_timeout=timedelta(seconds=10))

@@ -8,7 +8,7 @@ pane and a callback answer box.
 
 The integration is the Temporal LangGraph plugin from
 [`temporalio/ai-integrations`](https://github.com/temporalio/ai-integrations), vendored into the
-harness as `temporal_agent_harness.ai_sdks.langgraph` with a tool-call seam and a streaming seam
+harness as `temporal_agent_kit.ai_sdks.langgraph` with a tool-call seam and a streaming seam
 added, and the harness's own module beside it.
 
 ## What it demonstrates
@@ -20,7 +20,7 @@ added, and the harness's own module beside it.
   `thought_summary` / `reply_delta` / `tool_requested` → `model_interaction_ended` (with token
   usage) on the current turn.
 - **One tool of each kind**, all in one prebuilt `ToolNode` that runs in the workflow. The
-  plugin gives it `harness_tool_call`, so each call runs through `runner.run_tool`: the approval
+  plugin gives it `kit_tool_call`, so each call runs through `runner.run_tool`: the approval
   policy, `tool_start` / `tool_end` / `tool_error`, and steering.
 
   | Tool | Kind | Where it runs |
@@ -45,7 +45,7 @@ added, and the harness's own module beside it.
 | File | Role |
 |---|---|
 | `workflow.py` | `LangGraphHelloAgent`: the harness agent, its tools, the `Notes` state, and the graph. |
-| `worker.py` | Worker hosting the workflow: `LangGraphPlugin` (the graph, `harness_tool_call`, the harness observer) and `AgentHarnessPlugin` (with `get_weather`'s activity). |
+| `worker.py` | Worker hosting the workflow: `LangGraphPlugin` (the graph, `kit_tool_call`, the harness observer) and `AgentKitPlugin` (with `get_weather`'s activity). |
 | `agents.toml`, `LangGraphHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 ## Run it

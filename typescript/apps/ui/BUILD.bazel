@@ -36,7 +36,7 @@ js_library(
 )
 
 # The console's production build, which the Python package serves and ships
-# (//python/temporal_agent_harness/ui:dist): the page, what its entry module imports, and public/,
+# (//python/temporal_agent_kit/ui:dist): the page, what its entry module imports, and public/,
 # which vite copies as it is.
 vite_bin.vite(
     name = "dist",
@@ -50,7 +50,7 @@ vite_bin.vite(
     args = ["build"],
     chdir = package_name(),
     out_dirs = ["dist"],
-    visibility = ["//python/temporal_agent_harness/ui:__pkg__"],
+    visibility = ["//python/temporal_agent_kit/ui:__pkg__"],
 )
 
 # What vitest reads from the package root. vitest_test (bazel/vitest.bzl) adds it to every test,
@@ -102,10 +102,13 @@ js_library(
         "//typescript/apps/ui/src/lib/components/agent:ReplyStatus",
         "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
         "//typescript/apps/ui/src/lib/components/chat:EndSessionDialog",
+        "//typescript/apps/ui/src/lib/components/chat:HomeView",
         "//typescript/apps/ui/src/lib/components/chat:JsonReply",
         "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
         "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/chat:SearchPalette",
         "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:SessionsFooter",
         "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
         "//typescript/apps/ui/src/lib/components/chat:schemaForm",
         "//typescript/apps/ui/src/lib/components/flow:AgentLaneNode",
@@ -126,6 +129,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:Badge",
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:DataTable",
         "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:IconAgent",
@@ -135,6 +139,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:Reading",
         "//typescript/apps/ui/src/lib/components/primitives:SafeImage",
         "//typescript/apps/ui/src/lib/components/primitives:Select",
+        "//typescript/apps/ui/src/lib/components/primitives:SessionGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/components/primitives:ThinkingOrb",
@@ -144,6 +149,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:WindowedRows",
         "//typescript/apps/ui/src/lib/components/primitives:metrics",
         "//typescript/apps/ui/src/lib/components/primitives:nest",
+        "//typescript/apps/ui/src/lib/components/primitives:placeMenu",
         "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
         "//typescript/apps/ui/src/lib/components/primitives:scrollActivity",
         "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
@@ -168,7 +174,6 @@ js_library(
         "//typescript/apps/ui/src/lib/state:agentRunStorage",
         "//typescript/apps/ui/src/lib/state:agentState",
         "//typescript/apps/ui/src/lib/state:approvalDecisionTree",
-        "//typescript/apps/ui/src/lib/state:bootSession",
         "//typescript/apps/ui/src/lib/state:clientToolProvider",
         "//typescript/apps/ui/src/lib/state:codeModeNesting",
         "//typescript/apps/ui/src/lib/state:dismissable.svelte",

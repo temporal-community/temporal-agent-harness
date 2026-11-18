@@ -1,16 +1,16 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//pydantic_ai_slim",
         "@pypi//temporalio",
     ],
@@ -23,17 +23,17 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks:pydantic_ai",
         "@pypi//openai",  # keep
         "@pypi//pydantic_ai_slim",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "PydanticAIHelloAgent",
     agent = "examples.pydantic_ai_hello.workflow:PydanticAIHelloAgentWorkflow",
     description = """
@@ -52,7 +52,7 @@ live turn stream (reply_delta / tool_requested / tool_start / tool_end / model_i
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/pydantic_ai_hello:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "PydanticAIHelloAgent.schema.json",

@@ -177,7 +177,7 @@ It's how an agent running in the cloud calls a tool that must run wherever the n
 Fulfillment is decoupled from any UI: the packaged server mirrors the update at
 `POST /api/callback-result`, but any client speaking the update works. Examples:
 `examples/react_agent` (`ask_user`) and the OpenCode coding agent. Machinery in
-`harness/agent_workflow.py` (`callback_tool_defn`, `await_callback_result`, the `_CallbackEntry`
+`agent_workflow.py` (`callback_tool_defn`, `await_callback_result`, the `_CallbackEntry`
 registry).
 
 ## Mid-turn dispatch — one door, per-handler behavior
@@ -222,7 +222,7 @@ gone with no substitute, because each already had a first-class non-command surf
 the `agent_status` query, and the `close` signal. An agent that wants any of them *as a message*
 writes its own handler.
 
-Grounded in `harness/agent_workflow.py`; see `docs/design/unified-message-dispatch.md` for the
+Grounded in `agent_workflow.py`; see `docs/design/unified-message-dispatch.md` for the
 reasoning, and `examples/monty/conversational_workflow.py` for a `set_model` handler declared
 `ACCEPT`.
 
@@ -243,17 +243,17 @@ the visible one, but not the only one):
 The vendored and harness-authored integrations:
 - **Gemini** (`ai_sdks/google_genai_plugin/`) — **harness-authored**; the harness wrote the
   activity-wrapping itself (not an official Temporal SDK integration).
-- **OpenAI Agents SDK** (`ai_sdks/openai_agents/` + `ai_sdks/openai_agents_harness.py`) — a
+- **OpenAI Agents SDK** (`ai_sdks/openai_agents/` + `ai_sdks/openai_agents/_kit.py`) — a
   **vendored copy** of `temporalio.contrib.openai_agents` + generic streaming seams
   (`stream_to_provider` / `observer_factory`), with harness specifics in the sibling module. (See
   `python-idioms-for-java-spring-devs.md` for decorator mechanics and the re-vendoring note.)
-- **Strands Agents** (`ai_sdks/strands_agents/` + `ai_sdks/strands_agents_harness.py`, and the
+- **Strands Agents** (`ai_sdks/strands_agents/` + `ai_sdks/strands_agents/_kit.py`, and the
   TypeScript `ai-sdks/strands-agents/` in core and worker) — a **vendored copy** of
   `temporalio/ai-integrations` Strands Agents with a `stream_route` / `observer_factory` seam,
   harness specifics in the sibling module.
 - **LangGraph** (`ai_sdks/langgraph/`, Python only) — a **vendored copy** of
   `temporalio/ai-integrations` LangGraph with an `awrap_tool_call` / `stream_route` /
-  `observer_factory` seam; harness specifics in `_harness.py` inside the package, which the plugin
+  `observer_factory` seam; harness specifics in `_kit.py` inside the package, which the plugin
   modules never import, and `graph(name, runner)` keeps the plugin's interface.
 
 ## Model output is not one blob — it's typed parts

@@ -23,7 +23,7 @@ from temporalio import workflow
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from temporal_agent_harness.ai_sdks.langgraph import LangGraphPlugin, graph
+from temporal_agent_kit.ai_sdks.langgraph import LangGraphPlugin, graph
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 

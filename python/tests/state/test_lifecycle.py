@@ -8,28 +8,28 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from temporal_agent_harness.harness.state import (
+from temporal_agent_kit.state import (
     ConcurrentMutationError,
     DraftAliasError,
     FrozenError,
-    HarnessState,
+    AgentState,
     RevokedDraftError,
     StatePatch,
     StateSchemaError,
     StateSnapshot,
 )
-from temporal_agent_harness.harness.state.drafts import draft_class
+from temporal_agent_kit.state.drafts import draft_class
 
 from tests.state.replay import replay
 from tests.state.support import StateHost
-from tests.state.models import AgentState, Flat, Group, Inner, Outer, Todo
+from tests.state.models import PlanState, Flat, Group, Inner, Outer, Todo
 
 
 @pytest.fixture
 def harness_and_ref():
     events: list = []
     harness = StateHost(events.append)
-    ref = harness.state("agent", AgentState())
+    ref = harness.state("agent", PlanState())
     return events, ref
 
 
@@ -125,7 +125,7 @@ def test_concurrent_mutation_is_rejected(harness_and_ref):
 
 def test_set_replaces_the_whole_root(harness_and_ref):
     events, ref = harness_and_ref
-    ref.set(AgentState(model="other", count=7))
+    ref.set(PlanState(model="other", count=7))
     assert ref.version == 1
     assert events[-1].ops == [
         {"op": "replace", "path": "", "value": ref.current.model_dump(mode="json")}
@@ -137,7 +137,7 @@ def test_set_is_rejected_while_a_draft_is_open(harness_and_ref):
     _, ref = harness_and_ref
     with ref.mutate():
         with pytest.raises(ConcurrentMutationError):
-            ref.set(AgentState())
+            ref.set(PlanState())
 
 
 def test_validation_error_lands_on_the_assignment_line(harness_and_ref):
@@ -159,7 +159,7 @@ def test_validation_error_lands_on_the_assignment_line(harness_and_ref):
 def test_validator_failure_at_commit_leaves_current_untouched():
     from pydantic import model_validator
 
-    class Bounded(HarnessState):
+    class Bounded(AgentState):
         low: int = 0
         high: int = 10
 
@@ -238,7 +238,7 @@ def test_draft_class_is_generated_once_and_lives_on_the_state_class():
 def test_the_draft_class_is_built_when_the_state_class_is_declared():
     """Class generation belongs at definition time, not on a workflow task."""
 
-    class Declared(HarnessState):
+    class Declared(AgentState):
         n: int = 0
 
     assert Declared.__dict__["__harness_draft_class__"].__name__ == "Draft[Declared]"
@@ -247,7 +247,7 @@ def test_the_draft_class_is_built_when_the_state_class_is_declared():
 def test_a_subclass_gets_its_own_draft_class():
     """`cls.__dict__`, never `getattr`: an inherited draft class drops the new fields."""
 
-    class Parent(HarnessState):
+    class Parent(AgentState):
         a: int = 0
 
     class Child(Parent):
@@ -281,7 +281,7 @@ def test_version_only_advances_on_committing_mutations(harness_and_ref):
     with ref.mutate():
         pass
     assert ref.version == 1
-    ref.set(AgentState())
+    ref.set(PlanState())
     assert ref.version == 2
 
 
@@ -293,7 +293,7 @@ def test_harness_rejects_duplicate_state_ids():
 
 
 def test_root_must_be_a_harness_state():
-    from temporal_agent_harness.harness.state import StateRef
+    from temporal_agent_kit.state import StateRef
 
     with pytest.raises(TypeError):
         StateRef("x", {"not": "a model"})  # type: ignore[arg-type]
@@ -319,7 +319,7 @@ def test_repeated_assignment_emits_both_ops(harness_and_ref):
 def test_validator_free_models_skip_commit_validation():
     from tests.state.models import Group, Todo
 
-    assert AgentState.__harness_validate_on_commit__ is False
+    assert PlanState.__harness_validate_on_commit__ is False
     assert Group.__harness_validate_on_commit__ is False
     assert Todo.__harness_validate_on_commit__ is False
 
@@ -327,7 +327,7 @@ def test_validator_free_models_skip_commit_validation():
 def test_a_model_with_validators_validates_on_commit():
     from pydantic import field_validator
 
-    class Positive(HarnessState):
+    class Positive(AgentState):
         n: int = 1
 
         @field_validator("n")
@@ -359,7 +359,7 @@ def test_a_model_with_validators_validates_on_commit():
 def test_config_affecting_validation_forces_commit_validation():
     from pydantic import ConfigDict
 
-    class Lowered(HarnessState):
+    class Lowered(AgentState):
         model_config = ConfigDict(str_to_lower=True)
         s: str = ""
 
@@ -369,8 +369,8 @@ def test_config_affecting_validation_forces_commit_validation():
 def test_the_commit_strategy_can_be_forced_either_way():
     from pydantic import ConfigDict, model_validator
 
-    class Loose(HarnessState):
-        model_config = ConfigDict(harness_validate_on_commit=False)
+    class Loose(AgentState):
+        model_config = ConfigDict(kit_validate_on_commit=False)
         n: int = 0
 
         @model_validator(mode="after")
@@ -385,8 +385,8 @@ def test_the_commit_strategy_can_be_forced_either_way():
         d.n = 99  # the model validator is skipped by explicit opt-out
     assert ref.current.n == 99
 
-    class Strict(HarnessState):
-        model_config = ConfigDict(harness_validate_on_commit=True)
+    class Strict(AgentState):
+        model_config = ConfigDict(kit_validate_on_commit=True)
         n: int = 0
 
     assert Strict.__harness_validate_on_commit__ is True
@@ -420,11 +420,11 @@ def test_draft_model_cannot_be_smuggled_inside_a_newly_built_model(harness_and_r
 def test_draft_model_cannot_be_smuggled_through_a_model_typed_field():
     """The same hole through a plain model-typed field rather than a list."""
 
-    class Pair(HarnessState):
+    class Pair(AgentState):
         left: Inner = Inner()
         right: Inner = Inner()
 
-    class Root(HarnessState):
+    class Root(AgentState):
         pair: Pair = Pair()
 
     ref = StateHost().state("r", Root(pair=Pair(left=Inner(value=1))))
@@ -470,7 +470,7 @@ def test_a_set_field_cannot_be_declared_at_all(harness_and_ref):
 
     This replaces two tests that pinned real defects: ``DraftSet._coerce`` skipped both
     ``assert_no_drafts`` and ``freeze``, so ``d.chosen.add(d.steps[0])`` put a LIVE draft into a
-    set; and because ``HarnessState.__hash__`` hashes ``tuple(self.__dict__.values())``, editing
+    set; and because ``AgentState.__hash__`` hashes ``tuple(self.__dict__.values())``, editing
     that draft afterwards moved its hash, so the member fell out of its own bucket, re-adding it
     duplicated it, and the published patch carried a set serialized with two identical members
     while ``commit`` re-hashed it back down to one.
@@ -481,7 +481,7 @@ def test_a_set_field_cannot_be_declared_at_all(harness_and_ref):
     """
     with pytest.raises(StateSchemaError):
 
-        class Plan(HarnessState):
+        class Plan(AgentState):
             steps: list[Todo] = []
             chosen: set[Todo] = set()
 
@@ -502,7 +502,7 @@ def test_a_set_field_cannot_be_declared_at_all(harness_and_ref):
 def test_a_failed_commit_leaves_no_trace_and_the_ref_fully_usable():
     from pydantic import field_validator
 
-    class Leaf(HarnessState):
+    class Leaf(AgentState):
         n: int = 0
 
         @field_validator("n")
@@ -512,11 +512,11 @@ def test_a_failed_commit_leaves_no_trace_and_the_ref_fully_usable():
                 raise ValueError("n too large")
             return value
 
-    class Branch(HarnessState):
+    class Branch(AgentState):
         leaves: list[Leaf] = []
         label: str = ""
 
-    class Tree(HarnessState):
+    class Tree(AgentState):
         branch: Branch = Branch()
         note: str = ""
 
@@ -578,7 +578,7 @@ def test_failed_commits_never_desynchronize_the_patch_stream():
     """Failures interleaved with successes keep the versions contiguous."""
     from pydantic import field_validator
 
-    class Counter(HarnessState):
+    class Counter(AgentState):
         n: int = 0
 
         @field_validator("n")

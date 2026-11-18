@@ -14,7 +14,7 @@ NB: no ``from __future__ import annotations`` here. The annotations are read dir
 the model-facing schema and the result validator, so they must be concrete types.
 """
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_kit import agent
 
 
 @agent.callback_tool_defn()

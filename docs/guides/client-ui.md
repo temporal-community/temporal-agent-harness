@@ -1,6 +1,6 @@
 # Build a UI in React or Svelte
 
-A UI on a harness agent should be about the product, not the protocol. The client SDKs take care
+A UI on an Agent Kit agent should be about the product, not the protocol. The client SDKs take care
 of the event stream, reconnects, JSON Patch state, pairing replies with messages, and the
 subagent tree, and they type all of it from the agent's schema. The integration is one
 line:
@@ -12,9 +12,9 @@ const agent = new AgentSession<TicTacToeAgent>({ get sessionId() { return id; } 
 
 | Package | What it is |
 | --- | --- |
-| [`@temporalio/agent-harness-react`](../../typescript/packages/react) | `useAgentSession`, a hook for React 18.2+ |
-| [`@temporalio/agent-harness-svelte`](../../typescript/packages/svelte) | `AgentSession`, a reactive class for Svelte 5 |
-| [`@temporalio/agent-harness-client`](../../typescript/packages/client) | the framework-free core both bindings share; re-exported by each |
+| [`@temporalio/agent-kit-react`](../../typescript/packages/react) | `useAgentSession`, a hook for React 18.2+ |
+| [`@temporalio/agent-kit-svelte`](../../typescript/packages/svelte) | `AgentSession`, a reactive class for Svelte 5 |
+| [`@temporalio/agent-kit-client`](../../typescript/packages/client) | the framework-free core both bindings share; re-exported by each |
 
 **1. Declare state on the agent.** `agent.state(...)` makes a model observable: every
 committed `mutate()` block is published on the event stream as JSON Patch ops. A tool reaches
@@ -24,11 +24,11 @@ the browser watches the board change as the model plays.
 ```python
 from agents import Agent, Runner
 
-from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tool
-from temporal_agent_harness.harness.state import HarnessState, StateRef
+from temporal_agent_kit.ai_sdks.openai_agents import as_openai_agent_tool
+from temporal_agent_kit.state import AgentState, StateRef
 
 
-class Board(HarnessState):
+class Board(AgentState):
     """Nine cells, read left to right, top to bottom."""
 
     cells: list[Literal["X", "O"] | None] = [None] * 9
@@ -77,16 +77,16 @@ class TicTacToeAgentWorkflow:
         return TextReply(text=str(result.final_output))
 ```
 
-**2. Generate the types.** `temporal-agent-harness schema` prints an agent's handlers, state,
-and init data as JSON Schema, and [`harness-codegen`](../../typescript/packages/codegen) turns that
+**2. Generate the types.** `temporal-agent-kit schema` prints an agent's handlers, state,
+and init data as JSON Schema, and [`agent-kit-codegen`](../../typescript/packages/codegen) turns that
 into TypeScript. Install the generator in your application (available starting with the next
 npm release), then generate from either SDK's schema:
 
 ```bash
-npm install --save-dev --save-exact @temporalio/agent-harness-codegen@0.5.0
-uv run temporal-agent-harness schema my_agent.workflow:TicTacToeAgentWorkflow -o agent.schema.json
-# For TypeScript, use `agent-harness schema` on your compiled agent instead.
-npx harness-codegen agent.schema.json -o TicTacToeAgent.ts
+npm install --save-dev --save-exact @temporalio/agent-kit-codegen@0.5.0
+uv run temporal-agent-kit schema my_agent.workflow:TicTacToeAgentWorkflow -o agent.schema.json
+# For TypeScript, use `agent-kit schema` on your compiled agent instead.
+npx agent-kit-codegen agent.schema.json -o TicTacToeAgent.ts
 ```
 
 Repository contributors can also use `bazel run //python/examples/tictactoe:client_sdk_update`.
@@ -97,11 +97,11 @@ fails the type check, not production.
 **3. Render the session.**
 
 ```bash
-npm install @temporalio/agent-harness-react    # or @temporalio/agent-harness-svelte
+npm install @temporalio/agent-kit-react    # or @temporalio/agent-kit-svelte
 ```
 
 ```tsx
-import { useAgentSession } from "@temporalio/agent-harness-react";
+import { useAgentSession } from "@temporalio/agent-kit-react";
 import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent";
 
 function Game({ sessionId }: { sessionId: string }) {
@@ -150,7 +150,7 @@ full example.
 - **Durable by default.** A reload returns the same session, two tabs both stay live, and after a
   server restart the stream resumes where it left off.
 - **One connection per session.** Components following the same session share one connection
-  under a `<HarnessProvider>` (React) or `createHarnessContext()` (Svelte).
+  under a `<KitProvider>` (React) or `createKitContext()` (Svelte).
 - **Typed starts.** `startSession(transport, TicTacToeAgent, { data })` creates a session, with
   `data` required, optional, or refused to match the agent's init data.
 

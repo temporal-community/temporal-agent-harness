@@ -10,35 +10,35 @@ from typing import Any
 
 import pytest
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.state import (
-    HarnessState,
+from temporal_agent_kit import agent
+from temporal_agent_kit.state import (
+    AgentState,
     StateDecl,
     StateRef,
     StateSnapshot,
     declared_states,
 )
 
-from tests.state.models import AgentState
+from tests.state.models import PlanState
 
 
-class Counter(HarnessState):
+class Counter(AgentState):
     n: int = 0
 
 
-class Named(HarnessState):
+class Named(AgentState):
     name: str
 
 
 class Probe:
-    plan = agent.state(AgentState)
+    plan = agent.state(PlanState)
     counter = agent.state(Counter)
 
 
 def test_class_access_is_the_declaration_and_the_attribute_name_is_the_id():
     assert isinstance(Probe.plan, StateDecl)
     assert Probe.plan.state_id == "plan"
-    assert Probe.plan.state_type is AgentState
+    assert Probe.plan.state_type is PlanState
 
 
 def test_instance_access_is_one_stable_ref_per_instance():
@@ -65,7 +65,7 @@ def test_declared_state_cannot_be_reassigned():
 
 
 def test_a_non_harness_state_type_fails_when_the_class_body_runs():
-    with pytest.raises(TypeError, match="must be a HarnessState subclass"):
+    with pytest.raises(TypeError, match="must be an AgentState subclass"):
 
         class _Bad:
             plan = agent.state(dict)  # type: ignore[type-var]
@@ -108,7 +108,7 @@ def test_an_unattached_declaration_names_the_fix():
 
 def test_declared_states_are_in_declaration_order_and_follow_overrides():
     class Base:
-        plan = agent.state(AgentState)
+        plan = agent.state(PlanState)
         counter = agent.state(Counter)
 
     class Child(Base):

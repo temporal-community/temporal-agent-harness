@@ -1,4 +1,4 @@
-# Harness API and session lifecycle
+# Agent Kit API and session lifecycle
 
 The shared Python server serves the same HTTP API and browser console for Python and TypeScript
 agents. Run a Temporal service, session-manager worker, API server, and your agent worker with
@@ -44,7 +44,7 @@ Save the last processed resume offset and pass it as `from_offset` on reconnect.
 browser `Last-Event-ID` is the resume mechanism. Read the event's handler/message/agent identity:
 a session can contain queued messages, mid-turn handlers, and subagent events.
 
-Use the published `@temporalio/agent-harness-client`, React, or Svelte clients when possible;
+Use the published `@temporalio/agent-kit-client`, React, or Svelte clients when possible;
 they implement stream/state handling. `POST /api/chat` is a convenience for a turn it opens;
 use message submission plus attach for general application clients and mid-turn handlers.
 
@@ -86,14 +86,14 @@ Generate an agent's schema from its declaration:
 
 ```bash
 # Python
-temporal-agent-harness schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
-# TypeScript: compile first (agent-harness-schema is the same command)
-agent-harness schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
+temporal-agent-kit schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
+# TypeScript: compile first (agent-kit-schema is the same command)
+agent-kit schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
 # Either schema can generate a typed application client
-harness-codegen agent.schema.json -o Agent.ts
+agent-kit-codegen agent.schema.json -o Agent.ts
 ```
 
-The code generator is distributed as `@temporalio/agent-harness-codegen`. Regenerate and commit
+The code generator is distributed as `@temporalio/agent-kit-codegen`. Regenerate and commit
 client types after changing handlers, state, or init data. Never patch generated types manually.
 
 ## Registry and deployment

@@ -3,7 +3,7 @@
 # PartDelta / PartEnd) through the observer with a fake in-memory publisher (no Temporal server, no
 # API key) and asserts the emitted harness turn-stream vocabulary: the model-interaction bracket,
 # reply/thought deltas, a single consolidated tool_requested keyed by the SDK tool_call_id, and
-# mapped token usage. Also checks that as_pydantic_ai_tool / build_harness_toolset derive the right
+# mapped token usage. Also checks that as_pydantic_ai_tool / build_kit_toolset derive the right
 # schema + activity-skip config from a harness tool.
 #
 # Run with: uv run pytest tests/ai_sdks/pydantic_ai/test_stream_observer.py -v
@@ -27,9 +27,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RequestUsage
 
-from temporal_agent_harness.ai_sdks import pydantic_ai_harness as h
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.ai_sdks import pydantic_ai as h
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent_protocol import (
     AgentEventType,
     ModelInteractionEnded,
     ModelInteractionStarted,
@@ -37,8 +37,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     ThoughtSummaryDelta,
     ToolRequested,
 )
-from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
+from temporal_agent_kit.stream_context import TurnStreamContext
 
 
 class _FakePublisher:
@@ -252,7 +252,7 @@ def test_as_pydantic_ai_tool_derives_schema_from_harness_tool():
 
 
 def test_build_harness_toolset_marks_every_tool_to_run_in_workflow():
-    toolset = h.build_harness_toolset([get_weather], id="hello-tools")
+    toolset = h.build_kit_toolset([get_weather], id="hello-tools")
     assert toolset.id == "hello-tools"
     # `temporal: False` tells TemporalDurability not to wrap the tool's calls in an activity.
     assert {name: tool.metadata for name, tool in toolset.tools.items()} == {
@@ -270,7 +270,7 @@ def test_as_pydantic_ai_tool_rejects_non_harness_tool():
 
 class _FakeRunner(AgentWorkflowRunner):
     """A test double for AgentWorkflowRunner: a real subclass (so it passes the adapter's
-    isinstance check and HarnessDeps' field validation) with a no-op __init__ that skips the heavy
+    isinstance check and KitDeps' field validation) with a no-op __init__ that skips the heavy
     workflow-bound construction, recording how the adapted tool invokes run_tool."""
 
     def __init__(self, stream_context: TurnStreamContext | None = None) -> None:
@@ -302,7 +302,7 @@ async def test_tool_reads_runner_off_deps_not_workflow_instance():
     # the runner it finds on ctx.deps, with the SDK tool_call_id as the correlation id.
     runner = _FakeRunner()
     tool = h.as_pydantic_ai_tool(get_weather)
-    ctx = _FakeCtx(deps=h.HarnessDeps(runner=runner), tool_call_id="call_ABC")
+    ctx = _FakeCtx(deps=h.KitDeps(runner=runner), tool_call_id="call_ABC")
 
     result = await tool.function(ctx, city="Paris")
 
@@ -320,25 +320,25 @@ async def test_tool_raises_loudly_when_no_runner_on_deps():
     # No runner on deps (e.g. wrongly run inside an activity, or deps didn't carry the runner) is a
     # developer misconfiguration, so it fails loudly with guidance rather than being papered over.
     tool = h.as_pydantic_ai_tool(get_weather)
-    ctx = _FakeCtx(deps=h.HarnessDeps(), tool_call_id="call_NONE")
+    ctx = _FakeCtx(deps=h.KitDeps(), tool_call_id="call_NONE")
     with pytest.raises(RuntimeError, match="no live AgentWorkflowRunner"):
         await tool.function(ctx, city="Paris")
 
 
 def test_harness_deps_snapshots_stream_context_from_runner():
-    # Ergonomics: pass just the runner; HarnessDeps captures the in-flight turn's stream context
+    # Ergonomics: pass just the runner; KitDeps captures the in-flight turn's stream context
     # from it (resolved workflow-side, since the model-activity handler that consumes it can't reach
     # the runner). The runner stays a live attribute but is excluded from serialization.
     ctx = TurnStreamContext(turn_id="t-9", turn_number=3, agent_id="agent-abc")
     runner = _FakeRunner(stream_context=ctx)
 
-    deps = h.HarnessDeps(runner=runner)
-    assert deps.harness_stream_context == ctx
+    deps = h.KitDeps(runner=runner)
+    assert deps.kit_stream_context == ctx
     assert deps.runner is runner
     # Serialized form drops the runner and keeps the snapshotted context.
     assert "runner" not in deps.model_dump()
-    assert deps.model_dump()["harness_stream_context"]["turn_id"] == "t-9"
+    assert deps.model_dump()["kit_stream_context"]["turn_id"] == "t-9"
 
     # An explicit context overrides the snapshot rather than being clobbered.
     other = TurnStreamContext(turn_id="t-override", turn_number=1, agent_id="agent-abc")
-    assert h.HarnessDeps(runner=runner, harness_stream_context=other).harness_stream_context == other
+    assert h.KitDeps(runner=runner, kit_stream_context=other).kit_stream_context == other

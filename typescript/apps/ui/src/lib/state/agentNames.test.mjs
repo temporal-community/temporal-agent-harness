@@ -12,7 +12,6 @@ import { describe, it } from "vitest";
 import { installFakeIndexedDb } from "../../../tests/support/fakeIndexedDb.mjs";
 import { installBrowserSurface, session } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
-import { writeStoredActiveSessionId } from "./agentRunStorage.ts";
 import { writeView } from "./frameStore.ts";
 import { agentName } from "./sessionHistory.ts";
 
@@ -40,7 +39,7 @@ describe("agent names in the session list", () => {
       sessions: painted,
       total: 0
     });
-    writeStoredActiveSessionId("wf-hello");
+    window.location.search = "?s=wf-hello";
     let agentCalls = 0;
     const controller = new AgentRunController({
       async listAgents() {

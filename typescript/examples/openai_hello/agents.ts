@@ -1,10 +1,10 @@
-// A hello-world OpenAI Agents SDK agent on the harness, with one tool call.
+// A hello-world OpenAI Agents SDK agent on Agent Kit, with one tool call.
 //
 // A conversational agent that answers in plain text and can call a single tool (`get_weather`).
 // The turn runs the model with `runStreamed(...)`, which routes model calls through the streaming
-// activity so the harness observer can translate raw OpenAI events into the turn-stream events an
-// attached client sees. The tool is a normal harness tool adapted onto the SDK with
-// `asOpenAIAgentTool`, so the harness still owns approval and its `tool_start` / `tool_end` /
+// activity so Agent Kit observer can translate raw OpenAI events into the turn-stream events an
+// attached client sees. The tool is a normal Agent Kit tool adapted onto the SDK with
+// `asOpenAIAgentTool`, so Agent Kit still owns approval and its `tool_start` / `tool_end` /
 // `tool_error` events.
 //
 // Run it with the shared example stack (session-manager worker + server/UI); this agent is
@@ -19,11 +19,11 @@ import {
   defineAgent,
   handler,
   tool,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   asOpenAIAgentTool,
   runStreamed,
-} from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
+} from "@temporalio/agent-kit/ai-sdks/openai-agents";
 
 export const TASK_QUEUE = "openai-hello-ts";
 export const DEFAULT_MODEL = "gpt-5.1";

@@ -18,7 +18,7 @@
       "$lib/*": ["./src/lib/*"],
       // svelte-check type-checks the client's source with this TypeScript, so the client
       // must compile under it as well as under its own TypeScript 7.
-      "@temporalio/agent-harness-client": ["../../packages/client/src/index.ts"]
+      "@temporalio/agent-kit-client": ["../../packages/client/src/index.ts"]
     }
   },
   "include": [

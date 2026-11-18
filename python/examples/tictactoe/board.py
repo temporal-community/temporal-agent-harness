@@ -1,6 +1,6 @@
 """The tic-tac-toe board, as OBSERVABLE agent state, plus the one tool that moves on it.
 
-The board is a :class:`~temporal_agent_harness.harness.state.HarnessState` the workflow
+The board is a :class:`~temporal_agent_kit.state.AgentState` the workflow
 declares once, as the class attribute ``board = agent.state(Board)``; from then on every committed
 ``mutate()`` block publishes RFC 6902 patch ops on the agent's ``turn_events`` stream, which
 is what the console's AGENT STATE pane renders — so a move lands as ``replace /cells/4 "O"``
@@ -22,8 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.state import HarnessState, StateRef
+from temporal_agent_kit import agent
+from temporal_agent_kit.state import AgentState, StateRef
 
 Mark = Literal["X", "O"]
 Status = Literal["playing", "X_wins", "O_wins", "draw"]
@@ -68,14 +68,14 @@ CELL_NAMES = (
 # ---------------------------------------------------------------------------
 
 
-class Move(HarnessState):
+class Move(AgentState):
     """One move that has been played, in order."""
 
     mark: Mark
     cell: int = Field(description="1-9, left-to-right, top-to-bottom.")
 
 
-class Board(HarnessState):
+class Board(AgentState):
     """The whole game: nine cells, whose turn it is, who the agent is, and the outcome."""
 
     cells: list[Mark | None] = [None] * 9

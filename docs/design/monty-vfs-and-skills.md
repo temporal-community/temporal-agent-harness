@@ -1,6 +1,6 @@
 # Code Mode Virtual Filesystem & Skills
 
-**Status:** Phases 1–3 implemented (`temporal_agent_harness/harness/code_mode/vfs.py`, with changes to `monty_stepper.py`, `driver.py` and `tool.py`; example in `examples/code_mode_memory/`). Grounded in pydantic-monty 1.0.0. Monty behavior cited here is from the [filesystem docs](https://pydantic.dev/docs/monty/concepts/filesystem/) and was checked against the installed 1.0.0 runtime; see the appendix.
+**Status:** Phases 1–3 implemented (`temporal_agent_kit/code_mode/vfs.py`, with changes to `monty_stepper.py`, `driver.py` and `tool.py`; example in `examples/code_mode_memory/`). Grounded in pydantic-monty 1.0.0. Monty behavior cited here is from the [filesystem docs](https://pydantic.dev/docs/monty/concepts/filesystem/) and was checked against the installed 1.0.0 runtime; see the appendix.
 
 ---
 
@@ -174,7 +174,7 @@ class LocalDisk(agent.ActivityFileSystem[LocalDiskConfig], name="local-disk"):
     # write / mkdir / delete / rename for a writable mount
 ```
 
-- The base class declares all seven methods; a subclass overrides `stat`, `read` and `list`, and all four write methods or none. Defining the subclass generates one activity per method, named `vfs.<name>.<method>`, plus `vfs.<name>.view`: a stat and a ranged read returning one page (at most 256 KB) with the file's size and mtime. `AgentHarnessPlugin(filesystems=[LocalDisk])` registers them.
+- The base class declares all seven methods; a subclass overrides `stat`, `read` and `list`, and all four write methods or none. Defining the subclass generates one activity per method, named `vfs.<name>.<method>`, plus `vfs.<name>.view`: a stat and a ranged read returning one page (at most 256 KB) with the file's size and mtime. `AgentKitPlugin(filesystems=[LocalDisk])` registers them.
 - `LocalDisk.backend(config)` is the workflow side: each operation runs the matching activity on the workflow's task queue. Every activity builds a fresh instance from the config it is given, so the config is validated on every call, and `OSError`s become non-retryable `ApplicationError`s named for the built-in.
 - The config is untrusted input, because the console's file viewer sends it back (below). A filesystem must accept only what is safe to act on.
 

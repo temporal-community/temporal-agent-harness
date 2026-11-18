@@ -10,7 +10,7 @@
 set -euo pipefail
 
 dists="$(cd "${1:?usage: $0 <directory holding the wheel>}" && pwd)"
-wheel="$(ls "$dists"/temporal_agent_harness-*.whl)"
+wheel="$(ls "$dists"/temporal_agent_kit-*.whl)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -23,38 +23,38 @@ uv venv --quiet --python "${PYTHON_VERSION:-3.13}" "$work/venv"
 (cd python && uv export --frozen --no-hashes --no-emit-project --all-extras --quiet \
   | grep -v '^-e ' > "$work/constraints.txt")
 uv pip install --quiet --python "$work/venv" --constraint "$work/constraints.txt" \
-  "temporal-agent-harness[ui,genai,openai-agents,pydantic-ai,code-mode] @ file://$wheel" \
+  "temporal-agent-kit[ui,genai,openai-agents,pydantic-ai,code-mode] @ file://$wheel" \
   pytest pytest-asyncio jsonschema
 venv="$work/venv/bin"
 
 echo "The CLI runs"
-"$venv/temporal-agent-harness" --help >/dev/null
-"$venv/temporal-agent-harness" serve --help >/dev/null
-"$venv/temporal-agent-harness" session-manager --help >/dev/null
-"$venv/temporal-agent-harness" dev --help >/dev/null
+"$venv/temporal-agent-kit" --help >/dev/null
+"$venv/temporal-agent-kit" serve --help >/dev/null
+"$venv/temporal-agent-kit" session-manager --help >/dev/null
+"$venv/temporal-agent-kit" dev --help >/dev/null
 
 echo "Every integration imports from the install"
 (cd / && "$venv/python" - <<'PY'
 import importlib
 for name in [
-    "temporal_agent_harness.harness",
-    "temporal_agent_harness.harness.code_mode",
-    "temporal_agent_harness.ai_sdks.google_genai_plugin",
-    "temporal_agent_harness.ai_sdks.openai_agents_harness",
-    "temporal_agent_harness.ai_sdks.pydantic_ai_harness",
-    "temporal_agent_harness.web.serve",
-    "temporal_agent_harness.web.session_manager_worker",
+    "temporal_agent_kit",
+    "temporal_agent_kit.code_mode",
+    "temporal_agent_kit.ai_sdks.google_genai_plugin",
+    "temporal_agent_kit.ai_sdks.openai_agents",
+    "temporal_agent_kit.ai_sdks.pydantic_ai",
+    "temporal_agent_kit.web.serve",
+    "temporal_agent_kit.web.session_manager_worker",
 ]:
     importlib.import_module(name)
-from temporal_agent_harness.ui import packaged_ui_dist
+from temporal_agent_kit.ui import packaged_ui_dist
 assert packaged_ui_dist() is not None, "the install has no console"
 PY
 )
 
 echo "The packaged starter generates schemas, installs its skill, and runs without a model"
-"$venv/temporal-agent-harness" init "$work/starter"
-(cd "$work/starter" && "$venv/temporal-agent-harness" skills install --for agents)
-(cd "$work/starter" && "$venv/temporal-agent-harness" schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json)
+"$venv/temporal-agent-kit" init "$work/starter"
+(cd "$work/starter" && "$venv/temporal-agent-kit" skills install --for agents)
+(cd "$work/starter" && "$venv/temporal-agent-kit" schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json)
 (cd "$work/starter" && "$venv/python" - <<'PROBE'
 import asyncio
 import json
@@ -63,11 +63,11 @@ import signal
 import sys
 from pathlib import Path
 from temporalio.testing import WorkflowEnvironment
-from temporal_agent_harness.harness.agent_client import AgentClient
-from temporal_agent_harness.harness.agent_protocol import AgentConfig
+from temporal_agent_kit.agent_client import AgentClient
+from temporal_agent_kit.agent_protocol import AgentConfig
 
 assert json.loads(Path("agent.schema.json").read_text())["agent"] == "OpenAIHelloAgent"
-assert Path(".agents/skills/temporal-harness-python/references/api.md").is_file()
+assert Path(".agents/skills/temporal-agent-kit-python/references/api.md").is_file()
 
 async def check():
     async with await WorkflowEnvironment.start_local(
@@ -111,17 +111,17 @@ PROBE
 )
 
 # The conformance tests, from a copy of python/tests so that python/ (and the source tree's
-# temporal_agent_harness beside it) is not on sys.path. They read conformance/ and contract/
+# temporal_agent_kit beside it) is not on sys.path. They read conformance/ and contract/
 # relative to the repository root, so run them from there.
 echo "The conformance scenarios run against the installed package"
 mkdir -p "$work/tests/conformance"
 cp python/tests/__init__.py python/tests/conftest.py "$work/tests/"
 cp python/tests/conformance/*.py "$work/tests/conformance/"
-location="$(PYTHONPATH="$work" "$venv/python" -c 'import temporal_agent_harness; print(temporal_agent_harness.__file__)')"
+location="$(PYTHONPATH="$work" "$venv/python" -c 'import temporal_agent_kit; print(temporal_agent_kit.__file__)')"
 # Python reports the resolved path; macOS's mktemp hands out one through a symlink.
 case "$location" in
   "$work/venv/"* | "$(cd "$work" && pwd -P)/venv/"*) ;;
-  *) echo "temporal_agent_harness imported from $location, not from the install" >&2; exit 1 ;;
+  *) echo "temporal_agent_kit imported from $location, not from the install" >&2; exit 1 ;;
 esac
 PYTHONPATH="$work" "$venv/python" -m pytest -q -p no:cacheprovider \
   -o asyncio_mode=auto -o consider_namespace_packages=true --rootdir "$work" \

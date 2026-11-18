@@ -1,7 +1,7 @@
 // jev_tool_approval: ask TypeSafe's Jev to judge one gated tool call
 
 import { Context, ApplicationFailure } from "@temporalio/activity";
-import type { JevApprovalAnswer, JevApprovalRequest } from "@temporalio/agent-harness/ai-sdks/jev/evaluator";
+import type { JevApprovalAnswer, JevApprovalRequest } from "@temporalio/agent-kit/ai-sdks/jev/evaluator";
 
 export interface SystemOneResponse {
   model: string;

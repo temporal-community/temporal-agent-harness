@@ -15,7 +15,7 @@ import { buildReplayLog } from "./replayLog.ts";
 import { NO_THOUGHT_SUMMARY, foldTurnThought, thoughtDeltaText } from "./thoughtSummary.ts";
 import { buildTranscript } from "./transcript.ts";
 
-/* The shapes, as the three producers in temporal_agent_harness/ai_sdks actually dump them —
+/* The shapes, as the three producers in temporal_agent_kit/ai_sdks actually dump them —
    each copied from the payload that harness's own test asserts on. */
 const SHAPES = {
   gemini: (text) => ({ type: "thought_summary", content: { type: "text", text } }),

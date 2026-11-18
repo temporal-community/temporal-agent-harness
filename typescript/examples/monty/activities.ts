@@ -10,7 +10,7 @@
 // Each tool takes ONE request object, as Python's do, so a script calls
 // `search_flights({"origin": ..., ...})` in either language.
 
-import { activityTool } from "@temporalio/agent-harness";
+import { activityTool } from "@temporalio/agent-kit";
 import { z } from "zod";
 import {
   FlightBookingRequest,

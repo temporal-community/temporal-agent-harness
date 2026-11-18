@@ -1,6 +1,6 @@
-# Temporal Agent Harness for TypeScript
+# Temporal Agent Kit for TypeScript
 
-**Temporal-native agent harness (experimental) — build durable, composable AI agents on Temporal,
+**Temporal-native agent kit (experimental) — build durable, composable AI agents on Temporal,
 with the AI SDKs you already use.**
 
 Your agents survive worker restarts, expose typed message handlers, stream model and tool events,
@@ -20,9 +20,9 @@ products over their live state with the React and Svelte clients.
 Create an agent, install its coding-agent skill, and open a working session in four steps.
 No repository checkout or Bazel installation is needed.
 
-> **Available with the next npm release.** The `agent-harness` command is not in the published
-> 0.2.0 package, and the starter's `harness:dev` script needs the Python release that adds
-> `temporal-agent-harness dev`. Once both are published, the `@latest` command below selects
+> **Available with the next npm release.** The `agent-kit` command is not in the published
+> 0.2.0 package, and the starter's `agent-kit:dev` script needs the Python release that adds
+> `temporal-agent-kit dev`. Once both are published, the `@latest` command below selects
 > them. Until then, use the [manual setup](#build-with-it--install-from-npm) with published packages.
 
 You need **Node.js 22.18+**, npm, [uv](https://docs.astral.sh/uv/getting-started/installation/),
@@ -34,7 +34,7 @@ handler. `uvx` can provision Python for the shared server, which requires Python
 Run this from the directory where you want the new project:
 
 ```bash
-npx -y -p @temporalio/agent-harness-worker@latest agent-harness init my-agent
+npx -y -p @temporalio/agent-kit-worker@latest agent-kit init my-agent
 cd my-agent
 npm install
 ```
@@ -42,7 +42,7 @@ npm install
 `npx` supplies the CLI before you have a project; the first run downloads the worker package and
 the Temporal SDK's native bridge once. `init` creates a new directory containing `agents.ts`,
 `worker.ts`, `agents.toml`, TypeScript configuration, a `package.json` named after the
-directory, and a README. It pins the installed harness version, compatible Temporal/model
+directory, and a README. It pins the installed Agent Kit version, compatible Temporal/model
 dependencies, and the Python package that provides the shared services, and refuses to overwrite
 existing files. The starter's weather tool returns sample data.
 
@@ -50,12 +50,12 @@ existing files. The starter's weather tool returns sample data.
 
 ```bash
 cp env.example .env.local
-npm run harness:schema
-npm run harness:skill   # asks which coding agents to install the skill for
+npm run agent-kit:schema
+npm run agent-kit:skill   # asks which coding agents to install the skill for
 ```
 
-`.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `harness:schema`
-compiles the agent and writes `agent.schema.json`. `harness:skill` asks which coding agents you use
+`.env.local` is where `OPENAI_API_KEY` goes once you try `ask`; never commit it. `agent-kit:schema`
+compiles the agent and writes `agent.schema.json`. `agent-kit:skill` asks which coding agents you use
 and copies this SDK release's skill, with authoring, API, advanced-feature, and verification
 references, into the directories they read:
 
@@ -65,11 +65,11 @@ references, into the directories they read:
 | 2 | `agents` | `.agents/skills` | Codex and other agents that read the shared `.agents/skills` directory |
 
 Choose both if you use Claude Code alongside another agent. To skip the question, as in scripts,
-pass the choices: `npm run harness:skill -- --for claude --for agents`.
+pass the choices: `npm run agent-kit:skill -- --for claude --for agents`.
 Installing the npm package bundles the skill; this
 explicit step makes it discoverable in your project. For a tool with another skill directory,
-run `npx agent-harness skills path` to locate the bundled resources, or use
-`npx agent-harness skills install --dest <directory>`.
+run `npx agent-kit skills path` to locate the bundled resources, or use
+`npx agent-kit skills install --dest <directory>`.
 
 ### 3. Start the three services
 
@@ -81,10 +81,10 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session manager, API, and harness console:**
+**Terminal 2 — shared session manager, API, and Agent Kit console:**
 
 ```bash
-npm run harness:dev
+npm run agent-kit:dev
 ```
 
 **Terminal 3 — your TypeScript agent worker:**
@@ -93,8 +93,8 @@ npm run harness:dev
 npm start
 ```
 
-**The API, console, and session manager come from the Python package.** `harness:dev` runs
-`temporal-agent-harness dev` through `uvx`, in one process and without a Python project of your
+**The API, console, and session manager come from the Python package.** `agent-kit:dev` runs
+`temporal-agent-kit dev` through `uvx`, in one process and without a Python project of your
 own; the Python version is pinned in `package.json`. Your agent worker runs in Node. The console
 is prebuilt, so no frontend build is needed.
 
@@ -104,7 +104,7 @@ Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all three pr
 
 ### 4. Verify, then develop with your coding agent
 
-1. Open the **harness console at <http://localhost:8000>**. Create a session for
+1. Open the **Agent Kit console at <http://localhost:8000>**. Create a session for
    **OpenAI Hello (TypeScript)**.
 2. Send a `ping` message. The message box's handler button names the handler your
    message goes to; a new session starts on `ping`. Type any text, such as `hello`,
@@ -123,21 +123,21 @@ Node worker. Leave `TASK_QUEUE_PREFIX` unset for this starter. Keep all three pr
 5. Check startup and worker availability:
 
    ```bash
-   npm run harness:doctor
+   npm run agent-kit:doctor
    ```
 
-Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the harness console.
+Temporal's own workflow UI is at <http://localhost:8233>; it is separate from the Agent Kit console.
 
 With the services running, open the project in your coding agent. Reload its session if it was
 already running, then ask it to use the skill:
 
 | Tool | Prompt |
 | --- | --- |
-| Codex | `Use $temporal-harness-typescript to help me build this agent. Explain the starter, then verify it with ping before making model calls.` |
-| Claude Code | `/temporal-harness-typescript Explain the starter, then verify it with ping before making model calls.` |
+| Codex | `Use $temporal-agent-kit-typescript to help me build this agent. Explain the starter, then verify it with ping before making model calls.` |
+| Claude Code | `/temporal-agent-kit-typescript Explain the starter, then verify it with ping before making model calls.` |
 
 Edit `agents.ts` to change your agent and `worker.ts` for worker configuration. After changes,
-stop the worker, run `npm run harness:schema`, and restart `npm start`. Use a new session for changed
+stop the worker, run `npm run agent-kit:schema`, and restart `npm start`. Use a new session for changed
 workflow behavior. Commit `agent.schema.json` and `package-lock.json`.
 
 After upgrading the SDK, rerun the `skills install` commands to update unchanged skill files.
@@ -168,10 +168,10 @@ the same console, registry format, and session API.
 
 | Package | Use it for |
 | --- | --- |
-| `@temporalio/agent-harness` | Define agents, handlers, tools, approvals, and state in workflow code |
-| `@temporalio/agent-harness-worker` | Run agents: worker plugins, model activities, the server-side agent client, and schema CLI |
-| `@temporalio/agent-harness-client` | Build an application client without a UI framework |
-| `@temporalio/agent-harness-react` / `@temporalio/agent-harness-svelte` | Build a product UI with live, typed sessions; each re-exports the client |
+| `@temporalio/agent-kit` | Define agents, handlers, tools, approvals, and state in workflow code |
+| `@temporalio/agent-kit-worker` | Run agents: worker plugins, model activities, the server-side agent client, and schema CLI |
+| `@temporalio/agent-kit-client` | Build an application client without a UI framework |
+| `@temporalio/agent-kit-react` / `@temporalio/agent-kit-svelte` | Build a product UI with live, typed sessions; each re-exports the client |
 
 Model integrations are opt-in imports and optional peer dependencies. The walkthrough below
 installs the OpenAI Agents integration. The
@@ -188,7 +188,7 @@ toolchains and dependencies. Examples live in the repository and are not shipped
 
 ```bash
 git clone --branch npm-v0.5.0 https://github.com/temporal-community/temporal-agent-harness.git
-cd temporal-agent-harness
+cd temporal-agent-kit
 [ -f .env.local ] || cp .env.example .env.local
 # Set OPENAI_API_KEY in .env.local.
 cd typescript/examples/openai_hello
@@ -211,7 +211,7 @@ explains the files and how to modify the agent. The checkout's recipes load the 
 
 You need Node.js **22.18 or later**, npm, an OpenAI API key, the
 [Temporal CLI](https://docs.temporal.io/cli), and [uv](https://docs.astral.sh/uv/getting-started/installation/).
-`uvx` can provision Python for the shared services; the Python harness requires Python 3.11+.
+`uvx` can provision Python for the shared services; the Python package requires Python 3.11+.
 
 Create an empty directory:
 
@@ -229,22 +229,22 @@ Create `package.json`. The install commands below add its dependencies:
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "harness:schema": "npm run build && agent-harness-schema ./dist/agents.js#OpenAIHelloAgentTs -o OpenAIHelloAgentTs.schema.json",
+    "agent-kit:schema": "npm run build && agent-kit-schema ./dist/agents.js#OpenAIHelloAgentTs -o OpenAIHelloAgentTs.schema.json",
     "start": "node --env-file=.env.local dist/worker.js"
   }
 }
 ```
 
-Install the harness and the model integration:
+Install Agent Kit and the model integration:
 
 ```bash
-npm install --save-exact @temporalio/agent-harness@0.5.0 @temporalio/agent-harness-worker@0.5.0 @temporalio/agent-harness-client@0.5.0
+npm install --save-exact @temporalio/agent-kit@0.5.0 @temporalio/agent-kit-worker@0.5.0 @temporalio/agent-kit-client@0.5.0
 npm install --save-exact @temporalio/activity@1.24.0 @temporalio/client@1.24.0 @temporalio/common@1.24.0 @temporalio/envconfig@1.24.0 @temporalio/plugin@1.24.0 @temporalio/worker@1.24.0 @temporalio/workflow@1.24.0 @temporalio/workflow-streams@1.24.0 @temporalio/openai-agents@1.24.0
 npm install --save-exact @openai/agents-core@0.14.3 @openai/agents-openai@0.14.3 openai@6.46.0 zod@4.6.5
 npm install --save-dev --save-exact typescript@7.0.2 @types/node@22.20.4
 ```
 
-The Temporal SDK packages above share **1.24.0**, matching the OpenAI plugin. The harness packages
+The Temporal SDK packages above share **1.24.0**, matching the OpenAI plugin. The Agent Kit packages
 have their own version, **0.2.0**. Pinning the Temporal dependencies together avoids installing
 incompatible copies through the plugin. Commit `package-lock.json` and use `npm ci` on subsequent
 installs. The shared Python services below are pinned separately to **0.8.0**.
@@ -300,11 +300,11 @@ import {
   defineAgent,
   handler,
   tool,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
   asOpenAIAgentTool,
   runStreamed,
-} from "@temporalio/agent-harness/ai-sdks/openai-agents-harness";
+} from "@temporalio/agent-kit/ai-sdks/openai-agents";
 
 const getWeather = tool({
   name: "get_weather",
@@ -352,9 +352,9 @@ export const OpenAIHelloAgentTs = defineAgent({
 });
 ```
 
-### Running a worker — one harness plugin
+### Running a worker — one plugin
 
-Create `worker.ts`. The model integration's plugin comes first, then `AgentHarnessPlugin`.
+Create `worker.ts`. The model integration's plugin comes first, then `AgentKitPlugin`.
 The worker bundles the **compiled** `dist/agents.js`; it does not run the agent as ordinary
 Node application code.
 
@@ -362,8 +362,8 @@ Node application code.
 import { fileURLToPath } from "node:url";
 import { loadClientConnectConfig } from "@temporalio/envconfig";
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { AgentHarnessPlugin } from "@temporalio/agent-harness-worker";
-import { OpenAIAgentsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/openai-agents";
+import { AgentKitPlugin } from "@temporalio/agent-kit-worker";
+import { OpenAIAgentsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/openai-agents";
 
 // `ping` needs no model, so the worker starts without a key; only `ask` fails without one.
 if (!process.env.OPENAI_API_KEY)
@@ -377,7 +377,7 @@ try {
     namespace: namespace ?? "default",
     taskQueue: "openai-hello-ts",
     workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
-    plugins: [new OpenAIAgentsPlugin(), new AgentHarnessPlugin()],
+    plugins: [new OpenAIAgentsPlugin(), new AgentKitPlugin()],
   });
   await worker.run();
 } finally {
@@ -405,7 +405,7 @@ schema = "OpenAIHelloAgentTs.schema.json"
 Build the project and generate the schema:
 
 ```bash
-npm run harness:schema
+npm run agent-kit:schema
 ```
 
 The server reads this document without importing your agent code. It describes handlers, state,
@@ -422,10 +422,10 @@ Run one command per terminal, all from `my-agent/`:
 temporal server start-dev
 
 # 2. Session-manager worker: starts agents and tracks sessions.
-uvx --from 'temporal-agent-harness[ui]==0.11.0' temporal-agent-harness session-manager
+uvx --from 'temporal-agent-kit[ui]==0.11.0' temporal-agent-kit session-manager
 
-# 3. Harness console + JSON API: http://localhost:8000.
-uvx --from 'temporal-agent-harness[ui]==0.11.0' temporal-agent-harness serve ./agents.toml
+# 3. Agent Kit console + JSON API: http://localhost:8000.
+uvx --from 'temporal-agent-kit[ui]==0.11.0' temporal-agent-kit serve ./agents.toml
 
 # 4. Your TypeScript agent worker; loads .env.local.
 npm start
@@ -433,14 +433,14 @@ npm start
 
 The console is prebuilt in the Python package. No frontend build is needed. The console and
 session-manager worker are shared infrastructure; your agent code runs on your TypeScript worker.
-From the next Python release, `temporal-agent-harness dev ./agents.toml` runs steps 2 and 3 in
-one process, as the quickstart's `npm run harness:dev` does.
+From the next Python release, `temporal-agent-kit dev ./agents.toml` runs steps 2 and 3 in
+one process, as the quickstart's `npm run agent-kit:dev` does.
 Leave all four processes running while using the console. After editing TypeScript, stop your
-worker, rerun `npm run harness:schema`, and start it again. Start a new session when changing agent behavior.
+worker, rerun `npm run agent-kit:schema`, and start it again. Start a new session when changing agent behavior.
 
 ### Your first session
 
-1. Open the **harness console at <http://localhost:8000>**.
+1. Open the **Agent Kit console at <http://localhost:8000>**.
 2. Click **New session** (the **+** in the top bar), choose **OpenAI Hello (TypeScript)**,
    then click **Start session**.
 3. Send **“What's the weather in Paris?”** to the `ask` handler.
@@ -448,7 +448,7 @@ worker, rerun `npm run harness:schema`, and start it again. Start a new session 
    and its `{ "city": "Paris" }` input and sample result. The tool returns “It's 72°F and sunny in Paris.”; the model's wording can vary.
 5. Ask a follow-up in the same session. Reload the page to reconnect to its recorded conversation.
 
-![Harness console showing a TypeScript weather conversation and its completed get_weather tool call](https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/docs/images/typescript-quickstart.png)
+![Agent Kit console showing a TypeScript weather conversation and its completed get_weather tool call](https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/docs/images/typescript-quickstart.png)
 
 The screenshot shows the console after a completed weather turn. It uses a scripted model
 response for a reproducible capture; the agent, tool execution, Temporal workflows, and console
@@ -477,7 +477,7 @@ Zod schemas describe both its messages and the data supplied when the session st
 
 ```ts
 import { z } from "zod";
-import { defineAgent, handler, ToolApprovalPolicy } from "@temporalio/agent-harness";
+import { defineAgent, handler, ToolApprovalPolicy } from "@temporalio/agent-kit";
 
 export const TravelAgent = defineAgent({
   name: "TravelAgent",
@@ -516,10 +516,10 @@ workflow module, add a matching registry entry, and generate its schema using th
 | Cannot connect to Temporal | Start the dev server, or check `TEMPORAL_CONFIG_FILE`, `TEMPORAL_PROFILE`, and `TEMPORAL_*` overrides in every terminal. |
 | Console loads but agent discovery or session creation stalls | Start the session-manager worker and confirm it uses the same Temporal address and namespace as the console. |
 | A session starts but messages never progress | Start the TypeScript worker. Its task queue must match `agents.toml`, and its address and namespace must match the other services. |
-| `dist/worker.js` or the schema file is missing | Run `npm run harness:schema` from the project root before starting the services. |
+| `dist/worker.js` or the schema file is missing | Run `npm run agent-kit:schema` from the project root before starting the services. |
 | Duplicate protobuf registrations or incompatible Temporal types | Reinstall with the pinned dependency versions above. Keep the underlying Temporal SDK packages aligned with the OpenAI plugin. |
 | An edited registry still shows the old agents | The session-manager workflow caches its registry. For disposable local development, restart a fresh in-memory Temporal dev server, then restart the services. This discards local sessions; use it only when you can discard them. |
-| Port 8000 shows nothing useful | Open the harness console on 8000; Temporal's workflow UI on 8233 is a separate application. Check the `serve` terminal for startup errors. |
+| Port 8000 shows nothing useful | Open the Agent Kit console on 8000; Temporal's workflow UI on 8233 is a separate application. Check the `serve` terminal for startup errors. |
 
 ## What next?
 
@@ -544,7 +544,7 @@ workflow module, add a matching registry entry, and generate its schema using th
 
 ## Versioning and stability
 
-Pin the harness packages to the same exact harness release, and pin the underlying Temporal SDK
+Pin the Agent Kit packages to the same exact Agent Kit release, and pin the underlying Temporal SDK
 packages to the version required by your model integration. The Python services have a separate
 release version. The manual walkthrough pairs npm **0.2.0** with Python **0.8.0**; do not assume those
 version numbers should match.

@@ -23,7 +23,7 @@ from temporalio.worker import Replayer, Worker
 from examples.code_mode_memory import local_disk
 from examples.code_mode_memory.local_disk import LocalDisk, SkillsDisk
 from examples.code_mode_memory.workflow import MemoryConfig
-from temporal_agent_harness.harness.agent_protocol import (
+from temporal_agent_kit.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -32,13 +32,13 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.harness.code_mode.activity_fs import (
+from temporal_agent_kit.code_mode.activity_fs import (
     FsCall,
     FsRead,
     FsRename,
     FsWrite,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from tests.examples.code_mode_memory._memory_e2e_parent import CodeModeMemoryE2EParentWorkflow
 
@@ -183,7 +183,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[CodeModeMemoryE2EParentWorkflow],
-        plugins=[AgentHarnessPlugin(filesystems=[LocalDisk, SkillsDisk])],
+        plugins=[AgentKitPlugin(filesystems=[LocalDisk, SkillsDisk])],
     ):
         try:
             yield env.client, task_queue

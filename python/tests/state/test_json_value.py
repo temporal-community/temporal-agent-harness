@@ -9,11 +9,11 @@ from __future__ import annotations
 import pytest
 from pydantic import JsonValue
 
-from temporal_agent_harness.harness.state import HarnessState, StateRef
-from temporal_agent_harness.harness.state.errors import FrozenError
+from temporal_agent_kit.state import AgentState, StateRef
+from temporal_agent_kit.state.errors import FrozenError
 
 
-class Settings(HarnessState):
+class Settings(AgentState):
     name: str = ""
     extra: dict[str, JsonValue] = {}
 

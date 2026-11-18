@@ -20,13 +20,13 @@ from langchain_core.tools import tool
 
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_harness.ai_sdks.langgraph._activity import _observing
-from temporal_agent_harness.ai_sdks.langgraph._harness import (
+from temporal_agent_kit.ai_sdks.langgraph._activity import _observing
+from temporal_agent_kit.ai_sdks.langgraph._kit import (
     LangGraphStreamObserver,
     _non_retryable,
     _token_usage,
 )
-from temporal_agent_harness.harness.agent_protocol import ReplyDelta, TokenUsage, ToolRequested
+from temporal_agent_kit.agent_protocol import ReplyDelta, TokenUsage, ToolRequested
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 

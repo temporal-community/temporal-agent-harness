@@ -35,6 +35,8 @@ describe("pane empty states", () => {
     }
   });
 
+  /* Boot no longer starts a workflow when there is nothing to reopen, so the chat pane has
+     to say so and offer New session, not render an agent-less composer. */
   it("place the language tag wherever a pre carries data-language", () => {
     const files = readdirSync(SRC, { recursive: true }).filter((f) => f.endsWith(".svelte"));
     const hosts = files.filter((f) => /<pre[^>]*\sdata-language=/.test(readFileSync(new URL(f, SRC), "utf8")));

@@ -9,12 +9,12 @@ from temporalio.api.enums.v1 import TaskQueueType
 from temporalio.api.taskqueue.v1 import PollerInfo
 from temporalio.api.workflowservice.v1 import DescribeTaskQueueResponse
 
-from temporal_agent_harness.web import (
+from temporal_agent_kit.web import (
     AgentDescriptor,
     AgentRegistry,
-    create_agent_harness_app,
+    create_agent_kit_app,
 )
-from temporal_agent_harness.web.task_queue_status import (
+from temporal_agent_kit.web.task_queue_status import (
     NO_WORKER,
     READY,
     UNKNOWN,
@@ -202,7 +202,7 @@ def _agents_app(registry: AgentRegistry, temporal: _FakeTemporalClient) -> FastA
     connect to a real Temporal server — so the endpoint gets the same two pieces of state
     the lifespan would have set.
     """
-    app = create_agent_harness_app(registry=registry)
+    app = create_agent_kit_app(registry=registry)
     app.state.temporal = temporal
     app.state.manager_handle = _FakeManagerHandle(registry)
     return app

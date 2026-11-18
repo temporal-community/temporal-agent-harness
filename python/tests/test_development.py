@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from temporal_agent_harness.development import (
+from temporal_agent_kit.development import (
     api_checks,
     choose_skill_tools,
     create_starter,
@@ -16,7 +16,7 @@ from temporal_agent_harness.development import (
     project_name,
     skill_destinations,
 )
-from temporal_agent_harness.web.cli import main
+from temporal_agent_kit.web.cli import main
 
 
 def bundle(tmp_path: Path) -> Path:
@@ -45,7 +45,7 @@ def test_skill_update_preserves_edits_and_does_not_partially_write(tmp_path):
     assert (root / "SKILL.md").read_text() == "second"
     assert not (root / "old.md").exists()
     assert (root / "custom.md").read_text() == "mine"
-    assert json.loads((root / ".harness-skill.json").read_text())["version"] == "2"
+    assert json.loads((root / ".agent-kit-skill.json").read_text())["version"] == "2"
 
 
 def test_skill_update_rejects_symlinks_and_manifest_traversal(tmp_path):
@@ -59,7 +59,7 @@ def test_skill_update_rejects_symlinks_and_manifest_traversal(tmp_path):
         install_skill(tmp_path / "skills", source=source, sdk_version="2")
     assert outside.read_text() == "leave alone"
     (root / "old.md").unlink()
-    (root / ".harness-skill.json").write_text(json.dumps({"name":"temporal-harness-python", "files":{"../../outside":"x"}}))
+    (root / ".agent-kit-skill.json").write_text(json.dumps({"name":"temporal-agent-kit-python", "files":{"../../outside":"x"}}))
     with pytest.raises(ValueError, match="Invalid resource path"):
         install_skill(tmp_path / "skills", source=source, sdk_version="2")
 
@@ -97,15 +97,15 @@ def test_choose_skill_tools_stops_at_end_of_input():
 
 def test_skills_install_for_claude_reports_its_location(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("temporal_agent_harness.development.package_version", lambda: "9.9.9")
+    monkeypatch.setattr("temporal_agent_kit.development.package_version", lambda: "9.9.9")
     main(["skills", "install", "--for", "claude"])
     out = capsys.readouterr().out
-    assert (tmp_path / ".claude/skills/temporal-harness-python/SKILL.md").is_file()
+    assert (tmp_path / ".claude/skills/temporal-agent-kit-python/SKILL.md").is_file()
     assert not (tmp_path / ".agents").exists()
-    assert out.startswith("Installed temporal-harness-python 9.9.9 in ")
-    assert "/temporal-harness-python" in out
+    assert out.startswith("Installed temporal-agent-kit-python 9.9.9 in ")
+    assert "/temporal-agent-kit-python" in out
     main(["skills", "install", "--for", "claude"])
-    assert capsys.readouterr().out.startswith("Already up to date: temporal-harness-python ")
+    assert capsys.readouterr().out.startswith("Already up to date: temporal-agent-kit-python ")
 
 
 class Terminal(io.StringIO):
@@ -115,7 +115,7 @@ class Terminal(io.StringIO):
 
 def test_skills_install_without_a_target_asks_only_in_a_terminal(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("temporal_agent_harness.development.package_version", lambda: "9.9.9")
+    monkeypatch.setattr("temporal_agent_kit.development.package_version", lambda: "9.9.9")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     with pytest.raises(SystemExit, match="--for {claude,agents} or --dest"):
         main(["skills", "install"])
@@ -123,7 +123,7 @@ def test_skills_install_without_a_target_asks_only_in_a_terminal(tmp_path, monke
     monkeypatch.setattr(sys, "stdin", Terminal("2\n"))
     main(["skills", "install"])
     assert "Install the skill for which coding agents?" in capsys.readouterr().out
-    assert (tmp_path / ".agents/skills/temporal-harness-python/SKILL.md").is_file()
+    assert (tmp_path / ".agents/skills/temporal-agent-kit-python/SKILL.md").is_file()
     assert not (tmp_path / ".claude").exists()
 
 
@@ -135,7 +135,7 @@ def test_project_name_comes_from_the_directory():
 def test_starter_pins_the_install_and_refuses_overwrite(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    (source / "pyproject.toml.tmpl").write_text('name = "__PROJECT_NAME__"\nversion = "__HARNESS_VERSION__"')
+    (source / "pyproject.toml.tmpl").write_text('name = "__PROJECT_NAME__"\nversion = "__AGENT_KIT_VERSION__"')
     (source / "gitignore.tmpl").write_text(".env.local\n")
     root = create_starter(tmp_path / "app", source=source, sdk_version="0.9.0")
     assert '"0.9.0"' in (root / "pyproject.toml").read_text()
@@ -147,7 +147,7 @@ def test_starter_pins_the_install_and_refuses_overwrite(tmp_path):
 
 
 def test_api_diagnostics_fail_closed_without_leaking_response(capsys):
-    with patch("temporal_agent_harness.development.urlopen", side_effect=OSError("secret")):
+    with patch("temporal_agent_kit.development.urlopen", side_effect=OSError("secret")):
         report = api_checks("http://localhost:8000", .01)
     assert report[0]["ok"] is False
     assert "secret" not in json.dumps(report)
@@ -161,7 +161,7 @@ def test_schema_rejects_offline_openapi_export(capsys):
 
 
 def test_doctor_reports_invalid_registry_and_unavailable_services(tmp_path, monkeypatch, capsys):
-    from temporal_agent_harness.web import doctor
+    from temporal_agent_kit.web import doctor
 
     async def unavailable(queues, timeout):
         assert "session-manager" in queues[0]
@@ -179,7 +179,7 @@ def test_doctor_reports_invalid_registry_and_unavailable_services(tmp_path, monk
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
 def test_doctor_rejects_invalid_timeouts(timeout):
-    from temporal_agent_harness.web.doctor import diagnose
+    from temporal_agent_kit.web.doctor import diagnose
 
     with pytest.raises(ValueError, match="positive"):
         diagnose(None, "http://localhost:8000", timeout)
@@ -191,18 +191,18 @@ def test_api_reports_worker_readiness_and_malformed_responses():
     def response(value):
         return BytesIO(json.dumps(value).encode())
 
-    with patch("temporal_agent_harness.development.urlopen", return_value=response({
+    with patch("temporal_agent_kit.development.urlopen", return_value=response({
         "agents": [{"workflow_type": "Hello", "worker": {"status": "no_worker"}}]
     })):
         checks = api_checks("http://localhost:8000")
     assert checks[0]["ok"] is True
     assert checks[1] == {"check": "worker:Hello", "ok": False, "detail": "no_worker"}
-    with patch("temporal_agent_harness.development.urlopen", return_value=response({"agents": [None]})):
+    with patch("temporal_agent_kit.development.urlopen", return_value=response({"agents": [None]})):
         assert api_checks("http://localhost:8000")[-1]["ok"] is False
 
 
 def test_dev_runs_the_session_manager_and_server_together(monkeypatch, tmp_path):
-    from temporal_agent_harness.web import dev
+    from temporal_agent_kit.web import dev
 
     registry = tmp_path / "agents.toml"
     registry.write_text('[[agents]]\nkey = "a"\nworkflow_type = "A"\ntask_queue = "q"\nlabel = "A"\ndescription = "d"\n')

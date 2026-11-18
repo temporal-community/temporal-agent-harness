@@ -1,14 +1,14 @@
 """Agents' schema documents and the agents.toml registries that point at them, generated.
 
-harness_agent writes a Python agent's schema with the temporal-agent-harness CLI, and
-harness_ts_agent a TypeScript agent's with the worker package's agent-harness-schema;
-harness_agent_registry writes an agents.toml for a package's agents and keeps it and their
-schemas committed beside the BUILD file, so `temporal-agent-harness serve` reads the agents'
+agent_kit_agent writes a Python agent's schema with the temporal-agent-kit CLI, and
+agent_kit_ts_agent a TypeScript agent's with the worker package's agent-kit-schema;
+agent_kit_agent_registry writes an agents.toml for a package's agents and keeps it and their
+schemas committed beside the BUILD file, so `temporal-agent-kit serve` reads the agents'
 start interfaces without importing their code.
 """
 
 load("@aspect_rules_js//js:defs.bzl", "js_binary")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 load("//bazel:committed_files.bzl", "committed_files")
 
 AgentInfo = provider(
@@ -22,8 +22,8 @@ AgentInfo = provider(
     },
 )
 
-_CLI_LIB = Label("//python/temporal_agent_harness/web:cli_lib")
-_CLI_MODULE = "temporal_agent_harness.web.cli"
+_CLI_LIB = Label("//python/temporal_agent_kit/web:cli_lib")
+_CLI_MODULE = "temporal_agent_kit.web.cli"
 
 def _write_schema(ctx, tool, args, env = {}):
     # Not `<name>.schema.json`: that is where the committed copy is copied into the output tree.
@@ -33,30 +33,30 @@ def _write_schema(ctx, tool, args, env = {}):
         executable = tool,
         arguments = args + ["-o", out.path],
         env = env,
-        mnemonic = "HarnessSchema",
+        mnemonic = "AgentKitSchema",
         progress_message = "Writing the schema for %{label}",
     )
     return out
 
-def _harness_schema_impl(ctx):
+def _agent_kit_schema_impl(ctx):
     out = _write_schema(ctx, ctx.executable.tool, ctx.attr.args)
     return [DefaultInfo(files = depset([out]))]
 
-harness_schema = rule(
-    implementation = _harness_schema_impl,
+agent_kit_schema = rule(
+    implementation = _agent_kit_schema_impl,
     doc = "`<name>.generated.schema.json`: what `<tool> <args...> -o <file>` writes.",
     attrs = {
         "args": attr.string_list(mandatory = True, doc = 'The CLI\'s arguments, e.g. ["schema", "--protocol"].'),
         "tool": attr.label(
-            default = "//python/temporal_agent_harness/web:cli",
+            default = "//python/temporal_agent_kit/web:cli",
             executable = True,
             cfg = "exec",
-            doc = "The temporal-agent-harness CLI.",
+            doc = "The temporal-agent-kit CLI.",
         ),
     },
 )
 
-def _harness_agent_rule_impl(ctx):
+def _agent_kit_agent_rule_impl(ctx):
     schema = _write_schema(ctx, ctx.executable.tool, ["schema", ctx.attr.agent], ctx.attr.env)
     return [
         DefaultInfo(files = depset([schema])),
@@ -69,8 +69,8 @@ def _harness_agent_rule_impl(ctx):
         ),
     ]
 
-_harness_agent_rule = rule(
-    implementation = _harness_agent_rule_impl,
+_agent_kit_agent_rule = rule(
+    implementation = _agent_kit_agent_rule_impl,
     attrs = {
         "agent": attr.string(mandatory = True),
         "agent_label": attr.string(),
@@ -82,18 +82,18 @@ _harness_agent_rule = rule(
     },
 )
 
-def _harness_agent_impl(name, visibility, agent, deps, env, key, task_queue, label, description):
+def _agent_kit_agent_impl(name, visibility, agent, deps, env, key, task_queue, label, description):
     entry = [key, task_queue, label, description]
     if any(entry) and not all(entry):
-        fail("harness_agent: set all of key, task_queue, label, and description (a registry entry), or none")
+        fail("agent_kit_agent: set all of key, task_queue, label, and description (a registry entry), or none")
 
     # The CLI, able to import this agent: only the schema is written with it.
-    harness_module_binary(
+    agent_kit_module_binary(
         name = name + "_schema_tool",
         module = _CLI_MODULE,
         deps = [_CLI_LIB] + deps,
     )
-    _harness_agent_rule(
+    _agent_kit_agent_rule(
         name = name,
         visibility = visibility,
         agent = agent,
@@ -105,14 +105,14 @@ def _harness_agent_impl(name, visibility, agent, deps, env, key, task_queue, lab
         tool = ":" + name + "_schema_tool",
     )
 
-harness_agent = macro(
-    doc = """One agent: its schema document (`temporal-agent-harness schema <agent>`), which a
-    harness_agent_registry commits as `<name>.schema.json`, and, for an agent a registry lists,
+agent_kit_agent = macro(
+    doc = """One agent: its schema document (`temporal-agent-kit schema <agent>`), which a
+    agent_kit_agent_registry commits as `<name>.schema.json`, and, for an agent a registry lists,
     its entry's fields. The entry's
     workflow_type is the workflow the schema describes. An agent only ever run as a subagent
     leaves the entry's fields unset.
     """,
-    implementation = _harness_agent_impl,
+    implementation = _agent_kit_agent_impl,
     attrs = {
         "agent": attr.string(mandatory = True, configurable = False, doc = "The agent's class, `module.path:ClassName`."),
         "deps": attr.label_list(mandatory = True, configurable = False, doc = "Libraries that define the class."),
@@ -124,10 +124,10 @@ harness_agent = macro(
     },
 )
 
-_TS_CLI = Label("//typescript/packages/worker/src/harness:agent-schema.js")
+_TS_CLI = Label("//typescript/packages/worker/src:agent-schema.js")
 
-def _harness_ts_agent_rule_impl(ctx):
-    # agent-harness-schema is a js_binary: it runs from the output root, so paths are relative to it.
+def _agent_kit_ts_agent_rule_impl(ctx):
+    # agent-kit-schema is a js_binary: it runs from the output root, so paths are relative to it.
     out = ctx.actions.declare_file(ctx.label.name + ".generated.schema.json")
 
     # The module and what it imports, node_modules included, are read from the output tree.
@@ -141,7 +141,7 @@ def _harness_ts_agent_rule_impl(ctx):
         executable = ctx.executable.tool,
         arguments = ["%s#%s" % (ctx.file.module.short_path, ctx.attr.export), "-o", out.short_path],
         env = {"BAZEL_BINDIR": ctx.bin_dir.path},
-        mnemonic = "HarnessSchema",
+        mnemonic = "AgentKitSchema",
         progress_message = "Writing the schema for %{label}",
     )
     return [
@@ -155,8 +155,8 @@ def _harness_ts_agent_rule_impl(ctx):
         ),
     ]
 
-_harness_ts_agent_rule = rule(
-    implementation = _harness_ts_agent_rule_impl,
+_agent_kit_ts_agent_rule = rule(
+    implementation = _agent_kit_ts_agent_rule_impl,
     attrs = {
         "agent_label": attr.string(),
         "deps": attr.label_list(mandatory = True),
@@ -169,18 +169,18 @@ _harness_ts_agent_rule = rule(
     },
 )
 
-def _harness_ts_agent_impl(name, visibility, module, export, deps, key, task_queue, label, description):
+def _agent_kit_ts_agent_impl(name, visibility, module, export, deps, key, task_queue, label, description):
     entry = [key, task_queue, label, description]
     if any(entry) and not all(entry):
-        fail("harness_ts_agent: set all of key, task_queue, label, and description (a registry entry), or none")
+        fail("agent_kit_ts_agent: set all of key, task_queue, label, and description (a registry entry), or none")
 
     # The published CLI, able to import this agent: only the schema is written with it.
     js_binary(
         name = name + "_schema_tool",
         entry_point = _TS_CLI,
-        data = [Label("//typescript/packages/worker/src/harness:agent-schema")] + deps,
+        data = [Label("//typescript/packages/worker/src:agent-schema")] + deps,
     )
-    _harness_ts_agent_rule(
+    _agent_kit_ts_agent_rule(
         name = name,
         visibility = visibility,
         module = module,
@@ -193,13 +193,13 @@ def _harness_ts_agent_impl(name, visibility, module, export, deps, key, task_que
         tool = ":" + name + "_schema_tool",
     )
 
-harness_ts_agent = macro(
-    doc = """One TypeScript agent: its schema document (`agent-harness-schema <module>#<export>`,
-    the bin @temporalio/agent-harness-worker publishes), which a harness_agent_registry commits as
+agent_kit_ts_agent = macro(
+    doc = """One TypeScript agent: its schema document (`agent-kit-schema <module>#<export>`,
+    the bin @temporalio/agent-kit-worker publishes), which a agent_kit_agent_registry commits as
     `<name>.schema.json`, and, for an agent a registry lists, its entry's fields. The entry's
     workflow_type is the workflow the schema describes.
     """,
-    implementation = _harness_ts_agent_impl,
+    implementation = _agent_kit_ts_agent_impl,
     attrs = {
         "module": attr.label(mandatory = True, configurable = False, doc = "The compiled module that exports the agent, e.g. `:agents.js`."),
         "export": attr.string(mandatory = True, configurable = False, doc = "The name the module exports the agent as (`defineAgent`'s result)."),
@@ -223,7 +223,7 @@ def _registry_rule_impl(ctx):
                 "description": agent.description,
                 "key": agent.key,
                 "label": agent.label,
-                # The committed copy's name (harness_agent_registry), beside agents.toml.
+                # The committed copy's name (agent_kit_agent_registry), beside agents.toml.
                 "schema": target.label.name + ".schema.json",
                 "schema_path": agent.schema.path,
                 "task_queue": agent.task_queue,
@@ -239,7 +239,7 @@ def _registry_rule_impl(ctx):
         outputs = [out],
         executable = ctx.executable._writer,
         arguments = [spec.path, out.path],
-        mnemonic = "HarnessRegistry",
+        mnemonic = "AgentKitRegistry",
         progress_message = "Writing the agent registry %{label}",
     )
     return [DefaultInfo(files = depset([out]))]
@@ -254,7 +254,7 @@ _registry_rule = rule(
     },
 )
 
-def _harness_agent_registry_impl(name, visibility, agents, srcs):
+def _agent_kit_agent_registry_impl(name, visibility, agents, srcs):
     _registry_rule(
         name = name + "_toml",
         agents = agents,
@@ -262,7 +262,7 @@ def _harness_agent_registry_impl(name, visibility, agents, srcs):
         update = "//%s:%s_update" % (native.package_name(), name),
     )
 
-    # Each schema's name is its harness_agent's, which the registry's `schema` entries use too.
+    # Each schema's name is its agent_kit_agent's, which the registry's `schema` entries use too.
     committed_files(
         name = name,
         visibility = visibility,
@@ -273,17 +273,17 @@ def _harness_agent_registry_impl(name, visibility, agents, srcs):
         },
     )
 
-harness_agent_registry = macro(
-    doc = """This package's agents.toml for `agents` (harness_agent targets), committed beside the
+agent_kit_agent_registry = macro(
+    doc = """This package's agents.toml for `agents` (agent_kit_agent targets), committed beside the
     BUILD file with each agent's `<name>.schema.json`, which its `schema` entries point at.
 
     `bazel run :<name>_update` writes them; `<name>_toml_up_to_date_test` and
     `<name>_<Agent>_schema_json_up_to_date_test` fail while one is out of date (committed_files).
     `srcs` lists the committed files: `agents.toml` and each agent's `<name>.schema.json`.
     """,
-    implementation = _harness_agent_registry_impl,
+    implementation = _agent_kit_agent_registry_impl,
     attrs = {
-        "agents": attr.label_list(mandatory = True, configurable = False, doc = "harness_agent or harness_ts_agent targets, in the order of their entries."),
+        "agents": attr.label_list(mandatory = True, configurable = False, doc = "agent_kit_agent or agent_kit_ts_agent targets, in the order of their entries."),
         "srcs": attr.label_list(mandatory = True, allow_files = True, configurable = False, doc = "The committed agents.toml and each agent's schema document."),
     },
 )

@@ -48,8 +48,8 @@ implementation we do not need.
 ## The seam already exists
 
 `AgentClient.attach(on_item=…)` and `send_message(on_item=…)`
-(`temporal_agent_harness/harness/agent_client.py:538,401`) take an encoder callback. `_yield_item`
-(`temporal_agent_harness/web/app.py:652`) is the **only** thing binding the harness event model to
+(`temporal_agent_kit/agent_client.py:538,401`) take an encoder callback. `_yield_item`
+(`temporal_agent_kit/web/app.py:652`) is the **only** thing binding the harness event model to
 the current SSE wire shape. A second consumer with a different encoder is a pure addition — it
 does not fork the stream, gate it, or degrade it.
 
@@ -270,7 +270,7 @@ picked up later — the package has shipped 41 minor releases in nine months:
 - `npm pack chat@4.41.0`, then read `dist/types-994wmjht.d.ts` (`PostableMessage`, `ChatConfig`,
   `WebhookOptions`, `SlashCommandEvent`, `Thread`), `dist/workflow/index.js` (the `workflow`
   import), `package.json` (optional peers), and the bundled `docs/*.mdx`.
-- Harness side: `web/app.py`, `harness/agent_client.py`, `harness/agent_protocol/events.py`,
+- Harness side: `web/app.py`, `agent_client.py`, `agent_protocol/events.py`,
   `nexus_agent_adapter/handler.py`.
 - **Do not cite `ui/docs/api.md` as the event contract.** It is stale — it documents `reply` and
   `error` event types that no longer exist in `AgentEventType`, and omits `callback_requested`,

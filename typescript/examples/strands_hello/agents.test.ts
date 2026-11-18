@@ -10,11 +10,11 @@ import { after, before, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Model } from "@strands-agents/sdk";
 import type { BaseModelConfig, Message, ModelStreamEvent } from "@strands-agents/sdk";
-import type { AgentEvent } from "@temporalio/agent-harness/harness/agent-protocol";
-import { AgentHarnessPlugin, toolActivity } from "@temporalio/agent-harness-worker";
-import { StrandsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/strands-agents";
-import { harnessObserverFactory } from "@temporalio/agent-harness-worker/ai-sdks/strands-agents-harness";
-import { AgentClient } from "@temporalio/agent-harness-worker/harness/agent-client";
+import type { AgentEvent } from "@temporalio/agent-kit/agent-protocol";
+import { AgentKitPlugin, toolActivity } from "@temporalio/agent-kit-worker";
+import { StrandsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/strands-agents";
+import { kitObserverFactory } from "@temporalio/agent-kit-worker/ai-sdks/strands-agents";
+import { AgentClient } from "@temporalio/agent-kit-worker/agent-client";
 import { Client } from "@temporalio/client";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { NativeConnection, Worker } from "@temporalio/worker";
@@ -82,9 +82,9 @@ before(async () => {
     plugins: [
       new StrandsPlugin({
         models: { [MODEL]: () => new AskThenEchoModel() },
-        observerFactory: harnessObserverFactory,
+        observerFactory: kitObserverFactory,
       }),
-      new AgentHarnessPlugin({
+      new AgentKitPlugin({
         largePayloadOffload: null,
         tools: [toolActivity(getLocalTime, async () => "Saturday 14:05 (CET)")],
       }),

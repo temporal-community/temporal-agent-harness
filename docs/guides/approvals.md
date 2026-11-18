@@ -43,7 +43,7 @@ AgentWorkflowRunner(
         tools={"some_mcp_tool": "read_only"},   # by NAME, so it covers tools you didn't write
         default="read_only",                     # the catch-all
     ),
-    # THE MECHANISM — `jev_evaluator` (from `temporal_agent_harness.ai_sdks.jev`, with the
+    # THE MECHANISM — `jev_evaluator` (from `temporal_agent_kit.ai_sdks.jev`, with the
     # `typesafe` extra) puts a model in the seat, via one fast typed judgment from Jev
     # (https://docs.typesafe.ai) rather than a prompt to parse.
     auto_mode_evaluator=jev_evaluator(),
@@ -79,13 +79,13 @@ async def set_posture(self, msg: Posture) -> Ack:
 It can't fail open: low confidence, an irreversible effect, a raise, or a TypeSafe outage all
 land at the human gate rather than approving.
 
-And the harness won't even *ask* unless the call is governed. A tool with no criteria set
-assigned, or one assigned to a name nobody registered, is escalated by the harness itself — no
+And Agent Kit won't even *ask* unless the call is governed. A tool with no criteria set
+assigned, or one assigned to a name nobody registered, is escalated by Agent Kit itself — no
 evaluator is invoked and no model call is spent, so an unconfigured auto mode costs nothing.
 That's enforced in the gate rather than left to each evaluator, which is why an evaluator
 receives its governing rules as a required, non-optional field and needs no defensive check of
 its own. Needs the `typesafe` extra, with its `TypeSafePlugin` registered on the worker before
-`AgentHarnessPlugin`.
+`AgentKitPlugin`.
 
 Every evaluator — yours or Jev's — is bracketed on the event stream
 (`auto_approval_evaluation_started` → `_ended` / `_superseded` / `_error`), so its verdict,

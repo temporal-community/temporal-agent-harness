@@ -1,7 +1,7 @@
 # Accepted Messages
 
 An agent's inbound surface is just its `@agent.accepts` handlers. There is no
-separate command channel, no reserved message type, and nothing the harness
+separate command channel, no reserved message type, and nothing Agent Kit
 knows how to do on an agent's behalf — a control action is an ordinary handler
 with a typed input model:
 

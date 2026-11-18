@@ -1,13 +1,13 @@
-# @temporalio/agent-harness-client
+# @temporalio/agent-kit-client
 
-A framework-independent client for temporal-agent-harness agents. `AgentSessionCore` follows one
+A framework-independent client for temporal-agent-kit agents. `AgentSessionCore` follows one
 session's merged event stream — the root agent and every subagent it drives — and projects it
 into messages and observable state for each agent, through a `SessionState` a framework binding
-supplies (`@temporalio/agent-harness-svelte`, `@temporalio/agent-harness-react`, or
+supplies (`@temporalio/agent-kit-svelte`, `@temporalio/agent-kit-react`, or
 `PlainSessionState` for none).
 
 ```ts
-import { AgentSessionCore, HttpTransport, PlainSessionState } from "@temporalio/agent-harness-client";
+import { AgentSessionCore, HttpTransport, PlainSessionState } from "@temporalio/agent-kit-client";
 
 const state = new PlainSessionState<TicTacToeAgent>();
 const session = new AgentSessionCore(
@@ -48,7 +48,7 @@ To look at a session from the browser console during development, expose it:
 
 ```ts
 if (import.meta.env.DEV) exposeSession(sessionId, state);
-// In the console: __AGENT_HARNESS__["<session id>"]()
+// In the console: __AGENT_KIT__["<session id>"]()
 ```
 
 That returns `inspectSession(state)`: a plain object with the connection, the last resume offset,
@@ -68,7 +68,7 @@ if (import.meta.env.DEV) {
     let stop = () => {};
     new TanStackDevtoolsCore({
       plugins: [{
-        id: "agent-harness",
+        id: "agent-kit",
         name: "Agent session",
         render: (el) => {
           stop();

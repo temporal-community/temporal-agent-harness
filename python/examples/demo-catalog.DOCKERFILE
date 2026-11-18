@@ -39,7 +39,7 @@ COPY --chown=app . .
 
 RUN set -eu; \
     run() { bazel run --script_path="/app/bin/$1" "$2"; }; \
-    run cli //python/temporal_agent_harness/web:cli; \
+    run cli //python/temporal_agent_kit/web:cli; \
     for ex in agent_dag code_mode_memory monty openai_hello pydantic_ai_hello; do \
       run "py-$ex-worker" "//python/examples/$ex:worker"; \
     done; \

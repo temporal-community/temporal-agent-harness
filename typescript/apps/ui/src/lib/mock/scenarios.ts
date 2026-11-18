@@ -30,6 +30,8 @@ export interface MockScenario {
   streams?: Record<string, AgentSseFrame[] | "silent">;
   /** Session Manager pins and archives this fixture expects in the store; seeded by main.ts. */
   prefs?: OperatorPrefs;
+  /** Why `createSession` fails, for every start; starts succeed when absent. */
+  createError?: string;
 }
 
 const startedAt = 1_789_126_400;

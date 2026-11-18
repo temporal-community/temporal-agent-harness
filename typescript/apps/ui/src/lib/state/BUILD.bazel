@@ -16,14 +16,12 @@ js_library(
         ":agentRunStorage",
         ":agentState",
         ":approvalDecisionTree",
-        ":bootSession",
         ":clientToolProvider",
         ":fileMounts",
         ":flowProjection",
         ":frameStore",
         ":hydration",
         ":inboundMessageText",
-        ":initData",
         ":replayLog",
         ":replayTimeline",
         ":replyRuns",
@@ -54,12 +52,6 @@ js_library(
 js_library(
     name = "approvalDecisionTree",
     srcs = ["approvalDecisionTree.ts"],
-    visibility = ["//typescript/apps/ui:__subpackages__"],
-)
-
-js_library(
-    name = "bootSession",
-    srcs = ["bootSession.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
 )
 
@@ -151,7 +143,7 @@ js_library(
     name = "handlerRouting",
     srcs = ["handlerRouting.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-client"],
+    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-kit-client"],
 )
 
 js_library(
@@ -186,7 +178,7 @@ js_library(
     name = "initData",
     srcs = ["initData.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
-    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-harness-client"],
+    deps = ["//typescript/apps/ui:node_modules/@temporalio/agent-kit-client"],
 )
 
 js_library(
@@ -385,7 +377,6 @@ vitest_test(
     src = "agentNames.test.mjs",
     deps = [
         ":agentRun.svelte",
-        ":agentRunStorage",
         ":frameStore",
         ":sessionHistory",
         "//typescript/apps/ui/src:App",
@@ -448,8 +439,6 @@ vitest_test(
     src = "bootSession.test.mjs",
     deps = [
         ":agentRun.svelte",
-        ":agentRunStorage",
-        ":bootSession",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )
@@ -785,7 +774,6 @@ vitest_test(
     src = "reloadSnapshot.test.mjs",
     deps = [
         ":agentRun.svelte",
-        ":agentRunStorage",
         ":frameStore",
         "//typescript/apps/ui/tests/support:controllerHarness",
         "//typescript/apps/ui/tests/support:fakeIndexedDb",
@@ -948,7 +936,6 @@ vitest_test(
     src = "temporalActions.test.mjs",
     deps = [
         ":agentRun.svelte",
-        ":agentRunStorage",
         ":frameStore",
         "//typescript/apps/ui/tests/support:controllerHarness",
         "//typescript/apps/ui/tests/support:fakeIndexedDb",

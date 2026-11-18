@@ -40,9 +40,16 @@
     lead?: Snippet;
     /** Whatever closes the row after the launcher — in the app, the shortcuts hint. */
     trail?: Snippet;
+    /** False with no session open: the home desk's panes are mapped like any desk's, but the
+        views and panes the launcher opens are a session's. */
+    canLaunch?: boolean;
+    /** Makes the mark Home: back to the desk with no session open, the session left running. */
+    onHome?: () => void;
+    /** On that desk already, so Home is marked current rather than offered. */
+    atHome?: boolean;
   }
 
-  let { stack, drawer, onOpenDrawer, describe, lead, trail }: Props = $props();
+  let { stack, drawer, onOpenDrawer, describe, lead, trail, canLaunch = true, onHome, atHome = false }: Props = $props();
 
   /**
    * The only hues that reach a tick.
@@ -163,15 +170,34 @@
   </div>
 
   <div class="minimap-mark">
-    <!-- Silent decoration. The document title names the console; nothing on this
-         strip restates it. -->
+    {#if onHome}
+      <!-- The mark leads home, as a site's logo does: named for where it goes, not for itself. -->
+      <button
+        type="button"
+        class="brand-home"
+        aria-label="Home"
+        aria-current={atHome ? "page" : undefined}
+        data-tip={atHome ? "Home" : "Home\nLeaves this session running"}
+        data-tip-below
+        onclick={onHome}
+      >
+        {@render mark()}
+      </button>
+    {:else}
+      <!-- Silent decoration. The document title names the console; nothing on this
+           strip restates it. -->
+      {@render mark()}
+    {/if}
+  </div>
+
+  {#snippet mark()}
     <svg class="brand-mark" viewBox="0 0 192 192" aria-hidden="true">
       <path
         fill="currentColor"
         d="M123.34 68.6596C119.655 41.0484 110.327 18 96 18C81.6731 18 72.3454 41.0484 68.6596 68.6596C41.0484 72.3454 18 81.6731 18 96C18 110.327 41.0525 119.655 68.6596 123.34C72.3454 150.948 81.6731 174 96 174C110.327 174 119.655 150.948 123.34 123.34C150.952 119.655 174 110.327 174 96C174 81.6731 150.948 72.3454 123.34 68.6596ZM67.7583 115.298C41.3151 111.479 25.893 102.737 25.893 96C25.893 89.2629 41.3151 80.5212 67.7583 76.7021C67.1764 83.0674 66.8733 89.566 66.8733 96C66.8733 102.434 67.1764 108.937 67.7583 115.298ZM96 25.893C102.737 25.893 111.479 41.3151 115.298 67.7583C108.937 67.1764 102.434 66.8733 96 66.8733C89.566 66.8733 83.0633 67.1764 76.7021 67.7583C80.5212 41.3151 89.2629 25.893 96 25.893ZM124.242 115.298C122.94 115.488 117.602 116.114 116.252 116.248C116.118 117.602 115.488 122.936 115.302 124.238C111.483 150.681 102.741 166.103 96.0041 166.103C89.267 166.103 80.5253 150.681 76.7061 124.238C76.5202 122.936 75.8898 117.598 75.7564 116.248C75.1421 109.979 74.7703 103.246 74.7703 96C74.7703 88.7537 75.1421 82.0206 75.7564 75.7483C82.0247 75.134 88.7577 74.7622 96.0041 74.7622C103.25 74.7622 109.983 75.134 116.252 75.7483C117.606 75.8817 122.94 76.5121 124.242 76.698C150.685 80.5172 166.111 89.2629 166.111 95.996C166.111 102.729 150.685 111.479 124.242 115.298Z"
       />
     </svg>
-  </div>
+  {/snippet}
 
   <div class="minimap-trail">
     <div
@@ -234,6 +260,7 @@
          Trail holds ticks then controls; flex-end on the trail keeps them on the
          right edge. -->
     <div class="controls">
+      {#if canLaunch}
       <div class="launcher">
         <button
           type="button"
@@ -287,6 +314,7 @@
           </div>
         {/if}
       </div>
+      {/if}
 
       {#if trail}
         {@render trail()}
@@ -348,6 +376,32 @@
     color: var(--text-3);
     pointer-events: none;
     user-select: none;
+  }
+
+  /* A bare control, as the header's icon buttons are at rest: the mark brightens to say it goes
+     somewhere, and stays lit on the desk it leads to. */
+  .brand-home {
+    display: grid;
+    place-items: center;
+    padding: 2px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .brand-home[aria-current="page"] .brand-mark {
+    color: var(--text-1);
+  }
+
+  .brand-home:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .brand-home:hover .brand-mark {
+      color: var(--text-1);
+    }
   }
 
   /* One pip of ink and one pip of air per pane. Stating the pitch in the ink is

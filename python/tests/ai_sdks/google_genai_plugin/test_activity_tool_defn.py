@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
-from temporal_agent_harness.ai_sdks.google_genai_plugin import function_param
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent import Injected
+from temporal_agent_kit.ai_sdks.google_genai_plugin import function_param
+from temporal_agent_kit import agent
+from temporal_agent_kit.agent import Injected
 
 
 @agent.activity_tool_defn()

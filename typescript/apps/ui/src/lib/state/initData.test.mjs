@@ -1,13 +1,13 @@
-// ABOUTME: An agent's init data as the console handles it: which agent boot may start without
-// asking anyone, the form the data renders as, the payload a filled form becomes, and that boot
-// and "New session" send (or refuse to guess) the data through the controller.
+// ABOUTME: An agent's init data as the console handles it: which agents need it, the form the
+// data renders as, the payload a filled form becomes, and that "New session" sends the data
+// through the controller while boot starts nothing.
 
 import assert from "node:assert/strict";
 import { beforeAll, describe, it } from "vitest";
 
 import { installBrowserSurface } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
-import { defaultBootAgent, initDataForm, initDataPayload, requiresInitData } from "./initData.ts";
+import { initDataForm, initDataPayload, requiresInitData } from "./initData.ts";
 
 const tripSchema = {
   title: "Trip",
@@ -33,22 +33,11 @@ const planner = agent("planner", { required: true, schema: tripSchema });
 const greeter = agent("greeter", { required: false, schema: tripSchema });
 const qa = agent("qa");
 
-describe("defaultBootAgent", () => {
-  it("prefers qa, and otherwise the first registered agent", () => {
-    assert.equal(defaultBootAgent([greeter, qa])?.key, "qa");
-    assert.equal(defaultBootAgent([greeter, planner])?.key, "greeter");
-  });
-
-  it("never picks an agent that requires init data, since boot has nobody to ask", () => {
-    assert.equal(defaultBootAgent([planner, qa])?.key, "qa");
-    assert.equal(defaultBootAgent([{ ...planner, key: "qa" }, greeter])?.key, "greeter");
-    assert.equal(defaultBootAgent([planner]), null);
-  });
-
+describe("requiresInitData", () => {
   it("treats a server that does not report init data as none", () => {
     const { init_data: _, ...old } = qa;
     assert.equal(requiresInitData(old), false);
-    assert.equal(defaultBootAgent([old])?.key, "qa");
+    assert.equal(requiresInitData(planner), true);
   });
 });
 
@@ -126,17 +115,17 @@ describe("the controller's session starts", () => {
     return { controller, created };
   }
 
-  it("boot starts an agent that does not require init data, without any", async () => {
-    const { controller, created } = controllerWith([planner, greeter]);
-    await controller.initialize();
-    assert.deepEqual(created, [{ agent_workflow_type: "greeter-type" }]);
-  });
-
-  it("boot starts nothing when every agent requires init data, and says why", async () => {
-    const { controller, created } = controllerWith([planner]);
-    await controller.initialize();
-    assert.deepEqual(created, []);
-    assert.match(controller.connectionError ?? "", /needs init data/);
+  /* Loading the page is not a request to run an agent: with nothing to reopen, boot
+     leaves the console empty and starting one is New session's job. */
+  it("boot with no sessions starts no workflow and reports no error", async () => {
+    for (const agents of [[planner, greeter], [planner]]) {
+      const { controller, created } = controllerWith(agents);
+      await controller.initialize();
+      assert.deepEqual(created, []);
+      assert.equal(controller.session, null);
+      assert.equal(controller.connecting, false);
+      assert.equal(controller.connectionError, null);
+    }
   });
 
   it("a new session sends the init data it was given", async () => {

@@ -1,5 +1,5 @@
 // A plain, serializable picture of a session for logs and devtools, and a dev-only hook that
-// publishes it on `window.__AGENT_HARNESS__` for the browser console.
+// publishes it on `window.__AGENT_KIT__` for the browser console.
 
 import type { AgentSseFrame } from "./frames.ts";
 import type { ConnectionStatus, SessionActivity } from "./session.ts";
@@ -92,10 +92,10 @@ export function inspectSession(session: InspectableSession | InspectableCore): S
   return inspection;
 }
 
-/** For development: `window.__AGENT_HARNESS__[sessionId]()` returns `inspectSession(session)`.
+/** For development: `window.__AGENT_KIT__[sessionId]()` returns `inspectSession(session)`.
  *  Returns the removal. */
 export function exposeSession(sessionId: string, session: InspectableSession | InspectableCore): () => void {
-  const hook = ((globalThis as { __AGENT_HARNESS__?: Record<string, () => SessionInspection> }).__AGENT_HARNESS__ ??= {});
+  const hook = ((globalThis as { __AGENT_KIT__?: Record<string, () => SessionInspection> }).__AGENT_KIT__ ??= {});
   hook[sessionId] = () => inspectSession(session);
   return () => delete hook[sessionId];
 }

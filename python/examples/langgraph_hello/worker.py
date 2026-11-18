@@ -6,11 +6,11 @@ Run from the repo root with:
 Hosts only the LangGraphHelloAgent workflow. Two plugins on the client, in this order:
   * ``LangGraphPlugin`` — the temporalio-langgraph plugin, vendored as ai_sdks.langgraph. It registers the
     graph's activity nodes and the workflow-sandbox passthroughs LangGraph needs, gates every ToolNode
-    with the harness's ``harness_tool_call``, and streams model calls onto the turn with the harness
+    with the harness's ``kit_tool_call``, and streams model calls onto the turn with the harness
     observer.
-  * ``AgentHarnessPlugin``, after it — the harness's data converter (large-payload offload) and
+  * ``AgentKitPlugin``, after it — the harness's data converter (large-payload offload) and
     activities. Last, so its converter wins.
-``AgentHarnessPlugin(tools=...)`` registers the ``get_weather`` activity tool's body.
+``AgentKitPlugin(tools=...)`` registers the ``get_weather`` activity tool's body.
 
 Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
@@ -29,12 +29,12 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.ai_sdks.langgraph import (
+from temporal_agent_kit.ai_sdks.langgraph import (
     LangGraphPlugin,
-    harness_observer_factory,
-    harness_tool_call,
+    kit_observer_factory,
+    kit_tool_call,
 )
-from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_kit.plugin import AgentKitPlugin
 
 from examples.langgraph_hello.workflow import (
     GRAPH,
@@ -60,11 +60,11 @@ async def main() -> None:
     connect_config = ClientConfig.load_client_connect_config()
     langgraph = LangGraphPlugin(
         graphs={GRAPH: build_graph()},
-        awrap_tool_call=harness_tool_call,
-        observer_factory=harness_observer_factory,
+        awrap_tool_call=kit_tool_call,
+        observer_factory=kit_observer_factory,
     )
     client = await Client.connect(
-        **connect_config, plugins=[langgraph, AgentHarnessPlugin(tools=[get_weather])]
+        **connect_config, plugins=[langgraph, AgentKitPlugin(tools=[get_weather])]
     )
 
     worker = Worker(client, task_queue=task_queue, workflows=[LangGraphHelloAgentWorkflow])

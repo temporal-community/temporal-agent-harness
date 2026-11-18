@@ -1,9 +1,9 @@
 {
-  "name": "@temporalio/agent-harness-react",
+  "name": "@temporalio/agent-kit-react",
   "version": "0.5.0",
   "license": "MIT",
   "type": "module",
-  "description": "React binding for @temporalio/agent-harness-client: a useAgentSession hook over a temporal-agent-harness agent's event stream.",
+  "description": "React binding for @temporalio/agent-kit-client: a useAgentSession hook over a temporal-agent-kit agent's event stream.",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -26,7 +26,7 @@
     "react": "^18.2.0 || ^19.0.0"
   },
   "dependencies": {
-    "@temporalio/agent-harness-client": "^0.5.0"
+    "@temporalio/agent-kit-client": "^0.5.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

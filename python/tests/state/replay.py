@@ -17,7 +17,7 @@ from typing import Any, Sequence
 
 import jsonpatch
 
-from temporal_agent_harness.harness.state import StatePatch, StateSnapshot
+from temporal_agent_kit.state import StatePatch, StateSnapshot
 
 
 def apply_ops(document: dict[str, Any], ops: Sequence[dict[str, Any]]) -> Any:

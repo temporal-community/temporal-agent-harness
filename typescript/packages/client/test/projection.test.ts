@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { HarnessMessage, ToolPart } from "../src/messages.ts";
+import type { KitMessage, ToolPart } from "../src/messages.ts";
 import { SessionProjection } from "../src/projection.ts";
 import { applyAgentUpdate, type AgentView } from "../src/views.ts";
 import { Frames } from "./support.ts";
@@ -14,7 +14,7 @@ function project(frames: ReturnType<Frames["make"]>[]): SessionProjection {
   return projection;
 }
 
-function tool(message: HarnessMessage | undefined): ToolPart {
+function tool(message: KitMessage | undefined): ToolPart {
   const part = message?.parts.find((p) => p.type === "tool");
   assert.ok(part && part.type === "tool", "the message has a tool part");
   return part;
@@ -340,11 +340,11 @@ test("published messages never change afterwards", () => {
     f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, a),
     f.make("reply_delta", { text: "one" }, a)
   ]);
-  const [[, first]] = p.takeChanges().agents[0]![1].messages as [[number, HarnessMessage]];
+  const [[, first]] = p.takeChanges().agents[0]![1].messages as [[number, KitMessage]];
   const firstPart = first.parts[0];
 
   p.apply(f.make("reply_delta", { text: " two" }, a));
-  const [[, second]] = p.takeChanges().agents[0]![1].messages as [[number, HarnessMessage]];
+  const [[, second]] = p.takeChanges().agents[0]![1].messages as [[number, KitMessage]];
 
   assert.deepEqual(first.parts, [{ type: "reply_delta", text: "one" }]);
   assert.equal(first.parts[0], firstPart);

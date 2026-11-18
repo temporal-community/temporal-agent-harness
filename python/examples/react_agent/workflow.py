@@ -1,4 +1,4 @@
-"""The ReAct agent: a multi-tool OpenAI Agents SDK agent on the harness.
+"""The ReAct agent: a multi-tool OpenAI Agents SDK agent on Agent Kit.
 
 A conversational agent in the ReAct pattern — it reasons, then acts by calling a tool, and loops
 on the result until it can answer in plain text. It finds the weather for a named city
@@ -6,22 +6,22 @@ on the result until it can answer in plain text. It finds the weather for a name
 -> ``get_location_info`` -> ``get_weather``), and pulls Formula 1 data through an MCP server.
 
 Streaming is a toggle (``REACT_AGENT_STREAM``, default on — see ``STREAM_RESPONSES``). Streaming
-runs the model with ``Runner.run_streamed(..., context=self._runner)`` — passing the harness runner
+runs the model with ``Runner.run_streamed(..., context=self._runner)`` — passing Agent Kit runner
 as the SDK run context is what lets the streaming seam resolve the in-flight turn — so model calls
-route through the streaming activity and the harness observer translates raw OpenAI events into the
+route through the streaming activity and Agent Kit observer translates raw OpenAI events into the
 live turn stream. Non-streaming uses ``Runner.run(...)``: the turn runs to completion and returns
 one reply, with tool lifecycle / ``ask_user`` / the final reply still on the turn stream but no
 ``reply_delta`` or ``model_interaction_*``. The
-local tools are durable harness activity tools adapted onto the SDK with ``as_openai_agent_tools``
-(so the harness owns the approval policy and each tool's ``tool_start`` / ``tool_end`` /
+local tools are durable Agent Kit activity tools adapted onto the SDK with ``as_openai_agent_tools``
+(so Agent Kit owns the approval policy and each tool's ``tool_start`` / ``tool_end`` /
 ``tool_error`` events); the F1 tools come from a durable, activity-backed MCP server registered on
 the worker and referenced here with ``stateless_mcp_server``. It also has one human-in-the-loop
 tool, ``ask_user`` (an ``@agent.callback_tool_defn`` callback tool): when the model needs
 clarification it parks the turn in-workflow until an external client returns the user's answer —
 see ``client.py``.
 
-This is the harness form of workshop demo2/demo3 (OpenAI Agents SDK + Temporal, then MCP): the
-Agents SDK drives the reason-act loop; Temporal makes it durable; the harness standardizes it.
+This is Agent Kit form of workshop demo2/demo3 (OpenAI Agents SDK + Temporal, then MCP): the
+Agents SDK drives the reason-act loop; Temporal makes it durable; Agent Kit standardizes it.
 Registered in ``agents.toml`` and driven by the shared example stack (session-manager worker +
 FastAPI/UI). See ``README.md``.
 """
@@ -37,16 +37,16 @@ with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
     from agents import Runner, TResponseInputItem
 
-    from temporal_agent_harness.ai_sdks.openai_agents.workflow import stateless_mcp_server
-    from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tools
-    from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import (
+    from temporal_agent_kit.ai_sdks.openai_agents.workflow import stateless_mcp_server
+    from temporal_agent_kit.ai_sdks.openai_agents import as_openai_agent_tools
+    from temporal_agent_kit import agent
+    from temporal_agent_kit.agent_protocol import (
         AgentConfig,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_kit.agent_workflow import AgentWorkflowRunner
 
     from examples.react_agent.human_tools import HUMAN_TOOLS
     from examples.react_agent.tool_activities import ALL_TOOLS
@@ -132,7 +132,7 @@ class ReactAgentWorkflow:
 
         if STREAM_RESPONSES:
             # run_streamed returns immediately; iterate its events to drive the turn to completion.
-            # context=self._runner hands the harness runner to the streaming seam
+            # context=self._runner hands Agent Kit runner to the streaming seam
             # (stream_to_provider reads the in-flight turn off it); required only on this path.
             result = Runner.run_streamed(sdk_agent, input=input_items, context=self._runner)
             async for _event in result.stream_events():

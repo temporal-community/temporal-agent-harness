@@ -264,7 +264,7 @@
       code='self._plan = self._runner.state("plan", PlanState())'
     >
       <p>
-        A workflow author opts in with one call, and the harness streams every change
+        A workflow author opts in with one call, and Agent Kit streams every change
         to it from then on:
       </p>
     </EmptyState>

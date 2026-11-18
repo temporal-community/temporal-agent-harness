@@ -1,6 +1,6 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
-load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
-load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
 
 py_library(
     name = "activities",
@@ -9,7 +9,7 @@ py_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":travel_models",
-        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_kit:agent",
         "@pypi//temporalio",
     ],
 )
@@ -23,10 +23,10 @@ py_library(
         ":ask_user",
         ":conversational_workflow",
         ":workflow",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
         "@pypi//google_genai",
         "@pypi//pydantic",
         "@pypi//temporalio",
@@ -42,10 +42,10 @@ py_library(
         ":activities",
         ":ask_user",
         ":trip_board",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
         "@pypi//google_genai",
         "@pypi//pydantic",
         "@pypi//temporalio",
@@ -74,14 +74,14 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit/state:__init__",
         "@pypi//pydantic",
         "@pypi//temporalio",
     ],
 )
 
-harness_module_binary(
+agent_kit_module_binary(
     name = "worker",
     srcs = ["worker.py"],
     imports = ["../.."],
@@ -91,9 +91,9 @@ harness_module_binary(
         ":conversational_subagent_workflow",
         ":conversational_workflow",
         ":workflow",
-        "//python/temporal_agent_harness:plugin",
-        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//python/temporal_agent_harness/utils:task_queue",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//google_genai",
         "@pypi//temporalio",
     ],
@@ -108,14 +108,14 @@ py_library(
         ":activities",
         ":models",
         ":trip_board",
-        "//python/temporal_agent_harness/harness:agent",
-        "//python/temporal_agent_harness/harness:agent_workflow",
-        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "@pypi//temporalio",
     ],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "MontyChatAgent",
     agent = "examples.monty.conversational_workflow:MontyChatAgentWorkflow",
     description = """
@@ -129,7 +129,7 @@ replying with the results.""",
     deps = [":conversational_workflow"],
 )
 
-harness_agent(
+agent_kit_agent(
     name = "MontyChatSubagentAgent",
     agent = "examples.monty.conversational_subagent_workflow:MontyChatSubagentWorkflow",
     description = """
@@ -145,7 +145,7 @@ harness subagent toolset. The first end-to-end demo of agents-as-subagents.""",
 
 # agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
 # `bazel run //python/examples/monty:agents_update` rewrites them.
-harness_agent_registry(
+agent_kit_agent_registry(
     name = "agents",
     srcs = [
         "MontyChatAgent.schema.json",
@@ -164,5 +164,5 @@ py_library(
     srcs = ["ask_user.py"],
     imports = ["../.."],
     visibility = ["//python:__subpackages__"],
-    deps = ["//python/temporal_agent_harness/harness:agent"],
+    deps = ["//python/temporal_agent_kit:agent"],
 )

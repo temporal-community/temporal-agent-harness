@@ -4,17 +4,17 @@ Run from the repo root with:
     uv run --group examples python -m examples.react_agent.worker
 
 Hosts the ReactAgent workflow and its four tool activities (get_ip_address,
-get_location_info, get_coordinates, get_weather). Each tool is a harness activity tool
-(`@agent.activity_tool_defn`) doing real HTTP; `AgentHarnessPlugin(tools=...)` registers each
+get_location_info, get_coordinates, get_weather). Each tool is an Agent Kit activity tool
+(`@agent.activity_tool_defn`) doing real HTTP; `AgentKitPlugin(tools=...)` registers each
 one's activity body, and the OpenAI Agents plugin registers the model activities (including
 the streaming one) — so this worker declares no activities of its own.
 
-The plugin is wired for the HARNESS STREAMING PATH:
+The plugin is wired for the AGENT KIT STREAMING PATH:
   * ``model_params.stream_to_provider=stream_to_provider`` — reads each streamed model call's
     per-turn stream context off the run context the workflow threads in (the workflow calls
     ``Runner.run_streamed(..., context=self._runner)``), and
-  * ``observer_factory=harness_observer_factory`` — turns that context into the observer that
-    translates raw OpenAI events into the harness turn-stream vocabulary live.
+  * ``observer_factory=kit_observer_factory`` — turns that context into the observer that
+    translates raw OpenAI events into Agent Kit turn-stream vocabulary live.
 Drop either hook, or omit the ``context=self._runner`` on ``run_streamed``, and there is no
 stream target — the streamed call raises unless you also set ``model_params.streaming_topic``
 (the plugin's plain raw-topic fallback, not wired here).
@@ -39,17 +39,17 @@ from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 from agents.mcp import MCPServerStdio
 
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.ai_sdks.openai_agents import (
+from temporal_agent_kit.plugin import AgentKitPlugin
+from temporal_agent_kit.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
     StatelessMCPServerProvider
 )
-from temporal_agent_harness.ai_sdks.openai_agents_harness import (
-    harness_observer_factory,
+from temporal_agent_kit.ai_sdks.openai_agents import (
+    kit_observer_factory,
     stream_to_provider,
 )
-from temporal_agent_harness.utils.task_queue import task_queue_name
+from temporal_agent_kit.utils.task_queue import task_queue_name
 
 from examples.react_agent.human_tools import HUMAN_TOOLS
 from examples.react_agent.tool_activities import ALL_TOOLS
@@ -95,7 +95,7 @@ async def main() -> None:
             # heartbeat timeout well under the overall start-to-close.
             start_to_close_timeout=timedelta(minutes=2),
             heartbeat_timeout=timedelta(seconds=30),
-            # The harness streaming seam: route streamed events to the in-flight turn.
+            # Agent Kit streaming seam: route streamed events to the in-flight turn.
             stream_to_provider=stream_to_provider,
             # Streaming granularity. Each flush is one publish Signal, so a longer interval
             # means fewer workflow-history events for the same stream content (it does not
@@ -110,14 +110,14 @@ async def main() -> None:
                 server_factory=_f1_server_factory,
             ),
         ],
-        observer_factory=harness_observer_factory,
+        observer_factory=kit_observer_factory,
     )
 
-    # Two plugins, harness LAST so the OpenAI plugin's (OpenAI-aware, pydantic-compatible)
-    # payload converter wins; the harness plugin then adds the large-payload offload on top,
+    # Two plugins, AgentKitPlugin LAST so the OpenAI plugin's (OpenAI-aware, pydantic-compatible)
+    # payload converter wins; Agent Kit plugin then adds the large-payload offload on top,
     # matching the session-manager worker and the web server.
     #
-    # The harness plugin is handed the agent's WHOLE toolset: it registers the four
+    # Agent Kit plugin is handed the agent's WHOLE toolset: it registers the four
     # location/weather activity bodies and skips ask_user, a callback tool with no worker-side
     # body (the user's terminal client fulfills it). The OpenAI model activities (incl.
     # invoke_model_activity_streaming) are registered by the OpenAI plugin — so the Worker
@@ -125,7 +125,7 @@ async def main() -> None:
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
-        plugins=[plugin, AgentHarnessPlugin(tools=[*ALL_TOOLS, *HUMAN_TOOLS])],
+        plugins=[plugin, AgentKitPlugin(tools=[*ALL_TOOLS, *HUMAN_TOOLS])],
     )
 
     worker = Worker(

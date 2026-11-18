@@ -1,20 +1,18 @@
-# Strands Agents on the TypeScript harness
+# Strands Agents on Agent Kit for TypeScript
 
-Run a [Strands Agents](https://strandsagents.com/) agent as a harness agent. Every model call runs
+Run a [Strands Agents](https://strandsagents.com/) agent as an Agent Kit agent. Every model call runs
 as a Temporal activity and streams live onto the agent's turn: replies, reasoning, tool requests
-and token usage. Every tool call goes through the harness: the approval policy, `tool_start` /
+and token usage. Every tool call goes through Agent Kit: the approval policy, `tool_start` /
 `tool_end` / `tool_error` events, injected parameters, and mid-turn steering. This is the
-TypeScript side of the Python integration (`temporal_agent_harness.ai_sdks.strands_agents`); both
+TypeScript side of the Python integration (`temporal_agent_kit.ai_sdks.strands_agents`); both
 work the same way.
 
-The integration has four modules:
+The integration has two modules:
 
 | Module | Runs | What |
 |---|---|---|
-| `@temporalio/agent-harness/ai-sdks/strands-agents-harness` | workflow | `harnessStrandsAgent`, `asStrandsTool(s)`, `harnessStreamRoute` |
-| `@temporalio/agent-harness-worker/ai-sdks/strands-agents-harness` | worker | `harnessObserverFactory`, `StrandsStreamObserver` |
-| `@temporalio/agent-harness/ai-sdks/strands-agents` | workflow | the vendored plugin's workflow half: `TemporalAgent`, `TemporalModel`, … |
-| `@temporalio/agent-harness-worker/ai-sdks/strands-agents` | worker | the vendored plugin's worker half: `StrandsPlugin` |
+| `@temporalio/agent-kit/ai-sdks/strands-agents` | workflow | `kitStrandsAgent`, `asStrandsTool(s)`, `kitStreamRoute`, and the vendored plugin's workflow half: `TemporalAgent`, `TemporalModel`, … |
+| `@temporalio/agent-kit-worker/ai-sdks/strands-agents` | worker | `kitObserverFactory`, `StrandsStreamObserver`, and the vendored plugin's worker half: `StrandsPlugin` |
 
 `typescript/examples/strands_hello` is a complete agent using everything below.
 
@@ -23,10 +21,10 @@ The integration has four modules:
 ## Installation
 
 ```sh
-pnpm add @temporalio/agent-harness @temporalio/agent-harness-worker @strands-agents/sdk
+pnpm add @temporalio/agent-kit @temporalio/agent-kit-worker @strands-agents/sdk
 ```
 
-`@strands-agents/sdk` is an optional peer of both harness packages. Install the model provider
+`@strands-agents/sdk` is an optional peer of both Agent Kit packages. Install the model provider
 you use too, e.g. `openai` for `@strands-agents/sdk/models/openai`.
 
 ## Quickstart
@@ -37,10 +35,10 @@ you use too, e.g. `openai` for `@strands-agents/sdk/models/openai`.
 import { z } from "zod";
 import {
   MidTurn, TextMessage, TextReply, ToolApprovalPolicy, defineAgent, handler, tool,
-} from "@temporalio/agent-harness";
+} from "@temporalio/agent-kit";
 import {
-  asStrandsTool, harnessStrandsAgent,
-} from "@temporalio/agent-harness/ai-sdks/strands-agents-harness";
+  asStrandsTool, kitStrandsAgent,
+} from "@temporalio/agent-kit/ai-sdks/strands-agents";
 
 const getWeather = tool({
   name: "get_weather",
@@ -63,7 +61,7 @@ export const WeatherAgent = defineAgent({
     }),
   },
   create: ({ runner }) => {
-    const agent = harnessStrandsAgent(runner, {
+    const agent = kitStrandsAgent(runner, {
       model: "openai", // a name registered in StrandsPlugin({ models })
       activityOptions: { startToCloseTimeout: "2 minutes" },
       systemPrompt: "You are a friendly assistant.",
@@ -96,9 +94,9 @@ the model's reasoning.
 
 ```ts
 import { OpenAIModel } from "@strands-agents/sdk/models/openai";
-import { AgentHarnessPlugin, toolActivity } from "@temporalio/agent-harness-worker";
-import { StrandsPlugin } from "@temporalio/agent-harness-worker/ai-sdks/strands-agents";
-import { harnessObserverFactory } from "@temporalio/agent-harness-worker/ai-sdks/strands-agents-harness";
+import { AgentKitPlugin, toolActivity } from "@temporalio/agent-kit-worker";
+import { StrandsPlugin } from "@temporalio/agent-kit-worker/ai-sdks/strands-agents";
+import { kitObserverFactory } from "@temporalio/agent-kit-worker/ai-sdks/strands-agents";
 
 const worker = await Worker.create({
   connection,
@@ -107,21 +105,21 @@ const worker = await Worker.create({
   plugins: [
     new StrandsPlugin({
       models: { openai: () => new OpenAIModel({ modelId: "gpt-5.1" }) },
-      observerFactory: harnessObserverFactory,
+      observerFactory: kitObserverFactory,
     }),
-    new AgentHarnessPlugin({ tools: [/* toolActivity(...) for each activityTool */] }),
+    new AgentKitPlugin({ tools: [/* toolActivity(...) for each activityTool */] }),
   ],
 });
 ```
 
 `StrandsPlugin` registers the model activities and adjusts the workflow bundle for Strands (see
-[Bundling](#bundling)). Without `observerFactory: harnessObserverFactory`, model calls run but
-nothing streams onto the turn. The harness's plugin goes last, as in Python.
+[Bundling](#bundling)). Without `observerFactory: kitObserverFactory`, model calls run but
+nothing streams onto the turn. Agent Kit's plugin goes last, as in Python.
 
 ## Streaming
 
-`harnessStrandsAgent` routes every model call to the turn in progress. Inside the model activity,
-the harness observer translates the Strands stream:
+`kitStrandsAgent` routes every model call to the turn in progress. Inside the model activity,
+the Agent Kit observer translates the Strands stream:
 
 | Strands stream event | Turn event |
 |---|---|
@@ -133,20 +131,20 @@ the harness observer translates the Strands stream:
 
 ## Tools
 
-Every tool call of a harness Strands agent gets the agent's approval policy, lifecycle events and
+Every tool call of an Agent Kit Strands agent gets the agent's approval policy, lifecycle events and
 steering:
 
 | Tool | Declare with | Runs |
 |---|---|---|
 | Workflow tool | `tool({ ..., execute })` | inline, in the workflow |
-| Activity tool | `activityTool(...)` | on a worker, as a durable activity; register its body with `AgentHarnessPlugin({ tools: [toolActivity(tool, body)] })` |
+| Activity tool | `activityTool(...)` | on a worker, as a durable activity; register its body with `AgentKitPlugin({ tools: [toolActivity(tool, body)] })` |
 | Callback tool | `tool(...)` without `execute` | on a client: the call waits in the workflow until a client posts the result |
 | MCP tools | `new TemporalMCPClient({ server })` in `tools` | one activity per call, against the MCP server the worker registers |
 
 Pass each declared tool through `asStrandsTool(runner, tool)` (or `asStrandsTools(runner, [...])`).
-Each MCP tool call runs as a harness `tool(...)` named and described as the MCP tool is, so it is
+Each MCP tool call runs as Agent Kit `tool(...)` named and described as the MCP tool is, so it is
 gated and bracketed exactly like your own tools. `tool_requested`, `tool_start` and `tool_end`
-share Strands' `toolUseId`. `harnessStrandsAgent` refuses anything else: Strands `tool(...)`s and
+share Strands' `toolUseId`. `kitStrandsAgent` refuses anything else: Strands `tool(...)`s and
 `workflow.activityAsTool`.
 
 ### Injected parameters
@@ -171,12 +169,12 @@ agent's `tools`:
 new StrandsPlugin({
   models: { ... },
   mcpClients: { "f1-data": () => new McpClient({ transport: ... }) },
-  observerFactory: harnessObserverFactory,
+  observerFactory: kitObserverFactory,
 });
 ```
 
 ```ts
-const agent = harnessStrandsAgent(runner, {
+const agent = kitStrandsAgent(runner, {
   model: "openai",
   tools: [
     asStrandsTool(runner, getWeather),
@@ -194,24 +192,24 @@ Address an MCP tool in the policy by the name the model sees (with the client's 
 ## Human input and approvals
 
 Strands pauses an agent for a person with interrupts: the run stops, and the caller resumes it
-with answers, which runs the interrupted tool again. A harness agent uses the harness's own
+with answers, which runs the interrupted tool again. An Agent Kit agent uses Agent Kit's own
 mechanisms instead, which keep the turn running: a **callback tool** to ask a person or client for
 something (its call waits durably in the workflow), and the **approval policy** to approve a tool
-call. `harnessStrandsAgent` refuses Strands interrupts: if a tool or a hook interrupts the run, the
+call. `kitStrandsAgent` refuses Strands interrupts: if a tool or a hook interrupts the run, the
 call fails with a non-retryable `ApplicationFailure` of type `StrandsInterruptNotSupported`, the
 turn publishes `message_handler_error`, and the turn ends.
 
 ## Mid-turn steering
 
 Accept messages mid-turn (`midTurn: MidTurn.ACCEPT`) and, when `ctx.joined_turn`, queue the text
-with `runner.steer(text)`, as in the quickstart. The harness appends it to the next tool result the
+with `runner.steer(text)`, as in the quickstart. Agent Kit appends it to the next tool result the
 model receives. `tool_end` keeps the tool's own output.
 
 ## Models
 
 `StrandsPlugin({ models: { name: factory } })` maps names to model factories. Each factory runs
 lazily on the worker, inside the model activity, and its model is cached for the worker's lifetime.
-`harnessStrandsAgent(runner, { model: name })` selects one. Read credentials in the factory, never
+`kitStrandsAgent(runner, { model: name })` selects one. Read credentials in the factory, never
 in workflow code. Strands' own retries are off (`retryStrategy` is refused): set `retry`, timeouts
 and the other activity options in `activityOptions`.
 
@@ -228,9 +226,9 @@ A TypeScript worker bundles its workflow code. `StrandsPlugin` adjusts the bundl
   needs in the workflow sandbox. The package marks those modules as having side effects, so
   webpack keeps them.
 
-A worker can run harness Strands agents beside OpenAI Agents or Gemini agents.
+A worker can run Agent Kit Strands agents beside OpenAI Agents or Gemini agents.
 
-## Not available in a harness agent
+## Not available in an Agent Kit agent
 
 These upstream features work only on a plain `TemporalAgent`, which is still exported: Strands
 tools and `workflow.activityAsTool`, interrupts, and raw `streamingTopic` streaming. Upstream's TypeScript package
@@ -255,7 +253,7 @@ style is kept (quotes, formatting) so a sync diffs cleanly. Every local change i
   (its file session storage imports `fs` and `path`).
 - **ES modules:** `.js` / `.ts` import extensions, `import` in place of `require` (the polyfills install
   only inside a workflow and only where missing; the MCP client and tool import each other), and
-  `StrandsPlugin.version` read from the harness worker package.
+  `StrandsPlugin.version` read from the Agent Kit worker package.
 - **The repo's compiler settings:** no constructor parameter properties, a typed view of
   `globalThis` in the polyfills, the MCP transport type from `@modelcontextprotocol/client`, and
   a private static `apply` renamed `applyListings`.

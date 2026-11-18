@@ -17,6 +17,8 @@
     statusLabel?: string | null;
     focused: boolean;
     canClose: boolean;
+    /** False on a fixed set of panes, which nothing closes and so nothing guards. */
+    canPin?: boolean;
     canResize: boolean;
     onFocus: () => void;
     onToggleCollapse: () => void;
@@ -28,6 +30,8 @@
     onDragStart: (event: DragEvent) => void;
     onDragEnd: () => void;
     content: Snippet;
+    /** The pane's own controls, before the frame's split, pin, collapse and close. */
+    controls?: Snippet;
   }
 
   let {
@@ -39,6 +43,7 @@
     statusLabel = null,
     focused,
     canClose,
+    canPin = true,
     canResize,
     onFocus,
     onToggleCollapse,
@@ -48,13 +53,16 @@
     onToggleSplit,
     onDragStart,
     onDragEnd,
-    content
+    content,
+    controls
   }: Props = $props();
 
   let element = $state<HTMLElement | null>(null);
   let resizing = $state(false);
 
   const meta = $derived(PANE_META[pane.kind]);
+  /* What the pane is called aloud, folded or open: its kind, and its title where that says more. */
+  const name = $derived(title.trim().toLowerCase() === meta.kindLabel.toLowerCase() ? meta.kindLabel : `${meta.kindLabel}: ${title}`);
 
   /* A pane whose subject has not resolved yet is titled after its own kind —
      "Subagent" before the run names the agent — and the badge has said that. */
@@ -105,8 +113,8 @@
   <button
     type="button"
     class="spine"
-    title={statusLabel ? `Expand ${title} — ${statusLabel}` : `Expand ${title}`}
-    aria-label={statusLabel ? `Expand ${title}, ${statusLabel}` : `Expand ${title}`}
+    title={statusLabel ? `Expand ${name} — ${statusLabel}` : `Expand ${name}`}
+    aria-label={statusLabel ? `Expand ${name}, ${statusLabel}` : `Expand ${name}`}
     ondragover={(event) => event.preventDefault()}
     onclick={onToggleCollapse}
   >
@@ -128,7 +136,7 @@
     class:resizing
     bind:this={element}
     tabindex="-1"
-    aria-label={title.trim().toLowerCase() === meta.kindLabel.toLowerCase() ? meta.kindLabel : `${meta.kindLabel}: ${title}`}
+    aria-label={name}
     onfocusin={onFocus}
     onpointerdown={onFocus}
     ondragover={(event) => event.preventDefault()}
@@ -167,6 +175,7 @@
       <!-- Only on a shared column, which is the only place it means anything —
            and it appears exactly when a reader has just made one, which is when
            they want to know the other arrangement exists. -->
+      {@render controls?.()}
       {#if shared}
         <button
           type="button"
@@ -185,16 +194,18 @@
           {/if}
         </button>
       {/if}
-      <button
-        type="button"
-        class="head-button"
-        class:on={pane.pinned}
-        aria-pressed={pane.pinned}
-        title={pane.pinned ? "Unpin pane" : "Pin pane open"}
-        onclick={onTogglePin}
-      >
-        <Pin size={12} />
-      </button>
+      {#if canPin}
+        <button
+          type="button"
+          class="head-button"
+          class:on={pane.pinned}
+          aria-pressed={pane.pinned}
+          title={pane.pinned ? "Unpin pane" : "Pin pane open"}
+          onclick={onTogglePin}
+        >
+          <Pin size={12} />
+        </button>
+      {/if}
       <button
         type="button"
         class="head-button"
