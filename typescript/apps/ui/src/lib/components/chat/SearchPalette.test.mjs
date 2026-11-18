@@ -56,6 +56,27 @@ describe("the search palette", () => {
     assert.deepEqual(tabs, [["All", "false", false], ["Sessions", "false", false], ["Agents", "true", true], ["Panes", "false", false]]);
   });
 
+  it("marks each session with the Sessions list's own status glyph and says it", () => {
+    const row = (workflow_id, extra) => ({ ...sessions[0], workflow_id, initial_user_message: workflow_id, ...extra });
+    const body = draw({
+      scope: "sessions",
+      sessions: [row("open"), row("ended", { closed: true }), row("failed", { execution_status: "FAILED", closed: true }), row("gone", { execution_status: "NOT_FOUND" }), row("stalled", { agent_workflow_type: "DagAgent" }), row("ended-here")],
+      closedWorkflowIds: ["ended-here"]
+    });
+    const status = (title) => {
+      const hit = body.match(new RegExp(`<div[^>]*class="hit[^"]*"[^>]*>((?:(?!<div)[\\s\\S])*?)<span class="hit-title[^"]*"[^>]*>${title}</span>\\s*<span class="visually-hidden">, ([^<]+),</span>`));
+      assert.ok(hit, `${title} has a glyph and a spoken status`);
+      return [hit[1].match(/session-pip hollow|session-pip|lucide-circle-x|state-glyph/)?.[0], hit[2]];
+    };
+    assert.deepEqual(status("open"), ["session-pip", "Open"]);
+    assert.deepEqual(status("ended"), ["session-pip hollow", "Closed"]);
+    assert.deepEqual(status("ended-here"), ["session-pip hollow", "Closed"], "ended from this console before the list caught up");
+    assert.equal(status("failed")[1], "Needs attention");
+    assert.deepEqual(status("gone"), ["lucide-circle-x", "Unavailable"]);
+    assert.equal(status("stalled")[1], "No worker");
+    assert.doesNotMatch(body, /lucide-messages-square/, "no generic bubble once a row has its status");
+  });
+
   it("wraps a long query it can't match rather than scrolling sideways", () => {
     assert.match(palette, /\.no-hits \{[^}]*overflow-wrap: anywhere;/);
   });

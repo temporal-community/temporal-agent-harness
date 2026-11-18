@@ -9,23 +9,25 @@
      place would. */
   import { ArrowLeft, ArrowRight, Bot, LayoutPanelLeft, MessagesSquare, Search, X } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
+  import SessionGlyph from "$lib/components/primitives/SessionGlyph.svelte";
   import { tick } from "svelte";
   import type { AgentDescriptor, Session } from "$lib/api/types";
   import { PANE_META, type PaneKind } from "$lib/panes/registry";
-  import { agentName, sessionAge, sessionTitle } from "$lib/state/sessionHistory";
+  import { agentName, openSessionStatus, sessionAge, sessionGone, sessionRowStatus, sessionTitle, type RowStatus } from "$lib/state/sessionHistory";
 
   interface Props {
     open: boolean;
     scope: PaletteScope;
     sessions: Session[];
     agents: AgentDescriptor[];
+    closedWorkflowIds?: string[];
     paneKinds: PaneKind[];
     onSession: (workflowId: string) => void;
     onAgent: (workflowType: string) => void;
     onPane: (kind: PaneKind) => void;
   }
 
-  let { open = $bindable(), scope = $bindable(), sessions, agents, paneKinds, onSession, onAgent, onPane }: Props = $props();
+  let { open = $bindable(), scope = $bindable(), sessions, agents, closedWorkflowIds = [], paneKinds, onSession, onAgent, onPane }: Props = $props();
 
   const SCOPES: { key: PaletteScope; label: string }[] = [
     { key: "all", label: "All" },
@@ -42,7 +44,7 @@
   /* Everything shows a few of each; one scope shows all of its own. */
   const PER_GROUP = { all: 5, one: 200 };
 
-  type Hit = { key: string; group: string; title: string; detail: string; meta: string; icon: typeof Bot; pick: () => void };
+  type Hit = { key: string; group: string; title: string; detail: string; meta: string; icon: typeof Bot; status?: RowStatus & { unavailable: boolean }; pick: () => void };
 
   let dialog = $state<HTMLDialogElement | null>(null);
   let input = $state<HTMLInputElement | null>(null);
@@ -55,6 +57,8 @@
 
   const groups = $derived.by(() => {
     const now = Date.now();
+    const workerless = new Set(agents.filter((agent) => agent.worker?.status === "no_worker").map((agent) => agent.workflow_type));
+    const closedIds = new Set(closedWorkflowIds);
     const limit = scope === "all" ? PER_GROUP.all : PER_GROUP.one;
     const out: { label: string; hits: Hit[] }[] = [];
     if (scope === "all" || scope === "sessions") {
@@ -69,6 +73,7 @@
           detail: agentName(agents, session.agent_workflow_type),
           meta: sessionAge(session.created_at, now).short,
           icon: MessagesSquare,
+          status: { ...sessionRowStatus(session, workerless, closedIds, openSessionStatus.get(session.workflow_id)), unavailable: sessionGone(session) },
           pick: () => onSession(session.workflow_id)
         }));
       if (hits.length) out.push({ label: "Sessions", hits });
@@ -223,8 +228,9 @@
             onclick={() => pick(hit)}
             onkeydown={(event) => event.key === "Enter" && pick(hit)}
           >
-            <Icon class="hit-icon" size={14} aria-hidden="true" />
+            {#if hit.status}<SessionGlyph kind={hit.status.kind} unavailable={hit.status.unavailable} />{:else}<Icon class="hit-icon" size={14} aria-hidden="true" />{/if}
             <span class="hit-title fade-end" dir="auto">{hit.title}</span>
+            {#if hit.status}<span class="visually-hidden">, {hit.status.label},</span>{/if}
             <span class="hit-detail fade-end" dir="auto">{hit.detail}</span>
             {#if hit.meta}<span class="kicker hit-meta">{hit.meta}</span>{/if}
           </div>
@@ -318,7 +324,7 @@
 
   .hit {
     display: grid;
-    grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
+    grid-template-columns: 14px minmax(0, max-content) minmax(0, 1fr) auto;
     align-items: baseline;
     gap: var(--gap-md);
     min-height: var(--control-height);
@@ -330,8 +336,10 @@
     background: var(--selected-bg);
   }
 
-  .hit :global(.hit-icon) {
+  .hit :global(.hit-icon),
+  .hit :global(.session-glyph) {
     align-self: center;
+    justify-self: center;
     color: var(--text-3);
   }
 

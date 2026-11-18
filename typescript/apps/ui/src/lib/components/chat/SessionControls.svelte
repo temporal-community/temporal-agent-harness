@@ -1,6 +1,6 @@
 <script lang="ts">
   /** The launcher identifies the current run; the drawer only browses existing sessions. */
-  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, ListFilter, OctagonX, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
+  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, ListFilter, OctagonX, Pin, Plus, RefreshCw, Search, X } from "@lucide/svelte";
   import { createVirtualizer, type VirtualItem } from "@tanstack/svelte-virtual";
   import { tick, untrack, type Snippet } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -12,7 +12,7 @@
   import IconAgent from "$lib/components/primitives/IconAgent.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { placeMenu } from "$lib/components/primitives/placeMenu";
-  import StateGlyph from "$lib/components/primitives/StateGlyph.svelte";
+  import SessionGlyph, { ROW_GLYPH_KINDS } from "$lib/components/primitives/SessionGlyph.svelte";
   import { STATUS_TONES, type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
   import TipCard, { type TipField } from "$lib/components/primitives/TipCard.svelte";
   import { windowedFocus } from "$lib/components/primitives/windowedFocus";
@@ -40,10 +40,14 @@
     humanizeWorkflowType,
     knownStart,
     lastSeenPending,
+    openSessionStatus,
     rememberPending,
     sessionAge,
     sessionDay,
+    sessionFailed,
+    sessionGone,
     sessionHeadline,
+    sessionRowStatus,
     sessionTitle,
     temporalWorkflowUrl
   } from "$lib/state/sessionHistory";
@@ -332,15 +336,6 @@
     ];
   }
 
-  /* The glyph's shape says the state on its own; these only tint it. */
-  const ROW_GLYPH_KINDS = new Set<StatusKind>(["approval", "stuck", "blocked", "error"]);
-
-  function glyphColor(kind: StatusKind): string {
-    if (kind === "closed") return "var(--text-4)";
-    const tone = STATUS_TONES[kind];
-    return tone === "neutral" ? "var(--text-3)" : `var(--${tone})`;
-  }
-
   /* Its row repeats it when the list is one agent's sessions; the name still says it. */
   const showAgent = $derived(chosenAgents.length !== 1 && agentOptions.length > 1);
   const toggled = (list: string[], value: string) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
@@ -359,32 +354,14 @@
     return agentName(agents, session.agent_workflow_type);
   }
 
-  /* FAILED, TERMINATED, and TIMED_OUT are the statuses Temporal reports for a workflow that
-     stopped on its own, not because a person closed it — and `execution_status` carries that
-     for every row, not only the one open in chat. It must not collapse into the same quiet,
-     hollow pip as an ordinary closed session: that hid a session a reader never opened from
-     reading as anything but idle. Reuses "error", the kind an open session's own stream
-     failure already renders, instead of adding a second status system. */
-  const FAILED_EXECUTION_STATUSES = new Set(["FAILED", "TERMINATED", "TIMED_OUT"]);
+  const openStatus = $derived({ kind: statusKind, label: statusLabel });
+  $effect(() => {
+    openSessionStatus.clear();
+    if (sessionId) openSessionStatus.set(sessionId, openStatus);
+  });
 
-  function sessionFailed(session: Session): boolean {
-    return Boolean(session.execution_status && FAILED_EXECUTION_STATUSES.has(session.execution_status));
-  }
-
-  /* Temporal no longer has it: the dev server restarted, retention expired, or it was deleted.
-     The closed tone with its own shape (`statusGlyph`); the tip says why. */
-  function sessionGone(session: Session): boolean {
-    return session.execution_status === "NOT_FOUND";
-  }
-
-  function sessionStatusKind(session: Session): StatusKind {
-    if (sessionGone(session)) return "closed";
-    if (sessionFailed(session)) return "error";
-    if (sessionClosed(session)) return "closed";
-    if (session.workflow_id === sessionId) return statusKind;
-    if (workerless.has(session.agent_workflow_type)) return "stuck";
-    if (lastSeen(session)) return "approval";
-    return "idle";
+  function rowStatus(session: Session) {
+    return sessionRowStatus(session, workerless, closedIds, session.workflow_id === sessionId ? openStatus : undefined);
   }
 
   /* What a session not open in chat was waiting on when last left, unless the list has since
@@ -395,16 +372,7 @@
     return lastSeenPending.get(session.workflow_id);
   }
 
-  function sessionStatusLabel(session: Session): string {
-    if (sessionGone(session)) return "Unavailable";
-    if (sessionFailed(session)) return "Needs attention";
-    if (sessionClosed(session)) return "Closed";
-    if (session.workflow_id === sessionId) return statusLabel;
-    if (workerless.has(session.agent_workflow_type)) return "No worker";
-    const seen = lastSeen(session);
-    if (seen) return `${seen.label} when last seen`;
-    return "Open";
-  }
+  const sessionStatusLabel = (session: Session) => rowStatus(session).label;
 
   /* The status line of the card and the wide row's status column: a closed workflow says how it ended. */
   function sessionStatusWords(session: Session): string {
@@ -638,14 +606,6 @@
 
 </script>
 
-<!-- A status's shape wherever it is drawn: the row, its card and the nav. A gone workflow takes
-     StatusChip's closed circle in the quiet closed tone: like a close, nothing more can happen
-     to it, but it is no longer there to open, so not the plain closed pip. -->
-{#snippet statusGlyph(kind: StatusKind, unavailable: boolean)}
-  <span class="session-glyph" aria-hidden="true" style:--status-color={glyphColor(kind)}>
-    {#if unavailable}<XCircle size={12} aria-hidden="true" />{:else if ROW_GLYPH_KINDS.has(kind)}<StateGlyph {kind} size={12} />{:else}<span class={["session-pip", kind === "closed" && "hollow"]}></span>{/if}
-  </span>
-{/snippet}
 {#snippet agentIcon()}<IconAgent size={12} />{/snippet}
 {#snippet startedIcon()}<Clock size={12} aria-hidden="true" />{/snippet}
 
@@ -680,7 +640,7 @@
         data-tip-below
       >
         <!-- Only with the states that also get words, so it never churns beside the minimap. -->
-        {#if gone || ROW_GLYPH_KINDS.has(statusKind)}{@render statusGlyph(statusKind, gone)}{/if}
+        {#if gone || ROW_GLYPH_KINDS.has(statusKind)}<SessionGlyph kind={statusKind} unavailable={gone} />{/if}
         <span class="kicker head-kind session-name" dir="auto" style={`--head-accent: var(--${statusTone})`}>{agentTitle}</span>
         {#if spokenStatus}<span class="kicker session-state">{spokenStatus}</span>{/if}
         {#if !spokenStatus && agentTitle !== statusLabel}<span class="session-state-spoken">{statusLabel}</span>{/if}
@@ -874,7 +834,7 @@
                 </button>
               {:else}
               {@const item = entry.item}
-              {@const kind = sessionStatusKind(item)}
+              {@const kind = rowStatus(item).kind}
               {@const age = sessionAge(item.created_at, now)}
               {@const days = age.short ? (now / 1000 - item.created_at) / 86_400 : 0}
               {@const pinned = pinRank.has(item.workflow_id)}
@@ -885,7 +845,7 @@
               {@const archivable = isArchived || sessionClosed(item) || sessionGone(item)}
               {@const title = sessionTitle(item)}
               <!-- The row's status shape, and the same shape leading the status line of its card. -->
-              {#snippet glyph()}{@render statusGlyph(kind, sessionGone(item))}{/snippet}
+              {#snippet glyph()}<SessionGlyph {kind} unavailable={sessionGone(item)} />{/snippet}
               <div class="session-item">
                 <!-- The glyph's state and the short age are drawn; the name reads both as words. -->
                 <button
@@ -1274,27 +1234,6 @@
 
   .session-row.active {
     background: var(--selected-bg);
-  }
-
-  /* One width for every glyph, so every title starts at the same edge. */
-  .session-glyph {
-    flex: none;
-    width: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--status-color);
-  }
-
-  .session-pip {
-    width: var(--pip);
-    height: var(--pip);
-    background: currentColor;
-  }
-
-  .session-pip.hollow {
-    background: transparent;
-    box-shadow: inset 0 0 0 1px currentColor;
   }
 
   /* `match-parent`: text in the other direction starts at the row's start, not across a gap. */

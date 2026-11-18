@@ -139,6 +139,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:Reading",
         "//typescript/apps/ui/src/lib/components/primitives:SafeImage",
         "//typescript/apps/ui/src/lib/components/primitives:Select",
+        "//typescript/apps/ui/src/lib/components/primitives:SessionGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/components/primitives:ThinkingOrb",

@@ -1229,6 +1229,7 @@
   bind:scope={paletteScope}
   sessions={run.sessions}
   agents={run.agents}
+  closedWorkflowIds={run.closedWorkflowIds}
   paneKinds={paletteKinds}
   onSession={(workflowId) => run.selectSession(workflowId)}
   onAgent={(workflowType) => {
