@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-kit-codegen",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Generate TypeScript types for a temporal-agent-kit agent from its `temporal-agent-kit schema` document.",
   "bin": {

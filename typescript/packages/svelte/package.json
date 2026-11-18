@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-kit-svelte",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "type": "module",
   "description": "Svelte 5 binding for @temporalio/agent-kit-client: a reactive AgentSession over a temporal-agent-kit agent's event stream.",
@@ -27,7 +27,7 @@
     "svelte": "^5.7.0"
   },
   "dependencies": {
-    "@temporalio/agent-kit-client": "^0.5.0"
+    "@temporalio/agent-kit-client": "^0.6.0"
   },
   "devDependencies": {
     "@sveltejs/package": "^3.0.1",

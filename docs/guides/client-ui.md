@@ -83,7 +83,7 @@ into TypeScript. Install the generator in your application (available starting w
 npm release), then generate from either SDK's schema:
 
 ```bash
-npm install --save-dev --save-exact @temporalio/agent-kit-codegen@0.5.0
+npm install --save-dev --save-exact @temporalio/agent-kit-codegen@0.6.0
 uv run temporal-agent-kit schema my_agent.workflow:TicTacToeAgentWorkflow -o agent.schema.json
 # For TypeScript, use `agent-kit schema` on your compiled agent instead.
 npx agent-kit-codegen agent.schema.json -o TicTacToeAgent.ts
