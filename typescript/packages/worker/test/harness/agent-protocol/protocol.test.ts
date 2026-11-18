@@ -159,6 +159,7 @@ describe("ToolApprovalPolicy", () => {
       auto_approval_criteria: null,
       agent_id: null,
       close_after_idle: null,
+      initial_message: null,
     });
     assert.equal(AgentConfigSchema.parse({ agent_id: "a1b2c3-d4e5f6" }).agent_id, "a1b2c3-d4e5f6");
     assert.equal(AgentConfigSchema.safeParse({ agent_id: "not a valid id!" }).success, false);

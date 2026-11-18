@@ -1,7 +1,8 @@
 // The agent workflow's turn loop: routing, validation, the published interface, handler errors,
-// update idempotency, and the agent's lifecycle and init data.
+// update idempotency, the agent's lifecycle and init data, and an initial message.
 
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import type { ApplicationFailure } from "@temporalio/common";
 import { WorkflowFailedError, type WorkflowHandle } from "@temporalio/client";
@@ -11,6 +12,7 @@ import {
   type AcceptedFunction,
 } from "@temporalio/agent-harness/harness/agent-protocol";
 import {
+  AgentClient,
   AgentTurnError,
   AgentTurnTimeout,
   type AgentStreamOutput,
@@ -310,5 +312,91 @@ describe("lifecycle and init data", () => {
     await h.cancel();
     await assert.rejects(h.result());
     assert.equal((await events(h)).at(-1), "teardown");
+  });
+});
+
+describe("an initial message", () => {
+  const hello = { type: "greet", payload: { name: "Ada" } };
+
+  it("runs as the first turn", async () => {
+    const h = await env.start("TypedProbeAgent", [{ initial_message: hello }]);
+    const events = await collect(env.client, h.workflowId);
+
+    assert.deepStrictEqual(
+      events.map((e) => e.event.type),
+      ["message_accepted", "turn_started", "message_handler_start", "message_handler_end", "turn_end"],
+    );
+    assert.deepStrictEqual(events[0]!.event, {
+      type: "message_accepted",
+      handler: "greet",
+      payload: { name: "Ada" },
+      disposition: "opened",
+    });
+    assert.deepStrictEqual(await h.query<string[]>("seen"), ["greet:Ada"]);
+    assert.equal((await send(h, "pick", { model: "opus" })).turn_number, 2);
+  });
+
+  it("is ahead of a message sent with the start", async () => {
+    const workflowId = `TypedProbeAgent-${randomUUID()}`;
+    env.started.push(workflowId);
+    const reply = await new AgentClient(env.client, workflowId).startAndSubmitMessage(
+      "pick",
+      { model: "opus" },
+      {
+        workflowType: "TypedProbeAgent",
+        taskQueue: env.taskQueue,
+        startConfig: { initial_message: hello },
+      },
+    );
+
+    assert.deepStrictEqual([reply.turn_number, reply.disposition], [2, "queued"]);
+    const h = env.client.workflow.getHandle(workflowId);
+    await collect(env.client, workflowId, {
+      until: (e) => e.event.type === "turn_end" && e.turn_number === 2,
+    });
+    assert.deepStrictEqual(await h.query<string[]>("seen"), ["greet:Ada", "pick:opus"]);
+  });
+
+  for (const [message, type] of [
+    [{ type: "does_not_exist", payload: {} }, "UnknownFunction"],
+    [{ type: "greet", payload: {} }, "MalformedMessage"],
+  ] as const)
+    it(`fails the workflow when the agent refuses it (${type})`, async () => {
+      const h = await env.start("TypedProbeAgent", [{ initial_message: message }]);
+      const err = await rejection(h.result());
+      assert.ok(err instanceof WorkflowFailedError);
+      assert.equal((err.cause as ApplicationFailure).type, type);
+    });
+
+  it("lets a Schedule start a session that runs one turn and closes", async () => {
+    const workflowId = `TypedProbeAgent-${randomUUID()}`;
+    const schedule = await env.client.schedule.create({
+      scheduleId: `schedule-${randomUUID()}`,
+      spec: {},
+      action: {
+        type: "startWorkflow",
+        workflowType: "TypedProbeAgent",
+        workflowId,
+        taskQueue: env.taskQueue,
+        args: [{ initial_message: hello, close_after_idle: 1 }],
+      },
+    });
+    let started: string;
+    try {
+      await schedule.trigger();
+      started = (await eventually(async () => {
+        const action = (await schedule.describe()).info.recentActions[0]?.action;
+        return action?.workflow.workflowId ?? null;
+      }))!;
+    } finally {
+      await schedule.delete();
+    }
+
+    // A Schedule adds the time of the run to the workflow id it was given.
+    assert.ok(started.startsWith(workflowId));
+    const h = env.client.workflow.getHandle(started);
+    await h.result();
+    const s = await status(h);
+    assert.deepStrictEqual([s.close_reason, s.current_turn], ["idle_timeout_expired", 1]);
   });
 });

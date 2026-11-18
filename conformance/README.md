@@ -61,7 +61,8 @@ A stopped subagent's stream cannot be read, so a scenario that stops one first w
 subagent's last `turn_end`.
 
 A scenario may set the `config` (an `AgentConfig`) the agent starts with, such as a
-`close_after_idle`, and its `close` action sends the agent the `close` signal. The scripted
+`close_after_idle` or an `initial_message` (its `payload` is a script, and it is not one of the
+sends), and its `close` action sends the agent the `close` signal. The scripted
 agent's teardown never returns, so a closed agent's workflow keeps running: a message sent after
 it closes is refused by the agent, with the `AgentClosed` that `<name>.sends.jsonl` records,
 rather than by the server for a completed workflow.
