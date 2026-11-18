@@ -23,13 +23,15 @@ release independently otherwise; nothing requires their version numbers to match
 The project was renamed from Temporal Agent Harness. `temporal-agent-harness` on PyPI and the
 `@temporalio/agent-harness*` npm packages get no further releases; their successors continue the
 version lines (PyPI from 0.12.0, npm from 0.6.0). The `@temporalio/agent-kit*` names were
-reserved with `0.0.0` placeholders, so each needs its npm trusted publisher (repository
-`temporal-community/temporal-agent-harness`, workflow `publish-npm.yml`, environment `npm`)
-before the first npm release under the new names, and the `pypi-agent-kit` environment must
-admit release tags:
+reserved with hand-published `0.0.0` placeholders, so each needs its npm trusted publisher before
+the first npm release under the new names. npm drops a trusted publisher that no publish uses
+within 2 days, so set them up just before merging that release PR (npm 11.15+, 2FA on):
 
 ```sh
-gh api --method POST repos/temporal-community/temporal-agent-harness/environments/pypi-agent-kit/deployment-branch-policies -f name='[0-9]*.[0-9]*.[0-9]*' -f type=tag
+for p in agent-kit agent-kit-worker agent-kit-client agent-kit-react agent-kit-svelte agent-kit-codegen; do
+  npm trust github "@temporalio/$p" --repo temporal-community/temporal-agent-harness \
+    --file publish-npm.yml --environment npm --allow-publish --yes
+done
 ```
 
 Before the first release of the development commands, remove the “next release” availability
@@ -136,14 +138,9 @@ Judgment calls the pipeline cannot make. Put the answers in the release PR descr
    npm view @temporalio/agent-kit-react@<version> dependencies
    ```
 
-   The npm clients had one hand-made release, `0.1.0`, before this automation existed; its first
-   run is the first automated npm release, so watch each stage rather than assuming the next fired.
-   Before it, the `npm` GitHub environment must admit the new tag pattern (it was created with
-   one policy per package):
-
-   ```sh
-   gh api --method POST repos/temporal-community/temporal-agent-harness/environments/npm/deployment-branch-policies -f name='npm-v*' -f type=tag
-   ```
+   The `pypi-agent-kit` environment admits only `0.[0-9]*.[0-9]*` tags and the `npm` environment
+   only `npm-v0.[0-9]*.[0-9]*`. Don't widen either to `*` or `npm-v*`: that would let a 1.0 tag
+   publish.
 
 Do not tag or create GitHub Releases by hand in the normal flow; the merge does both. Pushing a
 matching tag yourself (`0.9.0` or `npm-v0.9.0`) is the manual fallback and also publishes.
