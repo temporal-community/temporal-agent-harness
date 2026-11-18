@@ -144,6 +144,21 @@ export function writeUrlSessionId(sessionId: string): void {
   }
 }
 
+/** A list kept in the address bar, one parameter per value, so a value may hold any character. */
+export function readUrlList(name: string): string[] {
+  if (typeof window === "undefined") return [];
+  return new URLSearchParams(window.location.search).getAll(name).filter((value) => value.trim());
+}
+
+export function writeUrlList(name: string, values: readonly string[]): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete(name);
+  for (const value of values) url.searchParams.append(name, value);
+  const next = `${url.pathname}${url.search}`;
+  if (next !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, "", next);
+}
+
 function readDesksMap(): Record<string, { desk: StoredDesk; savedAt: number }> {
   if (typeof window === "undefined") return {};
   try {

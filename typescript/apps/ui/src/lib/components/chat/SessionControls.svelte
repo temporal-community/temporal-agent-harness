@@ -1,6 +1,6 @@
 <script lang="ts">
   /** The launcher identifies the current run; the drawer only browses existing sessions. */
-  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, Pin, Plus, RefreshCw, Search, X, XCircle } from "@lucide/svelte";
+  import { Archive, ArchiveRestore, ChevronRight, Clock, ExternalLink, ListFilter, OctagonX, Pin, Plus, RefreshCw, Search, X } from "@lucide/svelte";
   import { createVirtualizer, type VirtualItem } from "@tanstack/svelte-virtual";
   import { tick, untrack, type Snippet } from "svelte";
   import type { Attachment } from "svelte/attachments";
@@ -11,8 +11,8 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconAgent from "$lib/components/primitives/IconAgent.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import Select from "$lib/components/primitives/Select.svelte";
-  import StateGlyph from "$lib/components/primitives/StateGlyph.svelte";
+  import { placeMenu } from "$lib/components/primitives/placeMenu";
+  import SessionGlyph, { ROW_GLYPH_KINDS } from "$lib/components/primitives/SessionGlyph.svelte";
   import { STATUS_TONES, type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
   import TipCard, { type TipField } from "$lib/components/primitives/TipCard.svelte";
   import { windowedFocus } from "$lib/components/primitives/windowedFocus";
@@ -20,9 +20,11 @@
     readArchivedSessions,
     readOperatorPrefs,
     readPinnedSessions,
+    readUrlList,
     toggleArchivedSession,
     togglePinnedSession,
-    writeOperatorPrefs
+    writeOperatorPrefs,
+    writeUrlList
   } from "$lib/state/agentRunStorage";
   import { handleListKey, keptHighlight } from "$lib/state/quickSwitch";
   import { markdownToText } from "$lib/components/chat/MarkdownMessage.svelte";
@@ -38,10 +40,14 @@
     humanizeWorkflowType,
     knownStart,
     lastSeenPending,
+    openSessionStatus,
     rememberPending,
     sessionAge,
     sessionDay,
+    sessionFailed,
+    sessionGone,
     sessionHeadline,
+    sessionRowStatus,
     sessionTitle,
     temporalWorkflowUrl
   } from "$lib/state/sessionHistory";
@@ -94,6 +100,10 @@
     onArchiveSession?: (sessionId: string) => void;
     /** Bound, so the chat's "Start a new session" opens this same setup dialog. */
     newSessionOpen?: boolean;
+    /** The console's one search: the list's own search and filter become an icon that opens it. */
+    onOpenSearch?: () => void;
+    /** The agent New session opens on, when something other than the open session chose it. */
+    preferredAgent?: string;
   }
 
   let {
@@ -125,7 +135,9 @@
     onClose,
     onEndSession,
     onArchiveSession,
-    newSessionOpen = $bindable(false)
+    newSessionOpen = $bindable(false),
+    onOpenSearch,
+    preferredAgent
   }: Props = $props();
 
   /**
@@ -146,7 +158,21 @@
     "closed"
   ]);
 
-  let agentFilter = $state("");
+  /* The agents and statuses whose sessions are listed; none chosen lists all of them. Kept in the
+     address bar like the desk, so a reload or a shared link keeps the list as filtered, and a
+     fresh visit lists everything. */
+  const AGENT_PARAM = "sa";
+  const STATUS_PARAM = "ss";
+  let agentFilter = $state(readUrlList(AGENT_PARAM));
+  let statusFilter = $state(readUrlList(STATUS_PARAM));
+  $effect(() => {
+    if (display !== "pane") return;
+    writeUrlList(AGENT_PARAM, agentFilter);
+    writeUrlList(STATUS_PARAM, statusFilter);
+  });
+  /* Only what the list knows now. A wait seen when a session was last open is not here: it may
+     be over, and the row already says so. */
+  const STATUS_FILTERS = ["Open", "Needs attention", "No worker", "Closed", "Unavailable"] as const;
   let sessionSearch = $state("");
   let sessionSearchInput = $state<HTMLInputElement | null>(null);
 
@@ -161,12 +187,21 @@
   const sessionItems = $derived(sortedSessions(sessions));
   const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
   const agentOptions = $derived(
-    [...new Set(sessionItems.map((session) => session.agent_workflow_type))].map((type) => ({
-      type, label: agentName(agents, type)
+    [...Map.groupBy(sessionItems, (session) => session.agent_workflow_type)].map(([type, list]) => ({
+      type, label: agentName(agents, type), count: list.length
     })).sort((a, b) => a.label.localeCompare(b.label))
   );
+  const statusOptions = $derived.by(() => {
+    const counts = Map.groupBy(sessionItems, sessionStatusFilter);
+    return STATUS_FILTERS.filter((status) => counts.has(status)).map((status) => ({ status, count: counts.get(status)!.length }));
+  });
+  /* Only what the list has a checkbox for counts: a link naming an agent or status that isn't
+     listed (or isn't yet, while sessions load) must not hide every row with nothing to untick. */
+  const chosenAgents = $derived(agentOptions.length > 1 ? agentFilter.filter((type) => agentOptions.some((option) => option.type === type)) : []);
+  const chosenStatuses = $derived(statusOptions.length > 1 ? statusFilter.filter((status) => statusOptions.some((option) => option.status === status)) : []);
   const filteredSessionItems = $derived(sessionItems.filter((session) =>
-    (!agentFilter || session.agent_workflow_type === agentFilter) &&
+    (!chosenAgents.length || chosenAgents.includes(session.agent_workflow_type)) &&
+    (!chosenStatuses.length || chosenStatuses.includes(sessionStatusFilter(session))) &&
     (!sessionSearchTerm || sessionMatchesSearch(session, sessionSearchTerm))
   ));
   /* One clock for every row's age, ticking on the minute; the day groups read it too, so
@@ -301,48 +336,32 @@
     ];
   }
 
-  /* The glyph's shape says the state on its own; these only tint it. */
-  const ROW_GLYPH_KINDS = new Set<StatusKind>(["approval", "stuck", "blocked", "error"]);
-
-  function glyphColor(kind: StatusKind): string {
-    if (kind === "closed") return "var(--text-4)";
-    const tone = STATUS_TONES[kind];
-    return tone === "neutral" ? "var(--text-3)" : `var(--${tone})`;
-  }
-
   /* Its row repeats it when the list is one agent's sessions; the name still says it. */
-  const showAgent = $derived(!agentFilter && agentOptions.length > 1);
+  const showAgent = $derived(chosenAgents.length !== 1 && agentOptions.length > 1);
+  const toggled = (list: string[], value: string) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
+  const filtering = $derived(chosenAgents.length > 0 || chosenStatuses.length > 0);
+  /* Moment-to-moment states of the open session (connecting, thinking) all count as Open, so its
+     row never drops in and out of the filtered list while it is watched. */
+  function sessionStatusFilter(session: Session): (typeof STATUS_FILTERS)[number] {
+    if (sessionGone(session)) return "Unavailable";
+    if (sessionFailed(session)) return "Needs attention";
+    if (sessionClosed(session)) return "Closed";
+    if (workerless.has(session.agent_workflow_type)) return "No worker";
+    return "Open";
+  }
 
   function sessionAgentLabel(session: Session): string {
     return agentName(agents, session.agent_workflow_type);
   }
 
-  /* FAILED, TERMINATED, and TIMED_OUT are the statuses Temporal reports for a workflow that
-     stopped on its own, not because a person closed it — and `execution_status` carries that
-     for every row, not only the one open in chat. It must not collapse into the same quiet,
-     hollow pip as an ordinary closed session: that hid a session a reader never opened from
-     reading as anything but idle. Reuses "error", the kind an open session's own stream
-     failure already renders, instead of adding a second status system. */
-  const FAILED_EXECUTION_STATUSES = new Set(["FAILED", "TERMINATED", "TIMED_OUT"]);
+  const openStatus = $derived({ kind: statusKind, label: statusLabel });
+  $effect(() => {
+    openSessionStatus.clear();
+    if (sessionId) openSessionStatus.set(sessionId, openStatus);
+  });
 
-  function sessionFailed(session: Session): boolean {
-    return Boolean(session.execution_status && FAILED_EXECUTION_STATUSES.has(session.execution_status));
-  }
-
-  /* Temporal no longer has it: the dev server restarted, retention expired, or it was deleted.
-     The closed tone with its own shape (`statusGlyph`); the tip says why. */
-  function sessionGone(session: Session): boolean {
-    return session.execution_status === "NOT_FOUND";
-  }
-
-  function sessionStatusKind(session: Session): StatusKind {
-    if (sessionGone(session)) return "closed";
-    if (sessionFailed(session)) return "error";
-    if (sessionClosed(session)) return "closed";
-    if (session.workflow_id === sessionId) return statusKind;
-    if (workerless.has(session.agent_workflow_type)) return "stuck";
-    if (lastSeen(session)) return "approval";
-    return "idle";
+  function rowStatus(session: Session) {
+    return sessionRowStatus(session, workerless, closedIds, session.workflow_id === sessionId ? openStatus : undefined);
   }
 
   /* What a session not open in chat was waiting on when last left, unless the list has since
@@ -353,16 +372,7 @@
     return lastSeenPending.get(session.workflow_id);
   }
 
-  function sessionStatusLabel(session: Session): string {
-    if (sessionGone(session)) return "Unavailable";
-    if (sessionFailed(session)) return "Needs attention";
-    if (sessionClosed(session)) return "Closed";
-    if (session.workflow_id === sessionId) return statusLabel;
-    if (workerless.has(session.agent_workflow_type)) return "No worker";
-    const seen = lastSeen(session);
-    if (seen) return `${seen.label} when last seen`;
-    return "Open";
-  }
+  const sessionStatusLabel = (session: Session) => rowStatus(session).label;
 
   /* The status line of the card and the wide row's status column: a closed workflow says how it ended. */
   function sessionStatusWords(session: Session): string {
@@ -596,14 +606,6 @@
 
 </script>
 
-<!-- A status's shape wherever it is drawn: the row, its card and the nav. A gone workflow takes
-     StatusChip's closed circle in the quiet closed tone: like a close, nothing more can happen
-     to it, but it is no longer there to open, so not the plain closed pip. -->
-{#snippet statusGlyph(kind: StatusKind, unavailable: boolean)}
-  <span class="session-glyph" aria-hidden="true" style:--status-color={glyphColor(kind)}>
-    {#if unavailable}<XCircle size={12} aria-hidden="true" />{:else if ROW_GLYPH_KINDS.has(kind)}<StateGlyph {kind} size={12} />{:else}<span class={["session-pip", kind === "closed" && "hollow"]}></span>{/if}
-  </span>
-{/snippet}
 {#snippet agentIcon()}<IconAgent size={12} />{/snippet}
 {#snippet startedIcon()}<Clock size={12} aria-hidden="true" />{/snippet}
 
@@ -638,7 +640,7 @@
         data-tip-below
       >
         <!-- Only with the states that also get words, so it never churns beside the minimap. -->
-        {#if gone || ROW_GLYPH_KINDS.has(statusKind)}{@render statusGlyph(statusKind, gone)}{/if}
+        {#if gone || ROW_GLYPH_KINDS.has(statusKind)}<SessionGlyph kind={statusKind} unavailable={gone} />{/if}
         <span class="kicker head-kind session-name" dir="auto" style={`--head-accent: var(--${statusTone})`}>{agentTitle}</span>
         {#if spokenStatus}<span class="kicker session-state">{spokenStatus}</span>{/if}
         {#if !spokenStatus && agentTitle !== statusLabel}<span class="session-state-spoken">{statusLabel}</span>{/if}
@@ -677,7 +679,7 @@
   {#if newSessionOpen}
     <StartSessionDialog
       {agents}
-      preferredAgentType={activeSession?.agent_workflow_type}
+      preferredAgentType={preferredAgent ?? activeSession?.agent_workflow_type}
       starting={creatingSession}
       refreshing={refreshingAgents}
       error={agentsError}
@@ -691,6 +693,65 @@
     <!-- The pane header's row, so the drawer and the pane beside it share one top edge. -->
     <header class="surface-head">
       <h2 class="head-name"><span class="kicker head-kind">Sessions</span><span class="session-count">{countFormat.format(sessionItems.length)}</span></h2>
+      {#if onOpenSearch}
+        <button
+          type="button"
+          class="head-button"
+          aria-label="Search sessions"
+          data-tip="Search sessions&#10;⌘K"
+          data-tip-below
+          data-tip-align="end"
+          onclick={onOpenSearch}
+        ><Search size={13} aria-hidden="true" /></button>
+      {/if}
+      {#if agentOptions.length > 1 || statusOptions.length > 1}
+        {@const chosen = [...agentOptions.filter((option) => chosenAgents.includes(option.type)).map((option) => option.label), ...chosenStatuses].join(", ")}
+        <!-- The table's column filter, on the list: a checklist per facet, with counts. A facet with
+             one value has nothing to choose between, so it isn't shown. -->
+        <button
+          type="button"
+          class={["head-button", filtering && "on"]}
+          aria-label={filtering ? `Filter sessions: ${chosen}` : "Filter sessions"}
+          data-tip={filtering ? `Showing ${chosen}` : "Filter by agent or status"}
+          data-tip-below
+          data-tip-align="end"
+          popovertarget="session-filter"
+        ><ListFilter size={13} aria-hidden="true" /></button>
+        <div
+          id="session-filter"
+          class="table-menu"
+          popover="auto"
+          ontoggle={(event) => placeMenu(event, (event.currentTarget as HTMLElement).previousElementSibling as HTMLElement)}
+        >
+          {#if agentOptions.length > 1}
+            <div class="menu-group" role="group" aria-labelledby="session-filter-agent">
+              <span class="kicker menu-heading" id="session-filter-agent">Agent</span>
+              {#each agentOptions as option (option.type)}
+                <label class="menu-check">
+                  <input type="checkbox" checked={chosenAgents.includes(option.type)} onchange={() => ((agentFilter = toggled(chosenAgents, option.type)), (arrowedId = null))} />
+                  <span>{option.label}</span>
+                  <span class="kicker menu-count">{countFormat.format(option.count)}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+          {#if statusOptions.length > 1}
+            <div class="menu-group" role="group" aria-labelledby="session-filter-status">
+              <span class="kicker menu-heading" id="session-filter-status">Status</span>
+              {#each statusOptions as option (option.status)}
+                <label class="menu-check">
+                  <input type="checkbox" checked={chosenStatuses.includes(option.status)} onchange={() => ((statusFilter = toggled(chosenStatuses, option.status)), (arrowedId = null))} />
+                  <span>{option.status}</span>
+                  <span class="kicker menu-count">{countFormat.format(option.count)}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+          {#if filtering}
+            <button type="button" class="menu-clear" onclick={() => ((agentFilter = []), (statusFilter = []), (arrowedId = null))}>Show all</button>
+          {/if}
+        </div>
+      {/if}
       {#if onRefreshSessions}
         <button
           type="button"
@@ -705,6 +766,7 @@
       {/if}
     </header>
     <div class="session-body">
+      {#if !onOpenSearch}
       <div class="session-filters">
       <label class="field">
         <Search size={14} aria-hidden="true" />
@@ -729,15 +791,8 @@
           </IconButton>
         {/if}
       </label>
-      {#if agentOptions.length > 1}
-        <Select
-          bind:value={agentFilter}
-          aria-label="Agent"
-          onchange={() => (arrowedId = null)}
-          options={[{ value: "", label: "All agents" }, ...agentOptions.map((option) => ({ value: option.type, label: option.label }))]}
-        />
-      {/if}
       </div>
+      {/if}
       {#if notice}
         <div class="session-error session-notice" role="status">
           <p>{notice}</p>
@@ -756,11 +811,11 @@
         {#if !sessionsError && filteredSessionItems.length === 0}
           <div class="session-empty">
             <strong>{sessionItems.length ? "No matching sessions" : "No sessions yet"}</strong>
-            <p>{sessionItems.length ? "Try another search or agent filter." : "Start one with any of your agents."}</p>
+            <p>{sessionItems.length ? "Try another search or filter." : "Start one with any of your agents."}</p>
           </div>
         {:else if !sessionsError && sessionGroups.length === 0}
           <!-- Every listed session is archived: the list above the Archived group was blank. -->
-          <div class="session-empty"><strong>{sessionSearchTerm || agentFilter ? "Every match is archived" : "Every session is archived"}</strong></div>
+          <div class="session-empty"><strong>{sessionSearchTerm || filtering ? "Every match is archived" : "Every session is archived"}</strong></div>
         {/if}
         <div class="session-rows" style:height={`${$sessionRows.getTotalSize()}px`}>
         {#each visibleGroups as group (group.label)}
@@ -779,7 +834,7 @@
                 </button>
               {:else}
               {@const item = entry.item}
-              {@const kind = sessionStatusKind(item)}
+              {@const kind = rowStatus(item).kind}
               {@const age = sessionAge(item.created_at, now)}
               {@const days = age.short ? (now / 1000 - item.created_at) / 86_400 : 0}
               {@const pinned = pinRank.has(item.workflow_id)}
@@ -790,7 +845,7 @@
               {@const archivable = isArchived || sessionClosed(item) || sessionGone(item)}
               {@const title = sessionTitle(item)}
               <!-- The row's status shape, and the same shape leading the status line of its card. -->
-              {#snippet glyph()}{@render statusGlyph(kind, sessionGone(item))}{/snippet}
+              {#snippet glyph()}<SessionGlyph {kind} unavailable={sessionGone(item)} />{/snippet}
               <div class="session-item">
                 <!-- The glyph's state and the short age are drawn; the name reads both as words. -->
                 <button
@@ -851,7 +906,7 @@
                     data-tip-align="end"
                     onclick={(event) => askToEnd(item, event.currentTarget as HTMLElement)}
                   >
-                    <X size={14} />
+                    <OctagonX size={14} />
                   </IconButton>
                 {/if}
                 <!-- Last, so an archive drawn at rest always sits beside the age, End or not.
@@ -975,10 +1030,6 @@
 
   .session-filters > .field {
     flex: 1 1 12rem;
-  }
-
-  .session-filters > :global(.field.select) {
-    flex: 0 1 11rem;
   }
 
   /* A size container, so a row's tip is never wider than the list that clips it. */
@@ -1183,27 +1234,6 @@
 
   .session-row.active {
     background: var(--selected-bg);
-  }
-
-  /* One width for every glyph, so every title starts at the same edge. */
-  .session-glyph {
-    flex: none;
-    width: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--status-color);
-  }
-
-  .session-pip {
-    width: var(--pip);
-    height: var(--pip);
-    background: currentColor;
-  }
-
-  .session-pip.hollow {
-    background: transparent;
-    box-shadow: inset 0 0 0 1px currentColor;
   }
 
   /* `match-parent`: text in the other direction starts at the row's start, not across a gap. */
