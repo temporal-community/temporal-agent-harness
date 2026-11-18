@@ -42,6 +42,7 @@ py_library(
         "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
         "//python/temporal_agent_harness/ai_sdks/jev:__init__",
         "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_harness/data_sources:__init__",
         "//python/temporal_agent_harness/harness:__init__",
         "//python/temporal_agent_harness/nexus_agent_adapter:__init__",
         "//python/temporal_agent_harness/nexus_agent_adapter:worker_lib",

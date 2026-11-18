@@ -182,6 +182,7 @@ produce a conflict instead of being overwritten. See [coding-agent development](
 | Handler schemas and mid-turn messages | [Messages](docs/guides/messages.md) |
 | Human approval and auto mode | [Approvals](docs/guides/approvals.md) |
 | Code Mode, virtual files, and subagents | [Code Mode](docs/guides/code-mode.md) |
+| Read access to Jira, Notion and your own systems | [Data sources](docs/guides/data-sources.md) |
 | Typed application clients | [React / Svelte](docs/guides/client-ui.md) |
 | Embed the API/UI in your service | [Self-hosting](docs/api/hosting.md) |
 | Work on this repository | [Contributing](AGENTS.md) and [development](docs/internal/development.md) |
