@@ -24,6 +24,47 @@ export function rememberPending(sessionId: string, label: string | null, connect
   return undefined;
 }
 
+export type RowStatus = { kind: StatusKind; label: string };
+
+/**
+ * The open session's status as its own stream reads it, keyed by its id. The Sessions list owns
+ * that reading and publishes it here, so every list that draws the session draws it the same.
+ */
+export const openSessionStatus = new SvelteMap<string, RowStatus>();
+
+/* FAILED, TERMINATED, and TIMED_OUT are the statuses Temporal reports for a workflow that
+   stopped on its own, not because a person closed it — and `execution_status` carries that
+   for every row, not only the one open in chat. It must not collapse into the same quiet,
+   hollow pip as an ordinary closed session: that hid a session a reader never opened from
+   reading as anything but idle. Reuses "error", the kind an open session's own stream
+   failure already renders, instead of adding a second status system. */
+const FAILED_EXECUTION_STATUSES = new Set(["FAILED", "TERMINATED", "TIMED_OUT"]);
+
+export function sessionFailed(session: Session): boolean {
+  return Boolean(session.execution_status && FAILED_EXECUTION_STATUSES.has(session.execution_status));
+}
+
+/** Temporal no longer has it: the dev server restarted, retention expired, or it was deleted. */
+export function sessionGone(session: Session): boolean {
+  return session.execution_status === "NOT_FOUND";
+}
+
+/**
+ * A session row's status: what the list says has ended wins, then the open session's own stream
+ * (`open`), then a missing worker, then what it was waiting on when last seen. Runs per rendered
+ * row, so `closedIds` must already be a set.
+ */
+export function sessionRowStatus(session: Session, workerless: ReadonlySet<string>, closedIds: ReadonlySet<string>, open?: RowStatus): RowStatus {
+  if (sessionGone(session)) return { kind: "closed", label: "Unavailable" };
+  if (sessionFailed(session)) return { kind: "error", label: "Needs attention" };
+  if (open?.kind === "closed" || closedIds.has(session.workflow_id) || session.closed) return { kind: "closed", label: "Closed" };
+  if (open) return open;
+  if (workerless.has(session.agent_workflow_type)) return { kind: "stuck", label: "No worker" };
+  const seen = lastSeenPending.get(session.workflow_id);
+  if (seen) return { kind: "approval", label: `${seen.label} when last seen` };
+  return { kind: "idle", label: "Open" };
+}
+
 /** A session's title when it has neither an opening message nor a label. */
 export const UNTITLED_SESSION = "Untitled session";
 

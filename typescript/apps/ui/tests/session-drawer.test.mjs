@@ -13,10 +13,12 @@ import {
   MAX_PINNED_SESSIONS,
   readArchivedSessions,
   readPinnedSessions,
+  readUrlList,
   toggleArchivedSession,
   togglePinnedSession,
   validArchivedSessions,
-  validPinnedSessions
+  validPinnedSessions,
+  writeUrlList
 } from "../src/lib/state/agentRunStorage.ts";
 import { createPaneStack } from "../src/lib/state/paneStack.svelte.ts";
 import { SESSION_HEADING_HEIGHT, SESSION_ROW_HEIGHT, lastSeenPending, rememberPending } from "../src/lib/state/sessionHistory.ts";
@@ -588,7 +590,7 @@ describe("Session Manager rows", () => {
     const mixed = pane({ sessions: [session("wf-a"), session("wf-b", { agent_workflow_type: "Other" })], sessionId: "" });
     assert.match(mixed, /class="session-agent[^"]*" dir="auto">Hello</);
     assert.doesNotMatch(mixed, /session-agent visually-hidden/);
-    assert.match(controls, /const showAgent = \$derived\(!agentFilter && agentOptions\.length > 1\);/);
+    assert.match(controls, /const showAgent = \$derived\(chosenAgents\.length !== 1 && agentOptions\.length > 1\);/);
     assert.match(single, /class="session-title[^"]*" dir="auto">Title wf-a</);
   });
 
@@ -614,13 +616,62 @@ describe("Session Manager rows", () => {
     assert.match(controls, /sessionDay\(session\.created_at, today\)/);
   });
 
-  it("puts search and the agent filter on one line that wraps in a narrow drawer", () => {
-    const body = pane({ sessions: [session("wf-a"), session("wf-b", { agent_workflow_type: "Other" })], sessionId: "" });
-    assert.match(body, /<div class="session-filters[^"]*"><label class="field[^"]*">[\s\S]*?aria-label="Search sessions"[\s\S]*?<\/label>\s*<span class="field select[^"]*">\s*<select aria-label="Agent"><option value="" selected="">All agents<[\s\S]*?<\/span><\/div>/);
-    assert.doesNotMatch(body, /select-lead/);
-    assert.match(rule(".session-filters"), /display: flex;\s*flex-wrap: wrap;/);
-    assert.match(rule(".session-filters > .field"), /flex: 1 1 12rem;/);
-    assert.match(rule(".session-filters > :global(.field.select)"), /flex: 0 1 11rem;/);
+  const facet = (body, name) =>
+    body.match(new RegExp(`<div class="menu-group[^"]*" role="group" aria-labelledby="session-filter-${name.toLowerCase()}">([\\s\\S]*?)</div>`))?.[1] ?? "";
+  const checks = (group) => [...group.matchAll(/<span[^>]*>([^<]+)<\/span>\s*<span class="kicker menu-count[^"]*">(\d+)<\/span>/g)].map((m) => `${m[1]} ${m[2]}`);
+
+  it("filters by agent and status from one checklist in the head, with counts, as a table's column does", () => {
+    const body = pane({
+      sessions: [session("wf-a"), session("wf-b", { closed: true }), session("wf-c", { agent_workflow_type: "Other", execution_status: "FAILED" })],
+      sessionId: ""
+    });
+    assert.match(body, /<button type="button" class="head-button[^"]*" aria-label="Filter sessions"[^>]*popovertarget="session-filter"/);
+    assert.deepEqual(checks(facet(body, "Agent")), ["Hello 2", "Other 1"]);
+    assert.deepEqual(checks(facet(body, "Status")), ["Open 1", "Needs attention 1", "Closed 1"], "in a fixed order, only those present");
+    assert.doesNotMatch(body, /<select aria-label="Agent"/, "no dropdown beside the search");
+    assert.match(controls, /\(!chosenAgents\.length \|\| chosenAgents\.includes\(session\.agent_workflow_type\)\) &&\s*\(!chosenStatuses\.length \|\| chosenStatuses\.includes\(sessionStatusFilter\(session\)\)\)/, "either in a facet, both across them");
+  });
+
+  it("shows a facet only when it has two values to choose between, and no filter when neither does", () => {
+    const agentsOnly = pane({ sessions: [session("wf-a"), session("wf-b", { agent_workflow_type: "Other" })], sessionId: "" });
+    assert.ok(facet(agentsOnly, "Agent"));
+    assert.equal(facet(agentsOnly, "Status"), "", "every session is Open");
+    const single = pane({ sessions: [session("wf-a"), session("wf-b")], sessionId: "" });
+    assert.doesNotMatch(single, /Filter sessions/);
+    assert.match(controls, /const STATUS_FILTERS = \["Open", "Needs attention", "No worker", "Closed", "Unavailable"\] as const;/, "a wait seen last time is not a current status, so it is not one to filter by");
+  });
+
+  it("takes its filter from the address bar, so a reload or a link keeps the list as filtered", () => {
+    installBrowserSurface();
+    const sessions = [
+      session("wf-a"),
+      session("wf-b", { agent_workflow_type: "Other" }),
+      session("wf-c", { agent_workflow_type: "Other", closed: true })
+    ];
+    const listed = (body) => [...body.matchAll(/id="session-option-([^"]+)"/g)].map((m) => m[1]).filter((id) => !id.endsWith("-tip"));
+    window.location.search = "?sa=Other&ss=Closed";
+    const linked = pane({ sessions, sessionId: "" });
+    assert.deepEqual(listed(linked), ["wf-c"]);
+    assert.match(linked, /class="head-button on[^"]*" aria-label="Filter sessions: Other, Closed"/);
+    /* An agent the list doesn't have, or doesn't yet while it loads, hides nothing and lights
+       nothing: there would be no checkbox to untick it. */
+    window.location.search = "?sa=Gone";
+    const stale = pane({ sessions, sessionId: "" });
+    assert.deepEqual(listed(stale).sort(), ["wf-a", "wf-b", "wf-c"]);
+    assert.match(stale, /aria-label="Filter sessions"/);
+    assert.match(controls, /\$effect\(\(\) => \{\s*if \(display !== "pane"\) return;\s*writeUrlList\(AGENT_PARAM, agentFilter\);\s*writeUrlList\(STATUS_PARAM, statusFilter\);/);
+  });
+
+  it("writes a list to the address bar one parameter per value, keeping the others", () => {
+    installBrowserSurface();
+    let written = "";
+    window.history.replaceState = (_state, _title, url) => (written = url);
+    window.location.href = "http://localhost/?s=wf-a&sa=Old";
+    window.location.search = "?s=wf-a&sa=Old";
+    writeUrlList("sa", ["Q&A Agent", "a,b"]);
+    assert.equal(written, "/?s=wf-a&sa=Q%26A+Agent&sa=a%2Cb");
+    window.location.search = "?s=wf-a&sa=Q%26A+Agent&sa=a%2Cb";
+    assert.deepEqual(readUrlList("sa"), ["Q&A Agent", "a,b"]);
   });
 });
 

@@ -64,10 +64,10 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:Chip",
         "//typescript/apps/ui/src/lib/components/primitives:IconAgent",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
-        "//typescript/apps/ui/src/lib/components/primitives:Select",
-        "//typescript/apps/ui/src/lib/components/primitives:StateGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:SessionGlyph",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/components/primitives:TipCard",
+        "//typescript/apps/ui/src/lib/components/primitives:placeMenu",
         "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
         "//typescript/apps/ui/src/lib/motion:inputClearDissolve",
         "//typescript/apps/ui/src/lib/state:agentRunStorage",
@@ -92,6 +92,21 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:EmptyState",
         "//typescript/apps/ui/src/lib/components/primitives:IconButton",
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+    ],
+)
+
+js_library(
+    name = "SearchPalette",
+    srcs = ["SearchPalette.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/api:types",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:SessionGlyph",
+        "//typescript/apps/ui/src/lib/panes:registry",
         "//typescript/apps/ui/src/lib/state:sessionHistory",
     ],
 )
@@ -194,6 +209,18 @@ vitest_test(
         ":HomeView",
         ":SessionsFooter",
         "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "SearchPalette_test",
+    src = "SearchPalette.test.mjs",
+    deps = [
+        ":SearchPalette",
+        ":SessionControls",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
         "//typescript/apps/ui/tests/support:controllerHarness",
     ],
 )

@@ -82,6 +82,7 @@
   import { ArrowDown, ArrowUp, Ellipsis, ListFilter } from "@lucide/svelte";
   import { createTable } from "@tanstack/svelte-table";
   import { untrack } from "svelte";
+  import { placeMenu } from "./placeMenu";
 
   interface Props {
     rows: TRow[];
@@ -218,13 +219,6 @@
   }
 
   let openMenu = $state<string | null>(null);
-  function placeMenu(event: ToggleEvent, anchor: HTMLElement | null): void {
-    const menu = event.currentTarget as HTMLElement;
-    if (event.newState !== "open" || !anchor) return;
-    const box = anchor.getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(box.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
-    menu.style.top = `${Math.min(box.bottom + 4, innerHeight - menu.offsetHeight - 8)}px`;
-  }
 
   /* A click anywhere on a row opens it, as its button does; one on a control inside it is that
      control's. */
@@ -696,60 +690,6 @@
     opacity: 1;
   }
 
-  .table-menu {
-    position: fixed;
-    inset: auto;
-    margin: 0;
-    min-width: 180px;
-    padding: var(--gap-xs);
-    border: 0;
-    background: var(--surface-3);
-    box-shadow: var(--shadow-dropdown);
-    color: var(--text-2);
-    font-family: var(--font-sans);
-    font-size: var(--font-sm);
-    font-weight: 500;
-    text-transform: none;
-    letter-spacing: normal;
-  }
-
-  .table-menu:popover-open {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .table-menu > button,
-  .menu-check {
-    display: flex;
-    align-items: center;
-    gap: var(--gap-sm);
-    min-height: var(--control-height);
-    padding: 0 var(--gap-md) 0 var(--gap-sm);
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    text-align: start;
-    cursor: pointer;
-  }
-
-  .menu-check span:first-of-type {
-    flex: 1;
-  }
-
-  .menu-check input {
-    accent-color: var(--accent);
-  }
-
-  .menu-count {
-    color: var(--text-4);
-  }
-
-  .menu-clear {
-    border-top: 1px solid var(--border) !important;
-    color: var(--accent-soft) !important;
-  }
-
   .no-match {
     margin: 0;
     padding: var(--gutter) 0;
@@ -780,12 +720,6 @@
 
     .trow:hover .row-actions {
       --actions-bg: var(--control-hover);
-    }
-
-    .table-menu > button:hover,
-    .menu-check:hover {
-      background: var(--control-hover);
-      color: var(--text-1);
     }
   }
 

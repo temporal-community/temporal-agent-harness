@@ -34,14 +34,14 @@ describe("ending a session", () => {
     assert.doesNotMatch(controls, /session-menu|Ellipsis/);
   });
 
-  it("is an X on every open row, named for the session, and on no ended one", () => {
+  it("is a stop sign on every open row, named for the session, and on no ended one", () => {
     const body = markup("pane", {
       sessions: [session("wf-a"), session("wf-b", { closed: true })],
       sessionId: "wf-c",
       closedWorkflowIds: []
     });
     const label = "End session — Open AI Hello — Session wf-a";
-    assert.match(body, new RegExp(`<button[^>]*aria-label="${label}"[^>]*data-tip="${label}"[^>]*>\\s*<svg[^>]*lucide-x`));
+    assert.match(body, new RegExp(`<button[^>]*aria-label="${label}"[^>]*data-tip="${label}"[^>]*>\\s*<svg[^>]*lucide-octagon-x`));
     assert.doesNotMatch(body, /aria-label="End session[^"]*wf-b"/, "an ended session has nothing to end");
   });
 
