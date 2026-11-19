@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-kit",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "type": "module",
   "description": "Temporal Agent Kit for TypeScript: the workflow-safe authoring API for durable agents.",
@@ -69,7 +69,7 @@
   },
   "dependencies": {
     "@standard-schema/spec": "^1.1.0",
-    "@temporalio/agent-kit-client": "^0.5.0",
+    "@temporalio/agent-kit-client": "^0.6.0",
     "@temporalio/common": "^1.24.0",
     "@temporalio/workflow": "^1.24.0",
     "@temporalio/workflow-streams": "^1.24.0",

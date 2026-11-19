@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-kit-react",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "type": "module",
   "description": "React binding for @temporalio/agent-kit-client: a useAgentSession hook over a temporal-agent-kit agent's event stream.",
@@ -26,7 +26,7 @@
     "react": "^18.2.0 || ^19.0.0"
   },
   "dependencies": {
-    "@temporalio/agent-kit-client": "^0.5.0"
+    "@temporalio/agent-kit-client": "^0.6.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",
