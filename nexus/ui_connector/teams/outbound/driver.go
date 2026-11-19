@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/markdown"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/teams"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/markdown"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/teams"
 	"go.temporal.io/sdk/workflow"
 )
 

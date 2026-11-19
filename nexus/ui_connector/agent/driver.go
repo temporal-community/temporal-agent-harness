@@ -1,4 +1,4 @@
-// Package agent implements router.Backend for the temporal-agent-harness Nexus service.
+// Package agent implements router.Backend for the temporal-agent-kit Nexus service.
 package agent
 
 import (
@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	harnessgen "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent/generated"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	harnessgen "github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/agent/generated"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"

@@ -7,11 +7,11 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/markdown"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/presentation"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/interaction"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/markdown"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/presentation"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack/interaction"
 )
 
 // Block Kit text limits.

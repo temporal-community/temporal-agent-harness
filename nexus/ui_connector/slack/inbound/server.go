@@ -14,10 +14,10 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/interaction"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack/interaction"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 )

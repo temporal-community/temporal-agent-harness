@@ -3,7 +3,7 @@ package slackoutbound
 import (
 	"fmt"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/timeline"
 )
 
 // Slack wording for timeline output.

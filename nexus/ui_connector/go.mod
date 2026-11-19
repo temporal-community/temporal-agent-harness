@@ -1,4 +1,4 @@
-module github.com/temporal-community/temporal-agent-harness/nexus/ui_connector
+module github.com/temporal-community/temporal-agent-kit/nexus/ui_connector
 
 go 1.25.0
 

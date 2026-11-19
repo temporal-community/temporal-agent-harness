@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
 )
 
 func singleTextField(fields []protocol.Field) bool {

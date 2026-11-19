@@ -15,10 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/interaction"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack/interaction"
 )
 
 // fakeSlack records Slack Web API calls. fail maps an API path to the Slack error it

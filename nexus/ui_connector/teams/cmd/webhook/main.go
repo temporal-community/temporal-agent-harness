@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/teams/inbound"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/teams/inbound"
 	"go.temporal.io/sdk/client"
 )
 
