@@ -172,6 +172,12 @@ describe("banners a screen reader hears", () => {
     assert.match(chat({ items: [user(1)], error: "Worker lost: boom" }), /class="error-banner[^"]*" role="alert"/);
     assert.match(chat({ items: [user(1)], closed: true }), /class="closed-banner[^"]*" role="status"/);
   });
+
+  /* Opening a past session replayed every turn's phases into the status line at once. */
+  it("says nothing about the reply on first paint, even mid-turn", () => {
+    const body = chat({ items: [user(1)], sending: true, live: true });
+    assert.match(body, /<p class="sr-only[^"]*" role="status"><\/p>/);
+  });
 });
 
 describe("the multi-line composer", () => {

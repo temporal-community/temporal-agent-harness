@@ -426,6 +426,16 @@
         ? replyAnnouncement(latestProgress.phase)
         : ""
   );
+  /* Spoken once it settles. Opening a past session replays its turns, flipping the phase
+     many times a second, and every flip queued its own announcement: 23 in two seconds.
+     Short enough that a live turn's "thinking" is still heard as it starts. */
+  const REPLY_SETTLE_MS = 600;
+  let replySpoken = $state("");
+  $effect(() => {
+    const next = replyAnnounced;
+    const settle = setTimeout(() => (replySpoken = next), REPLY_SETTLE_MS);
+    return () => clearTimeout(settle);
+  });
 
   /* A turn's activity is drawn once, under the message that opened it. A message that joins the
      running turn shares its number, and drawing it there too repeated the whole turn under each. */
@@ -2197,7 +2207,7 @@
       {/if}
     </div>
 
-    <p class="sr-only" role="status">{replyAnnounced}</p>
+    <p class="sr-only" role="status">{replySpoken}</p>
 
     {#if !closed && error && liveMessages.length > 0}
       <div class="error-banner" role="alert">
