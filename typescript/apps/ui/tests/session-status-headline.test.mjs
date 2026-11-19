@@ -83,25 +83,35 @@ describe("the session's status word and hue", () => {
   });
 
   /* The registry already said "no_worker", yet the nav asked whether the worker was running and
-     every other row read a plain "Open". */
-  it("says No worker wherever the registry reports none, opened or not", () => {
-    const quiet = { closed: false, error: false, pendingLabel: null, creating: false, connecting: true, sending: false };
-    assert.deepEqual(sessionHeadline({ ...quiet, noWorker: true, taskQueue: "billing-agent" }), {
-      kind: "stuck",
-      label: "No worker",
-      hint: "No worker is polling this agent's task queue billing-agent. Start the worker to continue."
+     every other row read a plain "Open". Then it said so as a fault and told the reader to start
+     a worker, over anything else: but a serverless worker that scales to zero is started by the
+     task the session is waiting on, so "no worker" is a state to name, not a job to hand out. */
+  it("says No worker wherever the registry reports none, as a state and never over what is happening", () => {
+    const quiet = { closed: false, error: false, pendingLabel: null, creating: false, connecting: false, sending: false };
+    const hint = "No worker is polling this agent's task queue billing-agent right now. The session picks up when one starts.";
+    assert.deepEqual(sessionHeadline({ ...quiet, noWorker: true, taskQueue: "billing-agent" }), { kind: "idle", label: "No worker", hint });
+    assert.deepEqual(sessionHeadline({ ...quiet, connecting: true, noWorker: true, taskQueue: "billing-agent" }), {
+      kind: "connecting",
+      label: "Waiting for a worker",
+      hint
     });
+    assert.equal(sessionHeadline({ ...quiet, pendingLabel: "1 approval needed", noWorker: true }).label, "1 approval needed");
+    assert.equal(sessionHeadline({ ...quiet, sending: true, noWorker: true }).label, "Thinking");
     assert.equal(sessionHeadline({ ...quiet, closed: true, noWorker: true }).label, "Closed", "a closed session needs no worker");
+    for (const state of [{}, { connecting: true }]) {
+      assert.doesNotMatch(sessionHeadline({ ...quiet, ...state, noWorker: true }).hint ?? "", /Start the worker/);
+    }
 
     const agents = [{ workflow_type: open.agent_workflow_type, label: "Billing", task_queue: "billing-agent", worker: { status: "no_worker" } }];
     const other = { ...open, workflow_id: "wf-other" };
     const nav = anchor({ agents });
-    assert.deepEqual(nav, { word: "No worker", tone: "live" });
+    assert.equal(nav.word, "No worker");
+    assert.notEqual(nav.tone, "live", "not the attention hue");
     const pane = stripComments(render(SessionControls, { props: { display: "pane", agents, sessions: [open, other], sessionId: open.workflow_id } }).body);
     for (const id of [open.workflow_id, "wf-other"]) {
       const row = pane.split('<div class="session-item').find((chunk) => chunk.includes(`id="session-option-${id}"`));
       assert.match(row, /<span class="visually-hidden[^"]*">, No worker,<\/span>/, id);
-      assert.match(row, /lucide-triangle-alert|lucide-alert-triangle/, id);
+      assert.doesNotMatch(row, /lucide-triangle-alert|lucide-alert-triangle/, `${id}: no warning glyph`);
     }
   });
 
