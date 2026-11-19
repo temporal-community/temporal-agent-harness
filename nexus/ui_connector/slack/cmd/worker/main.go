@@ -5,10 +5,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/outbound"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/agent"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack/outbound"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -68,7 +68,7 @@ func main() {
 	if bot.UserID != "" {
 		log.Printf("Slack bot user ID: %s", bot.UserID)
 	}
-	// Compose this connector: a Slack outbound driver + the temporal-agent-harness
+	// Compose this connector: a Slack outbound driver + the temporal-agent-kit
 	// backend driver, plugged into the generic RouterWorkflow.
 	platform := slackoutbound.NewSlackPlatform(bot.Client, bot.TeamID)
 	outboundDriver := slackoutbound.NewDriver(workflow.ActivityOptions{

@@ -3,7 +3,7 @@ package interaction
 import (
 	slackapi "github.com/slack-go/slack"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/presentation"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/presentation"
 )
 
 // Shared Block Kit limits for messages and forms.

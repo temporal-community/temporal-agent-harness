@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/inbound"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack/inbound"
 	"go.temporal.io/sdk/client"
 )
 

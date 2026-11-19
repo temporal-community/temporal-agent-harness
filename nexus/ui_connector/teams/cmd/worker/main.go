@@ -5,9 +5,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/teams/outbound"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/agent"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/teams/outbound"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"

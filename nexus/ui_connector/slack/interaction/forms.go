@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	slackapi "github.com/slack-go/slack"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/presentation"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/presentation"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
 )
 
 const (

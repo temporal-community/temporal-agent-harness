@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
 )
 
 // SpliceChunks renders chunks and inserts citation markers. It adjusts reply text

@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/markdown"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/markdown"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
 )
 
 // fakeSink records each platform call in order.

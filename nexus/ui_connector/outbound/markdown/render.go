@@ -3,8 +3,8 @@ package markdown
 import (
 	"strings"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/presentation"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/presentation"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
 )
 
 // Render formats one chunk as Markdown. Each tool phase gets a separate line.

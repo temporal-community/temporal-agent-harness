@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/linear"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/linear"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/mocks"
 )

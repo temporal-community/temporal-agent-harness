@@ -12,13 +12,13 @@ import (
 	slackapi "github.com/slack-go/slack"
 	"go.temporal.io/sdk/activity"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/markdown"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/presentation"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/interaction"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/markdown"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/presentation"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/slack/interaction"
 )
 
 // DefaultLimits sets size and duration limits for streamed messages.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
+	"github.com/temporal-community/temporal-agent-kit/nexus/ui_connector/protocol"
 )
 
 // Clip shortens s to at most max runes. It ends with "…" when it removes text.
