@@ -59,7 +59,8 @@ export function sessionRowStatus(session: Session, workerless: ReadonlySet<strin
   if (sessionFailed(session)) return { kind: "error", label: "Needs attention" };
   if (open?.kind === "closed" || closedIds.has(session.workflow_id) || session.closed) return { kind: "closed", label: "Closed" };
   if (open) return open;
-  if (workerless.has(session.agent_workflow_type)) return { kind: "stuck", label: "No worker" };
+  /* A state, not a warning: see sessionHeadline. */
+  if (workerless.has(session.agent_workflow_type)) return { kind: "idle", label: "No worker" };
   const seen = lastSeenPending.get(session.workflow_id);
   if (seen) return { kind: "approval", label: `${seen.label} when last seen` };
   return { kind: "idle", label: "Open" };
@@ -129,22 +130,24 @@ export function sessionHeadline(state: {
   if (state.failed) return { kind: "error", label: "Needs attention" };
   if (state.closed) return { kind: "closed", label: "Closed" };
   if (state.error) return { kind: "error", label: "Needs attention" };
-  if (state.noWorker) {
-    const queue = state.taskQueue?.trim();
-    return { kind: "stuck", label: "No worker", hint: `No worker is polling this agent's task queue${queue ? ` ${queue}` : ""}. Start the worker to continue.` };
-  }
   if (state.pendingLabel) return { kind: "approval", label: state.pendingLabel };
   if (state.creating) return { kind: "starting", label: "Starting" };
+  /* No worker is a state, not a fault, and never outranks what the session is doing. A
+     serverless worker that scales to zero is started by the very task the session is waiting
+     on, so this says what is true and asks nothing of the reader. */
+  const queue = state.taskQueue?.trim();
+  const workerHint = `No worker is polling this agent's task queue${queue ? ` ${queue}` : ""} right now. The session picks up when one starts.`;
+  if (state.connecting && state.noWorker) return { kind: "connecting", label: "Waiting for a worker", hint: workerHint };
   if (state.connecting) {
     const seconds = Math.floor(state.connectingFor ?? 0);
     if (!(seconds >= 1)) return { kind: "connecting", label: "Connecting" };
     const label = `Connecting · ${seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}`;
     if (seconds < CONNECTING_HINT_AFTER_S) return { kind: "connecting", label };
-    const queue = state.taskQueue?.trim();
     const hint = `Still connecting — is this agent's worker running?${queue ? ` It polls task queue ${queue}.` : ""}`;
     return { kind: "stuck", label, hint };
   }
   if (state.sending) return { kind: "thinking", label: "Thinking" };
+  if (state.noWorker) return { kind: "idle", label: "No worker", hint: workerHint };
   return { kind: "available", label: "Available" };
 }
 
