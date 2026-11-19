@@ -1,6 +1,6 @@
 {
   "name": "@temporalio/agent-kit-worker",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
   "type": "module",
   "description": "Worker side of the Temporal Agent Kit: the AgentKitPlugin and its activities, the agent client and the Code Mode sandbox.",
@@ -54,8 +54,8 @@
   },
   "dependencies": {
     "@temporalio/activity": "^1.24.0",
-    "@temporalio/agent-kit": "^0.6.0",
-    "@temporalio/agent-kit-client": "^0.6.0",
+    "@temporalio/agent-kit": "^0.6.1",
+    "@temporalio/agent-kit-client": "^0.6.1",
     "@temporalio/client": "^1.24.0",
     "@temporalio/common": "^1.24.0",
     "@temporalio/plugin": "^1.24.0",

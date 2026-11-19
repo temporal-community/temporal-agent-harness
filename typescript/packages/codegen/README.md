@@ -5,7 +5,7 @@ The generator is a public npm package starting with the next npm release; it was
 repository-only tooling. No checkout or Bazel installation is needed to use the package.
 
 ```bash
-npm install --save-dev --save-exact @temporalio/agent-kit-codegen@0.6.0
+npm install --save-dev --save-exact @temporalio/agent-kit-codegen@0.6.1
 # Export the schema using the SDK that defines your agent:
 uv run temporal-agent-kit schema my_agent.workflow:OpenAIHelloAgentWorkflow -o agent.schema.json
 # or: npx agent-kit-schema ./dist/agents.js#OpenAIHelloAgentTs -o agent.schema.json
