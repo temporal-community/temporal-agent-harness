@@ -176,6 +176,7 @@
   );
   let chatTargetId = $state<string | null>(null);
   let hotkeyHelpOpen = $state(false);
+  let characterKeys = $state(savedPrefs.characterKeys ?? true);
   const SESSION_DRAWER_DEFAULT_W = 420;
   const SESSION_DRAWER_MIN_W = 240;
   /* Open by default with no session to show: the sidebar is the console's one list of sessions
@@ -554,7 +555,7 @@
     }
 
     const action = resolveReplayAction(
-      describeReplayKeyEvent(event, { helpOpen: hotkeyHelpOpen, bleeding })
+      describeReplayKeyEvent(event, { helpOpen: hotkeyHelpOpen, bleeding, characterKeys })
     );
     if (action == null) return;
     event.preventDefault();
@@ -1223,7 +1224,15 @@
   </button>
 {/snippet}
 
-<HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
+<HotkeyHelp
+  open={hotkeyHelpOpen}
+  onClose={() => (hotkeyHelpOpen = false)}
+  {characterKeys}
+  onCharacterKeys={(on) => {
+    characterKeys = on;
+    writeOperatorPrefs({ characterKeys: on });
+  }}
+/>
 
 <SearchPalette
   bind:open={paletteOpen}

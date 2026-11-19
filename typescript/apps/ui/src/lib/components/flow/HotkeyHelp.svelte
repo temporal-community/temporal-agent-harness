@@ -4,9 +4,12 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    /** Shortcuts that are one character key are on. */
+    characterKeys: boolean;
+    onCharacterKeys: (on: boolean) => void;
   }
 
-  let { open, onClose }: Props = $props();
+  let { open, onClose, characterKeys, onCharacterKeys }: Props = $props();
 
   /* Two sections, because the table now holds two kinds of key and twenty
      undifferentiated rows is a list nobody reads to the end of. Derived from the
@@ -45,18 +48,26 @@
 <!-- The scrim is the dialog's own ::backdrop, so nothing sits between the app and
      the sheet to catch the click. A click landing on the dialog itself can only
      have come from the backdrop, because the body fills it edge to edge. -->
-<!-- svelte-ignore a11y_no_noninteractive_tabindex: the sheet scrolls and holds no control, so it takes focus itself -->
 <dialog
   bind:this={sheetElement}
   class="sheet"
   aria-labelledby="hotkey-help-title"
-  tabindex="0"
   onclose={onClose}
   onclick={(event) => {
     if (event.target === sheetElement) sheetElement?.close();
   }}
 >
   <h2 id="hotkey-help-title">Keyboard shortcuts</h2>
+  <!-- Speech input types characters, so one-key shortcuts fire on dictated words (WCAG 2.1.4).
+       Here because this sheet is where the keys are learned; its header button still opens it
+       with ? off. -->
+  <label class="character-keys">
+    <input type="checkbox" checked={characterKeys} onchange={(event) => onCharacterKeys(event.currentTarget.checked)} />
+    <span>
+      One-key shortcuts
+      <span class="character-keys-hint">Keys pressed on their own, like F, D and ?. Turn off if you use speech input.</span>
+    </span>
+  </label>
   {#each sections as section (section.title)}
     <h3>{section.title}</h3>
     <dl>
@@ -107,6 +118,27 @@
     font-weight: 650;
   }
 
+  .character-keys {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--gap-sm);
+    margin: 0 0 var(--gutter);
+    color: var(--text-1);
+    font-size: var(--font-md);
+    cursor: pointer;
+  }
+
+  .character-keys input {
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+  }
+
+  .character-keys-hint {
+    display: block;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+  }
+
   h3 {
     margin: var(--gutter) 0 var(--gap-xs);
     color: var(--text-3);
@@ -114,10 +146,6 @@
     font-weight: 650;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-  }
-
-  h3:first-of-type {
-    margin-top: 0;
   }
 
   dl {
