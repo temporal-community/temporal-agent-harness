@@ -170,7 +170,7 @@ describe("FilesPanel", () => {
     assert.match(row("gone.md"), /class="row node removed[\s\S]*lucide-file-x[\s\S]*, removed</);
     assert.match(row("gone.md"), /data-tip="Removed by this mount's latest commit at the cursor"/);
     assert.doesNotMatch(row("notes"), /, (added|modified|removed)<|data-tip=/, "a folder isn't marked for what's under it");
-    assert.match(body, /Added<\/dt>[\s\S]*Changed<\/dt>[\s\S]*Removed<\/dt>/);
+    assert.match(body, /Added<\/span>[\s\S]*Changed<\/span>[\s\S]*Removed<\/span>/);
   });
 
   /* Every row was a Tab stop: Tab reached 38 of 1,800 rows and left the pane, and arrows did nothing. */

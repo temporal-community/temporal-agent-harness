@@ -57,6 +57,6 @@ describe("Model interaction token counts", () => {
       new URL("../src/lib/components/primitives/MetricStrip.svelte", import.meta.url),
       "utf8"
     );
-    assert.match(strip, /\.pending dd\s*\{[^}]*color:\s*var\(--text-3\)/);
+    assert.match(strip, /\.pending \.metric-value\s*\{[^}]*color:\s*var\(--text-3\)/);
   });
 });

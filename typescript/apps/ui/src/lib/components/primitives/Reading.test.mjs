@@ -44,7 +44,7 @@ describe("pane header readings", () => {
       const reading = html.slice(html.indexOf('<div class="reading'));
       assert.match(html, /<div class="reading[\s"]/, `${pane}: header is not the shared Reading`);
       assert.match(reading, /<p class="kicker reading-label[^"]*" title="[^"]+"/, `${pane}: label lost its tip`);
-      const strips = [...reading.matchAll(/<dl class="metric-strip([^"]*)"/g)].map((m) => m[1]);
+      const strips = [...reading.matchAll(/<div class="metric-strip([^"]*)"/g)].map((m) => m[1]);
       /* Tokens names its parts, so they stay a second strip. State and Latency have no
          such label: one strip, or the lead figure sits on a row by itself. */
       if (pane === "tokens") assert.ok(strips.length >= 2, `${pane}: a lead figure and a named breakdown`);
@@ -53,8 +53,8 @@ describe("pane header readings", () => {
       assert.match(reading, /class="metric strong[\s"]/, `${pane}: the lead figure is not in the accent`);
       assert.doesNotMatch(html, /class="roll[\s"-]/, `${pane}: the old rollup cards are back`);
     }
-    assert.match(headers.state, /<dd[^>]*>v5<\/dd>/, "State leads with the version at the cursor");
-    assert.match(headers.latency, /class="metric strong[^"]*"[^>]*>(?:(?!<\/div>)[\s\S])*<dt class="kicker[^"]*">total</, "Latency leads with the total");
+    assert.match(headers.state, /<span class="metric-value[^"]*">v5<\/span>/, "State leads with the version at the cursor");
+    assert.match(headers.latency, /class="metric strong[^"]*"[^>]*>(?:(?!<\/div>)[\s\S])*<span class="kicker metric-label[^"]*">total</, "Latency leads with the total");
   });
 
   it("does not repeat the agent name, and keeps the figures on one row at the reported width", () => {
@@ -75,14 +75,14 @@ describe("pane header readings", () => {
     assert.match(headers.tokens, /title="At cursor"/, "the token label is unchanged");
     assert.match(headers.latency, /title="per step · 1 turn"/, "the latency label is unchanged");
 
-    const strips = [...reading.matchAll(/<dl class="metric-strip/g)];
+    const strips = [...reading.matchAll(/<div class="metric-strip/g)];
     assert.equal(strips.length, 1, "the lead figure is its own block above the others");
-    const dl = reading.slice(reading.indexOf("<dl"), reading.indexOf("</dl>"));
+    const strip = reading.slice(reading.indexOf('<div class="metric-strip'));
     for (const label of ["version", "commits", "this step"]) {
-      assert.match(dl, new RegExp(`<dt class="kicker[^"]*">${label}</dt>`));
+      assert.match(strip, new RegExp(`<span class="kicker metric-label[^"]*">${label}</span>`));
     }
-    const strong = dl.indexOf("metric strong");
-    const commits = dl.indexOf(">commits<");
+    const strong = strip.indexOf("metric strong");
+    const commits = strip.indexOf(">commits<");
     assert.ok(strong !== -1 && strong < commits, "the lead figure is not in the same strip as commits");
 
     /* Upper bound, in px, for the three figures in the report. They fit the 303px
@@ -119,12 +119,17 @@ describe("pane header readings", () => {
     const reading = html.slice(html.indexOf('<div class="reading'), html.indexOf("</header>"));
 
     assert.match(reading, /title="per step · 1 turn"/);
-    assert.equal([...reading.matchAll(/<dl class="metric-strip/g)].length, 1, "lead and peers share one strip");
-    const labels = [...reading.matchAll(/<dt class="kicker[^"]*">([^<]*)</g)].map((m) => m[1]);
+    assert.equal([...reading.matchAll(/<div class="metric-strip/g)].length, 1, "lead and peers share one strip");
+    const labels = [...reading.matchAll(/<span class="kicker metric-label[^"]*">([^<]*)</g)].map((m) => m[1]);
     assert.deepEqual(labels, ["total", "model", "tool", "approval", "check"]);
     assert.match(reading, /data-tip="approval · 1× · 100% of total"/);
     assert.match(reading, /class="metric quiet[\s"][^>]*data-tip="approval check · 1× · 0% of total"/);
     assert.match(reading, />123h \d\dm \d\ds</, "a multi-day duration is drawn whole");
     assert.doesNotMatch(reading, /wall-clock|own scale/);
+
+    /* WCAG 1.3.1: a <dl> may hold only dt/dd groups, and the icon sits beside the pair. */
+    assert.match(reading, /<div class="metric-strip[^"]*" role="list">/);
+    assert.equal([...reading.matchAll(/role="listitem"/g)].length, labels.length, "one item per figure");
+    assert.doesNotMatch(reading, /<d[ltd][\s>]/);
   });
 });
