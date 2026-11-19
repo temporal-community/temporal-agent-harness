@@ -728,7 +728,7 @@ describe("the latency waterfall", () => {
      printed "2h 00m 00s3h 00m 00s". */
   describe("at the minimum pane width", () => {
     const rule = (selector) =>
-      [...source.matchAll(new RegExp(`\\n\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`, "g"))]
+      [...source.matchAll(new RegExp(`\\n\\s*${escapeRegExp(selector)}\\s*\\{([^}]*)\\}`, "g"))]
         .map((match) => match[1])
         .join("\n");
 
