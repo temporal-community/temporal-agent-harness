@@ -1287,9 +1287,10 @@
     position: absolute;
     z-index: 4;
     top: 0;
-    width: 11px;
-    height: 8px;
-    margin-left: -5.5px;
+    /* The 24px square WCAG 2.5.8 asks for, around a 3px mark; the axis row is 34px. */
+    width: 24px;
+    height: 24px;
+    margin-left: -12px;
     padding: 0;
     border: 0;
     background: transparent;
@@ -1300,7 +1301,7 @@
     content: "";
     position: absolute;
     top: 1px;
-    left: 4px;
+    left: calc(50% - 1.5px);
     width: 3px;
     height: 6px;
     background: var(--text-3);

@@ -728,3 +728,12 @@ describe("the run-wide timeline pane", () => {
     }
   });
 });
+
+/* WCAG 2.5.8: the tick is 3px, the button it sits in is the 24px square. */
+describe("the axis cue marks", () => {
+  it("are 24px press targets centered on the tick", () => {
+    const cue = source.match(/\n {2}\.cue \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(cue, /width: 24px;\s*height: 24px;\s*margin-left: -12px;/);
+    assert.match(source, /\n {2}\.cue::before \{[^}]*left: calc\(50% - 1\.5px\);/);
+  });
+});

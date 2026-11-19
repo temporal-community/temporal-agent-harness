@@ -604,19 +604,19 @@
     border: 0;
   }
 
-  /* Small mark, generous hit box: the tick is 3px, the button is 11px. Centered
-     where the playhead's centre would be at the same event. */
+  /* Small mark, generous hit box: the tick is 3px, the button the 24px square WCAG
+     2.5.8 asks for. Centered where the playhead's centre would be at the same event. */
   .cue {
     position: absolute;
-    top: 0;
+    top: 50%;
     left: calc(var(--at) * (100% - 2px) + 1px);
     z-index: 2;
-    width: 11px;
-    height: 100%;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border: 0;
     background: transparent;
-    transform: translateX(-50%);
+    transform: translate(-50%, -50%);
     cursor: pointer;
   }
 

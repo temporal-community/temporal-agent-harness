@@ -295,3 +295,14 @@ describe("the position readout", () => {
     assert.match(css, /\.pos\.queue\s*\{[^}]*color:\s*var\(--queue\)/);
   });
 });
+
+/* WCAG 2.5.8: the tick is 3px, the button it sits in is the 24px square. */
+describe("the transport's cue marks", () => {
+  const source = readFileSync(new URL("./StepController.svelte", import.meta.url), "utf8");
+
+  it("are 24px press targets centered on the tick", () => {
+    const cue = source.match(/\n {2}\.cue \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(cue, /width: 24px;\s*height: 24px;/);
+    assert.match(cue, /transform: translate\(-50%, -50%\);/);
+  });
+});
