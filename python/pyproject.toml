@@ -1,6 +1,6 @@
 [project]
 name = "temporal-agent-kit"
-version = "0.11.0"
+version = "0.12.0"
 description = "Temporal Agent Kit (experimental) — durable agents on Temporal, with the AI SDKs you already use."
 readme = "README.md"
 requires-python = ">=3.11"
