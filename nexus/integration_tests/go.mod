@@ -1,6 +1,6 @@
 // Integration tests for the full nexus agent + connector pipeline.
-// ui_connector is resolved from the sibling directory (via go.work, or the
-// replace below when the workspace is off).
+// ui_connector is resolved from the sibling directory via the workspace
+// (go.work); outside it, the pinned version below is fetched from the repo.
 module github.com/temporal-community/temporal-agent-kit/nexus/integration_tests
 
 go 1.25.0
@@ -8,7 +8,7 @@ go 1.25.0
 require (
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/stretchr/testify v1.11.1
-	github.com/temporal-community/temporal-agent-kit/nexus/ui_connector v0.0.0-00010101000000-000000000000
+	github.com/temporal-community/temporal-agent-kit/nexus/ui_connector v0.0.0-20261119162039-d5082626356c
 	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
 	go.temporal.io/sdk v1.41.1
 	google.golang.org/protobuf v1.36.11
@@ -35,5 +35,3 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/temporal-community/temporal-agent-kit/nexus/ui_connector => ../ui_connector
