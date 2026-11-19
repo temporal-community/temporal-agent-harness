@@ -314,6 +314,12 @@ describe("the transport's cue marks", () => {
     assert.match(cue, /transform: translate\(-50%, -50%\);/);
   });
 
+  /* WCAG 2.2 2.5.8: the lane is 18px, so the transparent input reaches 3px past it each way. */
+  it("makes the scrubber a 24px target without drawing it taller", () => {
+    assert.match(source, /\n {2}\.scrub-input \{[^}]*inset: -3px 0;[^}]*height: calc\(100% \+ 6px\);/);
+    assert.match(source, /\n {2}\.scrub \{[^}]*height: 18px;/, "the lane it is drawn in stays 18px");
+  });
+
   /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
   it("draws a queued message dotted and an error wide", () => {
     assert.match(source, /\n {2}\.cue\.queue::before \{\s*background: repeating-linear-gradient/);

@@ -564,12 +564,14 @@
   }
 
   /* The input owns the whole lane so the drag target is bigger than the bar. */
+  /* 3px past the 18px lane each way, so the transparent input is the 24px target WCAG 2.2
+     2.5.8 asks for; the lane draws the bar. */
   .scrub-input {
     position: absolute;
-    inset: 0;
+    inset: -3px 0;
     z-index: 1;
     width: 100%;
-    height: 100%;
+    height: calc(100% + 6px);
     margin: 0;
     padding: 0;
     background: transparent;

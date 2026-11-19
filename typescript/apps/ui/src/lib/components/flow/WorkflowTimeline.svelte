@@ -1550,10 +1550,11 @@
     overflow: visible;
   }
 
+  /* 28px tall, and 24px wide however short the span: the target WCAG 2.2 2.5.8 asks for. */
   .mark::before {
     content: "";
     position: absolute;
-    inset: -4px -6px;
+    inset: -4px -10px;
   }
 
   .bar {

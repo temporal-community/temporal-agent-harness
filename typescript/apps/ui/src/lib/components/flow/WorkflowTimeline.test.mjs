@@ -737,6 +737,12 @@ describe("the axis cue marks", () => {
     assert.match(source, /\n {2}\.cue::before \{[^}]*left: calc\(50% - 1\.5px\);/);
   });
 
+  /* WCAG 2.2 2.5.8: a span can be drawn 4px wide; what a hand lands on is 24px by 28px. */
+  it("gives a span mark a 24px-wide target however short it is drawn", () => {
+    assert.match(source, /\n {2}\.mark \{[^}]*height: 20px;[^}]*min-width: 4px;/);
+    assert.match(source, /\n {2}\.mark::before \{[^}]*inset: -4px -10px;/);
+  });
+
   /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
   it("draws a queued message dotted and an error wide, still centered", () => {
     assert.match(source, /\n {2}\.cue\.queue::before \{\s*background: repeating-linear-gradient/);
