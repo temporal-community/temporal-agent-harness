@@ -612,6 +612,10 @@
   const midTurn = $derived(selectedHandler?.mid_turn ?? "reject");
   const sendingBlocksInput = $derived(sending && midTurn === "reject");
   const connectingBlocksInput = $derived(connecting && activeSession == null);
+  /* For the controls around the text box. The box itself is disabled only once the session can
+     never take input again: flipping `disabled` around a moment of loading drops the OS
+     accessibility link that dictation tools such as Wispr Flow type through, and sendMessage
+     already refuses to send until the session is ready. */
   const composerDisabled = $derived(closed || connectingBlocksInput || creatingSession);
   const pickerDraft = $derived(
     pickerButtonOpen ? { name: "", rest: "" } : parsePickerDraft(draft)
@@ -2543,7 +2547,7 @@
             placeholder={composerPlaceholder}
             aria-label={`Message ${activeTarget?.label ?? agentLabel}`}
             aria-describedby={handlerHint ? handlerHintId : undefined}
-            disabled={composerDisabled || !canSendToTarget}
+            disabled={closed || activeTarget?.closed === true}
             spellcheck={!scriptInput}
             oninput={handleComposerInput}
             onkeydown={handleComposerKeydown}

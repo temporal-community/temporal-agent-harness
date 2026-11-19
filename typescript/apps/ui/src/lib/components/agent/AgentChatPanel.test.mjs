@@ -184,6 +184,16 @@ describe("banners a screen reader hears", () => {
     assert.equal(new Set(regions).size, regions.length, `regions named apart: ${regions.join(" | ")}`);
   });
 
+  /* Dictation tools (Wispr Flow) type through the OS accessibility link to the focused field, and
+     a field that turns disabled and back drops that link: dictation worked once, then not again. */
+  it("keeps the text box enabled through every passing state, and disables it only when closed", () => {
+    const box = (props) => chat({ items: [user(1)], ...props }).match(/<textarea[^>]*>/)?.[0] ?? "";
+    for (const props of [{ creatingSession: true }, { connecting: true }, { sending: true }, { agentInterface: [] }]) {
+      assert.doesNotMatch(box(props), /\sdisabled/, JSON.stringify(props));
+    }
+    assert.match(box({ closed: true }), /\sdisabled/);
+  });
+
   /* Opening a past session replayed every turn's phases into the status line at once. */
   it("says nothing about the reply on first paint, even mid-turn", () => {
     const body = chat({ items: [user(1)], sending: true, live: true });
