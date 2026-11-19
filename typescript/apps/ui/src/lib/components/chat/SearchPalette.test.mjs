@@ -30,13 +30,15 @@ const draw = (props = {}) =>
       props: { open: false, scope: "all", sessions, agents, paneKinds: ["bay", "setup"], onSession() {}, onAgent() {}, onPane() {}, ...props }
     }).body
   );
-const groups = (body) => [...body.matchAll(/<h3 class="kicker group-label[^"]*">([^<]+)<\/h3>/g)].map((match) => match[1]);
+const groups = (body) => [...body.matchAll(/<div class="kicker group-label[^"]*"[^>]*>([^<]+)<\/div>/g)].map((match) => match[1]);
 const hits = (body) => [...body.matchAll(/<span class="hit-title[^"]*"[^>]*>([^<]+)<\/span>/g)].map((match) => match[1]);
 
 describe("the search palette", () => {
   it("shows a few of everything, grouped, newest sessions first", () => {
     const body = draw();
     assert.deepEqual(groups(body), ["Sessions", "Agents", "Panes"]);
+    /* WCAG 1.3.1: a listbox holds options and groups only; the group's label names it. */
+    assert.match(body, /<div role="group" aria-label="Sessions">\s*<div class="kicker group-label[^"]*" aria-hidden="true">/);
     const titles = hits(body);
     assert.deepEqual(titles.slice(0, 5), ["Question 7", "Question 6", "Question 5", "Question 4", "Question 3"], "five sessions of eight");
     assert.deepEqual(titles.slice(5), ["Q&amp;A Agent", "Agent DAG Studio", "Agent Bay", "Setup"]);

@@ -214,7 +214,9 @@
   <div class="palette-results" id={`${id}-list`} role="listbox" aria-label="Results" bind:this={results}>
     {#each groups as group (group.label)}
       <div role="group" aria-label={group.label}>
-        <h3 class="kicker group-label">{group.label}</h3>
+        <!-- Drawn only, so not a heading: a listbox may hold options and groups, and the group
+             already carries this name as its label. -->
+        <div class="kicker group-label" aria-hidden="true">{group.label}</div>
         {#each group.hits as hit (hit.key)}
           {@const index = flat.indexOf(hit)}
           {@const Icon = hit.icon}
