@@ -1235,6 +1235,13 @@ pre[data-language]::before,
   display: none;
 }
 
+/* Escape put it away (tipFocus.ts), under the pointer too. */
+[data-tip][data-tip-dismissed]::before,
+[data-tip][data-tip-dismissed]::after,
+[data-tip][data-tip-dismissed] > .tip-card {
+  display: none;
+}
+
 /* A tip that is being pressed is in the way of its own result, and so is the tip of a
    control whose menu or drawer is open under the pointer. */
 [data-tip]:active::before,

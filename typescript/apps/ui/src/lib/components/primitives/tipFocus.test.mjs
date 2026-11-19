@@ -66,6 +66,29 @@ describe("tips shown for focus", () => {
     assert.deepEqual(Object.keys(doc.handlers), []);
   });
 
+  /* WCAG 1.4.13: a tip can be put away without moving the pointer or focus. */
+  it("dismisses a showing tip on Escape until the pointer leaves it", () => {
+    const doc = fakeDocument();
+    const chip = { ...element(), matches: () => false, contains: () => false };
+    chip.closest = (selector) => (selector === "[data-tip-dismissed]" && chip.hasAttribute("data-tip-dismissed") ? chip : null);
+    doc.querySelectorAll = (selector) => (selector.includes(":hover") ? [chip] : []);
+    quietProgrammaticTips(doc);
+
+    doc.handlers.keydown({ key: "Enter" });
+    assert.ok(!chip.hasAttribute("data-tip-dismissed"), "only Escape dismisses");
+    doc.handlers.keydown({ key: "Escape" });
+    assert.ok(chip.hasAttribute("data-tip-dismissed"));
+
+    doc.handlers.pointerout({ target: chip, relatedTarget: null });
+    assert.ok(!chip.hasAttribute("data-tip-dismissed"), "the next hover shows it again");
+
+    const css = readFileSync(new URL("../../../app.css", import.meta.url), "utf8");
+    assert.match(
+      css,
+      /\[data-tip\]\[data-tip-dismissed\]::before,\s*\[data-tip\]\[data-tip-dismissed\]::after,\s*\[data-tip\]\[data-tip-dismissed\] > \.tip-card \{\s*display: none;/
+    );
+  });
+
   it("is installed at startup and hides a quiet tip unless it is hovered", () => {
     const main = readFileSync(new URL("../../../main.ts", import.meta.url), "utf8");
     assert.match(main, /quietProgrammaticTips\(document\);/);

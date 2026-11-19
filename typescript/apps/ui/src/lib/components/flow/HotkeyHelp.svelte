@@ -45,10 +45,12 @@
 <!-- The scrim is the dialog's own ::backdrop, so nothing sits between the app and
      the sheet to catch the click. A click landing on the dialog itself can only
      have come from the backdrop, because the body fills it edge to edge. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex: the sheet scrolls and holds no control, so it takes focus itself -->
 <dialog
   bind:this={sheetElement}
   class="sheet"
   aria-labelledby="hotkey-help-title"
+  tabindex="0"
   onclose={onClose}
   onclick={(event) => {
     if (event.target === sheetElement) sheetElement?.close();

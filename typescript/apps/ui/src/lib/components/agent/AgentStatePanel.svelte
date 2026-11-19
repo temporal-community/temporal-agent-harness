@@ -252,7 +252,8 @@
   </div>
 {/snippet}
 
-<section class="agent-state" class:empty={!current} aria-label="Agent state">
+<!-- svelte-ignore a11y_no_noninteractive_tabindex: empty, it is its own scroller, so a keyboard has to reach it -->
+<section class="agent-state" class:empty={!current} aria-label="Agent state" tabindex={current ? undefined : 0}>
   {#if !current}
     <!-- Not an error and not a loading state: most agents declare none. The line
          that would make this pane say something is short enough to print, so it

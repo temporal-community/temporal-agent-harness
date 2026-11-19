@@ -94,8 +94,8 @@
   </div>
   {#if !empty}
     <LongContent {id} text={body} {streaming} lines={lineCount} label="JSON reply" {onResize}>
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex: a streaming JSON scroller must be keyboard reachable -->
-      <div class="json-body" dir="ltr" tabindex={streaming ? 0 : undefined} bind:this={scroller} onscroll={handleScroll}>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex: it scrolls sideways, so a keyboard has to reach it -->
+      <div class="json-body" dir="ltr" tabindex="0" bind:this={scroller} onscroll={handleScroll}>
         <!-- A stream is drawn plain: re-highlighting everything so far on every delta is
              O(total) per chunk, which is what froze a megabyte reply for a second a delta. -->
         <pre class="json-code"><code>{#if streaming}{shown}{:else}{@html highlight(shown, "json")}{/if}</code></pre>
