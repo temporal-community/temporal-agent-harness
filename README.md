@@ -119,7 +119,7 @@ To add the SDK to an existing project:
 uv add 'temporal-agent-kit[ui]==0.12.1'
 
 # TypeScript
-npm install --save-exact @temporalio/agent-kit@0.6.0 @temporalio/agent-kit-worker@0.6.0
+npm install --save-exact @temporalio/agent-kit@0.6.1 @temporalio/agent-kit-worker@0.6.1
 ```
 
 The [Python manual setup](python/README.md#build-with-it--install-from-pypi) covers model
