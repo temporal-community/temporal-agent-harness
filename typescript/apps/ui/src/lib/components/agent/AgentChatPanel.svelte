@@ -2200,13 +2200,13 @@
     <p class="sr-only" role="status">{replyAnnounced}</p>
 
     {#if !closed && error && liveMessages.length > 0}
-      <div class="error-banner">
+      <div class="error-banner" role="alert">
         <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
       </div>
     {/if}
 
     {#if closed}
-      <div class="closed-banner">
+      <div class="closed-banner" role="status">
         <CheckCircle2 size={14} aria-hidden="true" />
         <span>Session ended</span>
         {#if onStartNewSession}

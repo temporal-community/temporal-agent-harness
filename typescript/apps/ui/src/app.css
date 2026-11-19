@@ -76,6 +76,7 @@
   /* --- Semantic event hues ------------------------------------------------- */
   /* Space Black console chassis + Temporal indigo structure. Status / attention
      hues borrow Holocene readability and SoP gold punch — not alternate themes. */
+  /* Fills, strokes and glyphs. As text it clears 4.5:1 on --surface-0 and -1 only; words take --accent-soft. */
   --accent: #6173f3;
   --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */

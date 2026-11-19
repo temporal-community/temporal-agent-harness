@@ -864,6 +864,7 @@
   class:drawer-solo={deskDrawer.groups.length === 1 && deskDrawer.groups[0].length === 1}
   style={`--drawer-h: ${drawerHeight}px; --session-drawer-w: ${sessionDrawerWidth}px`}
 >
+  <h1 class="visually-hidden">Agent console{home || !run.runInfo.agentLabel ? "" : `: ${run.runInfo.agentLabel}`}</h1>
   <!-- Two strips, and each answers one question: this one what you are looking
        at, the transport under the rail where in the run you are looking from.
        The link notice rides with the status line rather than as a third strip:

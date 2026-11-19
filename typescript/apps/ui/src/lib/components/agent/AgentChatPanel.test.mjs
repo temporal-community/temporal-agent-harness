@@ -167,6 +167,13 @@ const chat = (props) =>
   stripComments(render(AgentChatPanel, { props: { logs: [], agentLabel: "Planner", sessionId: "wf-root", ...props } }).body);
 const articles = (body) => body.split(/<article class="message /).slice(1);
 
+describe("banners a screen reader hears", () => {
+  it("announces a failure as an alert and the session ending as a status", () => {
+    assert.match(chat({ items: [user(1)], error: "Worker lost: boom" }), /class="error-banner[^"]*" role="alert"/);
+    assert.match(chat({ items: [user(1)], closed: true }), /class="closed-banner[^"]*" role="status"/);
+  });
+});
+
 describe("the multi-line composer", () => {
   const handler = (name, field, description) => ({
     name,

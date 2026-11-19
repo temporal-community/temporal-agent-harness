@@ -29,6 +29,14 @@ function rule(css, selector) {
   return match[1];
 }
 
+describe("the page heading", () => {
+  it("is one visually hidden h1 that every pane's h2 hangs from", () => {
+    assert.equal(shell.match(/<h1\b/g)?.length, 1);
+    assert.match(shell, /<h1 class="visually-hidden">Agent console/);
+    assert.match(rule(app, ".visually-hidden"), /clip-path: inset\(50%\);/);
+  });
+});
+
 describe("the shared header row", () => {
   it("is sized by one token, full-bleed, with the hairline", () => {
     const head = rule(app, ".surface-head");
