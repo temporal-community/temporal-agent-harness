@@ -60,6 +60,7 @@ from temporal_agent_kit.agent_protocol import (
     APPROVAL_SHORT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    TITLE_MEMO,
     PROVIDE_CALLBACK_RESULT_UPDATE,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
@@ -120,6 +121,7 @@ from temporal_agent_kit.agent_protocol import (
     TurnEnded,
     TurnStarted,
     AgentMessageReply,
+    title_from_message,
 )
 
 # TurnStreamContext (the activity-side stream-publishing carrier this runner builds + consumes)
@@ -2085,6 +2087,8 @@ class AgentWorkflowRunner:
                 "a handler) if that is not what you intended."
             )
         self._closed = False
+        # Whether the ``TITLE_MEMO`` memo holds a title yet.
+        self._titled = False
         # Observable state declared on the agent class with ``agent.state(...)``, keyed by
         # state id; registered at the end of construction, once publishing works.
         self._states: dict[str, StateRef[Any]] = {}
@@ -2209,6 +2213,12 @@ class AgentWorkflowRunner:
                     message_id=message_id,
                 )
             )
+
+        # An untitled agent takes its first message as its title. The session list reads the
+        # title from this memo on the listed execution rather than from the session's history.
+        if not self._titled:
+            self._titled = True
+            workflow.upsert_memo({TITLE_MEMO: title_from_message(message)})
 
         # Published for EVERY admitted message, not only a queued one: it is the only event
         # carrying what was sent, and a joining message gets no ``turn_started`` of its own to
@@ -3261,9 +3271,9 @@ class AgentWorkflowRunner:
     ) -> str:
         """Start a child agent workflow as a subagent and register it; return its short handle.
 
-        Mirrors ``session_manager.create_session`` — launches the registered ``workflow_type``
-        on ``task_queue`` with a standardized :class:`AgentConfig` — but tracks the child in
-        this runner's subagent registry instead. Returns a short ``handle`` (not the long child
+        Launches the registered ``workflow_type`` on ``task_queue`` with a standardized
+        :class:`AgentConfig`, as the server starts a session, but as this workflow's child,
+        tracked in this runner's subagent registry. Returns a short ``handle`` (not the long child
         ``workflow_id``) for the model to address THIS instance in later ``send_<function>`` /
         ``stop_<key>`` calls (a parent may run several instances of one ``agent_key``); the
         workflow-side resolves ``handle`` → ``workflow_id`` internally.

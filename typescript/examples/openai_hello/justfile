@@ -3,9 +3,8 @@
 #
 # Self-contained local stack (each in its own terminal):
 #   just temporal          # 1. local Temporal dev server (or bring your own)
-#   just session-manager   # 2. packaged session-manager worker
-#   just server            # 3. FastAPI API + UI on :8000
-#   just worker            # 4. this example's agent worker
+#   just server            # 2. FastAPI API + UI on :8000
+#   just worker            # 3. this example's agent worker
 #
 # Then open http://localhost:8000, pick "OpenAI Hello (TypeScript)", and chat (e.g. "What's the
 # weather in Paris?"). The reply streams token by token and the get_weather tool call shows up
@@ -40,10 +39,6 @@ config:
 # Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
 temporal:
     temporal server start-dev
-
-# Run the packaged session-manager worker (`temporal-agent-kit session-manager`).
-session-manager:
-    bazel run //python/temporal_agent_kit/web:cli -- session-manager
 
 # Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
 server:

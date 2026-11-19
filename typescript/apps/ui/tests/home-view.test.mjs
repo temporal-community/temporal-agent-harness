@@ -77,7 +77,7 @@ describe("the console with no session open", () => {
     const setup = part("setup");
     assert.doesNotMatch(setup, /metric-strip|No worker|Running/, "setup leaves the counts to the bay and the Sessions sidebar");
     assert.match(setup, /Start the three services[\s\S]*?Each in its own terminal/, "the step is the README's, by its own name");
-    assert.match(setup, /Temporal service[\s\S]*?temporal server start-dev[\s\S]*?Session manager, API and console[\s\S]*?Your Python agent worker/, "each command says which service it starts");
+    assert.match(setup, /Temporal service[\s\S]*?temporal server start-dev[\s\S]*?API and console[\s\S]*?temporal-agent-kit serve agents\.toml[\s\S]*?Your Python agent worker/, "each command says which service it starts");
     const features = part("capabilities");
     assert.equal(features.match(/<a class="cap[^"]*" href="https:\/\/github\.com\/[^"]+\/docs\/guides\/[a-z]+\.md#/g)?.length, 6, "each feature links the guide section that explains it");
     assert.doesNotMatch(setup, />\s*Examples\s*<|>\s*PyPI\s*</, "setup keeps only its quickstart; examples and the package page live elsewhere");

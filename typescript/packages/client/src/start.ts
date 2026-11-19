@@ -23,13 +23,23 @@ export interface CreateSessionRequest {
 export interface SessionSummary {
   workflow_id: string;
   created_at: number;
+  /** The agent's label from the server's registry. */
   label: string;
   agent_workflow_type: string;
-  execution_status?: string;
-  closed?: boolean;
+  execution_status: string;
+  closed: boolean;
+  /** The agent's title (by default its first message); `null` before it has one. */
+  title?: string | null;
   /** The Temporal Web UI's workflows page for the session's namespace; a workflow's page is this
    *  followed by `/<workflow id>`. Absent when the server does not know where that UI is. */
   temporal_workflows_url?: string | null;
+}
+
+/** One page of sessions, newest first, as `GET /api/sessions` returns it. */
+export interface SessionPage {
+  sessions: SessionSummary[];
+  /** Pass as `pageToken` for the next page; `null` on the last one. */
+  next_page_token: string | null;
 }
 
 /** Where sessions are created. `HttpTransport` is one. */

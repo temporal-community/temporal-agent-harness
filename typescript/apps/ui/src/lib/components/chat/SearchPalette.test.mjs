@@ -16,7 +16,7 @@ const controls = readFileSync(new URL("./SessionControls.svelte", import.meta.ur
 const sessions = Array.from({ length: 8 }, (_, i) => ({
   workflow_id: `wf-${i}`,
   agent_workflow_type: "QaAgent",
-  initial_user_message: `Question ${i}`,
+  title: `Question ${i}`,
   created_at: 1_700_000_000 + i,
   closed: false
 }));
@@ -57,7 +57,7 @@ describe("the search palette", () => {
   });
 
   it("marks each session with the Sessions list's own status glyph and says it", () => {
-    const row = (workflow_id, extra) => ({ ...sessions[0], workflow_id, initial_user_message: workflow_id, ...extra });
+    const row = (workflow_id, extra) => ({ ...sessions[0], workflow_id, title: workflow_id, ...extra });
     const body = draw({
       scope: "sessions",
       sessions: [row("open"), row("ended", { closed: true }), row("failed", { execution_status: "FAILED", closed: true }), row("gone", { execution_status: "NOT_FOUND" }), row("stalled", { agent_workflow_type: "DagAgent" }), row("ended-here")],

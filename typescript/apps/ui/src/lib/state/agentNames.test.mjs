@@ -48,7 +48,7 @@ describe("agent names in the session list", () => {
         return { agents: registry };
       },
       async listSessions() {
-        return painted;
+        return { sessions: painted, next_page_token: null };
       }
     });
 

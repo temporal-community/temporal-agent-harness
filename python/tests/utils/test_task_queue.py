@@ -1,4 +1,4 @@
-"""``TASK_QUEUE_PREFIX`` moves a deployment's workers, routing and session manager together."""
+"""``TASK_QUEUE_PREFIX`` moves a deployment's workers and the server's routing together."""
 
 from __future__ import annotations
 

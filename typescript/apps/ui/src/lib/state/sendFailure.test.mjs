@@ -20,7 +20,7 @@ function controllerWith(submitMessage) {
     listAgents: async () => ({
       agents: [{ key: "x", label: "X", workflow_type: parent.agent_workflow_type, task_queue: "q", description: "" }]
     }),
-    listSessions: async () => [parent],
+    listSessions: async () => ({ sessions: [parent], next_page_token: null }),
     agentInterface: async () => [],
     workflowStatus: async (workflow_id) => ({ workflow_id, execution_status: "RUNNING", closed: false }),
     // eslint-disable-next-line require-yield

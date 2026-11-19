@@ -3,10 +3,9 @@
 #
 # Self-contained local stack (each in its own terminal):
 #   just temporal          # 1. local Temporal dev server (or bring your own)
-#   just session-manager   # 2. packaged session-manager worker
-#   just server            # 3. FastAPI API + UI on :8000
-#   just worker            # 4. this example's agent worker
-#   just client            # 5. terminal client: session picker + answer ask_user + chat
+#   just server            # 2. FastAPI API + UI on :8000
+#   just worker            # 3. this example's agent worker
+#   just client            # 4. terminal client: session picker + answer ask_user + chat
 #
 # Two ways to drive it:
 #   * Web UI — open http://localhost:8000, pick "ReAct Agent", and chat (e.g. "What's the weather
@@ -47,10 +46,6 @@ config:
 temporal:
     temporal server start-dev
 
-# Run the packaged session-manager worker (`temporal-agent-kit session-manager`).
-session-manager:
-    bazel run //python/temporal_agent_kit/web:cli -- session-manager
-
 # Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
 server:
     bazel run //python/temporal_agent_kit/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
@@ -75,8 +70,8 @@ worker:
 client *ARGS:
     bazel run //python/examples/react_agent:client -- {{ARGS}}
 
-# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
-# temporal`). Ctrl-C stops them all.
+# `server` and `worker` in one terminal, against a running Temporal (`just temporal`). Ctrl-C
+# stops them all.
 #
 # Run this example's local stack.
 dev:

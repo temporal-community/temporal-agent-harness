@@ -13,6 +13,7 @@ import type {
   OKFGraph,
   OKFGraphRequest,
   Session,
+  SessionsPage,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -22,7 +23,10 @@ import type {
 
 export interface AgentApi {
   listAgents(): Promise<AgentRegistryResponse>;
-  listSessions(): Promise<Session[]>;
+  /** One page of sessions, newest first: the first without a token, else the one it names. */
+  listSessions(pageToken?: string): Promise<SessionsPage>;
+  /** One session by id, wherever it falls in the list; null when there is no such session. */
+  getSession(sessionId: WorkflowId): Promise<Session | null>;
   createSession(request: CreateSessionRequest): Promise<CreateSessionResponse>;
   workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState>;
   agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]>;

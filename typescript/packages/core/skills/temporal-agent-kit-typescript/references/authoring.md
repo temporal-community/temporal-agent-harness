@@ -64,7 +64,7 @@ must match `defineAgent`'s `name`, and its queue must match the worker. The sche
 start Temporal. The shared Python server reads the schema without importing TypeScript code.
 
 The shared services come from the Python package: the starter's `npm run agent-kit:dev` runs
-`temporal-agent-kit dev agents.toml` through `uvx`, beside Temporal and the Node worker.
+`temporal-agent-kit serve agents.toml` through `uvx`, beside Temporal and the Node worker.
 `npx agent-kit doctor --schema Agent.schema.json` checks the installed package, schema, API,
 and agent worker availability. For direct Temporal connection and local TOML validation, use the
 shared Python CLI's `doctor --registry agents.toml`. Both support `--json` and never reset services.

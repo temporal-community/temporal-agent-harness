@@ -13,6 +13,7 @@ import type {
   OKFGraph,
   OKFGraphRequest,
   Session,
+  SessionsPage,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -140,8 +141,18 @@ export class HttpAgentApi implements AgentApi {
     return json<AgentRegistryResponse>(apiPath("agents"));
   }
 
-  async listSessions(): Promise<Session[]> {
-    return json<Session[]>(apiPath("sessions"));
+  async listSessions(pageToken?: string): Promise<SessionsPage> {
+    const query = pageToken ? `?${new URLSearchParams({ page_token: pageToken })}` : "";
+    return json<SessionsPage>(apiPath(`sessions${query}`));
+  }
+
+  async getSession(sessionId: WorkflowId): Promise<Session | null> {
+    try {
+      return await json<Session>(apiPath(`sessions/${encodeURIComponent(sessionId)}`));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async createSession(

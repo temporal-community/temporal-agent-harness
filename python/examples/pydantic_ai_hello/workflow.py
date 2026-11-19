@@ -13,7 +13,7 @@ through ``deps`` at each ``run(...)`` call (``KitDeps(runner=...)``, which snaps
 stream context from it), so one shared agent serves every concurrent workflow correctly — no
 ``self._runner`` assumption.
 
-Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is registered
+Run it with the shared example stack (the packaged FastAPI/UI server); this agent is registered
 in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
 """
 

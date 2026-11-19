@@ -66,7 +66,7 @@ function tab(srv) {
       return { agents: [] };
     },
     async listSessions() {
-      return [];
+      return { sessions: [], next_page_token: null };
     },
     async agentInterface() {
       return [];

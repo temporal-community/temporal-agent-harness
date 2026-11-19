@@ -22,7 +22,7 @@ function api(frames) {
       return { agents: [] };
     },
     async listSessions() {
-      return [];
+      return { sessions: [], next_page_token: null };
     },
     async agentInterface() {
       return [];
@@ -85,8 +85,8 @@ describe("the reload snapshot", () => {
     assert.equal(controller.session?.workflow_id, "wf-painted");
   });
 
-  /* The lists are Session Manager queries. A reload used to wait on them before restoring the
-     run or opening its stream, so while they hung only the painted chat showed, "Connecting". */
+  /* The lists are requests of their own. A reload that waited on them before restoring the run
+     or opening its stream showed only the painted chat, "Connecting", while they hung. */
   it("restores the run and resumes its stream while the Session Manager's lists hang", async () => {
     const stored = session("wf-reloaded", { created_at: 7 });
     const frames = [1, 2, 3].map((offset) => ({
@@ -187,7 +187,7 @@ describe("the reload snapshot", () => {
     const controller = new AgentRunController({
       listAgents: () => new Promise(() => {}),
       async listSessions() {
-        return [cached, other];
+        return { sessions: [cached, other], next_page_token: null };
       },
       async agentInterface() {
         return [];

@@ -74,7 +74,7 @@ function scenario(name: string, label: string, frames: AgentSseFrame[]): MockSce
     created_at: 1_789_126_400,
     label,
     agent_workflow_type: "QaAgent",
-    initial_user_message: "Clean up these CRM rows."
+    title: "Clean up these CRM rows."
   };
   return { agents, sessions: [session], frames, agentInterface: handlers };
 }
@@ -407,7 +407,7 @@ export function jsonReplyScenarios(): Record<string, MockScenario> {
     frame("tool_approval_requested", { type: "tool_approval_requested", ...at(), tool_id: "tool-md-ask", tool_name: "ask_user", tool_input: { question: "Book **TAP 1234** to Lisbon?\n\n- window seat\n- `€312` total" } })
   ]);
   markdown.agents = agents.map((agent) => ({ ...agent, description: `${agent.description} Uses a *durable* **workflow** per session; see \`agents.toml\`.` }));
-  markdown.sessions = [{ ...markdown.sessions[0]!, initial_user_message: plan }];
+  markdown.sessions = [{ ...markdown.sessions[0]!, title: plan }];
 
   const pastedScript = Array.from({ length: 200 }, (_, i) => `print("pasted line ${i + 1}: ${i % 3 ? "שלום עולם" : "مرحبا بالعالم"}")`).join("\n");
   const longMarkdown = Array.from(

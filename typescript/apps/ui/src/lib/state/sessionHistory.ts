@@ -69,7 +69,7 @@ export function sessionRowStatus(session: Session, workerless: ReadonlySet<strin
 export const UNTITLED_SESSION = "Untitled session";
 
 export function sessionTitle(session: Session): string {
-  return markdownToText(session.initial_user_message).trim().replace(/\s+/g, " ") || session.label?.trim() || UNTITLED_SESSION;
+  return markdownToText(session.title).trim().replace(/\s+/g, " ") || session.label?.trim() || UNTITLED_SESSION;
 }
 
 /** "PydanticAIHelloAgent" → "Pydantic AI Hello Agent": words a kicker's capitals can still be read in. */

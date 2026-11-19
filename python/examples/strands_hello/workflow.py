@@ -16,7 +16,7 @@ sees. Its tools cover each kind an Agent Kit Strands agent accepts:
 A message sent while the agent is working steers it: ``ask`` joins the open turn and queues the
 text with ``runner.steer``, and Agent Kit hands it to the model with the next tool result.
 
-Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is registered
+Run it with the shared example stack (the packaged FastAPI/UI server); this agent is registered
 in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
 """
 

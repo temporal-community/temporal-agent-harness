@@ -18,7 +18,7 @@ and updates of the packaged skills.
 
 - `python/temporal_agent_kit/`: agent runtime, tools, and orchestration.
 - `python/temporal_agent_kit/ai_sdks/`: AI SDK integrations.
-- `python/temporal_agent_kit/web/`: CLI, session manager, and FastAPI service.
+- `python/temporal_agent_kit/web/`: CLI, agent registry, and FastAPI service.
 - `python/examples/`: runnable agents; examples are not shipped in the Python package.
 - `python/tests/`: Python tests, organized by subsystem.
 - `typescript/apps/ui/`: Svelte 5 console; `typescript/packages/`: clients and codegen.
@@ -36,7 +36,7 @@ Bazel provisions the build toolchains and dependencies. See `just --list` for re
 3. Run `just dev monty` in another, then open <http://localhost:8000>.
    `just dev` runs all examples; some need additional keys or callback clients (see README).
 
-`just dev` starts the session-manager worker, API/UI server, and agent workers;
+`just dev` starts the API/UI server and agent workers;
 it does **not** start Temporal. The run recipes load the root `.env.local`.
 For UI hot reload, keep the API on port 8000 and run `just ui-dev` separately.
 `just server` serves the UI built by Bazel; restart it to pick up frontend changes.

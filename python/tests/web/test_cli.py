@@ -97,7 +97,7 @@ def test_dev_server_default_applies_only_when_nothing_is_configured() -> None:
 
 @pytest.mark.parametrize(
     "argv",
-    [["--help"], [], ["serve", "--help"], ["session-manager", "--help"]],
+    [["--help"], [], ["serve", "--help"]],
 )
 def test_connection_rules_are_discoverable_from_the_command(
     argv: list[str], capsys: pytest.CaptureFixture[str]
@@ -126,14 +126,13 @@ def test_connection_rules_are_discoverable_from_the_command(
     assert "CURRENT DIRECTORY is NOT picked up" in out
     assert "agents.toml" in out
 
-def test_bare_invocation_lists_both_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
-    """The session-manager worker must be discoverable as a command, not a file to hand-write."""
+def test_bare_invocation_lists_the_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         main([])
 
     out = capsys.readouterr().out
     assert "serve" in out
-    assert "session-manager" in out
+    assert "doctor" in out
 
 
 def test_unknown_subcommand_names_the_valid_choices(
@@ -146,63 +145,7 @@ def test_unknown_subcommand_names_the_valid_choices(
     assert exit_info.value.code == 2
     err = capsys.readouterr().err
     assert "serve" in err
-    assert "session-manager" in err
-
-
-def test_session_manager_defaults_to_the_packaged_task_queue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`session-manager` with no flags must poll the queue the server actually expects."""
-    from temporal_agent_kit.web.session_manager import SESSION_MANAGER_TASK_QUEUE
-
-    captured: dict[str, object] = {}
-
-    def fake_run(*, task_queue: str, identity: str | None) -> None:
-        captured["task_queue"] = task_queue
-        captured["identity"] = identity
-
-    monkeypatch.setattr(
-        "temporal_agent_kit.web.session_manager_worker.run_session_manager_worker", fake_run
-    )
-
-    main(["session-manager"])
-
-    assert captured == {"task_queue": SESSION_MANAGER_TASK_QUEUE, "identity": None}
-
-
-def test_session_manager_forwards_task_queue_and_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(*, task_queue: str, identity: str | None) -> None:
-        captured["task_queue"] = task_queue
-        captured["identity"] = identity
-
-    monkeypatch.setattr(
-        "temporal_agent_kit.web.session_manager_worker.run_session_manager_worker", fake_run
-    )
-
-    main(["session-manager", "--task-queue", "custom-queue", "--identity", "worker-7"])
-
-    assert captured == {"task_queue": "custom-queue", "identity": "worker-7"}
-
-
-def test_session_manager_honors_the_temporal_address_flag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The connection flag has to work on BOTH subcommands, not just serve."""
-
-    def fake_run(**_kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(
-        "temporal_agent_kit.web.session_manager_worker.run_session_manager_worker", fake_run
-    )
-
-    main(["session-manager", "--temporal-address", "manager-host:7233"])
-
-    assert os.environ["TEMPORAL_ADDRESS"] == "manager-host:7233"
+    assert "doctor" in err
 
 
 async def _raise_connect_failure(*_args: object, **_kwargs: object):

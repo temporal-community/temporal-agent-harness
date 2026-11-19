@@ -1,11 +1,10 @@
 """One environment variable that moves a whole harness deployment onto its own task queues.
 
-Each agent worker polls its own queue, ``agents.toml`` names those queues for the server, and the
-session manager has a fixed workflow id and queue. Running a second, isolated copy of all of that
-in the same namespace (one per demo workspace, say) means every one of those names has to change
-together. Setting ``TASK_QUEUE_PREFIX`` to the same value for every process does that: workers
-poll ``<prefix>-<queue>``, the server routes sessions there, and the session manager becomes
-``<prefix>-session-manager``. Unset, every name is unchanged.
+Each agent worker polls its own queue, and ``agents.toml`` names those queues for the server.
+Running a second, isolated copy of all of that in the same namespace (one per demo workspace,
+say) means every one of those names has to change together. Setting ``TASK_QUEUE_PREFIX`` to the
+same value for every process does that: workers poll ``<prefix>-<queue>``, the server starts
+sessions there and lists only the sessions on those queues. Unset, every name is unchanged.
 """
 
 from __future__ import annotations

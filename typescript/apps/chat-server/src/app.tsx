@@ -47,7 +47,7 @@ import { TemporalState } from './state.ts';
  * caller choose the session id (`POST /api/sessions` with `session_id`), so this server never
  * keeps an external-id -> session-id table and can re-derive the session on every event.
  *
- * The prefix only namespaces these away from the manager's own `agent-session-{uuid4}`.
+ * The prefix only namespaces these away from the server's own `agent-session-{uuid4}`.
  */
 const SESSION_PREFIX = 'chat-';
 export const sessionIdForThread = (threadId: string): string => SESSION_PREFIX + threadId;

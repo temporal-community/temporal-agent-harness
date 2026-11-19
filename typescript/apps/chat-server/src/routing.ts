@@ -4,7 +4,7 @@
  * One bot is one agent. Two Slack bots in a workspace can address two different harness
  * agents, so the mapping is keyed by the bot's own identity rather than being global. The
  * value is an `AgentDescriptor.key` — resolved against the live registry from
- * `GET /api/agents`, so nothing here duplicates what the session manager already knows about
+ * `GET /api/agents`, so nothing here duplicates what the server's registry already knows about
  * workflow types and task queues.
  *
  * This is the one piece of genuine configuration in the whole server. Everything else about

@@ -95,7 +95,8 @@ const transport = new HttpTransport({ baseUrl: "/api/" });
 export const sessionsQuery = () =>
   queryOptions({
     queryKey: ["agent-kit", "sessions"],
-    queryFn: ({ signal }) => transport.listSessions(signal)
+    // The newest page of sessions; pass `next_page_token` back as `pageToken` for older ones.
+    queryFn: async ({ signal }) => (await transport.listSessions({ signal })).sessions
   });
 
 export function Sessions() {
@@ -108,7 +109,7 @@ export function Sessions() {
   return (
     <>
       <button onClick={() => start.mutate()} disabled={start.isPending}>New session</button>
-      {sessions.data?.map((s) => <a key={s.workflow_id} href={`?session=${s.workflow_id}`}>{s.label}</a>)}
+      {sessions.data?.map((s) => <a key={s.workflow_id} href={`?session=${s.workflow_id}`}>{s.title ?? s.label}</a>)}
     </>
   );
 }

@@ -27,7 +27,7 @@ from temporal_agent_kit import agent
 from temporal_agent_kit.code_mode.activity_fs import MAX_VIEW_BYTES
 from temporal_agent_kit.web import file_view
 from temporal_agent_kit.web.app import create_agent_kit_app
-from temporal_agent_kit.web.session_manager import AgentRegistry
+from temporal_agent_kit.web.registry import AgentRegistry
 
 FILES = {
     "notes.md": b"# Notes\n",

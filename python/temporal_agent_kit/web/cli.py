@@ -2,29 +2,25 @@
 
 This module is only the command-line surface: it parses arguments, resolves the Temporal address,
 and dispatches. The work lives in the modules the subcommands name — ``web.serve`` for the web
-app process and ``web.session_manager_worker`` for the session-manager worker — so neither is reachable only
-through a CLI.
+app process — so none of it is reachable only through a CLI.
 
 Adding the harness to a project with the ``ui`` extra installs this command into the project's
 environment (reachable as ``uv run temporal-agent-kit``), so a project gets the whole
 web-facing harness with no repo checkout, no Node/pnpm, and no ``examples/`` tree.
-A normal dev setup runs both subcommands:
+A normal dev setup is:
 
     uv add 'temporal-agent-kit[ui]'
-    uv run temporal-agent-kit session-manager &          # hosts SessionManagerWorkflow
     uv run temporal-agent-kit serve path/to/agents.toml   # prebuilt Svelte UI + JSON API
 
 ``serve`` publishes the UI built into the wheel (``temporal_agent_kit/ui/dist``) over one or
-more ``agents.toml`` registries. ``session-manager`` runs the agent-agnostic worker that hosts
-the packaged ``SessionManagerWorkflow``; without it the server comes up but ``/api/agents`` and
-session creation have nothing to answer them, since both are workflow queries.
+more ``agents.toml`` registries. It starts sessions as the registries' agent workflows and lists
+them from Temporal visibility, so beside Temporal it needs only the agents' workers.
 
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
 ``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
 of an ``agents.toml`` registry. The running server exposes the HTTP contract at ``/openapi.json``.
 
-``dev`` runs ``session-manager`` and ``serve`` together in one process for local development.
 ``init`` copies a bundled starter; ``skills`` locates or installs this release's agent skill.
 ``doctor`` reads configuration and service status without creating or resetting workflows.
 """
@@ -45,8 +41,7 @@ from temporal_agent_kit.web.client import (
 TEMPORAL_CONNECTION_HELP = """\
 Temporal connection:
   Service commands and doctor resolve connections with temporalio's standard client config, so the
-  server and the session-manager worker land on the same namespace when configured the same
-  way. In precedence order:
+  server and the agent workers land on the same namespace when configured the same way. In precedence order:
 
     1. --temporal-address HOST:PORT
          Overrides the ADDRESS only. Namespace, TLS, and API key still come from the
@@ -65,13 +60,11 @@ Temporal connection:
       TEMPORAL_CONFIG_FILE=./temporal.toml temporal-agent-kit serve ./agents.toml
 
 Task queues:
-  TASK_QUEUE_PREFIX, set to the same value for `serve`, `session-manager` and every agent
-  worker, moves the whole deployment onto its own queues: agents.toml's queues and the
-  session manager's workflow id and queue all become `<prefix>-<name>`.
+  TASK_QUEUE_PREFIX, set to the same value for `serve` and every agent worker, moves the whole
+  deployment onto its own queues: agents.toml's queues all become `<prefix>-<name>`, and the
+  server lists only sessions on those queues.
 
 Examples:
-  temporal-agent-kit dev ./agents.toml            # session manager + API/console, one process
-  temporal-agent-kit session-manager
   temporal-agent-kit serve ./agents.toml
   temporal-agent-kit serve one/agents.toml two/agents.toml --port 9000
   temporal-agent-kit serve ./agents.toml --temporal-address my-host:7233
@@ -88,18 +81,6 @@ def _serve(args: argparse.Namespace) -> None:
     from temporal_agent_kit.web.serve import run_server
 
     run_server(*args.registry_paths, host=args.host, port=args.port)
-
-
-def _dev(args: argparse.Namespace) -> None:
-    from temporal_agent_kit.web.dev import run_dev
-
-    run_dev(*args.registry_paths, host=args.host, port=args.port)
-
-
-def _session_manager(args: argparse.Namespace) -> None:
-    from temporal_agent_kit.web.session_manager_worker import run_session_manager_worker
-
-    run_session_manager_worker(task_queue=args.task_queue, identity=args.identity)
 
 
 def _schema(args: argparse.Namespace) -> None:
@@ -193,7 +174,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="temporal-agent-kit",
         description="Build and run Temporal agents: create a starter, install a coding-agent skill, "
-        "export schemas, diagnose services, or run the shared API/UI and session manager.",
+        "export schemas, diagnose services, or run the shared API/UI.",
         epilog=TEMPORAL_CONNECTION_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -230,34 +211,14 @@ def main(argv: list[str] | None = None) -> None:
     doctor.add_argument("--json", action="store_true")
     doctor.set_defaults(handler=_development)
 
-    dev = subparsers.add_parser(
-        "dev",
-        parents=[connection],
-        help="Run the session-manager worker and the web UI/API together for local development.",
-        description="Run the packaged session-manager worker and the prebuilt Agent Kit web UI and "
-        "JSON API in one process. Equivalent to `session-manager` and `serve` in two terminals; "
-        "start Temporal and your agent worker separately.",
-        epilog=TEMPORAL_CONNECTION_HELP,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    dev.add_argument(
-        "registry_paths",
-        nargs="+",
-        metavar="registry_path",
-        help="Path(s) to agents.toml registries, merged as `serve` does.",
-    )
-    dev.add_argument("--host", default="0.0.0.0")
-    dev.add_argument("--port", type=int, default=8000)
-    dev.set_defaults(handler=_dev)
-
     serve = subparsers.add_parser(
         "serve",
         parents=[connection],
         help="Serve the packaged web UI over one or more agents.toml registries.",
         description="Serve the prebuilt Agent Kit web UI and JSON API over one or more "
-        "agents.toml registries. Needs `temporal-agent-kit session-manager` running "
-        "against the same namespace, since the agent list and session creation are "
-        "workflow queries.",
+        "agents.toml registries. It starts sessions as the registries' agent workflows and "
+        "lists them from Temporal visibility; run the agents' workers against the same "
+        "namespace.",
         epilog=TEMPORAL_CONNECTION_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -271,35 +232,6 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
     serve.set_defaults(handler=_serve)
-
-    session_manager = subparsers.add_parser(
-        "session-manager",
-        parents=[connection],
-        help="Run the worker hosting the packaged session-manager workflow.",
-        description="Run the agent-agnostic worker that hosts the packaged "
-        "SessionManagerWorkflow. It registers no agent workflows or activities of its own — "
-        "it launches whichever agents `serve` registered, as child workflows on their own "
-        "task queues — so one worker serves every agent.",
-        epilog=TEMPORAL_CONNECTION_HELP,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    # Imported lazily: reaching for the default task queue shouldn't drag the session-manager
-    # module into `--help` on the other subcommand.
-    from temporal_agent_kit.utils.task_queue import task_queue_name
-    from temporal_agent_kit.web.session_manager import SESSION_MANAGER_TASK_QUEUE
-
-    session_manager.add_argument(
-        "--task-queue",
-        default=task_queue_name(SESSION_MANAGER_TASK_QUEUE),
-        help="Task queue to poll. Must match what the server expects "
-        "(default: %(default)r, under $TASK_QUEUE_PREFIX when set).",
-    )
-    session_manager.add_argument(
-        "--identity",
-        default=None,
-        help="Worker identity reported to Temporal. Defaults to the SDK's own identity.",
-    )
-    session_manager.set_defaults(handler=_session_manager)
 
     schema = subparsers.add_parser(
         "schema",

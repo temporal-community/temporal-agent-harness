@@ -26,9 +26,9 @@ looks like "auto mode doesn't work" rather than "the key is missing". Failing at
 the actual problem. The Monty example (examples/monty) is the same agent without auto mode,
 and needs only the Gemini key.
 
-This worker hosts only the auto-mode agent, not the session manager. The packaged session
-manager is hosted by `temporal-agent-kit session-manager`; because it launches agents by
-registered name, it dispatches this agent to this queue without this worker hosting it.
+This worker hosts only the auto-mode agent. The packaged server (`temporal-agent-kit serve`)
+starts agents by workflow type on their registered queues, so it dispatches this agent to this
+queue without hosting it.
 """
 
 from __future__ import annotations

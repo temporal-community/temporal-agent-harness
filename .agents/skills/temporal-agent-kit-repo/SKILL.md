@@ -28,8 +28,8 @@ in the root [AGENTS.md](../../../AGENTS.md) take precedence over anything here.
   JavaScript: the `typescript/` pnpm workspace through `bazel run //typescript:pnpm -- <args>`.
   Do not `pip install` or `npm install` into an example.
 - **Services.** `just temporal` in one terminal, then `just dev <example>` from the repo root
-  runs the session manager, the console server, and that example's worker together. Each
-  example's own justfile has `temporal`, `session-manager`, `server`, `worker`, and `dev`.
+  runs the console server and that example's worker together. Each example's own justfile has
+  `temporal`, `server`, `worker`, and `dev`.
 - **Credentials.** One `.env.local` at the repository root, copied from `.env.example`. The
   recipes load it. Never commit it.
 
@@ -50,14 +50,13 @@ in the root [AGENTS.md](../../../AGENTS.md) take precedence over anything here.
 ```bash
 cp .env.example .env.local        # once; set OPENAI_API_KEY and/or GEMINI_API_KEY
 just temporal                     # terminal 1, unless Temporal is already running
-just dev openai_hello             # terminal 2: session manager + console + this example's worker
+just dev openai_hello             # terminal 2: console + this example's worker
 ```
 
 Open <http://localhost:8000>, pick the agent, and verify a complete session: a reply, any tool
 trace, and a reload that reconnects. `just dev` lists several examples at once; `just server` and
-`just workers` run those parts separately. When the set of served agents changes against a
-Temporal server that stays up, run `just reset-manager` before the next `just server`; it only
-terminates the session-manager workflow. Do not reset or restart a developer's Temporal server.
+`just workers` run those parts separately. A change to the set of served agents takes effect when
+the server restarts. Do not reset or restart a developer's Temporal server.
 
 ## Test
 

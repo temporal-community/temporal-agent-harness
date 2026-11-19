@@ -70,7 +70,7 @@ Generate schemas with `temporal-agent-kit schema module:Class -o Agent.schema.js
 An application module must be installed or importable from the current project. Required init
 data produces a startup form in the console. Keep workflow name, registry name, and schema aligned.
 
-Run the local stack with `temporal-agent-kit dev agents.toml` (session manager plus API and
-console in one process) beside Temporal and the agent worker. Use
+Run the local stack with `temporal-agent-kit serve agents.toml` (the API and console) beside
+Temporal and the agent worker. Use
 `temporal-agent-kit doctor --registry agents.toml` to diagnose it. `--json` is suitable for
 scripts; a failed check exits nonzero. It never starts or resets services.

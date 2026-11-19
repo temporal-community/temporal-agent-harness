@@ -1,5 +1,4 @@
 """Installed-resource updates must preserve user work and make conflicts actionable."""
-import asyncio
 import io
 import json
 import sys
@@ -164,7 +163,7 @@ def test_doctor_reports_invalid_registry_and_unavailable_services(tmp_path, monk
     from temporal_agent_kit.web import doctor
 
     async def unavailable(queues, timeout):
-        assert "session-manager" in queues[0]
+        assert queues == []
         return [{"check": "temporal", "ok": False, "detail": "unavailable"}]
 
     monkeypatch.setattr(doctor, "inspect_temporal", unavailable)
@@ -199,47 +198,3 @@ def test_api_reports_worker_readiness_and_malformed_responses():
     assert checks[1] == {"check": "worker:Hello", "ok": False, "detail": "no_worker"}
     with patch("temporal_agent_kit.development.urlopen", return_value=response({"agents": [None]})):
         assert api_checks("http://localhost:8000")[-1]["ok"] is False
-
-
-def test_dev_runs_the_session_manager_and_server_together(monkeypatch, tmp_path):
-    from temporal_agent_kit.web import dev
-
-    registry = tmp_path / "agents.toml"
-    registry.write_text('[[agents]]\nkey = "a"\nworkflow_type = "A"\ntask_queue = "q"\nlabel = "A"\ndescription = "d"\n')
-    calls: list[str] = []
-
-    class FakeWorker:
-        async def run(self):
-            calls.append("worker")
-            await asyncio.Event().wait()
-
-        async def shutdown(self):
-            calls.append("worker shutdown")
-
-    class FakeServer:
-        should_exit = False
-
-        def __init__(self, config):
-            calls.append(f"server:{config.port}")
-
-        async def serve(self):
-            calls.append("serve")
-
-    class FakeClient:
-        namespace = "default"
-
-    async def verify():
-        calls.append("verify")
-
-    async def connect():
-        return FakeClient()
-
-    monkeypatch.setitem(sys.modules, "uvicorn", type("U", (), {"Server": FakeServer, "Config": lambda app, host, port: type("C", (), {"port": port})()}))
-    monkeypatch.setattr(dev, "verify_temporal_reachable", verify)
-    monkeypatch.setattr(dev, "connect_client", connect)
-    monkeypatch.setattr(dev, "create_app", lambda *paths: "app")
-    monkeypatch.setattr(dev, "create_session_manager_worker", lambda client, task_queue: FakeWorker())
-    monkeypatch.setattr(dev, "warn_without_console", lambda: None)
-    main(["dev", str(registry), "--port", "9001"])
-    assert calls[:3] == ["verify", "server:9001", "worker"] or calls[:3] == ["verify", "server:9001", "serve"]
-    assert "worker shutdown" in calls and "serve" in calls

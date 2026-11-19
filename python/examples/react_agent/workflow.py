@@ -22,8 +22,8 @@ see ``client.py``.
 
 This is Agent Kit form of workshop demo2/demo3 (OpenAI Agents SDK + Temporal, then MCP): the
 Agents SDK drives the reason-act loop; Temporal makes it durable; Agent Kit standardizes it.
-Registered in ``agents.toml`` and driven by the shared example stack (session-manager worker +
-FastAPI/UI). See ``README.md``.
+Registered in ``agents.toml`` and driven by the shared example stack (the packaged FastAPI/UI
+server). See ``README.md``.
 """
 
 from __future__ import annotations

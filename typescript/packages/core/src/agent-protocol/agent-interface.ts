@@ -6,12 +6,23 @@
 
 import { z } from "zod";
 
+import { pyRepr } from "../py-repr.ts";
+
 export const SEND_AGENT_MESSAGE_UPDATE = "send_agent_message";
 export const TOOL_APPROVAL_UPDATE = "tool_approval";
 export const PROVIDE_CALLBACK_RESULT_UPDATE = "provide_callback_result";
 export const AGENT_STATUS_QUERY = "agent_status";
 export const AGENT_INTERFACE_QUERY = "agent_interface";
 export const CLOSE_SIGNAL = "close";
+
+// Every memo key the Agent Kit writes starts with this, so an agent's own memo keys never collide
+// with the Kit's, whatever the Kit adds later.
+export const AGENT_KIT_MEMO_PREFIX = "agent_kit.";
+// The agent's title, at most `TITLE_MAX_CHARS` characters. A session list reads it from
+// visibility, so it can title every session without opening any session's history. Until
+// something sets it, an agent titles itself with its first admitted message (`titleFromMessage`).
+export const TITLE_MEMO = `${AGENT_KIT_MEMO_PREFIX}title`;
+export const TITLE_MAX_CHARS = 100;
 
 export const AGENT_ID_LENGTH = 6;
 export const APPROVAL_SHORT_ID_LENGTH = 6;
@@ -324,6 +335,24 @@ export const AgentMessageSchema = z.object({
   payload: messagePayload,
 });
 export type AgentMessage = z.output<typeof AgentMessageSchema>;
+
+/**
+ * `message` as a one-line title, at most `TITLE_MAX_CHARS` characters: an agent's default title.
+ *
+ * Handler names and payload shapes are agent-specific, so this stays generic: the payload's string
+ * field when it is the only field (the common chat shape, whatever the field is called), the
+ * handler name for an empty payload, and otherwise the handler name with the payload's fields as
+ * `key=repr`, sorted by key — Python's `repr`, so both SDKs title a session alike.
+ */
+export function titleFromMessage(message: AgentMessage): string {
+  const entries = Object.entries(message.payload).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  let title: string;
+  if (entries.length === 0) title = message.type;
+  else if (entries.length === 1 && typeof entries[0]![1] === "string") title = entries[0]![1];
+  else title = `${message.type}(${entries.map(([key, value]) => `${key}=${pyRepr(value)}`).join(", ")})`;
+  // By code point, as Python slices a str.
+  return Array.from(title).slice(0, TITLE_MAX_CHARS).join("");
+}
 
 // Schemas as Python's pydantic models publish them (field titles included), for wire parity.
 export const TextMessage = z.object({ text: z.string().meta({ title: "Text" }) }).meta({

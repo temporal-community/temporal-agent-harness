@@ -14,6 +14,7 @@ import type {
   OKFGraph,
   OKFGraphRequest,
   Session,
+  SessionsPage,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -119,6 +120,8 @@ const montyInterface: AgentInterfaceFunction[] = [
   }
 ];
 
+const MOCK_SESSIONS_PAGE_SIZE = 100;
+
 export class MockAgentApi implements AgentApi {
   #scenario: MockScenario;
   #sessions: Session[];
@@ -132,8 +135,19 @@ export class MockAgentApi implements AgentApi {
     return { agents: this.#scenario.agents };
   }
 
-  async listSessions(): Promise<Session[]> {
-    return this.#sessions;
+  /** Pages as the server does, newest first; a token is the offset of the page it names. */
+  async listSessions(pageToken?: string): Promise<SessionsPage> {
+    const newestFirst = [...this.#sessions].sort((a, b) => b.created_at - a.created_at);
+    const start = pageToken ? Number(pageToken) : 0;
+    const end = start + MOCK_SESSIONS_PAGE_SIZE;
+    return {
+      sessions: newestFirst.slice(start, end),
+      next_page_token: end < newestFirst.length ? String(end) : null
+    };
+  }
+
+  async getSession(sessionId: WorkflowId): Promise<Session | null> {
+    return this.#sessions.find((item) => item.workflow_id === sessionId) ?? null;
   }
 
   async createSession(
@@ -141,12 +155,13 @@ export class MockAgentApi implements AgentApi {
   ): Promise<CreateSessionResponse> {
     if (this.#scenario.createError) throw new Error(this.#scenario.createError);
     const number = this.#sessions.length + 1;
+    const agent = this.#scenario.agents.find((item) => item.workflow_type === request.agent_workflow_type);
     const session: Session = {
       workflow_id: `agent-session-mock-${number}`,
       created_at: Date.now() / 1000,
-      label: `Session ${number}`,
+      label: agent?.label ?? request.agent_workflow_type,
       agent_workflow_type: request.agent_workflow_type,
-      initial_user_message: null,
+      title: null,
       execution_status: "RUNNING",
       closed: false
     };

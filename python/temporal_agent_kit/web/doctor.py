@@ -11,7 +11,6 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 
 from temporal_agent_kit.development import api_checks
-from temporal_agent_kit.utils.task_queue import task_queue_name
 from temporal_agent_kit.web.registry import load_agent_registry
 from temporal_agent_kit.web.task_queue_status import describe_task_queue_workers
 
@@ -43,7 +42,7 @@ def diagnose(registry: Path | None, api_url: str, timeout: float = 5) -> dict[st
         except PackageNotFoundError:
             versions[name] = "not installed"
     checks = []
-    queues = [task_queue_name("session-manager")]
+    queues: list[str] = []
     if registry is not None:
         try:
             agents = load_agent_registry(registry).agents

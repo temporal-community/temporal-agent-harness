@@ -78,7 +78,7 @@ const sessions: Session[] = [
     created_at: startedAt,
     label: "Session 1",
     agent_workflow_type: "QaAgent",
-    initial_user_message:
+    title:
       "When should I use a local activity versus a normal activity?"
   }
 ];

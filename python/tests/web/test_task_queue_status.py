@@ -187,14 +187,6 @@ async def test_an_undescribed_queue_is_unknown_not_ready() -> None:
     assert workers.for_task_queue("never-asked").status == UNKNOWN
 
 
-class _FakeManagerHandle:
-    def __init__(self, registry: AgentRegistry) -> None:
-        self.registry = registry
-
-    async def query(self, _query, **_kwargs) -> AgentRegistry:
-        return self.registry
-
-
 def _agents_app(registry: AgentRegistry, temporal: _FakeTemporalClient) -> FastAPI:
     """Build the app and hand it its dependencies directly.
 
@@ -204,7 +196,7 @@ def _agents_app(registry: AgentRegistry, temporal: _FakeTemporalClient) -> FastA
     """
     app = create_agent_kit_app(registry=registry)
     app.state.temporal = temporal
-    app.state.manager_handle = _FakeManagerHandle(registry)
+    app.state.registry = registry
     return app
 
 

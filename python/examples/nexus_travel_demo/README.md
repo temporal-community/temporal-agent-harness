@@ -47,11 +47,10 @@ The caller prints each step as it happens, then the whole transcript:
   `set_model`'s.
 - `[approveToolCall]`, `[provideCallbackResult]` and `[agent]` (the turn's reply) follow.
 
-To watch the session in the Agent Kit console, also run `just session-manager` and
-`just console`, each in its own terminal, before `just caller`. Then open
-<http://localhost:8000>. Once the caller sends its first message, the session appears in the
-session list as a discovered Monty (Conversational) session, `nexus-travel-<id>`. Open it to
-follow the turns live. The caller closes the session at the end, which takes it off the list.
+To watch the session in the Agent Kit console, also run `just console` in its own terminal
+before `just caller`. Then open <http://localhost:8000>. Once the caller starts it, the session
+appears in the session list as a Monty (Conversational) session, `nexus-travel-<id>`. Open it to
+follow the turns live. The caller closes the session at the end, and the list shows it closed.
 
 In the Temporal UI (<http://localhost:8233>), the caller is `nexus-travel-caller-<id>`, and its
 history shows each Nexus operation. The agent it drove is `nexus-travel-<id>`, with the same

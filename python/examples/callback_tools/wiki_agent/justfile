@@ -3,10 +3,9 @@
 #
 # Self-contained local stack (each in its own terminal):
 #   just temporal          # 1. local Temporal dev server (or bring your own)
-#   just session-manager   # 2. packaged session-manager worker
-#   just server            # 3. FastAPI API on :8000 (serves this example's registry)
-#   just worker            # 4. the WikiAgent worker
-#   just client            # 5. the thin terminal client that fulfills the callback tools
+#   just server            # 2. FastAPI API on :8000 (serves this example's registry)
+#   just worker            # 3. the WikiAgent worker
+#   just client            # 4. the thin terminal client that fulfills the callback tools
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
 # project's `examples` dependencies on first use.
@@ -36,10 +35,6 @@ config:
 temporal:
     temporal server start-dev
 
-# Run the packaged session-manager worker (`temporal-agent-kit session-manager`).
-session-manager:
-    bazel run //python/temporal_agent_kit/web:cli -- session-manager
-
 # Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry
 # via the shared examples app entrypoint.
 server:
@@ -54,8 +49,8 @@ worker:
 client *ARGS:
     bazel run //python/examples/callback_tools/wiki_agent:client -- --wiki-dir "{{justfile_directory()}}/wiki" {{ARGS}}
 
-# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
-# temporal`). Ctrl-C stops them all.
+# `server` and `worker` in one terminal, against a running Temporal (`just temporal`). Ctrl-C
+# stops them all.
 #
 # Run this example's local stack.
 dev:

@@ -17,7 +17,8 @@ set dotenv-load := true
 root := justfile_directory() / ".." / ".." / ".."
 local := "TEMPORAL_CONFIG_FILE=" + root / "temporal.local.toml" + " TEMPORAL_PROFILE=default"
 endpoint := "nexus-travel-agent"
-agent_queue := "nexus-demo-monty"
+queue_prefix := "nexus-demo"
+agent_queue := queue_prefix + "-monty-dynamic-agent"
 nexus_queue := "nexus-travel-agent"
 
 default:
@@ -46,16 +47,12 @@ adapter-worker:
       AGENT_WORKFLOW_ID_PREFIX=nexus-travel- NEXUS_AGENT_TASK_QUEUE={{nexus_queue}} \
       bazel run //python/temporal_agent_kit/nexus_agent_adapter:worker
 
-# Optional, to watch the session in the harness console: the session manager the console needs.
-session-manager:
-    {{local}} bazel run //python/temporal_agent_kit/web:cli -- session-manager
-
-# Serving Monty's registry, the console lists running MontyChatAgent sessions it didn't start,
-# including the caller's, as discovered.
+# Serving Monty's registry under the prefix that names `agent_queue`, the console lists the
+# MontyChatAgent sessions on that queue, the caller's among them.
 
 # Optional: the harness console on http://localhost:8000, to watch the caller's session.
 console:
-    {{local}} bazel run //python/temporal_agent_kit/web:cli -- serve \
+    {{local}} TASK_QUEUE_PREFIX={{queue_prefix}} bazel run //python/temporal_agent_kit/web:cli -- serve \
       "{{root}}/python/examples/monty/agents.toml" --host 0.0.0.0 --port 8000
 
 # Run the caller workflow and print its transcript. It switches Monty to skip approvals first.

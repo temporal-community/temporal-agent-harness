@@ -134,7 +134,7 @@ function boot({
       };
     },
     async listSessions() {
-      return listSessionsFor();
+      return { sessions: await listSessionsFor(), next_page_token: null };
     },
     async createSession() {
       return session("wf-created");

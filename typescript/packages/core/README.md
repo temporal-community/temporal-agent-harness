@@ -21,9 +21,8 @@ Create an agent, install its coding-agent skill, and open a working session in f
 No repository checkout or Bazel installation is needed.
 
 > **Available with the next npm release.** The `agent-kit` command is not in the published
-> 0.2.0 package, and the starter's `agent-kit:dev` script needs the Python release that adds
-> `temporal-agent-kit dev`. Once both are published, the `@latest` command below selects
-> them. Until then, use the [manual setup](#build-with-it--install-from-npm) with published packages.
+> 0.2.0 package. Once it is published, the `@latest` command below selects it. Until then,
+> use the [manual setup](#build-with-it--install-from-npm) with published packages.
 
 You need **Node.js 22.18+**, npm, [uv](https://docs.astral.sh/uv/getting-started/installation/),
 the [Temporal CLI](https://docs.temporal.io/cli), and an OpenAI API key for the starter's `ask`
@@ -81,7 +80,7 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session manager, API, and Agent Kit console:**
+**Terminal 2 — shared API and Agent Kit console:**
 
 ```bash
 npm run agent-kit:dev
@@ -93,8 +92,8 @@ npm run agent-kit:dev
 npm start
 ```
 
-**The API, console, and session manager come from the Python package.** `agent-kit:dev` runs
-`temporal-agent-kit dev` through `uvx`, in one process and without a Python project of your
+**The API and console come from the Python package.** `agent-kit:dev` runs
+`temporal-agent-kit serve` through `uvx`, in one process and without a Python project of your
 own; the Python version is pinned in `package.json`. Your agent worker runs in Node. The console
 is prebuilt, so no frontend build is needed.
 
@@ -160,7 +159,7 @@ The reference below covers existing projects, manual setup, and repository examp
 | **Create a new agent project** with a coding-agent skill | [Four-step quickstart](#quickstart) |
 | **Add the SDK to an existing project** or assemble it manually | [Install from npm](#build-with-it--install-from-npm) |
 
-Your agent and worker are TypeScript. The shared console and session manager currently come
+Your agent and worker are TypeScript. The shared console and server currently come
 from the Python package, which `uvx` runs without a Python project of your own. Both SDKs use
 the same console, registry format, and session API.
 
@@ -198,7 +197,6 @@ Run each command in its own terminal, from that example directory:
 
 ```bash
 just temporal          # skip if your configured Temporal server is already running
-just session-manager
 just server
 just worker
 ```
@@ -283,7 +281,7 @@ OPENAI_API_KEY=your-openai-api-key
 
 `npm start` explicitly loads this file. The `uvx` commands below do not load it; they do not need
 the OpenAI key. For a non-default Temporal connection, export the same connection settings in
-all three service terminals as described under [Temporal connection](#temporal-connection).
+both service terminals as described under [Temporal connection](#temporal-connection).
 
 ### Your first agent
 
@@ -421,21 +419,16 @@ Run one command per terminal, all from `my-agent/`:
 #    Temporal's own workflow UI is at http://localhost:8233.
 temporal server start-dev
 
-# 2. Session-manager worker: starts agents and tracks sessions.
-uvx --from 'temporal-agent-kit[ui]==0.12.1' temporal-agent-kit session-manager
-
-# 3. Agent Kit console + JSON API: http://localhost:8000.
+# 2. Agent Kit console + JSON API: http://localhost:8000. Starts agents and lists sessions.
 uvx --from 'temporal-agent-kit[ui]==0.12.1' temporal-agent-kit serve ./agents.toml
 
-# 4. Your TypeScript agent worker; loads .env.local.
+# 3. Your TypeScript agent worker; loads .env.local.
 npm start
 ```
 
 The console is prebuilt in the Python package. No frontend build is needed. The console and
-session-manager worker are shared infrastructure; your agent code runs on your TypeScript worker.
-From the next Python release, `temporal-agent-kit dev ./agents.toml` runs steps 2 and 3 in
-one process, as the quickstart's `npm run agent-kit:dev` does.
-Leave all four processes running while using the console. After editing TypeScript, stop your
+its server are shared infrastructure; your agent code runs on your TypeScript worker.
+Leave all three processes running while using the console. After editing TypeScript, stop your
 worker, rerun `npm run agent-kit:schema`, and start it again. Start a new session when changing agent behavior.
 
 ### Your first session
@@ -456,9 +449,9 @@ are real. The quickstart above uses OpenAI and streams its response live.
 
 ### Temporal connection
 
-With no connection configured, all three services use `localhost:7233` and namespace `default`.
+With no connection configured, both services use `localhost:7233` and namespace `default`.
 For a project profile or Temporal Cloud, run these exports in **each** service terminal before
-starting the session manager, console, and TypeScript worker:
+starting the console and TypeScript worker:
 
 ```bash
 export TEMPORAL_CONFIG_FILE="$PWD/temporal.toml"
@@ -514,11 +507,11 @@ workflow module, add a matching registry entry, and generate its schema using th
 | --- | --- |
 | The worker warns that `OPENAI_API_KEY` is not set, or the model reports an authentication error | `ping` works without a key; for `ask`, put a valid key in `.env.local` and use `npm start` from the project root. Restart the worker after changing it. |
 | Cannot connect to Temporal | Start the dev server, or check `TEMPORAL_CONFIG_FILE`, `TEMPORAL_PROFILE`, and `TEMPORAL_*` overrides in every terminal. |
-| Console loads but agent discovery or session creation stalls | Start the session-manager worker and confirm it uses the same Temporal address and namespace as the console. |
+| Console loads but session creation fails | Confirm the console server uses the same Temporal address and namespace as the worker, and that `agents.toml` names the agent. |
 | A session starts but messages never progress | Start the TypeScript worker. Its task queue must match `agents.toml`, and its address and namespace must match the other services. |
 | `dist/worker.js` or the schema file is missing | Run `npm run agent-kit:schema` from the project root before starting the services. |
 | Duplicate protobuf registrations or incompatible Temporal types | Reinstall with the pinned dependency versions above. Keep the underlying Temporal SDK packages aligned with the OpenAI plugin. |
-| An edited registry still shows the old agents | The session-manager workflow caches its registry. For disposable local development, restart a fresh in-memory Temporal dev server, then restart the services. This discards local sessions; use it only when you can discard them. |
+| An edited registry still shows the old agents | The server reads `agents.toml` at startup; restart the `serve` process. |
 | Port 8000 shows nothing useful | Open the Agent Kit console on 8000; Temporal's workflow UI on 8233 is a separate application. Check the `serve` terminal for startup errors. |
 
 ## What next?

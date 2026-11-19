@@ -78,8 +78,6 @@ def _launches(instructions: dict[str, object], names: list[str]) -> list[Launch]
     cli_blob = instructions.get("cli")
     if isinstance(cli_blob, dict):
         cli = Program.from_json(cli_blob)
-        if instructions["session_manager"]:
-            launches.append(Launch("session-manager", cli, ("session-manager",)))
         if instructions["server"]:
             serve = ("serve", *registries, "--host", "0.0.0.0", "--port", "8000")
             launches.append(Launch("server", cli, serve))

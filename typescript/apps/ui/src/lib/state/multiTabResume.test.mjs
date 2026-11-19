@@ -72,7 +72,7 @@ function server() {
 function tab(source, attachCalls = []) {
   const controller = new AgentRunController({
     async listSessions() {
-      return [session(ID)];
+      return { sessions: [session(ID)], next_page_token: null };
     },
     async agentInterface() {
       return [];

@@ -6,10 +6,11 @@ message, seeing a tool result and completed reply, and reconnecting to the same 
 Use a scripted model for repeatable automated tests; do not claim a scripted response is a live
 provider test. Test approval/callback paths separately when your agent uses them.
 
-If the console loads but cannot start a session, check the session-manager worker. If a session
-exists but messages stall, check the agent worker, task queue, and namespace. If a model fails,
-check the worker's provider credentials and optional integration dependencies. If registration
-changes appear stale, inspect the session manager's cached registry before replacing local state.
+If the console loads but cannot start a session, check the server's registry and its Temporal
+connection. If a session exists but messages stall, check the agent worker, task queue, and
+namespace. If a model fails, check the worker's provider credentials and optional integration
+dependencies. If registration changes appear stale, restart the server; it reads its registry at
+startup.
 
 Keep the Temporal server, namespace, and task queues isolated for tests. Do not terminate unrelated
 sessions or reset a user's existing development server to make a test pass. Temporal workflow code

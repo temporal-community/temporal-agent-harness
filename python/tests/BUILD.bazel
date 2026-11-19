@@ -39,7 +39,6 @@ agent_kit_pytest_test(
         ":conftest",
         "//python/temporal_agent_kit:development",
         "//python/temporal_agent_kit/web:cli",
-        "//python/temporal_agent_kit/web:dev",
         "//python/temporal_agent_kit/web:doctor",
         "@pypi//pytest",
     ],
@@ -208,6 +207,17 @@ agent_kit_pytest_test(
         "//python/temporal_agent_kit/code_mode:monty_stepper",
         "//python/temporal_agent_kit/code_mode:vfs",
         "//python/temporal_agent_kit/state:__init__",
+        "@pypi//pytest",
+    ],
+)
+
+agent_kit_pytest_test(
+    name = "test_title_from_message",
+    srcs = ["test_title_from_message.py"],
+    imports = [".."],
+    deps = [
+        ":conftest",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
         "@pypi//pytest",
     ],
 )

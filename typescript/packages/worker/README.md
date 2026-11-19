@@ -11,7 +11,7 @@ Follow the [TypeScript quickstart](https://github.com/temporal-community/tempora
 for a complete npm install, agent, worker, registry, and first console session. It includes the
 pinned Temporal and OpenAI dependencies and explains the startup processes.
 
-Agent Kit has one server, session manager, and console for both SDKs. They come from the
+Agent Kit has one server and console for both SDKs. They come from the
 `temporal-agent-kit` Python package; `uvx` runs them without a Python project of your own.
 Your agents run on your TypeScript worker.
 
@@ -108,7 +108,7 @@ as. Without `-o` it prints the document.
 ## Serving and connection configuration
 
 Follow [Run the web UI](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/core#run-the-web-ui)
-for the startup commands. The console and session manager use the registry and generated schema;
+for the startup commands. The console server uses the registry and generated schema;
 the server never imports your TypeScript code. Keep `workflow_type` equal to the agent's
 `defineAgent({ name })`, and `task_queue` equal to the queue your worker polls.
 
@@ -118,7 +118,7 @@ namespace `default`. For a project-local file, export `TEMPORAL_CONFIG_FILE` exp
 service terminal; a `temporal.toml` in the current directory is not picked up automatically.
 Use the same `TEMPORAL_PROFILE` and connection overrides for all services.
 
-If you use `TASK_QUEUE_PREFIX`, set it consistently for the console, session manager, and worker,
+If you use `TASK_QUEUE_PREFIX`, set it consistently for the console server and the worker,
 and resolve the worker queue with `taskQueueName("briefed-agent-task-queue")`, exported by this
 package. The registry keeps the unprefixed queue name; the server applies the prefix.
 

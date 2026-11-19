@@ -332,7 +332,8 @@ Query. Sends, approvals, callbacks and status stay in the session: they go throu
   const sessionsQuery = () =>
     queryOptions({
       queryKey: ["agent-kit", "sessions"],
-      queryFn: ({ signal }) => transport.listSessions(signal)
+      // The newest page of sessions; pass `next_page_token` back as `pageToken` for older ones.
+      queryFn: async ({ signal }) => (await transport.listSessions({ signal })).sessions
     });
 
   const queryClient = useQueryClient();
@@ -345,7 +346,7 @@ Query. Sends, approvals, callbacks and status stay in the session: they go throu
 
 <button onclick={() => start.mutate()} disabled={start.isPending}>New session</button>
 {#each sessions.data ?? [] as s (s.workflow_id)}
-  <a href="?session={s.workflow_id}">{s.label}</a>
+  <a href="?session={s.workflow_id}">{s.title ?? s.label}</a>
 {/each}
 ```
 

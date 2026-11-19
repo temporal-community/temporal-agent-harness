@@ -295,7 +295,7 @@ async def _pick_session(http: httpx.AsyncClient) -> str | None:
                 sid = s["workflow_id"]
                 short = (sid[:28] + "…") if len(sid) > 29 else sid
                 pending = f"⏳ {count}" if count else "—"
-                opened = (s.get("initial_user_message") or "").strip()
+                opened = (s.get("title") or "").strip()
                 if len(opened) > 40:
                     opened = opened[:39] + "…"
                 tail = f" {opened!r}" if opened else ""

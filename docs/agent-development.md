@@ -63,11 +63,11 @@ provider key, so an agent can verify connectivity before spending model tokens. 
 use the same three-process architecture:
 
 1. Temporal service.
-2. `temporal-agent-kit dev agents.toml`: the Python session-manager worker and the API and
-   console server in one process. `session-manager` and `serve` remain available separately.
+2. `temporal-agent-kit serve agents.toml`: the Python API and console server, which starts
+   sessions as agent workflows and lists them from Temporal visibility.
 3. Your Python or TypeScript agent worker.
 
-For TypeScript applications, the starter's `npm run agent-kit:dev` runs `dev` through `uvx`; no
+For TypeScript applications, the starter's `npm run agent-kit:dev` runs `serve` through `uvx`; no
 Python project is needed. There is currently no Node.js implementation of the shared server.
 The TypeScript CLI is one command: `agent-kit init|schema|skills|doctor`, where `schema` is
 the existing `agent-kit-schema` binary.
@@ -81,8 +81,8 @@ npx agent-kit doctor --schema agent.schema.json --api-url http://localhost:8000
 
 Both commands report versions, API reachability, and the API's agent-worker poller status.
 The Python command also validates the TOML registry and its referenced schema names, connects
-directly to Temporal, and checks session-manager and agent queues. The TypeScript command
-checks the supplied agent schema's basic shape. It uses the API for worker availability.
+directly to Temporal, and checks the agent queues. The TypeScript command checks the supplied
+agent schema's basic shape. It uses the API for worker availability.
 Use Python's doctor when you need direct Temporal or TOML diagnostics.
 
 `--json` produces a report for automation; a failed check exits 1. `--timeout` is in seconds

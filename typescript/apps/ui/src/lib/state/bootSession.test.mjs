@@ -53,7 +53,7 @@ describe("boot", () => {
         return { accepted: [] };
       },
       async listSessions() {
-        return sessions;
+        return { sessions: sessions, next_page_token: null };
       },
       async createSession() {
         const fresh = at("wf-fresh");

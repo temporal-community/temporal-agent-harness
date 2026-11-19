@@ -22,6 +22,7 @@ import {
   proxyActivities,
   setHandler,
   startChild,
+  upsertMemo,
   uuid4,
   ActivityFailure,
 } from "@temporalio/workflow";
@@ -41,6 +42,7 @@ import {
   CloseReason,
   DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
   DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
+  TITLE_MEMO,
   MessageDisposition,
   MidTurn,
   PROVIDE_CALLBACK_RESULT_UPDATE,
@@ -49,6 +51,7 @@ import {
   TURN_EVENTS_TOPIC,
   ToolApprovalDecisionSchema,
   ToolApprovalPolicy,
+  titleFromMessage,
   toJsonSchema,
   validate,
   type AcceptedFunction,
@@ -169,6 +172,8 @@ export class AgentWorkflowRunner {
   readonly #closeAfterIdleMs: number | null;
 
   #closed = false;
+  /** Whether the `TITLE_MEMO` memo holds a title yet. */
+  #titled = false;
   #closeReason: CloseReason | null = null;
   #currentTurn = 0;
   #currentTurnId: string | null = null;
@@ -635,6 +640,12 @@ export class AgentWorkflowRunner {
         message_id: messageId,
         accepted_offset: acceptedOffset,
       });
+    }
+    // An untitled agent takes its first message as its title. The session list reads the title
+    // from this memo on the listed execution rather than from the session's history.
+    if (!this.#titled) {
+      this.#titled = true;
+      upsertMemo({ [TITLE_MEMO]: titleFromMessage(message) });
     }
     this.pub(
       turnId,

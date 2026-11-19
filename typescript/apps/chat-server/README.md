@@ -25,7 +25,7 @@ and is a little quicker to set up. Both are documented below; do whichever you n
 # Step 1 — run Agent Kit
 
 This server is a client of the Agent Kit API, so that has to be up before any of it means
-anything. From the **repo root**, four terminals:
+anything. From the **repo root**, three terminals:
 
 ```bash
 cp .env.example .env.local     # repo root — set GEMINI_API_KEY
@@ -33,9 +33,8 @@ cp .env.example .env.local     # repo root — set GEMINI_API_KEY
 
 ```bash
 just temporal           # 1. Temporal dev server
-just session-manager    # 2. session manager worker
-just server             # 3. Agent Kit API on :8000
-just worker-monty       # 4. the agent itself
+just server             # 2. Agent Kit API on :8000
+just worker-monty       # 3. the agent itself
 ```
 
 `monty-chat` is the example worth pointing at first: it is the one with a real handler

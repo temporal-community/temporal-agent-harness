@@ -1,6 +1,6 @@
 """The Python server serving an agent written with the TypeScript SDK.
 
-There is one server (HTTP API, session manager, console) for agents written with either SDK. Here
+There is one server (HTTP API and console) for agents written with either SDK. Here
 it serves ``BriefedTsAgent`` from //typescript/packages/worker/test/serving: the TypeScript worker
 runs as a subprocess on the dev server, the registry and schema document are the committed ones
 the TypeScript ``agent-kit-schema`` bin wrote, and the session goes through the same routes
@@ -19,11 +19,7 @@ import pytest
 import pytest_asyncio
 from pydantic import JsonValue
 
-from temporal_agent_kit.web import (
-    create_agent_kit_app,
-    create_session_manager_worker,
-    load_agent_registry,
-)
+from temporal_agent_kit.web import create_agent_kit_app, load_agent_registry
 from tests.conformance.driver import external_worker
 
 # Relative to the runfiles root, the test's working directory.
@@ -37,7 +33,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="module")
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def http(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[httpx.AsyncClient]:
     """The harness app, started as ``serve`` starts it, against a dev server hosting the
-    TypeScript worker on its registry task queue and the session-manager worker."""
+    TypeScript worker on its registry task queue."""
     registry = load_agent_registry(REGISTRY)
     (agent,) = registry.agents
     command = [os.path.abspath(os.environ[WORKER_ENV])]
@@ -50,11 +46,10 @@ async def http(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[httpx.
             env.setenv("TEMPORAL_NAMESPACE", client.namespace)
             app = create_agent_kit_app(registry=registry)
             async with app.router.lifespan_context(app):
-                async with create_session_manager_worker(app.state.temporal):
-                    async with httpx.AsyncClient(
-                        transport=httpx.ASGITransport(app=app), base_url="http://test"
-                    ) as http:
-                        yield http
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://test"
+                ) as http:
+                    yield http
 
 
 def _sse_events(body: str) -> list[tuple[str, dict[str, JsonValue]]]:
@@ -112,3 +107,9 @@ async def test_a_session_started_with_a_brief_answers_through_the_console_routes
         if kind == "message_handler_end" and data["message_id"] == message_id
     ]
     assert replies == [{"text": "tides: why?"}]
+
+    # The TypeScript agent titled its session with that first message, as a Python one does.
+    listed = (await http.get("/api/sessions")).json()["sessions"]
+    assert {"workflow_id": session_id, "title": "why?"}.items() <= next(
+        s for s in listed if s["workflow_id"] == session_id
+    ).items()

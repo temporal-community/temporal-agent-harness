@@ -51,8 +51,7 @@ seam could be added), Pydantic AI's Temporal support is used **unmodified** from
 | `agents.toml`, `PydanticAIHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 There is **no per-example client**: like the other examples, this agent is driven by the shared
-example stack — the packaged `SessionManagerWorkflow` worker plus the FastAPI app and web UI
-(`temporal-agent-kit serve`). Registering the agent (its `agent_kit_agent` in `BUILD.bazel`, which generates `agents.toml`) is all it takes to make it driveable.
+example stack — the packaged FastAPI app and web UI (`temporal-agent-kit serve`). Registering the agent (its `agent_kit_agent` in `BUILD.bazel`, which generates `agents.toml`) is all it takes to make it driveable.
 
 ## Run it
 
@@ -61,9 +60,8 @@ connection profile). Then, each in its own terminal:
 
 ```sh
 just temporal          # 1. local Temporal dev server (or bring your own)
-just session-manager   # 2. packaged session-manager worker
-just server            # 3. builds the Svelte UI, then serves API + UI on http://localhost:8000
-just worker            # 4. the agent worker
+just server            # 2. builds the Svelte UI, then serves API + UI on http://localhost:8000
+just worker            # 3. the agent worker
 ```
 
 `just server` builds the web UI first, so it needs `pnpm` on your PATH. (If the build reports missing
@@ -77,7 +75,6 @@ event translated from a raw Pydantic AI event in the model activity.
 Without `just`, the equivalent commands (from the repo root):
 
 ```sh
-uv run --group examples temporal-agent-kit session-manager
 uv run --group examples temporal-agent-kit serve examples/pydantic_ai_hello/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.pydantic_ai_hello.worker
 ```

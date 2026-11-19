@@ -64,9 +64,8 @@ Each command in its own terminal, all from this directory:
 
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
-just session-manager   # 2. session-manager worker
-just server            # 3. FastAPI API + built Svelte UI  ->  http://localhost:8000
-just worker            # 4. the auto-mode agent
+just server            # 2. FastAPI API + built Svelte UI  ->  http://localhost:8000
+just worker            # 3. the auto-mode agent
 ```
 
 Open <http://localhost:8000>, start a **Travel agent (Jev Auto mode)** session, and plan a trip.

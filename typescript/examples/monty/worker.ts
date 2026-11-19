@@ -13,10 +13,9 @@
 //     MONTY_AGENT_TASK_QUEUE   task queue to poll (default: monty-dynamic-agent-ts)
 //     TASK_QUEUE_PREFIX        put in front of the default queue's name, if set
 //
-// This worker hosts the three Monty agents (MontyDynamicAgentTs + the two conversational agents),
-// not the session manager. The packaged session manager is hosted by
-// `temporal-agent-kit session-manager`; because it launches agents by registered name, it
-// dispatches these agents to this queue without this worker hosting it.
+// This worker hosts the three Monty agents (MontyDynamicAgentTs + the two conversational agents).
+// The packaged server (`temporal-agent-kit serve`) starts agents by workflow type on their
+// registered queues, so it dispatches these agents to this queue without hosting them.
 
 import { fileURLToPath } from "node:url";
 import { GoogleGenAI } from "@google/genai";

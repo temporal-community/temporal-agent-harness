@@ -6,10 +6,9 @@
 #
 # Full stack, each in its own terminal, from THIS directory:
 #   just temporal          # 1. local Temporal dev server (skip if you bring your own)
-#   just session-manager   # 2. shared session-manager worker
-#   just server            # 3. packaged FastAPI API + Svelte UI on http://localhost:8000
-#   just worker            # 4. the CodingAgent worker
-#   just serve             # 5. the OpenCode shim (harness backend) on :4096
+#   just server            # 2. packaged FastAPI API + Svelte UI on http://localhost:8000
+#   just worker            # 3. the CodingAgent worker
+#   just serve             # 4. the OpenCode shim (harness backend) on :4096
 # then attach the TUI:      opencode attach http://127.0.0.1:4096
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
@@ -40,10 +39,6 @@ config:
 temporal:
     temporal server start-dev
 
-# Run the packaged session-manager worker (`temporal-agent-kit session-manager`).
-session-manager:
-    bazel run //python/temporal_agent_kit/web:cli -- session-manager
-
 # Serve the packaged FastAPI API + Svelte UI on http://localhost:8000, pointed at this example's
 # registry via the shared examples app entrypoint. Gives visibility/debuggability of the agent.
 server:
@@ -54,7 +49,7 @@ worker:
     bazel run //python/examples/callback_tools/coding_agent:worker
 
 # Run the OpenCode shim — fronts the CodingAgent workflow via the packaged server on :8000 (start
-# `server`, `session-manager`, and `worker` first). `dir` is the project the agent works on, given
+# `server` and `worker` first). `dir` is the project the agent works on, given
 # FIRST and resolved relative to where you run `just` (defaults to that directory); any extra flags
 # follow. Examples:  just serve ~/some/project  |  just serve ./sub --port 4096
 #
@@ -63,8 +58,8 @@ worker:
 serve dir="." *ARGS:
     bazel run //python/examples/callback_tools/coding_agent/opencode_shim:opencode_shim_bin -- "{{join(invocation_directory(), dir)}}" {{ARGS}}
 
-# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
-# temporal`). Ctrl-C stops them all.
+# `server` and `worker` in one terminal, against a running Temporal (`just temporal`). Ctrl-C
+# stops them all.
 #
 # Run this example's local stack.
 dev:

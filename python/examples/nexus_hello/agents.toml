@@ -1,9 +1,7 @@
 # Registry of agents the Nexus-hello example UI can launch.
 #
-# The packaged FastAPI server (`temporal-agent-kit serve`) reads this file and passes the parsed registry
-# into the packaged SessionManagerWorkflow as its workflow init arg. The manager then serves
-# it back over the `available_agents` query, so the app server can expose it at /api/agents
-# without hardcoding the agent list.
+# The packaged FastAPI server (`temporal-agent-kit serve`) reads this file at startup and serves it
+# at /api/agents, so the app server lists the agents without hardcoding them.
 #
 # Bazel does not build this example, so this file is written by hand. `schema` is the agent's start
 # interface; rewrite it after changing the agent with:

@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from temporalio.api.enums.v1 import EventType
-from temporalio.api.history.v1 import HistoryEvent
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
-from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.converter import ExternalStorage
 from temporalio.envconfig import ClientConfig
-from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_kit.agent_client import (
@@ -35,13 +29,7 @@ from temporal_agent_kit.agent_client import (
     CallbackResultError,
     ToolApprovalError,
 )
-from temporal_agent_kit.agent_protocol import (
-    AgentConfig,
-    AgentEvent,
-    AgentMessage,
-    AgentStatus,
-    SEND_AGENT_MESSAGE_UPDATE,
-)
+from temporal_agent_kit.agent_protocol import AgentEvent, AgentStatus
 from temporal_agent_kit.plugin import AgentKitPlugin
 from temporal_agent_kit.ui import packaged_ui_dist
 from temporal_agent_kit.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
@@ -57,31 +45,31 @@ from temporal_agent_kit.web.file_view import (
     okf_graph,
     view_file,
 )
-from temporal_agent_kit.web.registry import load_agent_registry
-from temporal_agent_kit.web.session_manager import (
-    SESSION_MANAGER_ID,
-    SESSION_MANAGER_TASK_QUEUE,
-    AgentRegistry,
-    CreateSessionRequest as ManagerCreateSessionRequest,
+from temporal_agent_kit.web.registry import AgentDescriptor, AgentRegistry, load_agent_registry
+from temporal_agent_kit.web.sessions import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    InvalidPageToken,
     Session,
-    SessionManagerWorkflow,
+    SessionIdTaken,
+    SessionPage,
+    get_session,
+    list_sessions,
+    start_session,
 )
 from temporal_agent_kit.web.task_queue_status import describe_task_queue_workers
 from temporal_agent_kit.web.temporal_ui import temporal_workflows_url
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
-_SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
-_SESSION_PREVIEW_HISTORY_MAX_EVENTS = 96
-_SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 
 
 class CreateSessionRequestBody(BaseModel):
     agent_workflow_type: str
-    # Optional caller-chosen workflow id; see ``CreateSessionRequest.session_id``. The UI does
-    # not set it — a minted id is right when the session has no identity outside the harness.
-    # An integration whose conversation identity comes from elsewhere sets it so the session id
-    # is derivable from that identity instead of needing a mapping table. Creation is
-    # idempotent when it is set.
+    # Optional caller-chosen workflow id, instead of a minted ``agent-session-{uuid4}``. The UI
+    # does not set it — a minted id is right when the session has no identity outside the
+    # harness. An integration whose conversation identity comes from elsewhere (a Slack thread)
+    # sets it so the session id is derivable from that identity instead of needing a mapping
+    # table. Creation is idempotent while that session runs.
     session_id: str | None = None
     # The agent's init data, as JSON — see each agent's ``init_data`` in ``GET /api/agents``.
     data: dict[str, Any] | None = None
@@ -124,8 +112,6 @@ def create_agent_kit_app(
     *,
     registry: RegistrySource | None = None,
     registry_path: Path | str | None = None,
-    manager_workflow_id: str = SESSION_MANAGER_ID,
-    manager_task_queue: str = SESSION_MANAGER_TASK_QUEUE,
     static_dir: Path | str | None = None,
     index_file: str = "index.html",
     states_file: str | None = None,
@@ -136,16 +122,13 @@ def create_agent_kit_app(
     Args:
         registry: In-memory registry or a callable that returns one at startup.
         registry_path: TOML registry path. Mutually exclusive with ``registry``.
-        manager_workflow_id: Deterministic workflow ID for the session manager.
-        manager_task_queue: Task queue where the session manager worker polls.
         static_dir: Optional directory containing static UI assets. When omitted,
             the packaged Vite UI is served if it is present in the installed package.
         index_file: File in ``static_dir`` served from ``/``.
         states_file: Optional file in ``static_dir`` served from ``/states``.
         large_payload_offload: Where oversized payloads are offloaded, forwarded to
-            ``AgentKitPlugin``. Must match what every agent worker and the
-            session-manager worker use, or this server can't read their payloads. The
-            default is single-host only; build
+            ``AgentKitPlugin``. Must match what every agent worker uses, or this server can't
+            read their payloads. The default is single-host only; build
             :func:`~temporal_agent_kit.utils.large_payload.s3_payload_storage` in your
             own async startup and pass it for a multi-host deploy.
     """
@@ -156,10 +139,10 @@ def create_agent_kit_app(
     async def lifespan(app: FastAPI):
         connect_config = ClientConfig.load_client_connect_config()
         # The harness plugin is where the data converter is DEFINED — the same one every agent
-        # worker and the session-manager worker get by adding the same plugin. An offloaded
-        # payload is only readable by a process using the matching converter, so this app must
-        # not spell one out of its own. The plugin's activity registration is a WORKER concern
-        # and this app hosts no worker, so it simply doesn't apply here.
+        # worker gets by adding the same plugin. An offloaded payload is only readable by a
+        # process using the matching converter, so this app must not spell one out of its own.
+        # The plugin's activity registration is a WORKER concern and this app hosts no worker,
+        # so it simply doesn't apply here.
         app.state.temporal = await Client.connect(
             **connect_config,
             plugins=[AgentKitPlugin(large_payload_offload=large_payload_offload)],
@@ -168,17 +151,8 @@ def create_agent_kit_app(
             connect_config.get("target_host"), connect_config.get("namespace")
         )
 
-        resolved_registry = _resolve_registry(registry, registry_path)
-        # Read from this process's own registry rather than the manager's copy, so a change to
-        # an agent's init data shows up on restart without resetting the manager.
-        app.state.agent_starts = agent_starts(resolved_registry)
-
-        app.state.manager_handle = await _ensure_session_manager_workflow(
-            app.state.temporal,
-            registry=resolved_registry,
-            manager_workflow_id=manager_workflow_id,
-            manager_task_queue=manager_task_queue,
-        )
+        app.state.registry = _resolve_registry(registry, registry_path)
+        app.state.agent_starts = agent_starts(app.state.registry)
         yield
 
     app = FastAPI(lifespan=lifespan)
@@ -218,13 +192,10 @@ def create_agent_kit_app(
         one look and the next, and a cached "Ready" is the exact lie this endpoint exists to
         stop telling.
         """
-        registry_result: AgentRegistry = await app.state.manager_handle.query(
-            SessionManagerWorkflow.available_agents,
-            result_type=AgentRegistry,
-        )
+        agents: list[AgentDescriptor] = app.state.registry.agents
         workers = await describe_task_queue_workers(
             app.state.temporal,
-            (agent.task_queue for agent in registry_result.agents),
+            (agent.task_queue for agent in agents),
         )
         starts = app.state.agent_starts
         content = {
@@ -240,49 +211,62 @@ def create_agent_kit_app(
                     ),
                     "worker": asdict(workers.for_task_queue(agent.task_queue)),
                 }
-                for agent in registry_result.agents
+                for agent in agents
             ]
         }
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/sessions")
-    async def list_sessions():
-        registry_result: AgentRegistry = await app.state.manager_handle.query(
-            SessionManagerWorkflow.available_agents,
-            result_type=AgentRegistry,
+    async def list_sessions_route(
+        page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+        page_token: str | None = None,
+    ):
+        """One page of sessions, newest first. Pass ``next_page_token`` back as ``page_token``
+        for the next; it is ``null`` on the last page."""
+        page = await list_sessions(
+            app.state.temporal,
+            app.state.registry,
+            page_size=page_size,
+            page_token=page_token,
         )
-        sessions: list[Session] = await app.state.manager_handle.query(
-            SessionManagerWorkflow.list_sessions,
-            result_type=list[Session],
+        return JSONResponse(
+            content=_session_page_content(page, app.state.temporal_workflows_url),
+            headers={"Cache-Control": "no-store"},
         )
-        known_workflow_ids = {session.workflow_id for session in sessions}
-        discovered = await _discover_untracked_sessions(
-            app.state.temporal, registry_result, known_workflow_ids
-        )
-        return await _sessions_with_execution_state(
-            app.state.temporal, sessions + discovered, app.state.temporal_workflows_url
+
+    @app.get("/api/sessions/{session_id}")
+    async def get_session_route(session_id: str):
+        """One session by id, for a session that is not on a page the caller has loaded."""
+        session = await get_session(app.state.temporal, app.state.registry, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"No session {session_id!r}.")
+        return JSONResponse(
+            content=_session_content(session, app.state.temporal_workflows_url),
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
+        agent = app.state.registry.by_workflow_type(req.agent_workflow_type)
+        if agent is None:
+            known = [descriptor.workflow_type for descriptor in app.state.registry.agents]
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown agent type {req.agent_workflow_type!r}. Known agents: {known}",
+            )
         data = validated_start_data(
             req.agent_workflow_type,
             app.state.agent_starts.get(req.agent_workflow_type),
             req.data,
         )
-        session: Session = await app.state.manager_handle.execute_update(
-            SessionManagerWorkflow.create_session,
-            ManagerCreateSessionRequest(
-                agent_workflow_type=req.agent_workflow_type,
-                config=AgentConfig(),
-                session_id=req.session_id,
-                data=data,
-            ),
-            result_type=Session,
+        session = await start_session(
+            app.state.temporal,
+            agent,
+            app.state.registry,
+            data=data,
+            session_id=req.session_id,
         )
-        return await _session_with_execution_state(
-            app.state.temporal, session, app.state.temporal_workflows_url
-        )
+        return _session_content(session, app.state.temporal_workflows_url)
 
     @app.get("/api/workflow-status/{workflow_id}")
     async def workflow_status(workflow_id: str):
@@ -421,6 +405,14 @@ def create_agent_kit_app(
             },
         )
 
+    @app.exception_handler(InvalidPageToken)
+    async def invalid_page_token_handler(request, exc):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(SessionIdTaken)
+    async def session_id_taken_handler(request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.exception_handler(InvalidStartData)
     async def invalid_start_data_handler(request, exc):
         # 422: the start was not attempted.
@@ -508,198 +500,18 @@ async def _workflow_execution_state(
     }
 
 
-async def _session_with_execution_state(
-    temporal: Client,
-    session: Session,
-    temporal_workflows_url: str | None = None,
-) -> dict[str, object]:
-    state, initial_user_message = await asyncio.gather(
-        _workflow_execution_state(temporal, session.workflow_id),
-        _session_initial_user_message(temporal, session.workflow_id),
-    )
-    content = {**asdict(session), **state}
-    if initial_user_message is not None:
-        content["initial_user_message"] = initial_user_message
+def _session_content(session: Session, temporal_workflows_url: str | None) -> dict[str, object]:
+    content: dict[str, object] = asdict(session)
     if temporal_workflows_url is not None:
         content["temporal_workflows_url"] = temporal_workflows_url
     return content
 
 
-_DISCOVERY_LIMIT = 200
-
-
-async def _discover_untracked_sessions(
-    temporal: Client,
-    registry: AgentRegistry,
-    known_workflow_ids: set[str],
-) -> list[Session]:
-    """Find agent workflows already running in the namespace that this session manager didn't
-    start itself (e.g. launched directly against a worker, or by another session manager),
-    so the UI can list and attach to them instead of only ones it created via ``create_session``.
-    """
-
-    if not registry.agents:
-        return []
-
-    escaped_types = [agent.workflow_type.replace("'", "''") for agent in registry.agents]
-    types_filter = " OR ".join(f"WorkflowType='{workflow_type}'" for workflow_type in escaped_types)
-    query = f"ExecutionStatus='Running' AND ({types_filter})"
-
-    discovered: list[Session] = []
-    async for execution in temporal.list_workflows(query=query, limit=_DISCOVERY_LIMIT):
-        if execution.id in known_workflow_ids:
-            continue
-        descriptor = registry.by_workflow_type(execution.workflow_type)
-        if descriptor is None:
-            continue
-        discovered.append(
-            Session(
-                workflow_id=execution.id,
-                created_at=execution.start_time.timestamp(),
-                label=descriptor.label,
-                agent_workflow_type=execution.workflow_type,
-                is_discovered=True,
-            )
-        )
-    return discovered
-
-
-async def _sessions_with_execution_state(
-    temporal: Client,
-    sessions: list[Session],
-    temporal_workflows_url: str | None = None,
-) -> list[dict[str, object]]:
-    return list(
-        await asyncio.gather(
-            *(
-                _session_with_execution_state(temporal, session, temporal_workflows_url)
-                for session in sessions
-            )
-        )
-    )
-
-
-async def _session_initial_user_message(
-    temporal: Client,
-    workflow_id: str,
-) -> str | None:
-    handle = temporal.get_workflow_handle(workflow_id)
-    scanned_events = 0
-    try:
-        async for event in handle.fetch_history_events(
-            page_size=_SESSION_PREVIEW_HISTORY_PAGE_SIZE,
-            wait_new_event=False,
-            rpc_timeout=_SESSION_PREVIEW_HISTORY_RPC_TIMEOUT,
-        ):
-            scanned_events += 1
-            user_message = await _session_user_message_from_history_event(
-                temporal,
-                event,
-            )
-            if user_message is not None:
-                return _display_user_message(user_message.model_dump_json())
-            if scanned_events >= _SESSION_PREVIEW_HISTORY_MAX_EVENTS:
-                break
-    except Exception:
-        return None
-    return None
-
-
-async def _session_user_message_from_history_event(
-    temporal: Client,
-    event: HistoryEvent,
-) -> AgentMessage | None:
-    if event.event_type != EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
-        return None
-    if not event.HasField("workflow_execution_update_accepted_event_attributes"):
-        return None
-
-    request = event.workflow_execution_update_accepted_event_attributes.accepted_request
-    if request.input.name != SEND_AGENT_MESSAGE_UPDATE:
-        return None
-    if not request.input.args.payloads:
-        return None
-
-    try:
-        decoded = await temporal.data_converter.decode(
-            request.input.args.payloads,
-            [AgentMessage],
-        )
-    except Exception:
-        return None
-    if not decoded or not isinstance(decoded[0], AgentMessage):
-        return None
-    return decoded[0]
-
-
-def _display_user_message(value: str) -> str:
-    """Render a stored ``{type, payload}`` message envelope as a one-line label.
-
-    Used for the session list's preview of the message that started a session. Handler names
-    and payload shapes are agent-specific, so this stays generic: prefer the payload's single
-    string field when there is exactly one (the common chat/prompt shape, whatever its field
-    is named), and otherwise fall back to ``type`` plus the compacted payload. Never assumes a
-    particular handler exists or that a field is called anything in particular.
-
-    A non-JSON value passes through unchanged.
-    """
-    if not value.startswith("{"):
-        return value
-    try:
-        message = json.loads(value)
-    except json.JSONDecodeError:
-        return value
-    if not isinstance(message, dict):
-        return value
-
-    msg_type = message.get("type")
-    payload = message.get("payload")
-    if not isinstance(payload, dict) or not payload:
-        return msg_type if isinstance(msg_type, str) else value
-
-    strings = [v for v in payload.values() if isinstance(v, str)]
-    if len(strings) == 1 and len(payload) == 1:
-        return strings[0]
-    rendered = ", ".join(f"{k}={payload[k]!r}" for k in sorted(payload))
-    return f"{msg_type}({rendered})" if isinstance(msg_type, str) else rendered
-
-
-async def _ensure_session_manager_workflow(
-    temporal: Client,
-    *,
-    registry: AgentRegistry,
-    manager_workflow_id: str,
-    manager_task_queue: str,
-) -> WorkflowHandle[Any, Any]:
-    handle = temporal.get_workflow_handle(manager_workflow_id)
-    try:
-        desc = await handle.describe()
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-    else:
-        if desc.status == WorkflowExecutionStatus.RUNNING:
-            print(f"Connected to existing session manager: {manager_workflow_id}")
-            return handle
-        print(
-            "Existing session manager "
-            f"{manager_workflow_id} is {desc.status.name}; starting new run"
-        )
-
-    try:
-        handle = await temporal.start_workflow(
-            SessionManagerWorkflow.run,
-            registry,
-            id=manager_workflow_id,
-            task_queue=manager_task_queue,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-        )
-    except WorkflowAlreadyStartedError:
-        handle = temporal.get_workflow_handle(manager_workflow_id)
-        print(f"Connected to session manager started concurrently: {manager_workflow_id}")
-    else:
-        print(f"Ensured session manager is running: {manager_workflow_id}")
-    return handle
+def _session_page_content(page: SessionPage, temporal_workflows_url: str | None) -> dict[str, object]:
+    return {
+        "sessions": [_session_content(session, temporal_workflows_url) for session in page.sessions],
+        "next_page_token": page.next_page_token,
+    }
 
 
 def _mount_static_ui(

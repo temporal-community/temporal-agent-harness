@@ -11,6 +11,7 @@ ts_project(
     visibility = ["//visibility:public"],
     deps = [
         "//typescript/packages/core:node_modules/zod",
+        "//typescript/packages/core/src:py-repr",
     ],
 )
 

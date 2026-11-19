@@ -17,7 +17,8 @@ import type {
   JsonRecord,
   OKFGraph,
   OKFGraphRequest,
-  Session
+  Session,
+  SessionsPage
 } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi, workflowGone } from "$lib/api/httpClient";
@@ -285,6 +286,9 @@ export class AgentRunController {
   sending = $state(false);
   creatingSession = $state(false);
   refreshingSessions = $state(false);
+  /** Where the next page of older sessions starts; null once the list reaches the oldest. */
+  sessionsNextPageToken = $state<string | null>(null);
+  loadingOlderSessions = $state(false);
   /** List-load failure for the picker; never the stream connection banner. */
   sessionsError = $state<string | null>(null);
   /** The agent-picker's own pair, so a worker re-check reports where it was asked for. */
@@ -309,6 +313,8 @@ export class AgentRunController {
   #agentsLoad: Promise<void> | null = null;
   /** Single-flight promise for listSessions loads. */
   #sessionsLoad: Promise<void> | null = null;
+  /** Sessions this console created that no list has carried yet: visibility can trail a start. */
+  #unlistedCreated = new Set<string>();
   #sessionsLoaded = $state(false);
   /** A list came back from the server, so `sessions` is more than a row painted from cache. */
   get sessionsLoaded(): boolean {
@@ -1029,8 +1035,8 @@ export class AgentRunController {
       const painted = this.session;
       if (painted && linkedSessionId) {
         /* Opened before the lists load: its frames are in IndexedDB and its stream is its own
-           workflow's, while the lists are Session Manager queries that hang for as long as
-           that worker does. The lists load even if opening it fails. */
+           workflow's, so a list that is slow to answer holds none of it up. The lists load
+           even if opening it fails. */
         try {
           streaming = await this.#openSession(painted, connectionVersion, "Failed to initialize agent session.");
         } finally {
@@ -1118,40 +1124,86 @@ export class AgentRunController {
   }
 
   /**
-   * Deep-link / URL session: find it in the list, re-listing once if it is not there.
-   * Main has no per-session GET, so an id that never appears in ``listSessions`` cannot
-   * be opened.
+   * Deep-link / URL session: find it in the loaded list, or else ask the server for it by
+   * id, since it may be on a page the list has not loaded. A session found that way joins
+   * the list.
    *
    * NOT_FOUND is excluded: Temporal has purged the workflow and /api/attach answers 500,
    * so the row can only open an empty console.
    */
   async #resolveSessionById(sessionId: string): Promise<Session | null> {
-    const openable = (): Session | null =>
-      this.sessions.find(
-        (item) => item.workflow_id === sessionId && item.execution_status !== "NOT_FOUND"
-      ) ?? null;
-
-    const known = openable();
+    const known = this.sessions.find(
+      (item) => item.workflow_id === sessionId && item.execution_status !== "NOT_FOUND"
+    );
     if (known) return known;
+    let session: Session | null;
     try {
-      await this.#loadSessions();
+      session = await this.#api.getSession(sessionId);
     } catch {
       return null;
     }
-    return openable();
+    if (!session) return null;
+    if (!this.sessions.some((item) => item.workflow_id === sessionId)) {
+      this.sessions = [...this.sessions, session];
+    }
+    return session;
   }
 
   async #loadSessions(): Promise<void> {
     if (this.#sessionsLoad) return this.#sessionsLoad;
     this.#sessionsLoad = (async () => {
-      const sessions = await this.#api.listSessions();
-      this.sessions = sessions;
-      this.#applySessionExecutionStates(sessions);
+      const page = await this.#api.listSessions();
+      this.#mergeFirstPage(page);
+      this.#applySessionExecutionStates(page.sessions);
       this.#sessionsLoaded = true;
     })().finally(() => {
       this.#sessionsLoad = null;
     });
     return this.#sessionsLoad;
+  }
+
+  /**
+   * Take a fresh first page without losing what the list holds past it. Kept beside the page:
+   * sessions this console created that the page does not carry yet, and, while there are older
+   * pages, the older sessions already loaded. A session missing from inside the page's span is
+   * gone, and is dropped.
+   */
+  #mergeFirstPage(page: SessionsPage): void {
+    const listed = new Set(page.sessions.map((session) => session.workflow_id));
+    for (const id of listed) this.#unlistedCreated.delete(id);
+    const created = this.sessions.filter((session) => this.#unlistedCreated.has(session.workflow_id));
+    const oldest = page.sessions.at(-1)?.created_at ?? -Infinity;
+    const older =
+      page.next_page_token === null
+        ? []
+        : this.sessions.filter(
+            (session) =>
+              !listed.has(session.workflow_id) &&
+              !this.#unlistedCreated.has(session.workflow_id) &&
+              session.created_at < oldest
+          );
+    this.sessions = [...created, ...page.sessions, ...older];
+    // The older sessions kept are where the list had paged to, so it carries on from there.
+    if (older.length === 0) this.sessionsNextPageToken = page.next_page_token;
+  }
+
+  /** Load the next page of older sessions, when there is one. */
+  async loadOlderSessions(): Promise<void> {
+    const pageToken = this.sessionsNextPageToken;
+    if (pageToken === null || this.loadingOlderSessions) return;
+    this.loadingOlderSessions = true;
+    this.sessionsError = null;
+    try {
+      const page = await this.#api.listSessions(pageToken);
+      const known = new Set(this.sessions.map((session) => session.workflow_id));
+      this.sessions = [...this.sessions, ...page.sessions.filter((session) => !known.has(session.workflow_id))];
+      this.#applySessionExecutionStates(page.sessions);
+      this.sessionsNextPageToken = page.next_page_token;
+    } catch (error) {
+      this.sessionsError = error instanceof Error ? error.message : "Failed to load older sessions.";
+    } finally {
+      this.loadingOlderSessions = false;
+    }
   }
 
   async refreshSessions(): Promise<void> {
@@ -1260,7 +1312,8 @@ export class AgentRunController {
           : { agent_workflow_type: agent.workflow_type, data }
       );
 
-      this.sessions = [...this.sessions.filter((item) => item.workflow_id !== session.workflow_id), session];
+      this.#unlistedCreated.add(session.workflow_id);
+      this.sessions = [session, ...this.sessions.filter((item) => item.workflow_id !== session.workflow_id)];
       if (!this.#isCurrentConnection(connectionVersion)) return;
 
       connectionVersion = this.#beginConnection();
@@ -1795,7 +1848,7 @@ export class AgentRunController {
     ++this.#sendVersion;
     this.sending = true;
     this.connectionError = null;
-    this.#recordInitialUserMessage(displayText);
+    this.#recordTitle(displayText);
 
     const submitted = this.#submitQueue.then(async () => {
       if (this.session?.workflow_id !== session.workflow_id) return;
@@ -2034,16 +2087,16 @@ export class AgentRunController {
     }
   }
 
-  #recordInitialUserMessage(message: string): void {
+  #recordTitle(message: string): void {
     const session = this.session;
     if (!session) return;
     this.sessions = this.sessions.map((item) =>
-      item.workflow_id === session.workflow_id && !item.initial_user_message
-        ? { ...item, initial_user_message: message }
+      item.workflow_id === session.workflow_id && !item.title
+        ? { ...item, title: message }
         : item
     );
-    if (!session.initial_user_message) {
-      this.session = { ...session, initial_user_message: message };
+    if (!session.title) {
+      this.session = { ...session, title: message };
     }
   }
 
@@ -2285,7 +2338,7 @@ export class AgentRunController {
       this.sending = false;
     }
     if (isRootFrame && frame.event === "message_accepted" && frame.data.turn_number === 1) {
-      this.#recordInitialUserMessage(
+      this.#recordTitle(
         renderUserMessage(frame.data.handler, frame.data.payload)
       );
     }

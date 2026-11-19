@@ -41,10 +41,9 @@ until something fulfills it. That's fine for this demo.
 | `agents.toml` | This example's registry (just the `WikiAgent`). |
 | `justfile` | Recipes for the local stack. |
 
-The web server and session-manager worker are **shared across examples** — `just server` points the
-packaged `temporal-agent-kit serve` at this example's `agents.toml`, and `just session-manager`
-runs the packaged `temporal-agent-kit session-manager`. The `POST /api/callback-result` route the client uses lives in
-the packaged server.
+The web server is **shared across examples** — `just server` points the packaged
+`temporal-agent-kit serve` at this example's `agents.toml`. The `POST /api/callback-result` route
+the client uses lives in the packaged server.
 
 ## Setup
 
@@ -62,10 +61,9 @@ recipes read the shared repo-root `.env.local`.
 
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
-just session-manager   # 2. session-manager worker
-just server            # 3. FastAPI API on http://localhost:8000
-just worker            # 4. the WikiAgent worker
-just client            # 5. the terminal client (writes to ./wiki by default)
+just server            # 2. FastAPI API on http://localhost:8000
+just worker            # 3. the WikiAgent worker
+just client            # 4. the terminal client (writes to ./wiki by default)
 ```
 
 Point the client at any directory you like: `just client --wiki-dir ~/notes`.

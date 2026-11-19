@@ -24,7 +24,7 @@ function sessionList(count: number): Session[] {
     created_at: startedAt - i * 37,
     label: `Session ${i + 1}`,
     agent_workflow_type: i % 3 === 0 ? "MontyDynamicAgent" : "QaAgent",
-    initial_user_message: firstMessages[i % firstMessages.length],
+    title: firstMessages[i % firstMessages.length],
     execution_status: i === 0 ? "RUNNING" : statuses[i % statuses.length],
     closed: i !== 0 && i % statuses.length !== 0
   }));
@@ -735,7 +735,7 @@ function sessionsWorst(): MockScenario {
     ...session,
     workflow_id: i === 3 ? `${uuidId(i)}-${"9f8e7d6c5b4a".repeat(90)}`.slice(0, 1000) : uuidId(i),
     agent_workflow_type: worstAgents[i % worstAgents.length]!.workflow_type,
-    initial_user_message: i % 5 === 4 ? null : session.initial_user_message,
+    title: i % 5 === 4 ? null : session.title,
     label: i % 10 === 9 ? "" : session.label,
     created_at: i === 1 ? 0 : i === 2 ? 4_102_444_800 : session.created_at - Math.floor(i / 6) * 86_400
   }));
@@ -776,7 +776,7 @@ function sessionsBreak(data: string): MockScenario {
     created_at: at,
     label,
     agent_workflow_type: type,
-    initial_user_message: message,
+    title: message,
     execution_status: status,
     closed: status !== "RUNNING"
   });

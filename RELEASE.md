@@ -9,14 +9,14 @@ rest: what to decide, what to write down, and what to do when something fails.
 
 | Unit | Packages | Version source | Tag |
 | --- | --- | --- | --- |
-| `pypi` | `temporal-agent-kit` on PyPI: the SDK, agent client, CLI, server, session manager and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi-agent-kit` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
+| `pypi` | `temporal-agent-kit` on PyPI: the SDK, agent client, CLI, server and the compiled console | [python/pyproject.toml](python/pyproject.toml) | `<version>` (bare: the `pypi-agent-kit` GitHub environment only admits tags matching `[0-9]*.[0-9]*.[0-9]*`) |
 | `npm` | Every `@temporalio/agent-kit*` package under [typescript/packages](typescript/packages), at **one shared version**: `@temporalio/agent-kit` (core), `-worker`, `-client`, `-react`, `-svelte`, and `-codegen` | each package's `package.json`, kept equal by the tooling | `npm-v<version>` |
 
 `@temporalio/agent-kit-codegen` ships in the same npm lockstep release. Examples ship in the
 repository: release notes name the tag to check out. The small `init` starters and language
 skills are bundled in the SDK packages.
 
-The TypeScript runtime uses the Python server, session manager and console, so a server or console
+The TypeScript runtime uses the Python server and console, so a server or console
 change needs a `pypi` release even when the motivating feature is TypeScript. The two units
 release independently otherwise; nothing requires their version numbers to match.
 

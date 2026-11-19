@@ -115,7 +115,7 @@ async def main() -> None:
 
     # Two plugins, AgentKitPlugin LAST so the OpenAI plugin's (OpenAI-aware, pydantic-compatible)
     # payload converter wins; Agent Kit plugin then adds the large-payload offload on top,
-    # matching the session-manager worker and the web server.
+    # matching the web server.
     #
     # Agent Kit plugin is handed the agent's WHOLE toolset: it registers the four
     # location/weather activity bodies and skips ask_user, a callback tool with no worker-side
