@@ -29,7 +29,7 @@ within 2 days, so set them up just before merging that release PR (npm 11.15+, 2
 
 ```sh
 for p in agent-kit agent-kit-worker agent-kit-client agent-kit-react agent-kit-svelte agent-kit-codegen; do
-  npm trust github "@temporalio/$p" --repo temporal-community/temporal-agent-harness \
+  npm trust github "@temporalio/$p" --repo temporal-community/temporal-agent-kit \
     --file publish-npm.yml --environment npm --allow-publish --yes
 done
 ```
@@ -172,7 +172,7 @@ publish them, in a reviewed PR:
   [check-installed-npm.sh](scripts/check-installed-npm.sh), which installs both next to the Temporal
   SDK version the worker's `@temporalio/openai-agents` peer pins and loads their entry points.
 - [ ] Configure npm trusted publishing for each new package: repository
-  `temporal-community/temporal-agent-harness`, workflow `publish-npm.yml`, environment `npm`.
+  `temporal-community/temporal-agent-kit`, workflow `publish-npm.yml`, environment `npm`.
   Check whether the registry needs a bootstrap for a new package before its first OIDC publish.
 - [ ] Confirm supported Node, Temporal and provider versions, the optional peers, and that a clean
   install with the native Monty dependency works.

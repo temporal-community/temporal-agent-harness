@@ -9,7 +9,7 @@
 > **Experimental.** APIs change between releases. Pin versions and upgrade deliberately.
 
 [Demo video](https://www.youtube.com/watch?v=z3L41NvF6wE) ·
-[Releases](https://github.com/temporal-community/temporal-agent-harness/releases)
+[Releases](https://github.com/temporal-community/temporal-agent-kit/releases)
 
 [Watch the high-level Temporal Agent Kit Explainer](https://github.com/user-attachments/assets/18a34eb2-fc6d-446d-9507-7fe4c870492f)
 
@@ -194,7 +194,7 @@ one Agent Kit version and use the underlying Temporal/model SDK versions documen
 quickstart. Commit your dependency lockfile. Examples live in release checkouts, not in the SDK
 packages; the small `init` starters are bundled separately.
 
-Use the [release notes](https://github.com/temporal-community/temporal-agent-harness/releases)
+Use the [release notes](https://github.com/temporal-community/temporal-agent-kit/releases)
 when upgrading.
 
 <details>

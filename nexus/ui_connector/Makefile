@@ -1,6 +1,6 @@
 .PHONY: generate generate-from-local install-nexgen build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker require-temporal-cli start-dev-server
 
-CONTRACT_URL := https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/python/temporal_agent_kit/nexus_agent_adapter/agent.nexusrpc.yaml
+CONTRACT_URL := https://raw.githubusercontent.com/temporal-community/temporal-agent-kit/main/python/temporal_agent_kit/nexus_agent_adapter/agent.nexusrpc.yaml
 
 # Installs the newest nex-gen release into `go env GOPATH`/bin, replacing whatever's
 # there if a newer tag exists. We're deliberately tracking latest (not pinning) while

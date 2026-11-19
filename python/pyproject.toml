@@ -32,10 +32,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/temporal-community/temporal-agent-harness"
-Repository = "https://github.com/temporal-community/temporal-agent-harness"
-Issues = "https://github.com/temporal-community/temporal-agent-harness/issues"
-Changelog = "https://github.com/temporal-community/temporal-agent-harness/releases"
+Homepage = "https://github.com/temporal-community/temporal-agent-kit"
+Repository = "https://github.com/temporal-community/temporal-agent-kit"
+Issues = "https://github.com/temporal-community/temporal-agent-kit/issues"
+Changelog = "https://github.com/temporal-community/temporal-agent-kit/releases"
 
 # Serves the prebuilt UI shipped in the wheel (temporal_agent_kit/ui/dist) over one or
 # more agents.toml registries — a plain `uv add 'temporal-agent-kit[ui]'` is enough to

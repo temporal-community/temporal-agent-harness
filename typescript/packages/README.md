@@ -66,7 +66,7 @@ after further edits, and keep `.tgz` files out of commits.
 
 1. In the GitHub repository settings, the `npm` environment exists with a deployment tag policy
    that admits `npm-v*` (it was created with one policy per package; add the new one with
-   `gh api --method POST repos/temporal-community/temporal-agent-harness/environments/npm/deployment-branch-policies -f name='npm-v*' -f type=tag`).
+   `gh api --method POST repos/temporal-community/temporal-agent-kit/environments/npm/deployment-branch-policies -f name='npm-v*' -f type=tag`).
 2. For **each** public npm package, open Settings → Trusted Publisher → GitHub Actions and enter:
 
    | Field | Value |
@@ -96,7 +96,7 @@ changes first.
 
 From an up-to-date `main` with passing CI, bump every lockstep package by hand (or run
 `node scripts/release.mjs prepare` locally with `RELEASE_UNIT=npm RELEASE_BUMP=patch
-GITHUB_REF=refs/heads/main GITHUB_REPOSITORY=temporal-community/temporal-agent-harness
+GITHUB_REF=refs/heads/main GITHUB_REPOSITORY=temporal-community/temporal-agent-kit
 GITHUB_OUTPUT=/dev/null RUNNER_TEMP=/tmp`), merge the change through the usual review, and from
 the merged commit:
 

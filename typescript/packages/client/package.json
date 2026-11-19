@@ -28,7 +28,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
+    "url": "git+https://github.com/temporal-community/temporal-agent-kit.git",
     "directory": "typescript/packages/client"
   }
 }

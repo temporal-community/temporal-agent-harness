@@ -9,9 +9,9 @@ products over their live state with the React and Svelte clients.
 
 > **Experimental.** APIs change between releases. Pin versions and upgrade deliberately.
 
-[Python quickstart](https://github.com/temporal-community/temporal-agent-harness/blob/main/python/README.md#quickstart)
-· [Examples](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples)
-· [Releases](https://github.com/temporal-community/temporal-agent-harness/releases)
+[Python quickstart](https://github.com/temporal-community/temporal-agent-kit/blob/main/python/README.md#quickstart)
+· [Examples](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/examples)
+· [Releases](https://github.com/temporal-community/temporal-agent-kit/releases)
 
 <a id="coding-agent-setup-and-starter"></a>
 
@@ -144,7 +144,7 @@ After upgrading the SDK, rerun the `skills install` commands to update unchanged
 Local edits produce a conflict and are preserved. Application-client guidance is in the installed
 skill's `references/api.md`.
 
-See [coding-agent development](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/agent-development.md)
+See [coding-agent development](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/agent-development.md)
 for skill discovery and updates, and [troubleshooting](#troubleshooting) if a service fails.
 
 <a id="installation"></a>
@@ -175,9 +175,9 @@ the same console, registry format, and session API.
 
 Model integrations are opt-in imports and optional peer dependencies. The walkthrough below
 installs the OpenAI Agents integration. The
-[Monty example](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples/monty)
+[Monty example](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/examples/monty)
 shows Gemini and Code Mode, and the
-[Strands Hello example](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples/strands_hello)
+[Strands Hello example](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/examples/strands_hello)
 shows Strands Agents.
 
 ### Try the example agent
@@ -187,7 +187,7 @@ as `bazel`, and the [Temporal CLI](https://docs.temporal.io/cli). Bazel supplies
 toolchains and dependencies. Examples live in the repository and are not shipped in npm packages.
 
 ```bash
-git clone --branch npm-v0.6.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch npm-v0.6.0 https://github.com/temporal-community/temporal-agent-kit.git
 cd temporal-agent-kit
 [ -f .env.local ] || cp .env.example .env.local
 # Set OPENAI_API_KEY in .env.local.
@@ -204,7 +204,7 @@ just worker
 ```
 
 Open <http://localhost:8000> and follow [Your first session](#your-first-session).
-The [example README](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples/openai_hello#readme)
+The [example README](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/examples/openai_hello#readme)
 explains the files and how to modify the agent. The checkout's recipes load the root `.env.local`.
 
 ### Build with it — install from npm
@@ -385,7 +385,7 @@ try {
 }
 ```
 
-The [worker reference](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/worker#readme)
+The [worker reference](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/worker#readme)
 covers activity tools, plugins, schema generation, and connection configuration.
 
 ### Register the agent
@@ -448,7 +448,7 @@ worker, rerun `npm run agent-kit:schema`, and start it again. Start a new sessio
    and its `{ "city": "Paris" }` input and sample result. The tool returns “It's 72°F and sunny in Paris.”; the model's wording can vary.
 5. Ask a follow-up in the same session. Reload the page to reconnect to its recorded conversation.
 
-![Agent Kit console showing a TypeScript weather conversation and its completed get_weather tool call](https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/docs/images/typescript-quickstart.png)
+![Agent Kit console showing a TypeScript weather conversation and its completed get_weather tool call](https://raw.githubusercontent.com/temporal-community/temporal-agent-kit/main/docs/images/typescript-quickstart.png)
 
 The screenshot shows the console after a completed weather turn. It uses a scripted model
 response for a reproducible capture; the agent, tool execution, Temporal workflows, and console
@@ -525,21 +525,21 @@ workflow module, add a matching registry entry, and generate its schema using th
 
 - **Approvals:** `allowInherentlySafe()` automatically permits this sample's read-only tool.
   Use `alwaysRequireHumanApproval()` to try the console's approval flow in a new session.
-  See [human-in-the-loop approvals](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/internal/human-in-the-loop-tool-approvals.md)
+  See [human-in-the-loop approvals](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/internal/human-in-the-loop-tool-approvals.md)
   for the shared concepts; its code examples are Python.
 - **State:** declare observable state with `state(...)` and read or update it through the agent's
   state references. See the
-  [Monty trip board](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/examples/monty/trip-board.ts)
-  and its [agent declaration](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/examples/monty/conversational-workflow.ts)
+  [Monty trip board](https://github.com/temporal-community/temporal-agent-kit/blob/main/typescript/examples/monty/trip-board.ts)
+  and its [agent declaration](https://github.com/temporal-community/temporal-agent-kit/blob/main/typescript/examples/monty/conversational-workflow.ts)
   for a complete example.
 - **Code Mode and subagents:** follow the
-  [TypeScript Monty example](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/examples/monty).
+  [TypeScript Monty example](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/examples/monty).
 - **Your own product UI:** use the
-  [React](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/react#readme)
-  or [Svelte](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/svelte#readme)
+  [React](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/react#readme)
+  or [Svelte](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/svelte#readme)
   client. These connect to the shared session API for agents written in either language.
 - **Worker configuration:** see the
-  [worker package](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/worker#readme)
+  [worker package](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/worker#readme)
   for activity registration and schema CLI details.
 
 ## Versioning and stability
@@ -550,5 +550,5 @@ release version. The manual walkthrough pairs npm **0.2.0** with Python **0.8.0*
 version numbers should match.
 
 Examples are not included in the npm packages: use the corresponding `npm-v<version>` repository
-tag. Review the [release notes](https://github.com/temporal-community/temporal-agent-harness/releases)
+tag. Review the [release notes](https://github.com/temporal-community/temporal-agent-kit/releases)
 when upgrading, regenerate schemas, and test the worker and shared services together.
