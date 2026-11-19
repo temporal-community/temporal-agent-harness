@@ -1000,11 +1000,14 @@
     background: var(--live);
   }
 
+  /* Shape as well as hue, as on the transport (WCAG 1.4.1): solid, dotted, wide. */
   .cue.queue::before {
-    background: var(--queue);
+    background: repeating-linear-gradient(to bottom, var(--queue) 0 2px, transparent 2px 4px);
   }
 
   .cue.error::before {
+    inset-inline-start: calc(50% - 3px);
+    width: 6px;
     background: var(--error);
   }
 

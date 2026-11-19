@@ -644,6 +644,16 @@
     background: var(--error);
   }
 
+  /* Shape as well as hue, so the kinds part without color (WCAG 1.4.1): an approval is a
+     solid tick, a queued message a dotted one, an error a wide one. */
+  .cue.queue::before {
+    background: repeating-linear-gradient(to bottom, var(--queue) 0 2px, transparent 2px 4px);
+  }
+
+  .cue.error::before {
+    width: 6px;
+  }
+
   .cue:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -1px;

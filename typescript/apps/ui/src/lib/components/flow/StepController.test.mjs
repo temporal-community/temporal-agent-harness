@@ -305,4 +305,10 @@ describe("the transport's cue marks", () => {
     assert.match(cue, /width: 24px;\s*height: 24px;/);
     assert.match(cue, /transform: translate\(-50%, -50%\);/);
   });
+
+  /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
+  it("draws a queued message dotted and an error wide", () => {
+    assert.match(source, /\n {2}\.cue\.queue::before \{\s*background: repeating-linear-gradient/);
+    assert.match(source, /\n {2}\.cue\.error::before \{\s*width: 6px;/);
+  });
 });

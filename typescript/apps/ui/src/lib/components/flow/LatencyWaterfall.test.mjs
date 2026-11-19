@@ -801,4 +801,10 @@ describe("the waterfall's press targets", () => {
     assert.match(source, /\n {2}\.axis \{[^}]*height: 22px;/, "the ruler a cue fills is 22px, so a 24px circle on it clears its neighbours");
     assert.match(rule(".bar::before"), /inset: -2px -11px;/);
   });
+
+  /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
+  it("draws a queued message dotted and an error wide, still centered", () => {
+    assert.match(rule(".cue.queue::before"), /background: repeating-linear-gradient/);
+    assert.match(rule(".cue.error::before"), /inset-inline-start: calc\(50% - 3px\);\s*width: 6px;/);
+  });
 });

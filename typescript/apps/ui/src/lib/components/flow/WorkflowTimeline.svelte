@@ -1311,6 +1311,16 @@
   .cue.queue::before { background: var(--queue); }
   .cue.error::before { background: var(--error); }
 
+  /* Shape as well as hue, as on the transport (WCAG 1.4.1): solid, dotted, wide. */
+  .cue.queue::before {
+    background: repeating-linear-gradient(to bottom, var(--queue) 0 2px, transparent 2px 4px);
+  }
+
+  .cue.error::before {
+    left: calc(50% - 3px);
+    width: 6px;
+  }
+
   .cue:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -1px;

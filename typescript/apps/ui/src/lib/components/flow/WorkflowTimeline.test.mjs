@@ -736,4 +736,10 @@ describe("the axis cue marks", () => {
     assert.match(cue, /width: 24px;\s*height: 24px;\s*margin-left: -12px;/);
     assert.match(source, /\n {2}\.cue::before \{[^}]*left: calc\(50% - 1\.5px\);/);
   });
+
+  /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
+  it("draws a queued message dotted and an error wide, still centered", () => {
+    assert.match(source, /\n {2}\.cue\.queue::before \{\s*background: repeating-linear-gradient/);
+    assert.match(source, /\n {2}\.cue\.error::before \{\s*left: calc\(50% - 3px\);\s*width: 6px;/);
+  });
 });
