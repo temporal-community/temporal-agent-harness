@@ -52,6 +52,9 @@
   /* --- Borders / focus ----------------------------------------------------- */
   --border: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.22);
+  /* A text field's edge is how it reads as a place to type: 3.2:1 or more against every surface
+     and its own fill, the 3:1 WCAG 1.4.11 asks of a control's boundary. */
+  --border-field: #666878;
   /* Solid: at 55% the ring measured 2.2:1 on the surfaces, under the 3:1 a focus indicator needs. */
   --focus-ring: var(--accent);
   /* Selected, open, or at the replay cursor: a whole-row tint, never a stroke down
@@ -444,7 +447,7 @@ a {
 .form-control {
   min-width: 0;
   height: var(--control-height);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-field);
   border-radius: 0;
   background: var(--control-bg);
   font-size: var(--font-sm);
@@ -481,7 +484,7 @@ textarea.form-control {
 
 .form-control[aria-invalid="true"],
 .field:has(> [aria-invalid="true"]) {
-  border-color: color-mix(in srgb, var(--error) 60%, var(--border));
+  border-color: color-mix(in srgb, var(--error) 60%, var(--border-field));
 }
 
 .form-control::placeholder {

@@ -37,6 +37,14 @@ describe("the page heading", () => {
   });
 });
 
+/* WCAG 1.4.11: a text field's edge is what says "type here", so it needs 3:1. */
+describe("text fields", () => {
+  it("draw their edge in --border-field, 3:1 or more on every surface", () => {
+    assert.match(app, /--border-field: #666878;/);
+    assert.match(app, /\n\.field,\n\.form-control \{[^}]*border: 1px solid var\(--border-field\);/);
+  });
+});
+
 /* WCAG 1.4.10: at 400% zoom a 1280 x 1024 window is 320 x 256 CSS px. */
 describe("the shell at 400% zoom", () => {
   it("lays the Session Manager over the desk when narrow, hiding what it covers, and puts it away on a pick", () => {

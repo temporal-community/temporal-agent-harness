@@ -361,7 +361,7 @@ describe("console conventions", () => {
 
   it("draws every search and filter field in a pane with the shared .field", async () => {
     const css = await readFile(join(root, "app.css"), "utf8");
-    assert.match(ruleOf(css, ".field,\n.form-control") ?? "", /height: var\(--control-height\);[\s\S]*border: 1px solid var\(--border\);/, "app.css lost the .field box");
+    assert.match(ruleOf(css, ".field,\n.form-control") ?? "", /height: var\(--control-height\);[\s\S]*border: 1px solid var\(--border-field\);/, "app.css lost the .field box");
     assert.match(css, /\.field:has\(> :is\(input, select\):focus-visible\),\s*\.form-control:focus-visible \{\s*outline: 2px solid var\(--focus-ring\);/, "app.css lost the .field focus ring");
     const offenders = [];
     const used = new Set();

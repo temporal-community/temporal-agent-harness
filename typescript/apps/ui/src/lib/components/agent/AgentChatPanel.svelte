@@ -3627,7 +3627,7 @@
     gap: var(--gutter-tight);
     align-items: center;
     padding: var(--gutter-tight);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-field);
     border-radius: 0;
     background: var(--control-bg);
     color: var(--text-3);
