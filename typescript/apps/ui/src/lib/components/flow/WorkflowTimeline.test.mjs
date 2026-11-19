@@ -737,6 +737,12 @@ describe("the axis cue marks", () => {
     assert.match(source, /\n {2}\.cue::before \{[^}]*left: calc\(50% - 1\.5px\);/);
   });
 
+  /* WCAG 2.2 2.5.8: under 24px a target must sit where a 24px circle clears its neighbours;
+     at 22px the gap toggle's circle clears the row under the axis. */
+  it("draws an idle-gap toggle in a 22px box around the same glyph", () => {
+    assert.match(source, /\n {2}\.gap-toggle \{[^}]*width: 22px;\s*height: 22px;\s*padding: 4px 6px;/);
+  });
+
   /* WCAG 2.2 2.5.8: a span can be drawn 4px wide; what a hand lands on is 24px by 28px. */
   it("gives a span mark a 24px-wide target however short it is drawn", () => {
     assert.match(source, /\n {2}\.mark \{[^}]*height: 20px;[^}]*min-width: 4px;/);

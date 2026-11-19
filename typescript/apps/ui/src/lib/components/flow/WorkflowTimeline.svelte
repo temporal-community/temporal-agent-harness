@@ -1232,13 +1232,15 @@
     white-space: nowrap;
   }
 
+  /* 22px square around the 10px break glyph: a 24px circle on it clears the row below it,
+     which is what WCAG 2.2 2.5.8 asks of a target under 24px. */
   .gap-toggle {
     position: absolute;
     z-index: 3;
     bottom: -1px;
-    width: 14px;
-    height: 20px;
-    padding: 3px 2px;
+    width: 22px;
+    height: 22px;
+    padding: 4px 6px;
     border: 0;
     background: var(--surface-1);
     color: var(--text-3);
