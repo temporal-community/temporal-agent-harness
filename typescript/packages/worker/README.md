@@ -3,11 +3,11 @@
 The worker side of the Temporal Agent Kit: `AgentKitPlugin` and Agent Kit's activities,
 the agent client, Code Mode's Monty activities, and the `agent-kit` command
 (`init`, `schema`, `skills`, `doctor`; `agent-kit-schema` is the same `schema` command). Agents themselves are written against
-[`@temporalio/agent-kit`](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/packages/core/README.md), which runs in the workflow.
+[`@temporalio/agent-kit`](https://github.com/temporal-community/temporal-agent-kit/blob/main/typescript/packages/core/README.md), which runs in the workflow.
 
 ## Getting started
 
-Follow the [TypeScript quickstart](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/core#readme)
+Follow the [TypeScript quickstart](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/core#readme)
 for a complete npm install, agent, worker, registry, and first console session. It includes the
 pinned Temporal and OpenAI dependencies and explains the startup processes.
 
@@ -107,7 +107,7 @@ as. Without `-o` it prints the document.
 
 ## Serving and connection configuration
 
-Follow [Run the web UI](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/core#run-the-web-ui)
+Follow [Run the web UI](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/core#run-the-web-ui)
 for the startup commands. The console and session manager use the registry and generated schema;
 the server never imports your TypeScript code. Keep `workflow_type` equal to the agent's
 `defineAgent({ name })`, and `task_queue` equal to the queue your worker polls.
@@ -122,5 +122,5 @@ If you use `TASK_QUEUE_PREFIX`, set it consistently for the console, session man
 and resolve the worker queue with `taskQueueName("briefed-agent-task-queue")`, exported by this
 package. The registry keeps the unprefixed queue name; the server applies the prefix.
 
-See the [registry and server documentation](https://github.com/temporal-community/temporal-agent-harness#run-the-web-ui--no-checkout-no-node)
-and [quickstart troubleshooting](https://github.com/temporal-community/temporal-agent-harness/tree/main/typescript/packages/core#troubleshooting).
+See the [registry and server documentation](https://github.com/temporal-community/temporal-agent-kit#run-the-web-ui--no-checkout-no-node)
+and [quickstart troubleshooting](https://github.com/temporal-community/temporal-agent-kit/tree/main/typescript/packages/core#troubleshooting).

@@ -2,7 +2,7 @@
   import { BookOpen, LayoutGrid, LayoutList, MessageCircle, Rows3, Rows4, Scale } from "@lucide/svelte";
   import { createAtom } from "@tanstack/svelte-store";
   import type { ColumnSizingState } from "@tanstack/svelte-table";
-  export const REPO = "https://github.com/temporal-community/temporal-agent-harness";
+  export const REPO = "https://github.com/temporal-community/temporal-agent-kit";
   export const RELEASES = `${REPO}/releases`;
 
   const REGISTRY = { python: "PyPI", typescript: "npm" };

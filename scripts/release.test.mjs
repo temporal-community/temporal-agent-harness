@@ -9,7 +9,7 @@ import {
   tagDetails, updateDevelopmentPins, updateReadmePins, validateInputs, validateNpmRelease,
 } from './release.mjs';
 
-const repository = 'temporal-community/temporal-agent-harness';
+const repository = 'temporal-community/temporal-agent-kit';
 const sha = 'a'.repeat(40);
 const repoUrl = `git+https://github.com/${repository}.git`;
 const publishConfig = { access: 'public', registry: 'https://registry.npmjs.org/' };

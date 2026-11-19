@@ -37,7 +37,7 @@ uv pip install -e './nexus/mcp[pydantic-ai]'
 To install from GitHub before the package is published, run:
 
 ```sh
-uv add "temporal-nexus-mcp @ git+https://github.com/temporal-community/temporal-agent-harness.git#subdirectory=nexus/mcp"
+uv add "temporal-nexus-mcp @ git+https://github.com/temporal-community/temporal-agent-kit.git#subdirectory=nexus/mcp"
 ```
 
 ## Select an API
