@@ -198,6 +198,14 @@ describe("the transport lane", () => {
     assert.doesNotMatch(html, /class="scrub[^"]*\boverview\b/);
   });
 
+  /* An aria-controls naming an id that is not on the page is a broken reference (WCAG 4.1.2). */
+  it("points the readout at its event card only while the card is open", () => {
+    const html = render(StepController, { props: controllerProps }).body;
+    assert.match(html, /aria-expanded="false"/, "the readout is there, closed");
+    assert.doesNotMatch(html, /aria-controls="now-card"/);
+    assert.doesNotMatch(html, /id="now-card"/, "and the card is not drawn while closed");
+  });
+
   it("draws a thin interactive overview without computing the ridge", () => {
     const eventRows = [{ index: 0, get timestamp() { throw new Error("ridge computed"); } }];
     const html = render(StepController, {

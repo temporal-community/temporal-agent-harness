@@ -380,7 +380,7 @@
       active={detailOpen}
       disabled={!hasDetail}
       aria-expanded={detailOpen}
-      aria-controls="now-card"
+      aria-controls={detailOpen && hasDetail ? "now-card" : undefined}
       data-tip={detailOpen && hasDetail
         ? undefined
         : hasDetail

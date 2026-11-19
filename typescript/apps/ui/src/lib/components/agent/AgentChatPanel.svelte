@@ -1969,9 +1969,11 @@
         {#if message}
         {@const copyable = copiesWhole(message)}
         {@const reply = message.role === "assistant"}
+        <!-- Named, so a reader listing the messages can tell one from the next. -->
         <div
           class="message-row"
           role="article"
+          aria-label={`${reply ? agentLabel : "You"}, message ${row.index + 1}`}
           aria-posinset={row.index + 1}
           aria-setsize={messages.length}
           tabindex="-1"
@@ -2007,13 +2009,13 @@
                 </LongContent>
               </TraceRow>
             {:else if message.data}
-              <JsonReply id={`message-${message.id}`} json={message.json} text={message.text} onResize={remeasureMessages} />
+              <JsonReply id={`message-${message.id}`} label={`JSON reply, message ${row.index + 1}`} json={message.json} text={message.text} onResize={remeasureMessages} />
             {:else}
               <LongContent
                 id={`message-${message.id}`}
                 text={message.text}
                 streaming={message.streaming}
-                label={reply ? "Agent reply" : "User message"}
+                label={`${reply ? "Agent reply" : "User message"}, message ${row.index + 1}`}
                 onResize={remeasureMessages}
               >
                 <MarkdownMessage
@@ -2101,7 +2103,7 @@
 
               {#if expanded && activeLog}
                 <div class="activity-trace"><div class="activity-list">
-                  {#each traceSteps(activityLogs) as step (groupKey(message.id, step.id))}
+                  {#each traceSteps(activityLogs) as step, stepIndex (groupKey(message.id, step.id))}
                     {#if step.kind === "thought"}
                       {#if thought}
                         <details
@@ -2164,7 +2166,7 @@
                         {#if args}
                           <section class="activity-full" aria-label="Arguments">
                             <span class="activity-full-label">Arguments</span>
-                            <JsonReply id={`trace-${step.id}-arguments`} json={args} onResize={remeasureMessages} />
+                            <JsonReply id={`trace-${step.id}-arguments`} label={`${outputRow?.toolName ?? "Tool"} arguments, message ${row.index + 1}, step ${stepIndex + 1}`} json={args} onResize={remeasureMessages} />
                           </section>
                         {/if}
                         <section class="activity-full" aria-label="Full details">

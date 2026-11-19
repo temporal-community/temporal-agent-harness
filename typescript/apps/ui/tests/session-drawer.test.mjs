@@ -62,7 +62,7 @@ describe("Session Manager drawer", () => {
     assert.equal(appSource.match(/<DockedDrawer\b/g)?.length, 2);
     assert.match(appSource, /<DockedDrawer\s+edge="left"/);
     assert.match(appSource, /<DockedDrawer\s+edge="bottom"/);
-    assert.match(appSource, /aria-controls="session-manager-drawer"/);
+    assert.match(appSource, /aria-controls=\{sessionManagerHeld \? "session-manager-drawer" : undefined\}/);
     /* The drawer and the list inside it are both regions; one name for both read as a
        nested duplicate to a screen reader. */
     assert.match(appSource, /<DockedDrawer\s+edge="left"\s+label="Session Manager"/);

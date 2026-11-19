@@ -173,6 +173,17 @@ describe("banners a screen reader hears", () => {
     assert.match(chat({ items: [user(1)], closed: true }), /class="closed-banner[^"]*" role="status"/);
   });
 
+  /* Every message was an unnamed article and every bubble a region called "User message" or
+     "Agent reply", so a list of them read the same line over and over. */
+  it("names each message and its bubble apart from the rest", () => {
+    const body = chat({ items: [user(1), reply(1, "Here."), user(2), reply(2, '{"a": 1}', { data: true, json: { a: 1 } })] });
+    const names = (pattern) => [...body.matchAll(pattern)].map((m) => m[1]);
+    const articles = names(/role="article" aria-label="([^"]+)"/g);
+    const regions = names(/role="region" aria-label="([^"]+)"/g);
+    assert.deepEqual(articles, ["You, message 1", "Planner, message 2", "You, message 3", "Planner, message 4"]);
+    assert.equal(new Set(regions).size, regions.length, `regions named apart: ${regions.join(" | ")}`);
+  });
+
   /* Opening a past session replayed every turn's phases into the status line at once. */
   it("says nothing about the reply on first paint, even mid-turn", () => {
     const body = chat({ items: [user(1)], sending: true, live: true });

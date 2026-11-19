@@ -40,10 +40,12 @@
     /** The streamed reply so far, shown unparsed until `json` arrives. */
     text?: string;
     id?: string;
+    /** The scroll region's name. Several replies are on screen at once, so a caller names its place. */
+    label?: string;
     onResize?: () => void;
   }
 
-  let { json, text = "", id = "json-reply", onResize }: Props = $props();
+  let { json, text = "", id = "json-reply", label = "JSON reply", onResize }: Props = $props();
 
   let scroller = $state<HTMLElement | null>(null);
   /* Tail the stream while the reader is at its end; once they scroll up to read, arriving
@@ -93,7 +95,7 @@
     <span class="code-language-tag">JSON</span>
   </div>
   {#if !empty}
-    <LongContent {id} text={body} {streaming} lines={lineCount} label="JSON reply" {onResize}>
+    <LongContent {id} text={body} {streaming} lines={lineCount} {label} {onResize}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex: it scrolls sideways, so a keyboard has to reach it -->
       <div class="json-body" dir="ltr" tabindex="0" bind:this={scroller} onscroll={handleScroll}>
         <!-- A stream is drawn plain: re-highlighting everything so far on every delta is

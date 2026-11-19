@@ -891,7 +891,7 @@
           data-tip="Sessions&#10;S"
           aria-pressed={sessionDrawerOpen}
           aria-expanded={sessionDrawerOpen}
-          aria-controls="session-manager-drawer"
+          aria-controls={sessionManagerHeld ? "session-manager-drawer" : undefined}
           data-tip-below
           data-tip-align="start"
           onclick={toggleSessionManager}
@@ -959,7 +959,7 @@
   </div>
 
   {#if sessionManagerHeld}
-    <aside class="session-drawer" id="session-manager-drawer">
+    <aside class="session-drawer" id="session-manager-drawer" aria-label="Session Manager">
       <DockedDrawer
         edge="left"
         label="Session Manager"

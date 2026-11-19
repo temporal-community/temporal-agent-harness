@@ -37,6 +37,20 @@ describe("the page heading", () => {
   });
 });
 
+/* WCAG 2.5.3 and 1.3.1: what a speech user sees is in the name; every landmark is named. */
+describe("names", () => {
+  it("lead a folded spine's name with the title and kind it draws, in that order", () => {
+    assert.match(pane, /const spineName = \$derived\([^;]*`\$\{title\} \$\{meta\.kindLabel\}`\);/);
+    assert.match(pane, /aria-label=\{`\$\{spineName\}, expand/);
+  });
+
+  it("name the Session Manager's landmark, and point at it only while it is on the page", () => {
+    assert.match(shell, /<aside class="session-drawer" id="session-manager-drawer" aria-label="Session Manager">/);
+    assert.match(shell, /\{#if sessionManagerHeld\}\s*<aside class="session-drawer"/);
+    assert.match(shell, /aria-controls=\{sessionManagerHeld \? "session-manager-drawer" : undefined\}/);
+  });
+});
+
 /* WCAG 1.4.11: a text field's edge is what says "type here", so it needs 3:1. */
 describe("text fields", () => {
   it("draw their edge in --border-field, 3:1 or more on every surface", () => {
@@ -96,7 +110,7 @@ describe("the shared header row", () => {
   it("is the top bar's row too, with quiet icon buttons and no boxed chips", () => {
     assert.ok(bar, "the top bar takes .surface-head");
     assert.doesNotMatch(rule(minimap, ".minimap"), /\b(height|padding|border-bottom|background):/);
-    assert.match(lead, /<button\s+type="button"\s+class=\{\["head-button session-drawer-trigger"[^>]*aria-label="Sessions"[^>]*aria-pressed=[^>]*aria-expanded=[^>]*aria-controls="session-manager-drawer"/);
+    assert.match(lead, /<button\s+type="button"\s+class=\{\["head-button session-drawer-trigger"[^>]*aria-label="Sessions"[^>]*aria-pressed=[^>]*aria-expanded=[^>]*aria-controls=\{sessionManagerHeld \? "session-manager-drawer" : undefined\}/);
     assert.match(launcher, /<button\s+type="button"\s+class="head-button session-new"\s+aria-label="New session"/);
     assert.match(launcher, /<a\s+class="head-button session-temporal"[^>]*aria-label="Open in Temporal Web UI"/);
     assert.match(launcher, /class="head-name session-anchor"[\s\S]*class="kicker head-kind session-name"/);

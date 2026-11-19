@@ -180,7 +180,9 @@
   onkeydown={(event) => event.stopPropagation()}
 >
   <div class="palette-search">
-    <label class="field">
+    <!-- A box, not a <label>: a label with no words of its own names nothing, and the input
+         carries its name. -->
+    <div class="field">
       <Search size={14} aria-hidden="true" />
       <input
         bind:this={input}
@@ -194,7 +196,7 @@
         oninput={() => (active = 0)}
         onkeydown={onKeydown}
       />
-    </label>
+    </div>
     <button
       type="button"
       class="head-button"
