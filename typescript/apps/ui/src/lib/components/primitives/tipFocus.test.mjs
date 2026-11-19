@@ -161,8 +161,11 @@ describe("tips shown for focus", () => {
     assert.match(caret, /border-top-color: var\(--surface-3\);/);
     const surface = css.match(/\n\[data-tip\]::after,\n\.tip-card \{([^}]*)\}/)?.[1] ?? "";
     assert.match(surface, /background: var\(--surface-3\);/, "the caret's colour is the bubble's");
-    /* The caret's 5px triangle spans 8–13px from the element, the bubble starts at 12: 1px of overlap, no seam. */
-    assert.match(caret, /bottom: calc\(100% \+ 3px\);\s*border: 5px solid transparent;/);
+    /* The caret's 5px triangle spans 8–13px from the element, the bubble starts at 12: 1px of overlap,
+       no seam. Its box starts at the element (an 8px transparent side), so the pointer can cross
+       into the bubble, which takes the pointer while shown (WCAG 1.4.13: hoverable). */
+    assert.match(caret, /bottom: 100%;\s*border: 5px solid transparent;\s*border-bottom-width: 8px;/);
+    assert.match(css, /\[data-tip\]:focus-visible > \.tip-card \{\s*display: block;\s*animation: [^;]+;\s*\/\*[^*]*\*\/\s*pointer-events: auto;/);
     assert.match(css, /\n\[data-tip\]::after,\n\[data-tip\] > \.tip-card \{\s*left: 50%;\s*bottom: calc\(100% \+ 12px\);/);
   });
 
