@@ -2,7 +2,7 @@
 
 Build durable agents using Python, Temporal, and your preferred AI SDK.
 
-[Project overview](https://github.com/temporal-community/temporal-agent-kit/blob/main/README.md) · [TypeScript guide](https://github.com/temporal-community/temporal-agent-kit/blob/main/typescript/packages/core/README.md) · [Harness API](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/api/README.md)
+[Project overview](https://github.com/temporal-community/temporal-agent-harness/blob/main/README.md) · [TypeScript guide](https://github.com/temporal-community/temporal-agent-harness/blob/main/typescript/packages/core/README.md) · [Harness API](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/api/README.md)
 
 <a id="coding-agent-setup-and-starter"></a>
 
@@ -136,7 +136,7 @@ After upgrading the SDK, rerun the `skills install` commands to update unchanged
 Local edits produce a conflict and are preserved. Application-client guidance is in the installed
 skill's `references/api.md`.
 
-See [coding-agent development](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/agent-development.md)
+See [coding-agent development](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/agent-development.md)
 for skill discovery and updates. The `init`, `skills`, and `doctor` commands ship with the base
 package; `dev`, `serve`, and OpenAPI export require the `ui` extra.
 
@@ -151,10 +151,10 @@ The reference below covers existing projects, model integration extras, and repo
 
 Clone at a release tag. You need [just](https://just.systems/),
 [Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, and the
-[`temporal` CLI](https://docs.temporal.io/cli) (see [Requirements](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/examples.md#requirements)).
+[`temporal` CLI](https://docs.temporal.io/cli) (see [Requirements](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/examples.md#requirements)).
 
 ```bash
-git clone --branch 0.11.0 https://github.com/temporal-community/temporal-agent-kit.git
+git clone --branch 0.12.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-kit
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
@@ -168,13 +168,13 @@ just dev            # 2. session-manager, Agent Kit server and all example agent
 
 Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
 Bazel, which fetches dependencies on first run. Every example follows the same four recipes; see
-[Run the examples](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/examples.md#run-the-examples) for the rest of them, including running all eight behind
+[Run the examples](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/examples.md#run-the-examples) for the rest of them, including running all eight behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.10.0 0.11.0`.
+`git diff 0.11.0 0.12.0`.
 
 ### Build with it — install from PyPI
 
@@ -185,7 +185,7 @@ Agent Kit is published to
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-kit[ui]==0.11.0'
+uv add 'temporal-agent-kit[ui]==0.12.0'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -208,7 +208,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-kit[ui]==0.11.0",
+    "temporal-agent-kit[ui]==0.12.0",
 ]
 ```
 
@@ -283,7 +283,7 @@ TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud \
 `uv run temporal-agent-kit --help` documents the full precedence order.
 
 Need the API and UI mounted inside your own FastAPI service instead? See
-[Self-hosting the web app](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/api/hosting.md#self-hosting-the-web-app).
+[Self-hosting the web app](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/api/hosting.md#self-hosting-the-web-app).
 
 #### Extras
 
@@ -303,26 +303,26 @@ opt-in:
 | `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentKitPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-kit[ui,code-mode,genai]==0.11.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-kit[ui,code-mode,genai]==0.12.0'`.
 
 
 ## Versioning and stability
 
 **Pin to a release.** Every release is listed on the
-[releases page](https://github.com/temporal-community/temporal-agent-kit/releases) and
+[releases page](https://github.com/temporal-community/temporal-agent-harness/releases) and
 published to [PyPI](https://pypi.org/project/temporal-agent-kit/). A release tag marks a
 commit that is known-good at the moment it was cut: the tests passed, and the published wheel and
 sdist were built from that commit, browser UI included.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-kit==0.11.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-kit==0.12.0`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 
 **This project is very early and experimental - `main` may break at any time.**
 
-Releases are cut when the maintainers judge the state stable ([how](https://github.com/temporal-community/temporal-agent-kit/blob/main/RELEASE.md)). This project is
+Releases are cut when the maintainers judge the state stable ([how](https://github.com/temporal-community/temporal-agent-harness/blob/main/RELEASE.md)). This project is
 **experimental** and pre-1.0: APIs will change between releases, without warning. Pinning is what
 keeps that churn from reaching you unannounced — so pin, and upgrade deliberately when you want
 to try out new Agent Kit capabilities.
@@ -479,10 +479,10 @@ on the client is enough — Temporal applies a client's plugins to workers built
 
 ## Further reading
 
-- [Harness API and session lifecycle](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/api/README.md)
-- [Messages and handler behavior](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/messages.md)
-- [Approvals and auto mode](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/approvals.md)
-- [Code Mode, files, and subagents](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/code-mode.md)
-- [Build a React or Svelte UI](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/client-ui.md)
-- [Run the repository examples](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/examples.md)
-- [Embed the web app in FastAPI](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/api/hosting.md)
+- [Harness API and session lifecycle](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/api/README.md)
+- [Messages and handler behavior](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/messages.md)
+- [Approvals and auto mode](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/approvals.md)
+- [Code Mode, files, and subagents](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/code-mode.md)
+- [Build a React or Svelte UI](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/client-ui.md)
+- [Run the repository examples](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/guides/examples.md)
+- [Embed the web app in FastAPI](https://github.com/temporal-community/temporal-agent-harness/blob/main/docs/api/hosting.md)
