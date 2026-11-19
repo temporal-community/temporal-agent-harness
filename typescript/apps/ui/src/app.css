@@ -275,6 +275,13 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Short, the desk scrolls down rather than squeezing the rail to nothing; see App.svelte. */
+@media (max-height: 500px) {
+  body {
+    overflow-y: auto;
+  }
+}
+
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);

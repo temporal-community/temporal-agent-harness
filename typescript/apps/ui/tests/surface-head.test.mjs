@@ -37,6 +37,25 @@ describe("the page heading", () => {
   });
 });
 
+/* WCAG 1.4.10: at 400% zoom a 1280 x 1024 window is 320 x 256 CSS px. */
+describe("the shell at 400% zoom", () => {
+  it("lays the Session Manager over the desk when narrow, hiding what it covers, and puts it away on a pick", () => {
+    const narrow = between(shell, "@media (max-width: 640px) {", "\n  }\n");
+    assert.match(narrow, /\.app\.has-session-drawer:not\(\.bleed\) \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+    assert.match(narrow, /grid-column: 1;\s*visibility: hidden;/, "covered, so nothing under it takes focus");
+    assert.match(narrow, /> :global\(\.rail-frame\) \{\s*grid-row: 2;/, "named rows, or auto-placement starves the drawer");
+    assert.match(shell, /const NARROW_SESSION_DRAWER = "\(max-width: 640px\)";/);
+    assert.match(shell, /if \(window\.matchMedia\(NARROW_SESSION_DRAWER\)\.matches\) holdSessionManager\(false\);/);
+  });
+
+  it("scrolls the page down when short instead of squeezing the rail", () => {
+    const short = between(shell, "@media (max-height: 500px) {", "\n  }\n");
+    assert.match(short, /\.app \{\s*height: auto;\s*min-height: 100dvh;/);
+    assert.match(short, /> :global\(\.rail-frame\) \{\s*min-height: calc\(100dvh - var\(--head-height\)\);/);
+    assert.match(app, /@media \(max-height: 500px\) \{\s*body \{\s*overflow-y: auto;/);
+  });
+});
+
 describe("the shared header row", () => {
   it("is sized by one token, full-bleed, with the hairline", () => {
     const head = rule(app, ".surface-head");
