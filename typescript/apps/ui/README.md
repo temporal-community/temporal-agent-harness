@@ -6,7 +6,7 @@ In development, Vite serves the app and proxies `/api` to the FastAPI server on
 
 Files:
 
-- `docs/api.md`: HTTP and SSE API reference for the packaged session-manager API.
+- `docs/api.md`: HTTP and SSE API reference for the packaged server's API.
 - `src/lib/api/types.ts`: TypeScript request, response, and stream-event types.
 - `src/lib/api/index.ts`: API type exports.
 

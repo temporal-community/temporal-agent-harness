@@ -50,10 +50,10 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session manager, API, and Agent Kit console:**
+**Terminal 2 — shared API and Agent Kit console:**
 
 ```bash
-uv run temporal-agent-kit dev agents.toml
+uv run temporal-agent-kit serve agents.toml
 ```
 
 **Terminal 3 — your Python agent worker:**
@@ -62,10 +62,9 @@ uv run temporal-agent-kit dev agents.toml
 uv run --env-file .env.local python -m my_agent.worker
 ```
 
-The console is prebuilt in the Python package; no Node.js or frontend build is needed. `dev` runs
-the session-manager worker and the API/console server in one process; `session-manager` and
-`serve` remain available as separate commands. Defaults are `localhost:7233` and namespace
-`default`. For another Temporal service, export the same `TEMPORAL_*` connection settings in each
+The console is prebuilt in the Python package; no Node.js or frontend build is needed. `serve`
+runs the API/console server, which starts each session as your agent's workflow and lists
+sessions from Temporal visibility. Defaults are `localhost:7233` and namespace `default`. For another Temporal service, export the same `TEMPORAL_*` connection settings in each
 service terminal. `.env.local` above loads only into the agent worker. Keep `TASK_QUEUE_PREFIX`
 consistent across services. Keep all three processes running.
 

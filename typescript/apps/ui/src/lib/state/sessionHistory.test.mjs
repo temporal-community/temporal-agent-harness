@@ -57,14 +57,14 @@ describe("the minute clock", () => {
 
 describe("recognizable session history", () => {
   it("uses the opening message, with useful fallbacks for sessions without one", () => {
-    assert.equal(sessionTitle({ initial_user_message: "  Plan a trip\n to Paris ", label: "Session 1" }), "Plan a trip to Paris");
-    assert.equal(sessionTitle({ initial_user_message: " ", label: "Imported session" }), "Imported session");
+    assert.equal(sessionTitle({ title: "  Plan a trip\n to Paris ", label: "Session 1" }), "Plan a trip to Paris");
+    assert.equal(sessionTitle({ title: " ", label: "Imported session" }), "Imported session");
     assert.equal(sessionTitle({}), "Untitled session");
   });
 
   it("reads a markdown opening message as its plain text", () => {
-    assert.equal(sessionTitle({ initial_user_message: "Compare **Berlin** and `Lisbon` for the [offsite](https://example.com)" }), "Compare Berlin and Lisbon for the offsite");
-    assert.equal(sessionTitle({ initial_user_message: "<script>alert(1)</script> **bold** # heading" }), "<script>alert(1)</script> bold # heading");
+    assert.equal(sessionTitle({ title: "Compare **Berlin** and `Lisbon` for the [offsite](https://example.com)" }), "Compare Berlin and Lisbon for the offsite");
+    assert.equal(sessionTitle({ title: "<script>alert(1)</script> **bold** # heading" }), "<script>alert(1)</script> bold # heading");
   });
 
   it("groups by local calendar dates, including across month boundaries", () => {

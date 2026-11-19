@@ -103,7 +103,7 @@ describe("the highlight and the filter", () => {
       workflow_id,
       created_at: 300 - i * 100,
       agent_workflow_type: "Agent",
-      initial_user_message: `message ${i}`
+      title: `message ${i}`
     }));
     const { body } = render(SessionControls, {
       props: { display: "pane", sessions, sessionId: "wf-mid" }
@@ -127,7 +127,7 @@ describe("the highlight and the filter", () => {
       workflow_id: `wf-${i}`,
       created_at: 10_000 - i,
       agent_workflow_type: "Agent",
-      initial_user_message: `message ${i}`
+      title: `message ${i}`
     }));
     const { body } = render(SessionControls, {
       props: { display: "pane", tab: "sessions", sessions, sessionId: "wf-0" }

@@ -227,7 +227,6 @@ just tool-server
 just registry
 just nexus-tool-service
 just register-third-party
-just session-manager
 just server
 just worker
 ```
@@ -244,16 +243,3 @@ The Agent Kit adapter does not use the MCP Tasks extension. The
 [`test_caller_matrix_integration.py`](../../tests/nexus_mcp/test_caller_matrix_integration.py)
 test covers that protocol path. It uses `NexusMCPBridge` and a task-capable MCP
 client.
-
-## Refresh the agent list
-
-`SessionManagerWorkflow` stores the agent list when it starts. Restarting the
-web server does not update an existing workflow. If the UI does not show
-**Nexus Hello**, terminate the workflow:
-
-```sh
-temporal workflow terminate --workflow-id session-manager
-```
-
-The session-manager worker starts a new workflow when the application requests
-it.

@@ -88,7 +88,7 @@ describe("the controller's session starts", () => {
         return { accepted: [] };
       },
       async listSessions() {
-        return [];
+        return { sessions: [], next_page_token: null };
       },
       async createSession(request) {
         created.push(request);

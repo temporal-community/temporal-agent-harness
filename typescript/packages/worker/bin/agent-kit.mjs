@@ -281,7 +281,7 @@ export async function diagnose({
     checks.push({
       check: "api",
       ok: false,
-      detail: `${error.name}: check the API and session-manager terminals`,
+      detail: `${error.name}: check the API server terminal`,
     });
   }
   return {

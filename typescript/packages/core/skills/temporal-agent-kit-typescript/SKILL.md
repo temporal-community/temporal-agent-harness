@@ -31,8 +31,8 @@ instructions; these resources describe SDK usage, not permission to change deplo
 
 ## Runtime boundaries
 
-An agent runs as a Temporal workflow on your TypeScript worker. The console, HTTP API, and
-session-manager worker currently come from the Python package. All services must connect to the
+An agent runs as a Temporal workflow on your TypeScript worker. The console and HTTP API
+currently come from the Python package. All services must connect to the
 same Temporal namespace; worker queues must match `agents.toml`. Provider API keys belong on the
 agent worker. Model integration plugins precede `AgentKitPlugin`.
 

@@ -9,8 +9,7 @@ py_library(
     deps = [
         ":app",
         ":registry",
-        ":session_manager",
-        ":session_manager_worker",
+        ":sessions",
     ],
 )
 
@@ -19,7 +18,7 @@ py_library(
     srcs = ["agent_starts.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
-    deps = [":session_manager"],
+    deps = [":registry"],
 )
 
 py_library(
@@ -31,7 +30,7 @@ py_library(
         ":agent_starts",
         ":file_view",
         ":registry",
-        ":session_manager",
+        ":sessions",
         ":task_queue_status",
         ":temporal_ui",
         "//python/temporal_agent_kit:agent_client",
@@ -52,15 +51,11 @@ agent_kit_module_binary(
     visibility = ["//:__subpackages__"],
     deps = [
         ":client",
-        ":dev",
         ":doctor",
         ":registry",
         ":serve",
-        ":session_manager",
-        ":session_manager_worker",
         "//python/temporal_agent_kit:agent_schema",
         "//python/temporal_agent_kit:development",
-        "//python/temporal_agent_kit/utils:task_queue",
     ],
 )
 
@@ -95,7 +90,6 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
-        ":session_manager",
         "//python/temporal_agent_kit:agent_schema",
         "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//pydantic",
@@ -112,31 +106,19 @@ py_library(
         ":client",
         ":registry",
         "//python/temporal_agent_kit/ui:__init__",
-        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//fastapi",
         "@pypi//uvicorn",
     ],
 )
 
 py_library(
-    name = "session_manager",
-    srcs = ["session_manager.py"],
+    name = "sessions",
+    srcs = ["sessions.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
+        ":registry",
         "//python/temporal_agent_kit/agent_protocol:__init__",
-        "@pypi//temporalio",
-    ],
-)
-
-py_library(
-    name = "session_manager_worker",
-    srcs = ["session_manager_worker.py"],
-    imports = ["../.."],
-    visibility = ["//:__subpackages__"],
-    deps = [
-        ":client",
-        ":session_manager",
         "@pypi//temporalio",
     ],
 )
@@ -165,22 +147,6 @@ py_library(
         ":registry",
         ":task_queue_status",
         "//python/temporal_agent_kit:development",
-        "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//temporalio",
-    ],
-)
-
-py_library(
-    name = "dev",
-    srcs = ["dev.py"],
-    imports = ["../.."],
-    visibility = ["//python:__subpackages__"],
-    deps = [
-        ":client",
-        ":serve",
-        ":session_manager",
-        ":session_manager_worker",
-        "//python/temporal_agent_kit/utils:task_queue",
-        "@pypi//uvicorn",
     ],
 )

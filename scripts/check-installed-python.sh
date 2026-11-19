@@ -30,8 +30,6 @@ venv="$work/venv/bin"
 echo "The CLI runs"
 "$venv/temporal-agent-kit" --help >/dev/null
 "$venv/temporal-agent-kit" serve --help >/dev/null
-"$venv/temporal-agent-kit" session-manager --help >/dev/null
-"$venv/temporal-agent-kit" dev --help >/dev/null
 
 echo "Every integration imports from the install"
 (cd / && "$venv/python" - <<'PY'
@@ -43,7 +41,7 @@ for name in [
     "temporal_agent_kit.ai_sdks.openai_agents",
     "temporal_agent_kit.ai_sdks.pydantic_ai",
     "temporal_agent_kit.web.serve",
-    "temporal_agent_kit.web.session_manager_worker",
+    "temporal_agent_kit.web.sessions",
 ]:
     importlib.import_module(name)
 from temporal_agent_kit.ui import packaged_ui_dist

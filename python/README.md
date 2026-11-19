@@ -70,10 +70,10 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session manager, API, and Agent Kit console:**
+**Terminal 2 — shared API and Agent Kit console:**
 
 ```bash
-uv run temporal-agent-kit dev agents.toml
+uv run temporal-agent-kit serve agents.toml
 ```
 
 **Terminal 3 — your Python agent worker:**
@@ -82,12 +82,12 @@ uv run temporal-agent-kit dev agents.toml
 uv run --env-file .env.local python -m my_agent.worker
 ```
 
-The console is prebuilt in the Python package; no Node.js or frontend build is needed. `dev` runs
-the session-manager worker and the API/console server in one process; `session-manager` and
-`serve` remain available as separate commands for deployments. Defaults are `localhost:7233` and
-namespace `default`. For another Temporal service, export the same `TEMPORAL_*` connection
-settings in each service terminal. `.env.local` above loads only into the agent worker. Keep
-`TASK_QUEUE_PREFIX` consistent across services. Keep all three processes running.
+The console is prebuilt in the Python package; no Node.js or frontend build is needed. `serve` runs
+the API/console server, which starts each session as your agent's workflow and lists sessions from
+Temporal visibility. Defaults are `localhost:7233` and namespace `default`. For another Temporal
+service, export the same `TEMPORAL_*` connection settings in each service terminal. `.env.local`
+above loads only into the agent worker. Keep `TASK_QUEUE_PREFIX` consistent across services. Keep
+all three processes running.
 
 ### 4. Verify, then develop with your coding agent
 
@@ -163,11 +163,11 @@ Then run two commands in separate terminals to get going with all example agents
 
 ```bash
 just temporal       # 1. local Temporal dev server (needs the `temporal` CLI)
-just dev            # 2. session-manager, Agent Kit server and all example agent workers
+just dev            # 2. Agent Kit server and all example agent workers
 ```
 
 Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
-Bazel, which fetches dependencies on first run. Every example follows the same four recipes; see
+Bazel, which fetches dependencies on first run. Every example follows the same three recipes; see
 [Run the examples](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/examples.md#run-the-examples) for the rest of them, including running all eight behind
 one UI.
 
@@ -224,22 +224,17 @@ wheel: nothing to clone, nothing to build. One command per terminal:
 # 1. A local Temporal dev server (needs the `temporal` CLI). Its own Web UI: http://localhost:8233
 temporal server start-dev
 
-# 2. The packaged session-manager worker. It hosts SessionManagerWorkflow, which starts your
-#    agents as child workflows — without it the server comes up but has nothing to answer
-#    /api/agents or session creation, since both are workflow queries.
-uv run temporal-agent-kit session-manager
-
-# 3. The prebuilt Svelte UI + JSON API on http://localhost:8000
+# 2. The prebuilt Svelte UI + JSON API on http://localhost:8000. It starts each session as
+#    your agent's workflow and lists sessions from Temporal visibility.
 uv run temporal-agent-kit serve ./agents.toml
 
-# 4. Your own worker, hosting your agent workflows on their own task queue
+# 3. Your own worker, hosting your agent workflows on their own task queue
 uv run python -m my_app.worker
 ```
 
 Open <http://localhost:8000> and create a session. `serve` accepts several registries and merges
 them (`serve one/agents.toml two/agents.toml`), so a single UI can list agents from more than one
-project. From the next release, `temporal-agent-kit dev ./agents.toml` runs steps 2 and 3 in
-one process, as the quickstart does.
+project.
 
 That registry is what lists the launchable agents:
 

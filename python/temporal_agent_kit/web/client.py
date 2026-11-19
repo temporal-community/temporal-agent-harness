@@ -1,9 +1,8 @@
-"""Temporal connection plumbing shared by the packaged server and worker entrypoints.
+"""Temporal connection plumbing for the packaged server and the Nexus agent adapter's worker.
 
-Both processes have to reach the *same* Temporal namespace with the *same* data converter, or
-the server can't read what the workers wrote. In the bundled examples this logic was duplicated
-in two launchers that could drift apart; here it lives once, so ``serve`` and
-``session-manager`` resolve their connection identically by construction.
+The server has to reach the *same* Temporal namespace as the agent workers, with the *same* data
+converter, or it can't read what the workers wrote. Both packaged processes resolve their
+connection here, from temporalio's standard client config.
 """
 
 from __future__ import annotations
@@ -51,9 +50,8 @@ def ensure_temporal_address(explicit_address: str | None) -> None:
 async def connect_client() -> "Client":
     """Connect a Temporal client carrying the harness plugin.
 
-    The plugin is where the shared data converter is DEFINED, so the session-manager worker, the
-    web server, and every agent worker can read each other's payloads only because they all add
-    it. Its default large-payload storage matches ``create_agent_kit_app``'s, keeping the
+    The plugin is where the shared data converter is DEFINED, so the web server and every agent
+    worker can read each other's payloads only because they all add it. Its default large-payload storage matches ``create_agent_kit_app``'s, keeping the
     packaged entrypoints mutually readable out of the box.
     """
     from temporalio.client import Client

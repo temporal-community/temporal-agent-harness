@@ -987,6 +987,9 @@
             {pendingLabel}
             onSelectSession={(sessionId) => run.selectSession(sessionId)}
             onRefreshSessions={() => run.refreshSessions()}
+            hasOlderSessions={run.sessionsNextPageToken !== null}
+            loadingOlderSessions={run.loadingOlderSessions}
+            onLoadOlderSessions={() => run.loadOlderSessions()}
             onEndSession={(sessionId) => run.endSession(sessionId)}
             onArchiveSession={(sessionId) => run.quiesce(sessionId)}
             onOpenSearch={() => openPalette("sessions")}

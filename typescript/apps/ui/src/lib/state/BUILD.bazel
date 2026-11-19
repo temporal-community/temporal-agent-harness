@@ -904,6 +904,15 @@ vitest_test(
 )
 
 vitest_test(
+    name = "sessionPaging_test",
+    src = "sessionPaging.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "statusNote_test",
     src = "statusNote.test.mjs",
     deps = [":replayLog"],

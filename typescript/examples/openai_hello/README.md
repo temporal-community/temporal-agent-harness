@@ -52,9 +52,9 @@ example; Bazel supplies its toolchains and dependencies.
 | `agents.test.ts` | The agent on a dev server against a scripted model (no network): a weather question gets a `get_weather` call and a streamed reply. |
 
 There is **no per-example client**: this agent is driven by the shared example stack — the packaged
-`SessionManagerWorkflow` worker plus the FastAPI app and web UI (`temporal-agent-kit serve`),
-which send messages and stream turns through Agent Kit's built-in `AgentClient`. Both come from
-the Python package; only the agent and its worker are TypeScript.
+FastAPI app and web UI (`temporal-agent-kit serve`), which send messages and stream turns through
+Agent Kit's built-in `AgentClient`. It comes from the Python package; only the agent and its
+worker are TypeScript.
 
 ## Run it
 
@@ -68,9 +68,8 @@ From `typescript/examples/openai_hello/`, run each command in its own terminal:
 
 ```sh
 just temporal          # 1. local Temporal dev server (or bring your own)
-just session-manager   # 2. packaged session-manager worker
-just server            # 3. builds the Svelte UI, then serves API + UI on http://localhost:8000
-just worker            # 4. the agent worker
+just server            # 2. builds the Svelte UI, then serves API + UI on http://localhost:8000
+just worker            # 3. the agent worker
 ```
 
 (If the UI build reports missing modules, run `just app-install` once. For UI hot-reloading,
@@ -83,7 +82,6 @@ Without `just`, the equivalent commands (from the repo root, with `.env.local`'s
 exported):
 
 ```sh
-bazel run //python/temporal_agent_kit/web:cli -- session-manager
 bazel run //python/temporal_agent_kit/web:cli -- serve "$PWD/typescript/examples/openai_hello/agents.toml" --host 0.0.0.0 --port 8000
 bazel run //typescript/examples/openai_hello:worker
 ```
@@ -116,8 +114,7 @@ and console. The normal example uses OpenAI. See
   This updates the generated schema and registry; review and commit the generated files.
 - For agent labels, descriptions, or queues, edit the `agent_kit_ts_agent` declaration in
   `BUILD.bazel` and run the same generator. Keep the worker's queue aligned with the registry.
-  The session manager caches its registry; see the quickstart's local-reset guidance before
-  replacing a running development registry.
+  Restart `just server` to serve the changed registry.
 
 For typed init data, state, Code Mode, subagents, and React/Svelte clients, continue with
 [the TypeScript guide](../../packages/core/README.md#what-next).

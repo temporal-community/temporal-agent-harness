@@ -22,7 +22,6 @@ def _agent_kit_dev_rule_impl(ctx):
         # Each example as its directory from the workspace root, where `bazel run` runs the CLI.
         "examples": [_example_dir(ctx, example) for example in ctx.attr.examples],
         "server": ctx.attr.server,
-        "session_manager": ctx.attr.session_manager,
         "workers": {_example_dir(ctx, example): _program(worker) for worker, example in ctx.attr.workers.items()},
     }))
 
@@ -58,22 +57,20 @@ _agent_kit_dev_rule = rule(
         "cli": attr.label(executable = True, cfg = "target"),
         "examples": attr.string_list(mandatory = True),
         "server": attr.bool(),
-        "session_manager": attr.bool(),
         "workers": attr.label_keyed_string_dict(cfg = "target"),
         "_runner": attr.label(default = "//bazel:dev_runner", executable = True, cfg = "target"),
     },
 )
 
-def _agent_kit_dev_impl(name, visibility, examples, cli, session_manager, server, workers):
-    if (session_manager or server) and not cli:
-        fail("agent_kit_dev: the session manager and server run `cli`")
+def _agent_kit_dev_impl(name, visibility, examples, cli, server, workers):
+    if server and not cli:
+        fail("agent_kit_dev: the server runs `cli`")
     _agent_kit_dev_rule(
         name = name,
         visibility = visibility,
         cli = cli,
         examples = examples,
         server = server,
-        session_manager = session_manager,
         workers = {"//%s/%s:worker" % (native.package_name(), example): example for example in examples} if workers else {},
     )
 
@@ -81,16 +78,14 @@ agent_kit_dev = macro(
     doc = """Runs examples' programs together: `bazel run <name> -- [example ...]`.
 
     For each example named at run time (its directory under this package, or that path's last
-    segment; none means all of `examples`), runs its `:worker` when `workers` is set, plus `cli`'s
-    session manager and `cli serve` over the chosen examples' agents.toml registries when
-    `session_manager` and `server` are set. Every output line carries its program's label, and
+    segment; none means all of `examples`), runs its `:worker` when `workers` is set, plus
+    `cli serve` over the chosen examples' agents.toml registries when `server` is set. Every output line carries its program's label, and
     Ctrl-C stops them all (bazel/dev_runner.py).
     """,
     implementation = _agent_kit_dev_impl,
     attrs = {
         "examples": attr.string_list(mandatory = True, configurable = False, doc = "Directories under this package that can be run."),
         "cli": attr.label(configurable = False, doc = "The temporal-agent-kit CLI, able to import every example's agents."),
-        "session_manager": attr.bool(configurable = False, doc = "Run `cli session-manager`."),
         "server": attr.bool(configurable = False, doc = "Run `cli serve` over the chosen examples' registries on :8000."),
         "workers": attr.bool(configurable = False, doc = "Run each chosen example's `:worker`."),
     },

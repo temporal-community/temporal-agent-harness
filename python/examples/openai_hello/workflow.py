@@ -7,7 +7,7 @@ OpenAI events into the turn-stream events an attached client sees. The tool is a
 Agent Kit tool adapted onto the SDK with ``as_openai_agent_tool``, so Agent Kit still owns
 approval and its ``tool_start`` / ``tool_end`` / ``tool_error`` events.
 
-Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is
+Run it with the shared example stack (the packaged FastAPI/UI server); this agent is
 registered in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
 """
 

@@ -38,7 +38,7 @@ const messageAccepted = (handler, payload, disposition = "opened") => ({
 
 /* One helper per surface, each landing on the value its own component reads:
    AgentChatPanel reads TranscriptItem.text, the replay log reads ReplayLogRow.body, and the
-   session list reads the string agentRun.svelte.ts stores as initial_user_message — which it
+   session list reads the string agentRun.svelte.ts stores as title — which it
    produces by calling renderUserMessage on the same frame fields. */
 function chatBubble(handler, payload) {
   const item = buildTranscript([messageAccepted(handler, payload)]).find((i) => i.kind === "user");

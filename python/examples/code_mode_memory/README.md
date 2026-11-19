@@ -97,7 +97,6 @@ Viewing files and the graph needs a Temporal server that runs standalone activit
 ```bash
 cp ../../.env.example ../../.env.local   # first time: Temporal connection + GEMINI_API_KEY
 just temporal          # local Temporal dev server (or bring your own)
-just session-manager
 just server            # UI on http://localhost:8000
 just worker
 ```

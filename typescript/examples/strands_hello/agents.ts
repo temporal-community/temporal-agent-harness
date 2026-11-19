@@ -15,7 +15,7 @@
 // A message sent while the agent is working steers it: `ask` joins the open turn and queues the
 // text with `runner.steer`, and Agent Kit hands it to the model with the next tool result.
 //
-// Run it with the shared example stack (session-manager worker + server/UI); this agent is
+// Run it with the shared example stack (the packaged server/UI); this agent is
 // registered in `agents.toml` and driven by the packaged web app. See README.md.
 
 import { z } from "zod";

@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from temporal_agent_kit.ui import packaged_ui_dist
-from temporal_agent_kit.utils.task_queue import task_queue_name
 from temporal_agent_kit.web.client import verify_temporal_reachable
 from temporal_agent_kit.web.registry import load_agent_registries
 
@@ -34,20 +33,12 @@ def create_app(*registry_paths: str | Path) -> "FastAPI":
     # Imported here rather than at module scope so that importing this module (e.g. to reach
     # ``create_app`` from a custom launcher) doesn't require FastAPI — it only arrives with the
     # ``ui`` extra.
-    from temporal_agent_kit.web import (
-        SESSION_MANAGER_ID,
-        SESSION_MANAGER_TASK_QUEUE,
-        create_agent_kit_app,
-    )
+    from temporal_agent_kit.web import create_agent_kit_app
 
     if not registry_paths:
         raise ValueError("create_app requires at least one registry path.")
     registry = load_agent_registries(registry_paths)
-    return create_agent_kit_app(
-        registry=registry,
-        manager_workflow_id=task_queue_name(SESSION_MANAGER_ID),
-        manager_task_queue=task_queue_name(SESSION_MANAGER_TASK_QUEUE),
-    )
+    return create_agent_kit_app(registry=registry)
 
 
 def warn_without_console() -> None:
@@ -87,8 +78,8 @@ def run_server(
 
     # Pre-flight the Temporal connection. The app connects inside its ASGI lifespan, where a
     # failure surfaces as a starlette traceback plus "Application startup failed" — and only
-    # after the port has been bound. Checking first means an unreachable server reports the same
-    # actionable message the session-manager entrypoint gives, before anything is listening.
+    # after the port has been bound. Checking first reports an unreachable server with
+    # ``connect_client``'s actionable message, before anything is listening.
     asyncio.run(verify_temporal_reachable())
 
     uvicorn.run(app, host=host, port=port)

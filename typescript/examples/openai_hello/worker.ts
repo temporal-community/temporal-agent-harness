@@ -42,7 +42,7 @@ const worker = await Worker.create({
   taskQueue: process.env.OPENAI_HELLO_TS_TASK_QUEUE || taskQueueName(TASK_QUEUE),
   workflowsPath: fileURLToPath(new URL("./agents.js", import.meta.url)),
   // Model activity timeouts are the workflow's own (agents.ts): a plugin's `modelParams` reach
-  // only the workflows a client carrying the plugin starts, and the session manager starts these.
+  // only the workflows a client carrying the plugin starts, and the packaged server starts these.
   // Agent Kit's plugin goes last, as in Python.
   plugins: [new OpenAIAgentsPlugin(), new AgentKitPlugin()],
 });

@@ -109,10 +109,11 @@ export interface AgentRegistryResponse {
 export interface Session {
   workflow_id: WorkflowId;
   created_at: UnixEpochSeconds;
+  /** The agent's label from the server's registry. */
   label: string;
   agent_workflow_type: AgentWorkflowType;
-  is_discovered?: boolean;
-  initial_user_message?: string | null;
+  /** The agent's title (by default its first message); null before it has one. */
+  title?: string | null;
   execution_status?: string | null;
   closed?: boolean;
   /** The Temporal Web UI's workflows page for the session's namespace, e.g.
@@ -121,7 +122,12 @@ export interface Session {
   temporal_workflows_url?: string | null;
 }
 
-export type SessionsResponse = Session[];
+/** One page of sessions, newest first. */
+export interface SessionsPage {
+  sessions: Session[];
+  /** Where the next, older page starts; null on the last page. */
+  next_page_token: string | null;
+}
 
 export interface WorkflowExecutionState {
   workflow_id: WorkflowId;

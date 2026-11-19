@@ -3,10 +3,9 @@
 #
 # Self-contained local stack (each in its own terminal):
 #   just temporal          # 1. local Temporal dev server (or bring your own)
-#   just session-manager   # 2. packaged session-manager worker
-#   just server            # 3. FastAPI API on :8000
-#   just worker            # 4. this example's worker (both agents)
-#   just studio            # 5. the studio UI on http://127.0.0.1:5173
+#   just server            # 2. FastAPI API on :8000
+#   just worker            # 3. this example's worker (both agents)
+#   just studio            # 4. the studio UI on http://127.0.0.1:5173
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
 # project's `examples` dependencies on first use. First-time setup: `cp .env.example .env.local`
@@ -34,10 +33,6 @@ config:
 temporal:
     temporal server start-dev
 
-# Run the packaged session-manager worker (`temporal-agent-kit session-manager`).
-session-manager:
-    bazel run //python/temporal_agent_kit/web:cli -- session-manager
-
 # Serve the harness API (and the generic console) on http://localhost:8000 for this registry.
 server:
     bazel run //python/temporal_agent_kit/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
@@ -58,8 +53,8 @@ studio:
 check-ui:
     bazel test //python/examples/agent_dag/ui:svelte_check_test
 
-# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
-# temporal`). Ctrl-C stops them all.
+# `server` and `worker` in one terminal, against a running Temporal (`just temporal`). Ctrl-C
+# stops them all.
 #
 # Run this example's local stack.
 dev:

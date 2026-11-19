@@ -194,5 +194,5 @@ def api_checks(api_url: str, timeout: float = 5) -> list[dict[str, Any]]:
                            "detail": worker.get("status", "availability not reported")})
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as error:
         # Do not echo response bodies, URLs, or connection configuration containing credentials.
-        checks.append({"check": "api", "ok": False, "detail": f"{type(error).__name__}: check the API and session-manager terminals"})
+        checks.append({"check": "api", "ok": False, "detail": f"{type(error).__name__}: check the API server terminal"})
     return checks

@@ -34,8 +34,10 @@ const json = (body: unknown, status = 200) =>
 const created: SessionSummary = {
   workflow_id: "agent-session-1",
   created_at: 0,
-  label: "Session 1",
-  agent_workflow_type: "TripAgent"
+  label: "Trip",
+  agent_workflow_type: "TripAgent",
+  execution_status: "RUNNING",
+  closed: false
 };
 
 test("startSession posts the workflow type and the init data", async () => {
@@ -82,9 +84,21 @@ test("a start the server rejects is an HttpError carrying its code", async () =>
   );
 });
 
-test("listSessions reads GET sessions", async () => {
-  const { calls, fetch } = stubFetch(json([created]));
-  const sessions = await new HttpTransport({ fetch }).listSessions();
-  assert.deepEqual(sessions, [created]);
-  assert.deepEqual(calls, [{ url: "api/sessions", method: "GET", body: undefined }]);
+test("listSessions reads a page of GET sessions", async () => {
+  const first = { sessions: [created], next_page_token: "t1" };
+  const last = { sessions: [], next_page_token: null };
+  const { calls, fetch } = stubFetch(json(first), json(last));
+  const transport = new HttpTransport({ fetch });
+  assert.deepEqual(await transport.listSessions(), first);
+  assert.deepEqual(await transport.listSessions({ pageSize: 50, pageToken: "t1" }), last);
+  assert.deepEqual(calls, [
+    { url: "api/sessions", method: "GET", body: undefined },
+    { url: "api/sessions?page_size=50&page_token=t1", method: "GET", body: undefined }
+  ]);
+});
+
+test("getSession reads GET sessions/{id}", async () => {
+  const { calls, fetch } = stubFetch(json(created));
+  assert.deepEqual(await new HttpTransport({ fetch }).getSession("slack:C1/1"), created);
+  assert.deepEqual(calls, [{ url: "api/sessions/slack%3AC1%2F1", method: "GET", body: undefined }]);
 });

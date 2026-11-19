@@ -8,7 +8,8 @@ shapes.
 Source of truth in the current server:
 
 - `temporal_agent_kit/web/app.py`: HTTP routes and SSE flattening.
-- `temporal_agent_kit/web/session_manager.py`: agent registry and session shapes.
+- `temporal_agent_kit/web/registry.py`: agent registry shapes.
+- `temporal_agent_kit/web/sessions.py`: session shapes, starting and listing.
 - `temporal_agent_kit/agent_protocol/events.py`: stream event payloads.
 - `temporal_agent_kit/agent_protocol/agent_interface.py`: status, accepted-message, and
   tool-approval shapes.
@@ -64,23 +65,38 @@ policy decision.
 
 ### `GET /api/sessions`
 
-Returns all sessions tracked by the session manager.
+Returns one page of sessions, newest first, from a Temporal visibility query: the
+top-level workflows of the registry's agent types on their registry task queues.
+Query parameters: `page_size` (default 100, at most 1000) and `page_token` (a
+previous page's `next_page_token`; an invalid one is a 400).
 
 ```ts
-type SessionsResponse = Session[]
+type SessionsPage = {
+  sessions: Session[]
+  next_page_token: string | null
+}
 
 type Session = {
   workflow_id: string
-  created_at: number
-  label: string
   agent_workflow_type: string
-  initial_user_message?: string | null
+  label: string
+  created_at: number
+  execution_status: string
+  closed: boolean
+  title: string | null
+  temporal_workflows_url?: string | null
 }
 ```
 
-`created_at` is epoch seconds. `initial_user_message` is the message that
-started the session (its first `message_accepted`), rendered for display when
-available.
+`next_page_token` is `null` on the last page. `label` is the agent's registry
+label. `created_at` is epoch seconds. `title` is the agent's title — by default
+its first message; `null` before it has one. The agent writes it to the
+workflow's memo under `agent_kit.title`.
+
+### `GET /api/sessions/{session_id}`
+
+Returns one `Session`, for a session that is not on a loaded page. 404 when
+`session_id` is not a session of this server's registry.
 
 ### `POST /api/sessions`
 
@@ -89,15 +105,20 @@ Creates a session for one agent type.
 ```ts
 type CreateSessionRequest = {
   agent_workflow_type: string
+  session_id?: string
+  data?: Record<string, unknown>
 }
 
 type CreateSessionResponse = Session
 ```
 
 `agent_workflow_type` must be one of the `workflow_type` values returned by
-`GET /api/agents`.
+`GET /api/agents`; an unknown one is a 422. The server starts the agent's
+workflow directly on its registry task queue. With `session_id`, creation is
+idempotent while that session runs; a closed session's id starts a new run, and
+an id naming a running workflow that is not a session of this server is a 409.
 
-Session deletion is not currently exposed by the shared session-manager API.
+Session deletion is not currently exposed by the server's API.
 The UI keeps the delete action disabled until the backend grows a terminate
 route.
 

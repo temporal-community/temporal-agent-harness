@@ -56,13 +56,11 @@ connection profile). Then, each in its own terminal:
 
 ```sh
 just temporal          # 1. local Temporal dev server (or bring your own)
-just session-manager   # 2. packaged session-manager worker
-just server            # 3. builds the Svelte UI, then serves API + UI on http://localhost:8000
-just worker            # 4. the agent worker
+just server            # 2. builds the Svelte UI, then serves API + UI on http://localhost:8000
+just worker            # 3. the agent worker
 ```
 
-Or `just dev` runs the session manager, server and worker in one terminal against a running
-Temporal.
+Or `just dev` runs the server and worker in one terminal against a running Temporal.
 
 Open http://localhost:8000, pick **Strands Hello (TypeScript)**, and try:
 

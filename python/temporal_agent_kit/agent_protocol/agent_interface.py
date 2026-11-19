@@ -31,6 +31,16 @@ PROVIDE_CALLBACK_RESULT_UPDATE = "provide_callback_result"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
 
+# Every memo key the Agent Kit writes starts with this, so an agent's own memo keys never collide
+# with the Kit's, whatever the Kit adds later.
+AGENT_KIT_MEMO_PREFIX = "agent_kit."
+# The agent's title, at most ``TITLE_MAX_CHARS`` characters. A session list reads it from
+# visibility, so it can title every session without opening any session's history. Until
+# something sets it, an agent titles itself with its first admitted message
+# (:func:`title_from_message`).
+TITLE_MEMO = f"{AGENT_KIT_MEMO_PREFIX}title"
+TITLE_MAX_CHARS = 100
+
 # Width (hex chars) of ONE segment of an agent's short id. A top-level agent's id is a single
 # segment; a subagent's id is its parent's id plus one fresh segment, joined by ``-`` (see
 # ``AGENT_ID`` and ``AgentWorkflowRunner.start_subagent``) — short and cheap for a model to
@@ -766,6 +776,25 @@ class AgentMessage(BaseModel):
 
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+def title_from_message(message: AgentMessage) -> str:
+    """``message`` as a one-line title, at most ``TITLE_MAX_CHARS``: an agent's default title.
+
+    Handler names and payload shapes are agent-specific, so this stays generic: the payload's
+    string field when it is the only field (the common chat shape, whatever the field is called),
+    the handler name for an empty payload, and otherwise the handler name with the payload's
+    fields as ``key=repr``, sorted by key.
+    """
+    payload = message.payload
+    if not payload:
+        title = message.type
+    elif len(payload) == 1 and isinstance(only := next(iter(payload.values())), str):
+        title = only
+    else:
+        fields = ", ".join(f"{key}={payload[key]!r}" for key in sorted(payload))
+        title = f"{message.type}({fields})"
+    return title[:TITLE_MAX_CHARS]
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 #
 # Three separate Temporal namespaces, each with its own worker, so Nexus is actually brokering
 # real namespace boundaries rather than everything living in one namespace:
-#   default            the agent (this example's worker, session-manager, FastAPI/UI)
+#   default            the agent (this example's worker, FastAPI/UI)
 #   gateway             the durable tools gateway (ToolRegistryWorkflow + its worker)
 #   nexus-mcp-server   the demo native Nexus tool service (nexus_tool_service.py)
 #
@@ -22,9 +22,8 @@
 #   just nexus-tool-service   # 5. the demo native Nexus tool service, on "nexus-mcp-server"
 #   just register-third-party # 6. ONE-SHOT: tags demo under agent_id "NexusHelloAgent"
 #                             #    (needs tool-server up -- the gateway fetches its tools)
-#   just session-manager      # 7. packaged session-manager worker
-#   just server               # 8. FastAPI API + UI on :8000
-#   just worker               # 9. this example's agent worker, on "default"
+#   just server               # 7. FastAPI API + UI on :8000
+#   just worker               # 8. this example's agent worker, on "default"
 #
 # Open the UI and start chatting. All three tools are available.
 #
@@ -153,10 +152,6 @@ register-third-party:
         --input '"{{agent_id}}"' \
         --input '"demo"' \
         --input '"http://127.0.0.1:8765/mcp"'
-
-# Run the packaged session-manager worker (`temporal-agent-kit session-manager`).
-session-manager:
-    bazel run //python/temporal_agent_kit/web:cli -- session-manager
 
 # Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
 server:

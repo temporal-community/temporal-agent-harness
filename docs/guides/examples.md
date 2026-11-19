@@ -50,15 +50,14 @@ conversational Code Mode travel agent + a subagent variant) is the best starting
 ```bash
 cd python/examples/monty
 just temporal          # local Temporal dev server; skip if you bring your own
-just session-manager   # worker hosting the packaged SessionManagerWorkflow
 just server            # serves the Svelte UI + /api on :8000 (this example's agents only)
 just worker            # this example's agent worker
 ```
 
 Open <http://localhost:8000> and pick an agent. Every example follows the same recipe set
-(`temporal` / `session-manager` / `server` / `worker`, plus `client` where noted). `just server`
-builds the UI from `typescript/apps/ui/` with the Node and pnpm Bazel pins, so a change there
-shows up on the next `just server`.
+(`temporal` / `server` / `worker`, plus `client` where noted). `just server` builds the UI from
+`typescript/apps/ui/` with the Node and pnpm Bazel pins, so a change there shows up on the next
+`just server`.
 
 ### All examples behind one UI
 
@@ -66,8 +65,8 @@ The **root** justfile runs every example agent at once so the UI lists them all.
 each in its own terminal:
 
 ```bash
-just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
-just dev               # starts the session manager, the server, and all eight workers in one terminal; Ctrl-C stops them all
+just temporal          # local Temporal dev server; skip if you bring your own
+just dev               # starts the server and all eight workers in one terminal; Ctrl-C stops them all
 ```
 
 
@@ -75,7 +74,7 @@ just dev               # starts the session manager, the server, and all eight w
 `monty` or `auto_mode`) to run only those: `just dev monty auto_mode` serves just their agents and
 starts just their workers, and `just workers tictactoe` adds one more worker beside a running
 stack. From an example's own directory, `just dev` does the same for that example. Switching the
-set of agents you serve is a registry change, so `just reset-manager` first (see the gotcha below).
+set of agents you serve takes effect when the server restarts.
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
 
@@ -89,9 +88,5 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](../../python/examples/code_mode_memory/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](../../python/examples/agent_dag/README.md)); best in its own UI, **`just agent-dag-studio`** |
 
-**Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
-workflow with the registry on first start and reuses the existing one after that. So when you switch
-between a single-example server and the all-agents server (or change the set), run
-`just reset-manager` before the next `just server`, or start a fresh Temporal dev server. Also: an
-agent whose worker isn't running will accept a created session but never progress (it parks) — start
-its worker.
+An agent whose worker isn't running will accept a created session but never progress (it parks) —
+start its worker.

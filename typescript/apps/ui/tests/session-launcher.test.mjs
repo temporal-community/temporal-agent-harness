@@ -137,7 +137,7 @@ describe("the session anchor in the app chrome", () => {
       workflow_id: "wf-1",
       created_at: 1_790_000_000,
       agent_workflow_type: "PydanticAIHelloAgent",
-      initial_user_message: "What is the **weather** in Paris?"
+      title: "What is the **weather** in Paris?"
     };
     const anchor = (agents) => {
       const body = stripComments(

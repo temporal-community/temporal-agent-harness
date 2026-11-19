@@ -50,7 +50,7 @@ Run each command in its own terminal, all from this project directory:
 temporal server start-dev
 ```
 
-**Terminal 2 — shared session manager, API, and Agent Kit console:**
+**Terminal 2 — shared API and Agent Kit console:**
 
 ```bash
 npm run agent-kit:dev
@@ -62,7 +62,7 @@ npm run agent-kit:dev
 npm start
 ```
 
-**The API, console, and session manager come from the Python package.** `agent-kit:dev` runs them
+**The API and console come from the Python package.** `agent-kit:dev` runs them
 with `uvx` in one process; no Python project of your own is needed, and the console is prebuilt.
 Your agent worker runs in Node. The Python version is pinned in `package.json`.
 

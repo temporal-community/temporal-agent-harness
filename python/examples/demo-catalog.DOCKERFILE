@@ -2,20 +2,19 @@
 # examples locally (see the README); built from the repo root:
 #   docker build -f python/examples/demo-catalog.DOCKERFILE .
 #
-# One image for every harness process: the session manager, `cli serve`, each example's worker,
-# and the agent_dag studio page. The repo builds with Bazel, so this builds the targets once and
+# One image for every harness process: `cli serve`, each example's worker, and the agent_dag
+# studio page. The repo builds with Bazel, so this builds the targets once and
 # records each `bazel run` as a script under /app/bin (`--script_path`), which runs it later
 # without Bazel. The scripts point into Bazel's output base, so this stays a single stage. Pick a
 # program with the component's command, e.g.
 #   /app/bin/cli serve <agents.toml ...> --host 0.0.0.0 --port 8000
-#   /app/bin/cli session-manager
 #   /app/bin/py-openai_hello-worker
 #
 # Each deployment sets these, the same in every component:
 #   TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY   the Temporal connection
-#   TASK_QUEUE_PREFIX   puts every worker's queue, the server's routing to them, and the session
-#                       manager's workflow id and queue under one prefix. A crashable workspace
-#                       sets it with `crashable.taskQueueEnv: TASK_QUEUE_PREFIX`.
+#   TASK_QUEUE_PREFIX   puts every worker's queue, and the server's routing to and listing of
+#                       them, under one prefix. A crashable workspace sets it with
+#                       `crashable.taskQueueEnv: TASK_QUEUE_PREFIX`.
 # and per component:
 #   BASE_PATH        agent-dag-studio: serve the page under this path prefix (the catalog's
 #                    ingress does not strip it)

@@ -18,9 +18,8 @@ Env vars:
     TASK_QUEUE_PREFIX            put in front of the default queue's name, if set
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
-agents) — not the session manager. The packaged session manager is hosted by
-`temporal-agent-kit session-manager`; because it launches agents by registered name,
-it dispatches these agents to this queue without this worker hosting it.
+agents). The packaged server (`temporal-agent-kit serve`) starts agents by workflow type
+on their registered queues, so it dispatches these agents to this queue without hosting them.
 """
 
 from __future__ import annotations
@@ -89,8 +88,7 @@ async def main() -> None:
     # All three Monty agents run here: the script-only MontyDynamicAgent, the inline
     # conversational MontyChatAgent, and the subagent-driven MontyChatSubagentAgent (which
     # drives MontyDynamicAgent as a subagent — so the child runs on this same queue). The
-    # session manager is hosted by its own worker, not here; it dispatches these agents
-    # to this queue by name.
+    # packaged server starts these agents on this queue by workflow type.
     #
     # No `activities=` at all: a client plugin is applied to the workers built from that
     # client, so both plugins register their own activities here.

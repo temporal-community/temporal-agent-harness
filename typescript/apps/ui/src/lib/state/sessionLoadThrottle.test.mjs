@@ -13,7 +13,7 @@ describe("session list loads", () => {
       async listSessions() {
         calls += 1;
         await new Promise((resolve) => setTimeout(resolve, 20));
-        return [];
+        return { sessions: [], next_page_token: null };
       }
     });
 

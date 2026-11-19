@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from temporal_agent_kit.web.session_manager import AgentRegistry, AgentStart
+from temporal_agent_kit.web.registry import AgentRegistry, AgentStart
 
 
 class InvalidStartData(ValueError):

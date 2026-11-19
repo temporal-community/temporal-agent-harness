@@ -133,14 +133,14 @@ covers the complete compatible dependency set. No repository checkout is require
 flowchart LR
     UI[Agent Kit console or your application] --> API[Shared Python HTTP API]
     API --> T[Temporal service]
-    M[Python session-manager worker] <--> T
     W[Your Python or TypeScript agent worker] <--> T
 ```
 
-**The shared API, UI server, and session manager currently come from the Python package.**
-`temporal-agent-kit dev agents.toml` runs the API server and the session manager in one
-process, so local development is three processes: Temporal, `dev`, and your agent worker.
-TypeScript users run `dev` with `uvx` without creating a Python project. The npm SDK runs
+**The shared API and UI server currently come from the Python package.**
+`temporal-agent-kit serve agents.toml` runs the API server, which starts sessions as agent
+workflows and lists them from Temporal visibility, so local development is three processes:
+Temporal, `serve`, and your agent worker. TypeScript users run `serve` with `uvx` without creating
+a Python project. The npm SDK runs
 TypeScript agents; it does not yet include a Node.js Agent Kit server.
 
 The Agent Kit console is at **localhost:8000**. Temporal's own workflow UI is at **localhost:8233**

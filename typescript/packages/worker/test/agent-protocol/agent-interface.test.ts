@@ -6,8 +6,12 @@ import { describe, it } from "node:test";
 import fc from "fast-check";
 import {
   AgentConfigSchema,
+  AGENT_KIT_MEMO_PREFIX,
   AutoApprovalCriteria,
+  TITLE_MAX_CHARS,
+  TITLE_MEMO,
   ToolApprovalPolicy,
+  titleFromMessage,
 } from "@temporalio/agent-kit/agent-protocol";
 
 const TRUE_VALUES = [
@@ -176,5 +180,32 @@ describe("AgentConfig", () => {
     );
     assert.equal(config.auto_approval_criteria?.min_confidence, 0.7);
     assert.equal(config.auto_approval_criteria?.escalate_if_irreversible_above, 0);
+  });
+});
+
+// The same cases as python/tests/test_title_from_message.py: both SDKs title a session alike.
+describe("titleFromMessage", () => {
+  for (const [type, payload, title] of [
+    ["ask", { text: "Seven Nation Army" }, "Seven Nation Army"],
+    ["reset", {}, "reset"],
+    ["play", { cell: 5 }, "play(cell=5)"],
+    ["set", { b: "it's", a: [1, null, true] }, `set(a=[1, None, True], b="it's")`],
+  ] as const) {
+    it(`renders ${type} as one line`, () => {
+      assert.equal(titleFromMessage({ type, payload }), title);
+    });
+  }
+
+  it("cuts a long message to the limit, by character", () => {
+    const text = "🌊".repeat(TITLE_MAX_CHARS + 5);
+    assert.equal(
+      titleFromMessage({ type: "ask", payload: { text } }),
+      "🌊".repeat(TITLE_MAX_CHARS),
+    );
+  });
+
+  it("is written under the kit's own memo prefix, as Python writes it", () => {
+    assert.equal(TITLE_MEMO, "agent_kit.title");
+    assert.ok(TITLE_MEMO.startsWith(AGENT_KIT_MEMO_PREFIX));
   });
 });

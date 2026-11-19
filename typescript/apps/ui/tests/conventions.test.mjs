@@ -102,7 +102,7 @@ const OWN_BOX = /(?:^|;)\s*(?:height|border(?:-width|-color)?|box-shadow|outline
 
 /* Fields that carry prose an agent, a model or a person wrote, so they may hold markdown. In markup
    each is drawn by MarkdownMessage (`text={…}`) or read through markdownToText, never raw. */
-const PROSE_FIELD = /\.(?:description|reason|question|preview|initial_user_message)\b|\bthought\.text\b/;
+const PROSE_FIELD = /\.(?:description|reason|question|preview)\b|\b(?:session|item)\.title\b|\bthought\.text\b/;
 const MARKUP_EXPRESSION = /(\b[\w-]+=)?\{([^{}]*)\}/g;
 const markupOf = (text) => text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, "");
 

@@ -126,7 +126,7 @@ describe("approval routing", () => {
     approveCalls = [];
     const api = {
       async listSessions() {
-        return [];
+        return { sessions: [], next_page_token: null };
       },
       async agentInterface() {
         return [];

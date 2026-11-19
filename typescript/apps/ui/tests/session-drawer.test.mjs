@@ -104,7 +104,7 @@ describe("Session Manager rows", () => {
     workflow_id: id,
     agent_workflow_type: "Hello",
     created_at: Date.now() / 1000 - 120,
-    initial_user_message: `Title ${id}`,
+    title: `Title ${id}`,
     ...extra
   });
   const pane = (props) =>
@@ -128,7 +128,7 @@ describe("Session Manager rows", () => {
     assert.match(controls, /new MediaQuery\("pointer: coarse"\)/);
     assert.match(
       controls,
-      /estimateSize: \(index\) =>\s*entries\[index\]\?\.kind === "heading" \|\| entries\[index\]\?\.kind === "archive"\s*\? SESSION_HEADING_HEIGHT\s*: coarsePointer\.current \? SESSION_ROW_HEIGHT\.coarse : SESSION_ROW_HEIGHT\.fine/
+      /estimateSize: \(index\) =>\s*entries\[index\]\?\.kind === "heading" \|\| entries\[index\]\?\.kind === "archive" \|\| entries\[index\]\?\.kind === "older"\s*\? SESSION_HEADING_HEIGHT\s*: coarsePointer\.current \? SESSION_ROW_HEIGHT\.coarse : SESSION_ROW_HEIGHT\.fine/
     );
     const row = rule(".session-row");
     assert.match(row, /min-height: var\(--session-row-height\);/);
@@ -223,7 +223,7 @@ describe("Session Manager rows", () => {
     const title = `${"顧客データ ".repeat(50)}<b>end</b>`;
     const agents = [{ workflow_type: "MontyConversationAgent", label: "Monty" }];
     const body = pane({
-      sessions: [session("wf-a", { created_at: 1_790_000_000, closed: true, execution_status: "TIMED_OUT", initial_user_message: title, agent_workflow_type: "MontyConversationAgent" })],
+      sessions: [session("wf-a", { created_at: 1_790_000_000, closed: true, execution_status: "TIMED_OUT", title: title, agent_workflow_type: "MontyConversationAgent" })],
       agents,
       sessionId: ""
     });
@@ -371,7 +371,7 @@ describe("Session Manager rows", () => {
   });
 
   it("mutes the Untitled session fallback so it doesn't read as a real title", () => {
-    const body = pane({ sessions: [session("wf-none", { initial_user_message: null, label: "" }), session("wf-real")], sessionId: "" });
+    const body = pane({ sessions: [session("wf-none", { title: null, label: "" }), session("wf-real")], sessionId: "" });
     assert.match(rowOf(body, "wf-none"), /class="session-title fade-end untitled[^"]*" dir="auto">Untitled session</);
     assert.doesNotMatch(rowOf(body, "wf-real"), /untitled/);
     assert.match(rule(".session-title.untitled"), /color: var\(--text-3\);/);
@@ -576,21 +576,25 @@ describe("Session Manager rows", () => {
     toggleArchivedSession("wf-unlisted");
     assert.deepEqual(toggleArchivedSession("wf-y"), ["wf-y", "wf-unlisted", "wf-x", "wf-new", "wf-1"], "no list, no pruning");
 
-    /* Only a list the server sent, with no error, under the discovery limit, is whole. */
-    assert.match(controls, /if \(!sessionsLoaded \|\| sessionsError\) return undefined;/);
-    assert.match(controls, /session\.is_discovered\)\.length >= DISCOVERY_LIMIT\) return undefined;/);
+    /* Only a list the server sent, with no error, down to its oldest page, is whole. */
+    assert.match(controls, /if \(!sessionsLoaded \|\| sessionsError \|\| hasOlderSessions\) return undefined;/);
     assert.match(controls, /toggleArchivedSession\(workflowId, wholeList\(\)\)/);
     assert.match(appSource, /sessionsLoaded=\{run\.sessionsLoaded\}/);
     storage.local.clear();
   });
 
-  it("drops the agent label from sight when one agent is listed or one is filtered", () => {
+  it("offers older sessions below the list only while the server has more", () => {
+    const more = pane({ sessions: [session("wf-a")], sessionId: "", hasOlderSessions: true });
+    assert.match(more, /<button type="button" class="group-heading load-older[^"]*"[^>]*>\s*Load older sessions\s*<\/button>/);
+    const loading = pane({ sessions: [session("wf-a")], sessionId: "", hasOlderSessions: true, loadingOlderSessions: true });
+    assert.match(loading, /class="group-heading load-older[^"]*" disabled[^>]*>\s*Loading older sessions…/);
+    assert.doesNotMatch(pane({ sessions: [session("wf-a")], sessionId: "" }), /load-older/);
+  });
+
+  it("shows every row's agent, even when the list is one agent's sessions", () => {
     const single = pane({ sessions: [session("wf-a"), session("wf-b")], sessionId: "" });
-    assert.match(single, /class="session-agent visually-hidden[^"]*" dir="auto">Hello</);
-    const mixed = pane({ sessions: [session("wf-a"), session("wf-b", { agent_workflow_type: "Other" })], sessionId: "" });
-    assert.match(mixed, /class="session-agent[^"]*" dir="auto">Hello</);
-    assert.doesNotMatch(mixed, /session-agent visually-hidden/);
-    assert.match(controls, /const showAgent = \$derived\(chosenAgents\.length !== 1 && agentOptions\.length > 1\);/);
+    assert.match(single, /class="session-agent fade-end[^"]*" dir="auto">Hello</);
+    assert.doesNotMatch(single, /session-agent visually-hidden/);
     assert.match(single, /class="session-title[^"]*" dir="auto">Title wf-a</);
   });
 
@@ -679,13 +683,13 @@ describe("Session Manager rows", () => {
    worker is different: the workflow is there and only slow, so it keeps its "still
    connecting" state. Only a definitive NotFound makes a session gone. */
 describe("a session whose workflow is gone", () => {
-  const live = (id) => ({ workflow_id: id, agent_workflow_type: "Hello", created_at: Date.now() / 1000 - 60, initial_user_message: `Title ${id}`, execution_status: "RUNNING", closed: false });
+  const live = (id) => ({ workflow_id: id, agent_workflow_type: "Hello", created_at: Date.now() / 1000 - 60, title: `Title ${id}`, execution_status: "RUNNING", closed: false });
 
   function boot({ status, agentStatus }) {
     const calls = { attach: 0, agentStatus: 0 };
     const api = {
       async listAgents() { return { agents: [] }; },
-      async listSessions() { return []; },
+      async listSessions() { return { sessions: [], next_page_token: null }; },
       async agentInterface() { return []; },
       async agentStatus() {
         calls.agentStatus += 1;

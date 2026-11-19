@@ -25,7 +25,7 @@ durable workflow does the reasoning, and the shim runs the agent's tool calls on
 
 Two frontends watch the **same** durable workflow: the OpenCode TUI (via the shim) and the
 packaged **Svelte UI** on :8000 (great for visibility/debuggability). The shim reaches the agent
-through the packaged HTTP server, so every session goes through the session-manager and shows up
+through the packaged HTTP server, so every session goes through the packaged server and shows up
 in the Svelte UI.
 
 ## Approvals
@@ -48,9 +48,8 @@ phase isn't throttled by approving one thing at a time.
 | `opencode_shim/` | The OpenCode-protocol server. `agent_kit_backend.py` fronts the workflow; `local_tools.py` executes the callback tools on your disk; `backend.py` defines the `AgentBackend` protocol + the `AgentTurn` seam. |
 | `justfile` | Recipes for the local stack. |
 
-The web server and session-manager worker are **shared across examples** — `just server` points
-the packaged `temporal-agent-kit serve` at this example's `agents.toml`, and
-`just session-manager` runs the packaged `temporal-agent-kit session-manager`.
+The web server is **shared across examples** — `just server` points the packaged
+`temporal-agent-kit serve` at this example's `agents.toml`.
 
 ## Setup
 
@@ -68,10 +67,9 @@ Each in its own terminal, from **this directory** (`examples/callback_tools/codi
 
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
-just session-manager   # 2. session-manager worker
-just server            # 3. packaged FastAPI API + Svelte UI on http://localhost:8000
-just worker            # 4. the CodingAgent worker
-just serve ~/some/proj # 5. the OpenCode shim; pass the project the agent should work on
+just server            # 2. packaged FastAPI API + Svelte UI on http://localhost:8000
+just worker            # 3. the CodingAgent worker
+just serve ~/some/proj # 4. the OpenCode shim; pass the project the agent should work on
 ```
 
 The project dir comes first; a relative path (e.g. `./TestProject`) resolves against the directory
@@ -127,9 +125,9 @@ no `write` prompt) so you see a diff of what will be written.
 - The tools are ordinary Agent Kit tools, so they go through the **same tool path** as any other:
   `run_tool` → the tool-approval policy (here: gate everything) → `tool_start` →
   `callback_requested` → the shim's result → `tool_end`.
-- The shim uses only the packaged HTTP server: `POST /api/sessions` (create the durable session
-  via the session-manager), `POST /api/chat` (send + stream a turn), `POST /api/approve` (relay
-  the OpenCode permission decision), `POST /api/callback-result` (return each tool's result), and
+- The shim uses only the packaged HTTP server: `POST /api/sessions` (create the durable session,
+  started as the `CodingAgent` workflow), `POST /api/chat` (send + stream a turn),
+  `POST /api/approve` (relay the OpenCode permission decision), `POST /api/callback-result` (return each tool's result), and
   `POST /api/sessions/{id}/close` (abort).
 - A callback result is validated against the tool's declared return type before it resolves the
   call, and the submission is idempotent — see `temporal_agent_kit` and the tests in

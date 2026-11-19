@@ -38,9 +38,9 @@ with workflow.unsafe.imports_passed_through():
     from examples.monty.models import RunScript
 
 
-# The agent's own task queue. The (agent-agnostic) session manager launches this agent by
-# its registered defn name on whichever queue the caller specifies — so this agent runs
-# under its true name on its own queue; no masquerading as another agent.
+# The agent's own task queue. The (agent-agnostic) packaged server starts this agent by its
+# registered defn name on the queue its registry entry names — so this agent runs under its
+# true name on its own queue; no masquerading as another agent.
 TASK_QUEUE = "monty-dynamic-agent"
 
 

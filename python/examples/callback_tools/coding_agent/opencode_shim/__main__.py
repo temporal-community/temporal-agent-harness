@@ -3,8 +3,8 @@
 From this example's directory, `just serve` is the easy path.
 
 The shim fronts the durable `CodingAgent` workflow via the packaged Agent Kit server (`--server`,
-default http://localhost:8000). That server + the session-manager + the CodingAgent worker must be
-running (see the justfile). `working_dir` is the project the agent works on (defaults to the
+default http://localhost:8000). That server + the CodingAgent worker must be running (see the
+justfile). `working_dir` is the project the agent works on (defaults to the
 current directory).
 """
 

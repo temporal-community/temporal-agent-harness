@@ -12,7 +12,7 @@ python/               # the Python SDK as a uv project (pyproject.toml, uv.lock)
 │   ├── harness/      # the core harness: agent contract, turn runner, tools, Code Mode,
 │   │                 #   the agent/subagent protocol, human-in-the-loop approvals
 │   ├── ai_sdks/      # AI SDK integrations (Gemini today) — durable activity wrappers
-│   ├── web/          # packaged session-manager workflow + FastAPI app factory
+│   ├── web/          # agent registry, CLI + FastAPI app factory
 │   └── utils/        # general Temporal utilities (e.g. large-payload offload)
 ├── examples/
 │   ├── monty/          # a travel-booking agent example with packaged web/UI wiring
@@ -44,7 +44,6 @@ Local stack recipes delegate into `python/examples/monty`:
 
 ```bash
 just temporal          # local Temporal dev server
-just session-manager   # packaged session-manager worker
 just server            # the UI + FastAPI API on http://localhost:8000
 just monty-worker      # Monty agent worker
 just ui-dev            # Vite hot reload on http://127.0.0.1:5173
@@ -104,7 +103,7 @@ just package       # bazel test //python/... //typescript/apps/ui/..., then baze
 The wheel and sdist include:
 
 - the core harness package
-- `temporal_agent_kit.web` with the FastAPI app factory and session-manager worker helper
+- `temporal_agent_kit.web` with the FastAPI app factory and the agent registry loader
 - `temporal_agent_kit.ui/dist` with the built Svelte UI assets
 - the `ui` extra, which pulls in `fastapi[standard]`
 
@@ -172,11 +171,10 @@ bazel run //typescript/packages/worker/test/replay:histories_update  # re-record
   from the workspace root, so repo-relative paths (`.env.local`'s `TEMPORAL_CONFIG_FILE`,
   `agents.toml`) resolve as they do for the justfiles' recipes.
 - **Running the examples.** The justfiles' run recipes call `bazel run` (loading `.env.local`
-  first). The session manager and `serve` are `//python/temporal_agent_kit/web:cli`, which
-  imports no agent code. `//python/examples:dev`, `:workers`, and `:server` are `agent_kit_dev`
-  targets (`bazel/dev.bzl`): `bazel run //python/examples:dev -- monty wiki_agent` runs the
-  session manager, the server over those examples' registries, and their workers, every example
-  when none are named.
+  first). `serve` is `//python/temporal_agent_kit/web:cli`, which imports no agent code.
+  `//python/examples:dev`, `:workers`, and `:server` are `agent_kit_dev` targets
+  (`bazel/dev.bzl`): `bazel run //python/examples:dev -- monty wiki_agent` runs the server over
+  those examples' registries and their workers, every example when none are named.
   `bazel/dev_runner.py` starts them with the environment `bazel run` would give each, prefixes
   every output line with the program's name, and forwards Ctrl-C to all of them. The root
   `server`, `workers`, and `dev` recipes run these targets. Bazel holds its lock only while

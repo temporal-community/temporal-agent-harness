@@ -67,9 +67,8 @@ Each command in its own terminal, all from this directory:
 
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
-just session-manager   # 2. session-manager worker
-just server            # 3. FastAPI API + built Svelte UI  ->  http://localhost:8000
-just worker            # 4. the tic-tac-toe agent
+just server            # 2. FastAPI API + built Svelte UI  ->  http://localhost:8000
+just worker            # 3. the tic-tac-toe agent
 ```
 
 Open <http://localhost:8000>, start a **Tic-Tac-Toe (TypeSafe)** session, send `new_game`

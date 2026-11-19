@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tomllib
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -13,7 +14,46 @@ from pydantic.json_schema import SkipJsonSchema
 
 from temporal_agent_kit.agent_schema import agent_init_data_schema_from_document
 from temporal_agent_kit.utils.task_queue import task_queue_name
-from temporal_agent_kit.web.session_manager import AgentDescriptor, AgentRegistry, AgentStart
+
+
+@dataclass
+class AgentStart:
+    """What an agent takes to start, after its config: its ``@agent.init`` init data."""
+
+    # {"required": bool, "schema": {...}}: the init data's JSON Schema, self-contained for a form
+    # (agent_init_data_schema). ``None`` when the agent takes no init data.
+    init_data: dict[str, Any] | None = None
+
+
+@dataclass
+class AgentDescriptor:
+    """One launchable agent in the server's registry."""
+
+    key: str
+    workflow_type: str
+    task_queue: str
+    label: str
+    description: str
+    # The agent's start interface, read from its generated schema document (the registry's
+    # ``schema``). ``None`` when the registry does not say; the agent still validates its start.
+    start: AgentStart | None = None
+
+
+@dataclass
+class AgentRegistry:
+    """The agents a server launches and lists sessions of."""
+
+    agents: list[AgentDescriptor] = field(default_factory=list)
+
+    def by_workflow_type(self, workflow_type: str) -> AgentDescriptor | None:
+        return next(
+            (agent for agent in self.agents if agent.workflow_type == workflow_type),
+            None,
+        )
+
+    def by_key(self, key: str) -> AgentDescriptor | None:
+        return next((agent for agent in self.agents if agent.key == key), None)
+
 
 _Required = Annotated[str, StringConstraints(min_length=1)]
 

@@ -77,8 +77,8 @@ Ask it a question and it chains tools to find the answer:
 | `client.py` | A terminal client: a session picker that shows which sessions are **waiting on an `ask_user`**, then lets you answer open questions, chat, or create a session — all over HTTP. |
 | `agents.toml`, `ReactAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
-The agent is driven by the shared example stack — the packaged `SessionManagerWorkflow` worker plus
-the FastAPI app and web UI (`temporal-agent-kit serve`); registering it (its `agent_kit_agent` in `BUILD.bazel`, which generates `agents.toml`) is all that takes.
+The agent is driven by the shared example stack — the packaged FastAPI app and web UI
+(`temporal-agent-kit serve`); registering it (its `agent_kit_agent` in `BUILD.bazel`, which generates `agents.toml`) is all that takes.
 Unlike the simpler examples, it **also ships a terminal `client.py`** — needed to answer `ask_user`,
 since the packaged web UI has no affordance for fulfilling a callback tool.
 
@@ -124,10 +124,9 @@ Then, each in its own terminal:
 
 ```sh
 just temporal          # 1. local Temporal dev server (or bring your own)
-just session-manager   # 2. packaged session-manager worker
-just server            # 3. builds the Svelte UI, then serves API + UI on http://localhost:8000
-just worker            # 4. the agent worker
-just client            # 5. terminal client that chats + answers ask_user
+just server            # 2. builds the Svelte UI, then serves API + UI on http://localhost:8000
+just worker            # 3. the agent worker
+just client            # 4. terminal client that chats + answers ask_user
 ```
 
 `just server` builds the web UI first, so it needs `pnpm` on your PATH. (If the build reports
@@ -159,7 +158,6 @@ exits.
 Without `just`, the equivalent commands (from the repo root):
 
 ```sh
-uv run --group examples temporal-agent-kit session-manager
 uv run --group examples temporal-agent-kit serve examples/react_agent/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.react_agent.worker
 uv run --group examples python -m examples.react_agent.client

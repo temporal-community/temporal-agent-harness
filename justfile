@@ -56,12 +56,8 @@ buildifier:
 # ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
 
 # Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
-# Start this fresh, or run `just reset-manager` before `server`, so the merged registry takes effect.
 temporal:
     temporal server start-dev
-
-# Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
-session-manager: (_run "//python/temporal_agent_kit/web:cli" "session-manager")
 
 # Serves the console as Bazel builds it from typescript/apps/ui/, so a change there shows up on the
 # next run. An agent only runs if its worker is up — see the worker recipes below.
@@ -83,19 +79,12 @@ ui-dev: app-install
 # Co-launch the named examples' agent workers in one terminal.
 workers *EXAMPLES: (_run "//python/examples:workers" EXAMPLES)
 
-# Against a running Temporal (`just temporal`): the session manager, `server` over the named
-# examples' registries, and their workers. Names as for `server`, e.g. `just dev monty auto_mode`. Each
-# output line carries its program's name; Ctrl-C stops them all.
+# Against a running Temporal (`just temporal`): `server` over the named examples' registries, and
+# their workers. Names as for `server`, e.g. `just dev monty auto_mode`. Each output line carries
+# its program's name; Ctrl-C stops them all.
 #
 # Run the local stack for the named examples in one terminal.
 dev *EXAMPLES: (_run "//python/examples:dev" EXAMPLES)
-
-# The next `server` start re-seeds it with the current (merged) registry. Needed when switching
-# which agents are served without a fresh Temporal.
-#
-# Terminate the session-manager workflow.
-reset-manager:
-    temporal workflow terminate -w session-manager || true
 
 # `bazel run <target> -- <args>` with the repo-root .env.local loaded.
 _run target *ARGS:

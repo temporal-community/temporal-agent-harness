@@ -46,7 +46,7 @@
 
   async function refreshSessions(): Promise<void> {
     try {
-      const all = await transport.listSessions();
+      const { sessions: all } = await transport.listSessions();
       sessions = all.filter((s) => s.agent_workflow_type === "DagBuilderAgent").sort((a, b) => b.created_at - a.created_at);
       apiDown = false;
     } catch {
@@ -78,7 +78,7 @@
       open(created.workflow_id, prompt);
       void refreshSessions();
     } catch {
-      startError = `Can't create a session at ${API}. Are \`just server\`, \`just session-manager\` and \`just worker\` running?`;
+      startError = `Can't create a session at ${API}. Are \`just server\` and \`just worker\` running?`;
     }
   }
 </script>

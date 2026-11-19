@@ -52,8 +52,8 @@ async def main() -> None:
     plugin = GoogleGenAIPlugin(GeminiClient(api_key=api_key))
 
     # AgentKitPlugin last: it leaves the Gemini plugin's payload converter in place and
-    # adds Agent Kit's large-payload offload, so this worker, the session-manager worker,
-    # and the web server all read the same payloads.
+    # adds Agent Kit's large-payload offload, so this worker and the web server read the same
+    # payloads.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config, plugins=[plugin, AgentKitPlugin()]

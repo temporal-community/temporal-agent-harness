@@ -55,6 +55,7 @@
   type Display = "launcher" | "pane";
 
   const ARCHIVED = "Archived";
+  const OLDER = "Older";
 
   interface Props {
     sessions?: Session[];
@@ -85,6 +86,10 @@
     onNewSession?: (workflowType: string, data?: JsonRecord) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onRefreshSessions?: () => void | Promise<void>;
+    /** The server has sessions older than the ones listed. */
+    hasOlderSessions?: boolean;
+    loadingOlderSessions?: boolean;
+    onLoadOlderSessions?: () => void | Promise<void>;
     /** Re-list when setup opens, so availability reflects the current workers. */
     onEnsureAgents?: () => void | Promise<void>;
     /** Re-check availability without changing the selected agent or entered data. */
@@ -128,6 +133,9 @@
     onNewSession,
     onSelectSession,
     onRefreshSessions,
+    hasOlderSessions = false,
+    loadingOlderSessions = false,
+    onLoadOlderSessions,
     onEnsureAgents,
     onRefreshAgents,
     refreshingAgents = false,
@@ -336,8 +344,6 @@
     ];
   }
 
-  /* Its row repeats it when the list is one agent's sessions; the name still says it. */
-  const showAgent = $derived(chosenAgents.length !== 1 && agentOptions.length > 1);
   const toggled = (list: string[], value: string) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
   const filtering = $derived(chosenAgents.length > 0 || chosenStatuses.length > 0);
   /* Moment-to-moment states of the open session (connecting, thinking) all count as Open, so its
@@ -452,6 +458,7 @@
   type ListEntry =
     | { kind: "heading"; key: string; group: string; count: number }
     | { kind: "archive"; key: string; group: string; count: number }
+    | { kind: "older"; key: string; group: string }
     | { kind: "session"; key: string; group: string; item: Session; ordinal: number };
   const entries = $derived.by(() => {
     const out: ListEntry[] = [];
@@ -469,6 +476,9 @@
       }
     }
     if (!archivedDrawn.length && archivedItems.length) out.push({ kind: "archive", key: "archive", group: ARCHIVED, count: archivedItems.length });
+    /* Last, as the server pages from newest to oldest. A search or filter covers what is
+       loaded, so this stays below its matches too. */
+    if (hasOlderSessions) out.push({ kind: "older", key: "older", group: OLDER });
     return out;
   });
   const entryIndex = $derived(
@@ -482,7 +492,7 @@
     getItemKey: (index) => entries[index]?.key ?? index,
     /* The CSS heights below, so measuring a row moves nothing; zoomed text still gets measured. */
     estimateSize: (index) =>
-      entries[index]?.kind === "heading" || entries[index]?.kind === "archive"
+      entries[index]?.kind === "heading" || entries[index]?.kind === "archive" || entries[index]?.kind === "older"
         ? SESSION_HEADING_HEIGHT
         : coarsePointer.current ? SESSION_ROW_HEIGHT.coarse : SESSION_ROW_HEIGHT.fine,
     getScrollElement: () => sessionListElement,
@@ -555,14 +565,10 @@
     document.getElementById(sessionOptionId(workflowId))?.parentElement?.querySelector<HTMLElement>(".session-pin")?.focus({ preventScroll: true });
   }
 
-  /* The server lists at most this many running sessions it did not start (app.py
-     `_DISCOVERY_LIMIT`); at the limit, a missing one may only be past it. */
-  const DISCOVERY_LIMIT = 200;
-
-  /* Every session there is, or nothing: archives are pruned only against a whole list. */
+  /* Every session there is, or nothing: archives are pruned only against a whole list, which
+     the list is once its oldest page is loaded. */
   function wholeList(): string[] | undefined {
-    if (!sessionsLoaded || sessionsError) return undefined;
-    if (sessions.filter((session) => session.is_discovered).length >= DISCOVERY_LIMIT) return undefined;
+    if (!sessionsLoaded || sessionsError || hasOlderSessions) return undefined;
     return sessions.map((session) => session.workflow_id);
   }
 
@@ -832,6 +838,10 @@
                   {entry.group} <span>{countFormat.format(entry.count)}</span>
                   <ChevronRight class="disclosure-chevron" size={12} aria-hidden="true" />
                 </button>
+              {:else if entry.kind === "older"}
+                <button type="button" class="group-heading load-older" disabled={loadingOlderSessions} onclick={() => void onLoadOlderSessions?.()}>
+                  {loadingOlderSessions ? "Loading older sessions…" : "Load older sessions"}
+                </button>
               {:else}
               {@const item = entry.item}
               {@const kind = rowStatus(item).kind}
@@ -868,7 +878,7 @@
                   <span class="session-started fade-end" aria-hidden="true">{sessionStartedShort(item.created_at)}</span>
                   <span class={["session-title fade-end", title === UNTITLED_SESSION && "untitled"]} dir="auto">{title}</span>
                   <span class="visually-hidden">, {sessionStatusLabel(item)},</span>
-                  <span class={["session-agent", !showAgent && "visually-hidden", "fade-end"]} dir="auto">{sessionAgentLabel(item)}</span>
+                  <span class="session-agent fade-end" dir="auto">{sessionAgentLabel(item)}</span>
                   {#if atRest}<span class="session-kept-gap" aria-hidden="true"></span>{/if}
                   <time aria-hidden="true" datetime={age.short ? new Date(item.created_at * 1000).toISOString() : undefined}>{age.short}</time>
                   {#if age.long}<span class="visually-hidden">, {age.long}</span>{/if}
@@ -1183,7 +1193,8 @@
     }
   }
 
-  .archive-toggle {
+  .archive-toggle,
+  .load-older {
     width: 100%;
     border: 0;
     background: transparent;
@@ -1193,7 +1204,12 @@
     transition: background var(--duration-fast) var(--ease-ui);
   }
 
-  .archive-toggle:focus-visible {
+  .load-older:disabled {
+    cursor: progress;
+  }
+
+  .archive-toggle:focus-visible,
+  .load-older:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
   }
@@ -1401,7 +1417,8 @@
 
   @media (hover: hover) and (pointer: fine) {
     .session-item:hover .session-row,
-    .archive-toggle:hover {
+    .archive-toggle:hover,
+    .load-older:not(:disabled):hover {
       background: var(--control-hover);
     }
 
@@ -1424,7 +1441,8 @@
 
     .session-row,
     .session-actions :global(.icon-button.icon-button),
-    .archive-toggle {
+    .archive-toggle,
+    .load-older {
       transition: none;
     }
 

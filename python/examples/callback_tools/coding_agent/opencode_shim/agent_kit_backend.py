@@ -2,14 +2,14 @@
 
 This is the shim's real front end for the durable ``CodingAgent`` workflow. It reaches the agent
 **through the packaged Agent Kit HTTP server** (``temporal-agent-kit serve`` on :8000) — the same server the
-Svelte UI uses — so every session is created via the session-manager and is visible/debuggable in
+Svelte UI uses — so every session is created via the packaged server and is visible/debuggable in
 that UI while the user chats in OpenCode.
 
 Per user prompt, :meth:`run_turn`:
 
   1. ensures an Agent Kit session exists for this OpenCode session (``POST /api/sessions`` →
-     ``SessionManagerWorkflow`` launches the ``CodingAgent`` child workflow), mapping the OpenCode
-     session id to Agent Kit ``workflow_id``;
+     the server starts the ``CodingAgent`` workflow), mapping the OpenCode session id to Agent Kit
+     ``workflow_id``;
   2. sends the prompt and streams the turn (``POST /api/chat``, Server-Sent Events);
   3. translates each Agent Kit ``AgentEvent`` into calls on the :class:`AgentTurn` the shim gave us:
 

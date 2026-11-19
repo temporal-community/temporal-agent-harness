@@ -7,7 +7,7 @@
 // `asOpenAIAgentTool`, so Agent Kit still owns approval and its `tool_start` / `tool_end` /
 // `tool_error` events.
 //
-// Run it with the shared example stack (session-manager worker + server/UI); this agent is
+// Run it with the shared example stack (the packaged server/UI); this agent is
 // registered in `agents.toml` and driven by the packaged web app. See README.md.
 
 import { Agent, type AgentInputItem } from "@openai/agents-core";

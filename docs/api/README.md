@@ -1,14 +1,17 @@
 # Agent Kit API and session lifecycle
 
 The shared Python server serves the same HTTP API and browser console for Python and TypeScript
-agents. Run a Temporal service, session-manager worker, API server, and your agent worker with
-the same connection and namespace. Worker task queues must match the registry.
+agents. Run a Temporal service, the API server, and your agent worker with the same connection
+and namespace. Worker task queues must match the registry.
 
 ## Discover and start
 
 `GET /api/agents` lists registered workflow types, init-data schemas, and worker poller status.
 A poller indicates availability on a queue, not proof that it hosts a particular workflow type.
-`GET /api/sessions` lists sessions. Create one using the **workflow type**, not the registry key:
+`GET /api/sessions` lists sessions a page at a time, newest first, from Temporal visibility:
+pass the response's `next_page_token` as `page_token` for the next page.
+`GET /api/sessions/{session_id}` returns one. Create a session using the **workflow type**, not
+the registry key:
 
 ```bash
 curl --fail-with-body http://localhost:8000/api/sessions \
@@ -18,7 +21,7 @@ curl --fail-with-body http://localhost:8000/api/sessions \
 
 The response's `workflow_id` is the session ID used by subsequent calls. An optional `session_id`
 lets an integration derive a stable ID from its own conversation identity; repeated creation
-with the same ID is idempotent. Supply `data` when the agent requires init data. Do not send it
+with the same ID returns the running session, and a closed session's ID starts a new run. Supply `data` when the agent requires init data. Do not send it
 for an agent that takes none. The server checks presence and the agent validates its schema.
 Read `GET /api/agent-interface/{session_id}` for handlers and their input/output schemas.
 
@@ -100,9 +103,9 @@ client types after changing handlers, state, or init data. Never patch generated
 
 `agents.toml` declares a key, workflow type, task queue, label, description, and optional schema
 path relative to the TOML file. Keep the schema's agent name equal to `workflow_type`. The server
-never imports your agent implementation. The session manager caches its registry: replacing the
-registry file alone does not update an already-running manager's list. Restart with fresh local
-Temporal state only when the development sessions are disposable.
+never imports your agent implementation. The server reads the registry at startup, so a
+registry change takes effect when the server restarts. The server lists only sessions of its
+registry's workflow types on their task queues.
 
 The built-in local payload store is for processes sharing a host/filesystem. For a multi-host
 deployment, configure a shared offload store consistently across clients, workers, and server.

@@ -12,7 +12,7 @@ Three variants ship here:
 - **MontyChatSubagentAgent** — same conversational experience, but it drives `MontyDynamicAgent`
   as a *subagent* (the first end-to-end exercise of the Agent Kit subagent toolset).
 
-The agents are driven through the packaged session-manager workflow and shared
+The agents are driven through the packaged server and shared
 Svelte UI (`ui`). The Monty example owns the local app, registry, and recipes, so
 the whole stack runs from this directory.
 
@@ -93,9 +93,8 @@ Each command in its own terminal, all from this directory:
 
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
-just session-manager   # 2. session-manager worker
-just server            # 3. FastAPI API + built Svelte UI  ->  http://localhost:8000
-just worker            # 4. the Monty agents
+just server            # 2. FastAPI API + built Svelte UI  ->  http://localhost:8000
+just worker            # 3. the Monty agents
 ```
 
 Then open <http://localhost:8000> and pick a Monty agent. For frontend

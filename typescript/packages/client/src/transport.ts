@@ -3,7 +3,7 @@
 // along with `SessionStarter` and listing the server's sessions.
 
 import type { AgentSseFrame, MessageDisposition } from "./frames.ts";
-import type { CreateSessionRequest, SessionStarter, SessionSummary } from "./start.ts";
+import type { CreateSessionRequest, SessionPage, SessionStarter, SessionSummary } from "./start.ts";
 
 export interface SubmitMessageResponse {
   turn_number: number;
@@ -129,9 +129,22 @@ export class HttpTransport implements SessionTransport, SessionStarter {
     return this.#json("sessions", request, signal);
   }
 
-  /** Every session the server knows about, open or closed, across all its agents. */
-  async listSessions(signal?: AbortSignal): Promise<SessionSummary[]> {
-    return (await (await this.#request("sessions", { signal })).json()) as SessionSummary[];
+  /** One page of the server's sessions, open or closed, across all its agents, newest first. */
+  async listSessions(
+    options: { pageSize?: number; pageToken?: string | null; signal?: AbortSignal } = {}
+  ): Promise<SessionPage> {
+    const query = new URLSearchParams();
+    if (options.pageSize !== undefined) query.set("page_size", String(options.pageSize));
+    if (options.pageToken) query.set("page_token", options.pageToken);
+    const path = query.toString() ? `sessions?${query}` : "sessions";
+    return (await (await this.#request(path, { signal: options.signal })).json()) as SessionPage;
+  }
+
+  /** One session by id, wherever it falls in the list. Rejects with a 404 `HttpError` for an id
+   *  that is not one of the server's sessions. */
+  async getSession(sessionId: string, signal?: AbortSignal): Promise<SessionSummary> {
+    const path = `sessions/${encodeURIComponent(sessionId)}`;
+    return (await (await this.#request(path, { signal })).json()) as SessionSummary;
   }
 
   async closeSession(sessionId: string): Promise<void> {

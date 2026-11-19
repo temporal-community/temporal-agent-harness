@@ -61,7 +61,7 @@ function boot({ streamFor = () => [], reply = {}, interfaceFails = () => false }
       };
     },
     async listSessions() {
-      return [parent];
+      return { sessions: [parent], next_page_token: null };
     },
     async workflowStatus(workflowId) {
       return { workflow_id: workflowId, execution_status: "RUNNING", closed: false };

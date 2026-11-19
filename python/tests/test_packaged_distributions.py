@@ -33,7 +33,7 @@ def test_built_distributions_include_packaged_ui_assets(
     with zipfile.ZipFile(wheel_path) as wheel:
         names = set(wheel.namelist())
         _assert_ui_assets_present(names)
-        assert "temporal_agent_kit/web/session_manager_worker.py" in names
+        assert "temporal_agent_kit/web/sessions.py" in names
 
         # The dist-info directory name embeds the package version, so match it rather than
         # hardcoding it — cutting a release shouldn't require editing this test.
@@ -52,7 +52,7 @@ def test_built_distributions_include_packaged_ui_assets(
 
     with tarfile.open(sdist_path) as sdist:
         names = set(sdist.getnames())
-        assert any(name.endswith("/temporal_agent_kit/web/session_manager_worker.py") for name in names)
+        assert any(name.endswith("/temporal_agent_kit/web/sessions.py") for name in names)
         assert any(name.endswith("/temporal_agent_kit/ui/dist/index.html") for name in names)
         assert any(name.endswith("/temporal_agent_kit/ui/dist/temporal-logo.svg") for name in names)
         assert any(
@@ -78,7 +78,7 @@ def test_built_distributions_expose_ui_server_console_script(
             "temporal_agent_kit/web/cli.py",
             "temporal_agent_kit/web/serve.py",
             "temporal_agent_kit/web/client.py",
-            "temporal_agent_kit/web/session_manager_worker.py",
+            "temporal_agent_kit/web/sessions.py",
         ):
             assert module in names
 
@@ -253,7 +253,6 @@ def test_built_distributions_include_development_resources(built_distributions):
     wheel_path, sdist_path = built_distributions
     required = {
         "temporal_agent_kit/development.py",
-        "temporal_agent_kit/web/dev.py",
         "temporal_agent_kit/web/doctor.py",
         *{
             f"temporal_agent_kit/skills/temporal-agent-kit-python/{path}"

@@ -6,26 +6,11 @@ service: your own routes alongside it, auth middleware, a registry built in code
 read from a TOML file, or a different ASGI deployment.
 
 `create_agent_kit_app` returns the FastAPI app, serving both `/api/*` and the packaged Svelte
-UI. `create_session_manager_worker` builds the same agent-agnostic worker that
-`temporal-agent-kit session-manager` runs for you:
+UI. It starts each session as the agent's workflow and lists sessions from Temporal visibility,
+so it needs no worker of its own:
 
 ```python
-from temporalio.client import Client
-from temporalio.envconfig import ClientConfig
-
-from temporal_agent_kit.plugin import AgentKitPlugin
-from temporal_agent_kit.web import (
-    create_agent_kit_app,
-    create_session_manager_worker,
-)
-
-
-async def run_session_manager() -> None:
-    connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(**connect_config, plugins=[AgentKitPlugin()])
-    worker = create_session_manager_worker(client)
-    await worker.run()
-
+from temporal_agent_kit.web import create_agent_kit_app
 
 app = create_agent_kit_app(registry_path="agents.toml")
 ```
@@ -36,7 +21,5 @@ Then serve the app with Uvicorn:
 uvicorn my_app.web:app --host 0.0.0.0 --port 8000
 ```
 
-`create_session_manager_worker` only registers the packaged session-manager workflow; run your
-own agent workflows on their own workers and task queues. It takes an already-connected client,
-so the Agent Kit plugin goes on that client — see
-[Running a worker](../../python/README.md#running-a-worker--one-plugin).
+Run your agent workflows on their own workers, on the task queues the registry names, with the
+Agent Kit plugin — see [Running a worker](../../python/README.md#running-a-worker--one-plugin).
