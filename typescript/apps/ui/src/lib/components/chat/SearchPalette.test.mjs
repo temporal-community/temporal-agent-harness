@@ -37,6 +37,8 @@ describe("the search palette", () => {
   it("shows a few of everything, grouped, newest sessions first", () => {
     const body = draw();
     assert.deepEqual(groups(body), ["Sessions", "Agents", "Panes"]);
+    /* WCAG 1.4.3: --text-4 on the selected tint is 4.2:1; the selected row's meta steps up. */
+    assert.match(palette, /\n  \.hit\.active \.hit-meta \{\s*color: var\(--text-3\);/);
     /* WCAG 1.3.1: a listbox holds options and groups only; the group's label names it. */
     assert.match(body, /<div role="group" aria-label="Sessions">\s*<div class="kicker group-label[^"]*" aria-hidden="true">/);
     const titles = hits(body);

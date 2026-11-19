@@ -650,7 +650,10 @@
 
   /* One line per row, always: a wrapped label made its row taller than the rest.
      Ellipsis only once the viewport cap bites; the `title` carries the rest. */
+  /* --text-2, not the kicker's --text-3: on the menu's --surface-3 that is 3.5:1, under the
+     4.5:1 WCAG 1.4.3 asks of text. The tick says which rows are open. */
   .launch-menu .kicker {
+    color: var(--text-2);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

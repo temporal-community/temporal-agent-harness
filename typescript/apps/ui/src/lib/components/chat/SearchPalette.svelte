@@ -359,6 +359,11 @@
     color: var(--text-4);
   }
 
+  /* --text-4 on the selected tint is 4.2:1, under WCAG 1.4.3's 4.5:1. */
+  .hit.active .hit-meta {
+    color: var(--text-3);
+  }
+
   .no-hits {
     margin: 0;
     padding: var(--gutter) var(--gap-md);
