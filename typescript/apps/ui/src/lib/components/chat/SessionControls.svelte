@@ -26,7 +26,7 @@
     writeOperatorPrefs,
     writeUrlList
   } from "$lib/state/agentRunStorage";
-  import { handleListKey, keptHighlight } from "$lib/state/quickSwitch";
+  import { handleListKey, keptHighlight, spokenHighlight } from "$lib/state/quickSwitch";
   import { markdownToText } from "$lib/components/chat/MarkdownMessage.svelte";
   import { dissolveClear, inputClearDissolve } from "$lib/motion/inputClearDissolve";
   import {
@@ -444,10 +444,16 @@
   /* In the order drawn, so arrowing from search walks the pins first too. */
   const filteredIds = $derived(drawnGroups.flatMap((group) => group.sessions.map((session) => session.workflow_id)));
   const highlightedId = $derived(keptHighlight(filteredIds, arrowedId));
+  const highlightSpoken = $derived(
+    spokenHighlight(filteredIds, highlightedId, arrowedId !== null, (id) => {
+      const session = drawnGroups.flatMap((group) => group.sessions).find((item) => item.workflow_id === id);
+      return session ? `${sessionTitle(session)}, ${sessionAgentLabel(session)}` : null;
+    })
+  );
   let sessionListElement = $state<HTMLElement | null>(null);
 
   /* Only the rows in view are in the DOM: a list of 10,000 took 5 s to open drawn whole.
-     Day headings are rows too, so the list scrolls as one; each option still carries
+     Day headings are rows too, so the list scrolls as one; each item still carries
      aria-setsize/aria-posinset, so a screen reader hears the full count. */
   type ListEntry =
     | { kind: "heading"; key: string; group: string; count: number }
@@ -776,11 +782,6 @@
           bind:value={sessionSearch}
           placeholder="Search message, agent, or ID"
           aria-label="Search sessions"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-controls="session-listbox"
-          aria-expanded="true"
-          aria-activedescendant={highlightedId ? sessionOptionId(highlightedId) : undefined}
           oninput={() => (arrowedId = null)}
           use:inputClearDissolve
           onkeydown={handleSearchKeydown}
@@ -791,6 +792,7 @@
           </IconButton>
         {/if}
       </label>
+      <p class="visually-hidden" aria-live="polite" aria-atomic="true">{highlightSpoken}</p>
       </div>
       {/if}
       {#if notice}
@@ -807,7 +809,9 @@
           {/if}
         </div>
       {/if}
-      <div class="session-list" id="session-listbox" role="listbox" aria-label="Sessions" tabindex="-1" bind:this={sessionListElement} {@attach windowedFocus()}>
+      <!-- A list only while it has items: an empty list is an error to assistive tech, and the
+           empty note above is the whole reading then. -->
+      <div class="session-list" id="session-listbox" role={entries.length ? "list" : undefined} aria-label={entries.length ? "Sessions" : undefined} tabindex="-1" bind:this={sessionListElement} {@attach windowedFocus()}>
         {#if !sessionsError && filteredSessionItems.length === 0}
           <div class="session-empty">
             <strong>{sessionItems.length ? "No matching sessions" : "No sessions yet"}</strong>
@@ -819,14 +823,24 @@
         {/if}
         <div class="session-rows" style:height={`${$sessionRows.getTotalSize()}px`}>
         {#each visibleGroups as group (group.label)}
-          <div class="session-group" role="group" aria-label={group.label}>
+          <div class="session-group">
             {#each group.rows as row (row.key)}
               {@const entry = entries[row.index]}
-              <div class="session-entry" data-index={row.index} style:top={`${row.start}px`} {@attach measureRow}>
+              <!-- The item, not the row's button, carries the count: a list item may hold the
+                   row and its actions, which a listbox option could not. -->
+              <div
+                class="session-entry"
+                role={entry.kind === "heading" ? undefined : "listitem"}
+                aria-setsize={entry.kind === "session" ? filteredIds.length : undefined}
+                aria-posinset={entry.kind === "session" ? entry.ordinal : undefined}
+                data-index={row.index}
+                style:top={`${row.start}px`}
+                {@attach measureRow}
+              >
               {#if entry.kind === "heading"}
                 <div class="group-heading" aria-hidden="true">{entry.group} <span>{countFormat.format(entry.count)}</span></div>
               {:else if entry.kind === "archive"}
-                <!-- The one heading that does something. A sibling of the options in its group,
+                <!-- The one heading that does something. A sibling of the rows in its group,
                      like the pin, never inside one. -->
                 <button type="button" class="group-heading archive-toggle disclosure" aria-expanded={archiveOpen} onclick={toggleArchiveOpen}>
                   {entry.group} <span>{countFormat.format(entry.count)}</span>
@@ -852,10 +866,6 @@
                   type="button"
                   id={sessionOptionId(item.workflow_id)}
                   class={["session-row", item.workflow_id === sessionId && "active", kind === "closed" && "closed", days >= 7 ? "aged-week" : days >= 1 && "aged-day", arrowedId !== null && item.workflow_id === highlightedId && "highlighted"]}
-                  role="option"
-                  aria-setsize={filteredIds.length}
-                  aria-posinset={entry.ordinal}
-                  aria-selected={item.workflow_id === highlightedId}
                   aria-current={item.workflow_id === sessionId ? "true" : undefined}
                   aria-describedby={`${sessionOptionId(item.workflow_id)}-tip`}
                   data-tip=""
@@ -883,8 +893,8 @@
                     fields={sessionTipFields(item, age.long, glyph)}
                   />
                 </button>
-                <!-- Beside the option, never in it: an option is a button already. Tab reaches
-                     them in the order drawn, after the option. An open row offers pin and End,
+                <!-- Beside the row's button, never in it: a button cannot hold buttons. Tab
+                     reaches them in the order drawn, after the row. An open row offers pin and End,
                      a closed one pin and archive: the pin first, like a pane header. A pin is
                      only drawn on hover: Pinned already says it. -->
                 <div class="session-actions">

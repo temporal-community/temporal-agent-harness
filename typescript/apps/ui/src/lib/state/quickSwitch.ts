@@ -85,6 +85,22 @@ export function keptHighlight(visibleIds: readonly string[], highlightedId: stri
 }
 
 /**
+ * What a screen reader hears when an arrow press moves the highlight, which is drawn, not focused.
+ * Silent until the reader arrows: the default highlight on the first row is not news.
+ */
+export function spokenHighlight(
+  visibleIds: readonly string[],
+  highlightedId: string | null,
+  arrowed: boolean,
+  describe: (id: string) => string | null
+): string {
+  if (!arrowed || highlightedId == null) return "";
+  const index = visibleIds.indexOf(highlightedId);
+  const name = describe(highlightedId);
+  return index === -1 || !name ? "" : `${name}, ${index + 1} of ${visibleIds.length}`;
+}
+
+/**
  * What was focused before the drawer opened, if it is still somewhere focus can go back to.
  * Gone from the page, or inside the drawer that is closing, means the trigger instead.
  */
