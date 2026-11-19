@@ -159,21 +159,24 @@ describe("agent worker readiness", () => {
     assert.match(functionSource(sessionControlsSource, "openNewSessionMenu") ?? "", /\}$/, "through its own closing brace");
   });
 
-  it("guards form submission against an unavailable worker", () => {
-    assert.match(functionSource(dialogSource, "start") ?? "", /if \(!agent \|\| busy \|\| agentBlocked\(agent\)\) return;/);
-    assert.match(functionSource(dialogSource, "agentBlocked") ?? "", /return agent\.worker\?\.status === "no_worker";/);
+  /* A serverless worker that scales to zero has no poller until the session's first task
+     starts it, so a missing worker cannot be a reason to refuse the start. */
+  it("never refuses a start over the worker", () => {
+    assert.match(functionSource(dialogSource, "start") ?? "", /if \(!agent \|\| busy\) return;/);
+    assert.doesNotMatch(dialogSource, /agentBlocked/);
   });
 
-  it("allows selecting an unavailable agent to explain how to enable it, but disables Start", () => {
+  it("starts an agent with no worker, warning that a non-serverless one needs a worker started", () => {
     const { body } = render(StartSessionDialog, {
       props: { agents: [agent(noWorker)], onStart() {}, onClose() {} }
     });
     assert.match(body, /role="option"[^>]*aria-selected="true"/);
     assert.match(body, /No worker/);
-    assert.match(body, /Start a worker on/);
+    assert.match(body, /class="callout-warning worker-hint[^"]*">No worker is polling/);
+    assert.match(body, /Unless this agent runs on serverless workers that start on demand, start one/);
     assert.match(body, /monty-dynamic-agent/);
     assert.match(body, /aria-label="Copy task queue name"/);
-    assert.match(body, /<button[^>]*type="submit"[^>]*disabled/);
+    assert.doesNotMatch(body.match(/<button[^>]*type="submit"[^>]*>/)?.[0] ?? "", /disabled/);
   });
 
   it("permits unknown availability and states the uncertainty", () => {

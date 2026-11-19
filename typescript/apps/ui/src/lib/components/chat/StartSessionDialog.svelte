@@ -264,10 +264,6 @@
     return null;
   }
 
-  function agentBlocked(agent: AgentDescriptor): boolean {
-    return agent.worker?.status === "no_worker";
-  }
-
   function choose(entry: Entry, focusCard = false): void {
     if (busy) return;
     chosenKey = entry.agent.key;
@@ -314,7 +310,7 @@
   }
 
   async function start(withData = true): Promise<void> {
-    if (!agent || busy || agentBlocked(agent)) return;
+    if (!agent || busy) return;
     if (!withData && form?.required) return;
     let data: JsonRecord | undefined;
     const key = agent.key;
@@ -548,8 +544,10 @@
               </section>
             {/if}
             <div aria-live="polite">
-              {#if agentBlocked(agent)}
-                <p class="callout-warning worker-hint">Start a worker on <Copyable value={agent.task_queue} label="Copy task queue name"><code>{agent.task_queue}</code></Copyable> to use this agent, then re-check availability.</p>
+              <!-- A warning, not a block: a serverless worker that scales to zero is started by the
+                   session's first task, so no poller now does not mean none later. -->
+              {#if agent.worker?.status === "no_worker"}
+                <p class="callout-warning worker-hint">No worker is polling <Copyable value={agent.task_queue} label="Copy task queue name"><code>{agent.task_queue}</code></Copyable>. Unless this agent runs on serverless workers that start on demand, start one before you use the session.</p>
               {:else if agent.worker?.status !== "ready"}
                 <p class="worker-hint">Worker availability could not be checked. You can still try starting this agent.</p>
               {/if}
@@ -570,14 +568,14 @@
           <div class="actions">
             <Chip fill="quiet" disabled={busy} onclick={close}>Cancel</Chip>
             {#if form && !form.required}
-              <Chip fill="quiet" disabled={busy || !agent || agentBlocked(agent)} onclick={() => void start(false)}>Start without data</Chip>
+              <Chip fill="quiet" disabled={busy || !agent} onclick={() => void start(false)}>Start without data</Chip>
             {/if}
             <Chip
               type="submit"
               fill="solid"
               tone="accent"
               aria-label={selected ? `Start session with ${selected.name}` : undefined}
-              disabled={busy || !agent || agentBlocked(agent)}
+              disabled={busy || !agent}
             >{busy ? "Starting…" : "Start session"}</Chip>
           </div>
         </footer>
