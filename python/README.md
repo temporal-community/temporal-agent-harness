@@ -154,7 +154,7 @@ Clone at a release tag. You need [just](https://just.systems/),
 [`temporal` CLI](https://docs.temporal.io/cli) (see [Requirements](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/guides/examples.md#requirements)).
 
 ```bash
-git clone --branch 0.12.0 https://github.com/temporal-community/temporal-agent-kit.git
+git clone --branch 0.12.1 https://github.com/temporal-community/temporal-agent-kit.git
 cd temporal-agent-kit
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
@@ -174,7 +174,7 @@ one UI.
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.11.0 0.12.0`.
+`git diff 0.12.0 0.12.1`.
 
 ### Build with it — install from PyPI
 
@@ -185,7 +185,7 @@ Agent Kit is published to
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-kit[ui]==0.12.0'
+uv add 'temporal-agent-kit[ui]==0.12.1'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -207,7 +207,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-kit[ui]==0.12.0",
+    "temporal-agent-kit[ui]==0.12.1",
 ]
 ```
 
@@ -301,7 +301,7 @@ opt-in:
 | `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentKitPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-kit[ui,code-mode,genai]==0.12.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-kit[ui,code-mode,genai]==0.12.1'`.
 
 
 ## Versioning and stability
@@ -314,7 +314,7 @@ sdist were built from that commit, browser UI included.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-kit==0.12.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-kit==0.12.1`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 

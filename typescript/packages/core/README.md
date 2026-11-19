@@ -422,10 +422,10 @@ Run one command per terminal, all from `my-agent/`:
 temporal server start-dev
 
 # 2. Session-manager worker: starts agents and tracks sessions.
-uvx --from 'temporal-agent-kit[ui]==0.12.0' temporal-agent-kit session-manager
+uvx --from 'temporal-agent-kit[ui]==0.12.1' temporal-agent-kit session-manager
 
 # 3. Agent Kit console + JSON API: http://localhost:8000.
-uvx --from 'temporal-agent-kit[ui]==0.12.0' temporal-agent-kit serve ./agents.toml
+uvx --from 'temporal-agent-kit[ui]==0.12.1' temporal-agent-kit serve ./agents.toml
 
 # 4. Your TypeScript agent worker; loads .env.local.
 npm start
