@@ -9,7 +9,7 @@ import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
 import SessionControls from "$lib/components/chat/SessionControls.svelte";
-import { focusReturnTarget, handleListKey, keptHighlight } from "./quickSwitch.ts";
+import { focusReturnTarget, handleListKey, keptHighlight, spokenHighlight } from "./quickSwitch.ts";
 import { describeReplayKeyEvent, resolveReplayAction } from "./replayHotkeys.ts";
 
 function key(name, overrides = {}) {
@@ -98,7 +98,18 @@ describe("the highlight and the filter", () => {
     assert.equal(keptHighlight([], "b"), null, "no rows, no highlight");
   });
 
-  it("renders as a combobox pointing at the first row", () => {
+  /* The highlight is drawn, not focused, so an arrow press is spoken from a live line. */
+  it("speaks the arrowed row and its place, and nothing before the first arrow", () => {
+    const name = (id) => (id === "gone" ? null : `Title ${id}, Agent`);
+    assert.equal(spokenHighlight(["a", "b", "c"], "b", true, name), "Title b, Agent, 2 of 3");
+    assert.equal(spokenHighlight(["a", "b", "c"], "a", false, name), "", "the default highlight is not news");
+    assert.equal(spokenHighlight(["a", "b"], null, true, name), "");
+    assert.equal(spokenHighlight(["a", "gone"], "gone", true, name), "", "a row it cannot name says nothing");
+  });
+
+  /* A search field over a plain list, not a combobox and listbox: a listbox may hold only
+     options, and every row also carries pin, End and archive buttons (WCAG 4.1.2). */
+  it("renders a search field over a list whose items hold the row and its actions", () => {
     const sessions = ["wf-new", "wf-mid", "wf-old"].map((workflow_id, i) => ({
       workflow_id,
       created_at: 300 - i * 100,
@@ -109,17 +120,15 @@ describe("the highlight and the filter", () => {
       props: { display: "pane", sessions, sessionId: "wf-mid" }
     });
     const input = body.match(/<input[^>]*>/)?.[0] ?? "";
-    assert.match(input, /role="combobox"/);
-    assert.match(input, /aria-controls="session-listbox"/);
-    assert.match(input, /aria-expanded="true"/);
-    assert.match(input, /aria-activedescendant="session-option-wf-new"/);
-    assert.match(body, /id="session-listbox"[^>]*role="listbox"/);
+    assert.match(input, /aria-label="Search sessions"/);
+    assert.doesNotMatch(input, /role=|aria-activedescendant|aria-controls/);
+    assert.match(body, /id="session-listbox"[^>]*role="list" aria-label="Sessions"/);
+    assert.doesNotMatch(body, /role="(listbox|option)"/);
     assert.doesNotMatch(body, /agent-glyph/, "the icon repeated the agent named on the row and the status chip beside it");
-    const options = [...body.matchAll(/<button[^>]*role="option"[^>]*>/g)].map(([tag]) => tag);
-    assert.equal(options.length, 3);
-    assert.match(options[0], /id="session-option-wf-new"[^>]*aria-selected="true"/);
-    assert.match(options[1], /aria-selected="false"/);
-    assert.match(options[2], /aria-selected="false"/);
+    const items = [...body.matchAll(/<div class="session-entry[^"]*" role="listitem"[^>]*>[\s\S]*?<button[^>]*class="session-row/g)];
+    assert.equal(items.length, 3);
+    assert.match(items[0][0], /aria-setsize="3" aria-posinset="1"[\s\S]*id="session-option-wf-new"/);
+    assert.match(body, /<p class="visually-hidden[^"]*" aria-live="polite" aria-atomic="true"><\/p>/, "silent until an arrow press");
   });
 
   it("draws a screenful of a 10,000-session list and tells assistive tech the rest", () => {
@@ -132,10 +141,10 @@ describe("the highlight and the filter", () => {
     const { body } = render(SessionControls, {
       props: { display: "pane", tab: "sessions", sessions, sessionId: "wf-0" }
     });
-    const options = [...body.matchAll(/<button[^>]*role="option"[^>]*>/g)].map(([tag]) => tag);
+    const items = [...body.matchAll(/<div class="session-entry[^"]*" role="listitem"[^>]*>/g)].map(([tag]) => tag);
     /* An 800px first paint of 28px rows, plus the overscan: a screenful, not ten thousand. */
-    assert.ok(options.length > 0 && options.length < 40, `${options.length} options drawn`);
-    assert.match(options[0], /aria-setsize="10000"[^>]*aria-posinset="1"/);
+    assert.ok(items.length > 0 && items.length < 40, `${items.length} items drawn`);
+    assert.match(items[0], /aria-setsize="10000"[^>]*aria-posinset="1"/);
   });
 });
 

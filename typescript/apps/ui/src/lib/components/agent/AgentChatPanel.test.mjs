@@ -167,6 +167,40 @@ const chat = (props) =>
   stripComments(render(AgentChatPanel, { props: { logs: [], agentLabel: "Planner", sessionId: "wf-root", ...props } }).body);
 const articles = (body) => body.split(/<article class="message /).slice(1);
 
+describe("banners a screen reader hears", () => {
+  it("announces a failure as an alert and the session ending as a status", () => {
+    assert.match(chat({ items: [user(1)], error: "Worker lost: boom" }), /class="error-banner[^"]*" role="alert"/);
+    assert.match(chat({ items: [user(1)], closed: true }), /class="closed-banner[^"]*" role="status"/);
+  });
+
+  /* Every message was an unnamed article and every bubble a region called "User message" or
+     "Agent reply", so a list of them read the same line over and over. */
+  it("names each message and its bubble apart from the rest", () => {
+    const body = chat({ items: [user(1), reply(1, "Here."), user(2), reply(2, '{"a": 1}', { data: true, json: { a: 1 } })] });
+    const names = (pattern) => [...body.matchAll(pattern)].map((m) => m[1]);
+    const articles = names(/role="article" aria-label="([^"]+)"/g);
+    const regions = names(/role="region" aria-label="([^"]+)"/g);
+    assert.deepEqual(articles, ["You, message 1", "Planner, message 2", "You, message 3", "Planner, message 4"]);
+    assert.equal(new Set(regions).size, regions.length, `regions named apart: ${regions.join(" | ")}`);
+  });
+
+  /* Dictation tools (Wispr Flow) type through the OS accessibility link to the focused field, and
+     a field that turns disabled and back drops that link: dictation worked once, then not again. */
+  it("keeps the text box enabled through every passing state, and disables it only when closed", () => {
+    const box = (props) => chat({ items: [user(1)], ...props }).match(/<textarea[^>]*>/)?.[0] ?? "";
+    for (const props of [{ creatingSession: true }, { connecting: true }, { sending: true }, { agentInterface: [] }]) {
+      assert.doesNotMatch(box(props), /\sdisabled/, JSON.stringify(props));
+    }
+    assert.match(box({ closed: true }), /\sdisabled/);
+  });
+
+  /* Opening a past session replayed every turn's phases into the status line at once. */
+  it("says nothing about the reply on first paint, even mid-turn", () => {
+    const body = chat({ items: [user(1)], sending: true, live: true });
+    assert.match(body, /<p class="sr-only[^"]*" role="status"><\/p>/);
+  });
+});
+
 describe("the multi-line composer", () => {
   const handler = (name, field, description) => ({
     name,

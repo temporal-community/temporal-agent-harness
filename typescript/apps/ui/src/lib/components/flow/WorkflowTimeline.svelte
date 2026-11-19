@@ -1232,13 +1232,15 @@
     white-space: nowrap;
   }
 
+  /* 22px square around the 10px break glyph: a 24px circle on it clears the row below it,
+     which is what WCAG 2.2 2.5.8 asks of a target under 24px. */
   .gap-toggle {
     position: absolute;
     z-index: 3;
     bottom: -1px;
-    width: 14px;
-    height: 20px;
-    padding: 3px 2px;
+    width: 22px;
+    height: 22px;
+    padding: 4px 6px;
     border: 0;
     background: var(--surface-1);
     color: var(--text-3);
@@ -1287,9 +1289,10 @@
     position: absolute;
     z-index: 4;
     top: 0;
-    width: 11px;
-    height: 8px;
-    margin-left: -5.5px;
+    /* The 24px square WCAG 2.5.8 asks for, around a 3px mark; the axis row is 34px. */
+    width: 24px;
+    height: 24px;
+    margin-left: -12px;
     padding: 0;
     border: 0;
     background: transparent;
@@ -1300,7 +1303,7 @@
     content: "";
     position: absolute;
     top: 1px;
-    left: 4px;
+    left: calc(50% - 1.5px);
     width: 3px;
     height: 6px;
     background: var(--text-3);
@@ -1309,6 +1312,16 @@
   .cue.approval::before { background: var(--live); }
   .cue.queue::before { background: var(--queue); }
   .cue.error::before { background: var(--error); }
+
+  /* Shape as well as hue, as on the transport (WCAG 1.4.1): solid, dotted, wide. */
+  .cue.queue::before {
+    background: repeating-linear-gradient(to bottom, var(--queue) 0 2px, transparent 2px 4px);
+  }
+
+  .cue.error::before {
+    left: calc(50% - 3px);
+    width: 6px;
+  }
 
   .cue:focus-visible {
     outline: 2px solid var(--focus-ring);
@@ -1539,10 +1552,11 @@
     overflow: visible;
   }
 
+  /* 28px tall, and 24px wide however short the span: the target WCAG 2.2 2.5.8 asks for. */
   .mark::before {
     content: "";
     position: absolute;
-    inset: -4px -6px;
+    inset: -4px -10px;
   }
 
   .bar {

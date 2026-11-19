@@ -45,6 +45,8 @@ export type OperatorPrefs = {
   archivedSessions?: string[];
   /** The Archived group is open. Absent means closed. */
   sessionArchiveOpen?: boolean;
+  /** Shortcuts that are one character key fire. Absent means yes; see `isCharacterKey`. */
+  characterKeys?: boolean;
 };
 
 /** Enough for any list a person curates by hand; past it the oldest pin drops. */

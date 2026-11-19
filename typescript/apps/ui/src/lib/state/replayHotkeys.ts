@@ -243,6 +243,8 @@ export interface ReplayKeyContext {
   helpOpen: boolean;
   /** A pane is full-screen, so Escape has it to leave. */
   bleeding: boolean;
+  /** The reader has kept shortcuts that are one character key on. See `isCharacterKey`. */
+  characterKeys: boolean;
 }
 
 /**
@@ -298,6 +300,8 @@ const SPACE_ACTIVATED_INPUT_TYPES = new Set(["button", "checkbox", "radio", "res
 export interface ReplaySurfaceState {
   helpOpen: boolean;
   bleeding: boolean;
+  /** Absent means on. */
+  characterKeys?: boolean;
 }
 
 export function describeReplayKeyEvent(
@@ -318,6 +322,7 @@ export function describeReplayKeyEvent(
     metaKey: event.metaKey,
     helpOpen: surfaces.helpOpen,
     bleeding: surfaces.bleeding,
+    characterKeys: surfaces.characterKeys ?? true,
     /* `isComposing` is the right question, but Chromium answers it late for the
        first keystroke of a composition and reports the legacy 229 sentinel
        instead. Both readings mean the user is mid-word. */
@@ -343,6 +348,16 @@ export function describeReplayKeyEvent(
 
 /** A single character compares case-blind; a named key like `ArrowLeft` does not. */
 const foldKey = (key: string): string => (key.length === 1 ? key.toLowerCase() : key);
+
+/**
+ * A binding that is one character key, with Shift at most: `,` `.` Space `?` `F` `D` `S`.
+ * Speech input types characters, so these fire on dictated words; WCAG 2.1.4 asks that the
+ * reader can turn them off. Arrows, Home, End and Escape are not characters, and every chord
+ * with Cmd, Ctrl or Alt stays on.
+ */
+export function isCharacterKey(binding: ReplayBinding): boolean {
+  return binding.key.length === 1 && !binding.mod && !binding.alt && !binding.ctrl;
+}
 
 /**
  * Whether the surface a binding acts on is actually there.
@@ -403,6 +418,7 @@ export function resolveReplayAction(context: ReplayKeyContext): ReplayAction | n
       isLive(candidate, context)
   );
   if (!binding) return null;
+  if (!context.characterKeys && isCharacterKey(binding)) return null;
 
   /* A modal is up. The platform already keeps the pointer and the focus ring off
      the desk behind it; a window-level keydown listener is the one route that

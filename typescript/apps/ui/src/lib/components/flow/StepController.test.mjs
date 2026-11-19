@@ -198,6 +198,14 @@ describe("the transport lane", () => {
     assert.doesNotMatch(html, /class="scrub[^"]*\boverview\b/);
   });
 
+  /* An aria-controls naming an id that is not on the page is a broken reference (WCAG 4.1.2). */
+  it("points the readout at its event card only while the card is open", () => {
+    const html = render(StepController, { props: controllerProps }).body;
+    assert.match(html, /aria-expanded="false"/, "the readout is there, closed");
+    assert.doesNotMatch(html, /aria-controls="now-card"/);
+    assert.doesNotMatch(html, /id="now-card"/, "and the card is not drawn while closed");
+  });
+
   it("draws a thin interactive overview without computing the ridge", () => {
     const eventRows = [{ index: 0, get timestamp() { throw new Error("ridge computed"); } }];
     const html = render(StepController, {
@@ -293,5 +301,28 @@ describe("the position readout", () => {
     assert.match(css, /\.pos\.error\s*\{[^}]*color:\s*var\(--error\)/);
     assert.match(css, /\.pos\.approval\s*\{[^}]*color:\s*var\(--live\)/);
     assert.match(css, /\.pos\.queue\s*\{[^}]*color:\s*var\(--queue\)/);
+  });
+});
+
+/* WCAG 2.5.8: the tick is 3px, the button it sits in is the 24px square. */
+describe("the transport's cue marks", () => {
+  const source = readFileSync(new URL("./StepController.svelte", import.meta.url), "utf8");
+
+  it("are 24px press targets centered on the tick", () => {
+    const cue = source.match(/\n {2}\.cue \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(cue, /width: 24px;\s*height: 24px;/);
+    assert.match(cue, /transform: translate\(-50%, -50%\);/);
+  });
+
+  /* WCAG 2.2 2.5.8: the lane is 18px, so the transparent input reaches 3px past it each way. */
+  it("makes the scrubber a 24px target without drawing it taller", () => {
+    assert.match(source, /\n {2}\.scrub-input \{[^}]*inset: -3px 0;[^}]*height: calc\(100% \+ 6px\);/);
+    assert.match(source, /\n {2}\.scrub \{[^}]*height: 18px;/, "the lane it is drawn in stays 18px");
+  });
+
+  /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
+  it("draws a queued message dotted and an error wide", () => {
+    assert.match(source, /\n {2}\.cue\.queue::before \{\s*background: repeating-linear-gradient/);
+    assert.match(source, /\n {2}\.cue\.error::before \{\s*width: 6px;/);
   });
 });

@@ -7,6 +7,9 @@
  * cannot tell the two apart, so this marks the element `data-tip-quiet` when focus arrives
  * other than by a navigation key, and app.css hides a quiet tip unless it is hovered. Blur
  * clears the mark, so tabbing away and back shows the tip as usual.
+ *
+ * Escape marks every showing tip `data-tip-dismissed`, which app.css hides even under the pointer
+ * (WCAG 1.4.13). The mark lasts until the element has neither the pointer nor focus.
  */
 const NAVIGATION_KEYS = new Set([
   "Tab",
@@ -18,12 +21,19 @@ const NAVIGATION_KEYS = new Set([
   "End"
 ]);
 
-type TipTarget = EventTarget & Partial<Pick<Element, "hasAttribute" | "setAttribute" | "removeAttribute">>;
+type TipTarget = EventTarget &
+  Partial<Pick<Element, "hasAttribute" | "setAttribute" | "removeAttribute" | "closest" | "contains" | "matches">>;
 
-export function quietProgrammaticTips(doc: Pick<Document, "addEventListener" | "removeEventListener">): () => void {
+export function quietProgrammaticTips(
+  doc: Pick<Document, "addEventListener" | "removeEventListener"> & Partial<Pick<Document, "querySelectorAll">>
+): () => void {
   let navigating = false;
   const onKeydown = (event: KeyboardEvent) => {
     navigating = NAVIGATION_KEYS.has(event.key);
+    if (event.key !== "Escape") return;
+    for (const tip of doc.querySelectorAll?.("[data-tip]:hover, [data-tip]:focus-visible") ?? []) {
+      tip.setAttribute("data-tip-dismissed", "");
+    }
   };
   const onPointerdown = () => {
     navigating = false;
@@ -33,18 +43,28 @@ export function quietProgrammaticTips(doc: Pick<Document, "addEventListener" | "
     if (!navigating && target?.hasAttribute?.("data-tip")) target.setAttribute?.("data-tip-quiet", "");
   };
   const onFocusout = (event: FocusEvent) => {
-    (event.target as TipTarget | null)?.removeAttribute?.("data-tip-quiet");
+    const target = event.target as TipTarget | null;
+    target?.removeAttribute?.("data-tip-quiet");
+    if (!target?.matches?.(":hover")) target?.removeAttribute?.("data-tip-dismissed");
+  };
+  const onPointerout = (event: PointerEvent) => {
+    const tip = (event.target as TipTarget | null)?.closest?.("[data-tip-dismissed]") as TipTarget | null | undefined;
+    if (tip && !tip.contains?.(event.relatedTarget as Node | null) && !tip.matches?.(":focus")) {
+      tip.removeAttribute?.("data-tip-dismissed");
+    }
   };
 
   doc.addEventListener("keydown", onKeydown, true);
   doc.addEventListener("pointerdown", onPointerdown, true);
   doc.addEventListener("focusin", onFocusin, true);
   doc.addEventListener("focusout", onFocusout, true);
+  doc.addEventListener("pointerout", onPointerout, true);
   return () => {
     doc.removeEventListener("keydown", onKeydown, true);
     doc.removeEventListener("pointerdown", onPointerdown, true);
     doc.removeEventListener("focusin", onFocusin, true);
     doc.removeEventListener("focusout", onFocusout, true);
+    doc.removeEventListener("pointerout", onPointerout, true);
   };
 }
 

@@ -39,6 +39,8 @@ import LatencyWaterfall, {
 } from "./LatencyWaterfall.svelte";
 
 const source = readFileSync(new URL("./LatencyWaterfall.svelte", import.meta.url), "utf8");
+/** A CSS selector as a regex that matches only itself. */
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 let clock = 0;
 const frame = (event, data) => ({
   event,
@@ -726,7 +728,7 @@ describe("the latency waterfall", () => {
      printed "2h 00m 00s3h 00m 00s". */
   describe("at the minimum pane width", () => {
     const rule = (selector) =>
-      [...source.matchAll(new RegExp(`\\n\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`, "g"))]
+      [...source.matchAll(new RegExp(`\\n\\s*${escapeRegExp(selector)}\\s*\\{([^}]*)\\}`, "g"))]
         .map((match) => match[1])
         .join("\n");
 
@@ -787,5 +789,22 @@ describe("the latency waterfall", () => {
       assert.equal(axisTicks(100, 1_000, () => 30).gap, 10, "guides sit on the nice step, not the end tick");
       assert.doesNotMatch(source, /niceTimeTicks\(scale, 5\)/, "no fixed tick count per row");
     });
+  });
+});
+
+/* WCAG 2.5.8: a mark is drawn 2–3px wide, but what a hand has to land on is 24px. */
+describe("the waterfall's press targets", () => {
+  const rule = (selector) => source.match(new RegExp(`\\n {2}${escapeRegExp(selector)} \\{([^}]*)\\}`))?.[1] ?? "";
+
+  it("gives a cue the ruler's height and 24px of width, and a 2px bar 24px of slop", () => {
+    assert.match(rule(".cue"), /width: 24px;\s*height: 100%;\s*margin-inline-start: -12px;/);
+    assert.match(source, /\n {2}\.axis \{[^}]*height: 22px;/, "the ruler a cue fills is 22px, so a 24px circle on it clears its neighbours");
+    assert.match(rule(".bar::before"), /inset: -2px -11px;/);
+  });
+
+  /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
+  it("draws a queued message dotted and an error wide, still centered", () => {
+    assert.match(rule(".cue.queue::before"), /background: repeating-linear-gradient/);
+    assert.match(rule(".cue.error::before"), /inset-inline-start: calc\(50% - 3px\);\s*width: 6px;/);
   });
 });

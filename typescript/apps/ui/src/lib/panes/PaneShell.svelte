@@ -63,6 +63,9 @@
   const meta = $derived(PANE_META[pane.kind]);
   /* What the pane is called aloud, folded or open: its kind, and its title where that says more. */
   const name = $derived(title.trim().toLowerCase() === meta.kindLabel.toLowerCase() ? meta.kindLabel : `${meta.kindLabel}: ${title}`);
+  /* A folded spine draws its title, then its kind, so its name starts with those words in that
+     order: a speech user says what they see (WCAG 2.5.3). */
+  const spineName = $derived(title.trim().toLowerCase() === meta.kindLabel.toLowerCase() ? meta.kindLabel : `${title} ${meta.kindLabel}`);
 
   /* A pane whose subject has not resolved yet is titled after its own kind —
      "Subagent" before the run names the agent — and the badge has said that. */
@@ -114,7 +117,7 @@
     type="button"
     class="spine"
     title={statusLabel ? `Expand ${name} — ${statusLabel}` : `Expand ${name}`}
-    aria-label={statusLabel ? `Expand ${name}, ${statusLabel}` : `Expand ${name}`}
+    aria-label={`${spineName}, expand${statusLabel ? `, ${statusLabel}` : ""}`}
     ondragover={(event) => event.preventDefault()}
     onclick={onToggleCollapse}
   >

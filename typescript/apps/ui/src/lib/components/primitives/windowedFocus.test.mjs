@@ -204,7 +204,7 @@ describe("a windowed list", () => {
     assert.doesNotMatch(empty, /role="feed"/, "an empty chat is no feed");
     assert.match(
       chat,
-      new RegExp(`class="message-row[^"]*" role="article" aria-posinset="1" aria-setsize="${messages}" tabindex="-1"`)
+      new RegExp(`class="message-row[^"]*" role="article" aria-label="You, message 1" aria-posinset="1" aria-setsize="${messages}" tabindex="-1"`)
     );
 
     const { groups } = buildReplayLog(frames);

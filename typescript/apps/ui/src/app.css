@@ -52,6 +52,9 @@
   /* --- Borders / focus ----------------------------------------------------- */
   --border: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.22);
+  /* A text field's edge is how it reads as a place to type: 3.2:1 or more against every surface
+     and its own fill, the 3:1 WCAG 1.4.11 asks of a control's boundary. */
+  --border-field: #666878;
   /* Solid: at 55% the ring measured 2.2:1 on the surfaces, under the 3:1 a focus indicator needs. */
   --focus-ring: var(--accent);
   /* Selected, open, or at the replay cursor: a whole-row tint, never a stroke down
@@ -76,6 +79,7 @@
   /* --- Semantic event hues ------------------------------------------------- */
   /* Space Black console chassis + Temporal indigo structure. Status / attention
      hues borrow Holocene readability and SoP gold punch — not alternate themes. */
+  /* Fills, strokes and glyphs. As text it clears 4.5:1 on --surface-0 and -1 only; words take --accent-soft. */
   --accent: #6173f3;
   --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */
@@ -274,6 +278,13 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Short, the desk scrolls down rather than squeezing the rail to nothing; see App.svelte. */
+@media (max-height: 500px) {
+  body {
+    overflow-y: auto;
+  }
+}
+
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
@@ -436,7 +447,7 @@ a {
 .form-control {
   min-width: 0;
   height: var(--control-height);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-field);
   border-radius: 0;
   background: var(--control-bg);
   font-size: var(--font-sm);
@@ -473,7 +484,7 @@ textarea.form-control {
 
 .form-control[aria-invalid="true"],
 .field:has(> [aria-invalid="true"]) {
-  border-color: color-mix(in srgb, var(--error) 60%, var(--border));
+  border-color: color-mix(in srgb, var(--error) 60%, var(--border-field));
 }
 
 .form-control::placeholder {
@@ -1077,13 +1088,18 @@ pre[data-language]::before,
 /* The caret stays on the element's centre wherever the bubble slides, so a tip
    that has cleared its element still points back at it. It is the bubble's own
    fill and overlaps it by 1px, painted above it: under it, a stroke on the
-   bubble cut across its base and it read as a separate, fainter piece. */
+   bubble cut across its base and it read as a separate, fainter piece.
+   Its box starts at the element's edge: the 8px transparent side fills the gap
+   the triangle used to float over, so the pointer crosses from the element into
+   the bubble without leaving the hover (WCAG 1.4.13). The triangle draws where
+   it always did, 8–13px out. */
 [data-tip]::before {
   content: "";
   z-index: 41;
   left: 50%;
-  bottom: calc(100% + 3px);
+  bottom: 100%;
   border: 5px solid transparent;
+  border-bottom-width: 8px;
   border-top-color: var(--surface-3);
   transform: translate(-50%, 0);
 }
@@ -1135,7 +1151,9 @@ pre[data-language]::before,
 [data-tip-below]:not([data-tip-flip])::before,
 [data-tip][data-tip-flip]:not([data-tip-below])::before {
   bottom: auto;
-  top: calc(100% + 3px);
+  top: 100%;
+  border-top-width: 8px;
+  border-bottom-width: 5px;
   border-top-color: transparent;
   border-bottom-color: var(--surface-3);
 }
@@ -1168,7 +1186,8 @@ pre[data-language]::before,
 [data-tip][data-tip-side="right"]::before,
 [data-tip][data-tip-side="right"][data-tip-flip]::before {
   top: calc(var(--tip-side-middle) - 5px);
-  left: calc(var(--tip-side-x) + 3px);
+  left: var(--tip-side-x);
+  border-width: 5px 5px 5px 8px;
   border-color: transparent var(--surface-3) transparent transparent;
   transform: none;
 }
@@ -1185,6 +1204,7 @@ pre[data-language]::before,
 
 [data-tip][data-tip-side="right"][data-tip-flip]::before {
   left: calc(var(--tip-side-x) - 13px);
+  border-width: 5px 8px 5px 5px;
   border-color: transparent transparent transparent var(--surface-3);
 }
 
@@ -1204,6 +1224,8 @@ pre[data-language]::before,
 [data-tip]:focus-visible > .tip-card {
   display: block;
   animation: tip-in var(--duration-fast) var(--ease-ui) var(--tip-delay) both;
+  /* Hit-testable while shown, so the pointer resting on the bubble keeps it. */
+  pointer-events: auto;
 }
 
 [data-tip]:hover > .tip-card,
@@ -1231,6 +1253,13 @@ pre[data-language]::before,
 [data-tip][data-tip-quiet]:not(:hover)::before,
 [data-tip][data-tip-quiet]:not(:hover)::after,
 [data-tip][data-tip-quiet]:not(:hover) > .tip-card {
+  display: none;
+}
+
+/* Escape put it away (tipFocus.ts), under the pointer too. */
+[data-tip][data-tip-dismissed]::before,
+[data-tip][data-tip-dismissed]::after,
+[data-tip][data-tip-dismissed] > .tip-card {
   display: none;
 }
 

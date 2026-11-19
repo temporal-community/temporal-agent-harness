@@ -389,6 +389,8 @@
     position: relative;
     flex: none;
     min-width: 0;
+    /* Keeps the plot's clickable bars 4px clear of the legend buttons above it. */
+    margin-top: 4px;
     height: clamp(var(--plot-min), 40cqi, var(--plot-max));
   }
 

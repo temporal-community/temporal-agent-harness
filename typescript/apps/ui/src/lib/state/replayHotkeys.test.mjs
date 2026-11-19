@@ -29,6 +29,7 @@ import { AgentRunController } from "./agentRun.svelte.ts";
 import {
   applyReplayAction,
   describeReplayKeyEvent,
+  isCharacterKey,
   REPLAY_BINDINGS,
   resolveReplayAction
 } from "./replayHotkeys.ts";
@@ -49,9 +50,28 @@ function press(overrides = {}) {
     modalOpen: false,
     helpOpen: false,
     bleeding: false,
+    characterKeys: true,
     ...overrides
   };
 }
+
+/* WCAG 2.1.4: speech input types characters, so one-key shortcuts must be able to go quiet. */
+describe("with one-key shortcuts turned off", () => {
+  it("drops every bare character key and keeps arrows, Home, End and modified chords", () => {
+    const off = (overrides) => resolveReplayAction(press({ characterKeys: false, ...overrides }));
+    for (const key of ["f", "d", "s", ",", ".", " "]) assert.equal(off({ key }), null, JSON.stringify(key));
+    assert.equal(off({ key: "?", shiftKey: true }), null);
+    assert.equal(off({ key: "ArrowRight" }), "stepForward");
+    assert.equal(off({ key: "End" }), "last");
+    assert.equal(off({ key: "d", modKey: true, shiftKey: true }), "railToggleDock");
+    assert.equal(resolveReplayAction(press({ key: "d" })), "toggleDrawer", "on by default");
+  });
+
+  it("names exactly the bindings a speech user would trip", () => {
+    const keys = REPLAY_BINDINGS.filter(isCharacterKey).map((binding) => binding.chord);
+    assert.deepEqual(keys.sort(), [",", ".", "?", "D", "F", "S", "Space"].sort());
+  });
+});
 
 describe("when a binding is allowed to fire", () => {
   it("a plain key does what the table says", () => {

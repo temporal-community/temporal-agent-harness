@@ -380,7 +380,7 @@
       active={detailOpen}
       disabled={!hasDetail}
       aria-expanded={detailOpen}
-      aria-controls="now-card"
+      aria-controls={detailOpen && hasDetail ? "now-card" : undefined}
       data-tip={detailOpen && hasDetail
         ? undefined
         : hasDetail
@@ -564,12 +564,14 @@
   }
 
   /* The input owns the whole lane so the drag target is bigger than the bar. */
+  /* 3px past the 18px lane each way, so the transparent input is the 24px target WCAG 2.2
+     2.5.8 asks for; the lane draws the bar. */
   .scrub-input {
     position: absolute;
-    inset: 0;
+    inset: -3px 0;
     z-index: 1;
     width: 100%;
-    height: 100%;
+    height: calc(100% + 6px);
     margin: 0;
     padding: 0;
     background: transparent;
@@ -604,19 +606,19 @@
     border: 0;
   }
 
-  /* Small mark, generous hit box: the tick is 3px, the button is 11px. Centered
-     where the playhead's centre would be at the same event. */
+  /* Small mark, generous hit box: the tick is 3px, the button the 24px square WCAG
+     2.5.8 asks for. Centered where the playhead's centre would be at the same event. */
   .cue {
     position: absolute;
-    top: 0;
+    top: 50%;
     left: calc(var(--at) * (100% - 2px) + 1px);
     z-index: 2;
-    width: 11px;
-    height: 100%;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border: 0;
     background: transparent;
-    transform: translateX(-50%);
+    transform: translate(-50%, -50%);
     cursor: pointer;
   }
 
@@ -642,6 +644,16 @@
 
   .cue.error::before {
     background: var(--error);
+  }
+
+  /* Shape as well as hue, so the kinds part without color (WCAG 1.4.1): an approval is a
+     solid tick, a queued message a dotted one, an error a wide one. */
+  .cue.queue::before {
+    background: repeating-linear-gradient(to bottom, var(--queue) 0 2px, transparent 2px 4px);
+  }
+
+  .cue.error::before {
+    width: 6px;
   }
 
   .cue:focus-visible {

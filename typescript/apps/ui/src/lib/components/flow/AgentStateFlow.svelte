@@ -280,6 +280,7 @@
        moves between panes. Pinch (ctrl+wheel), the corner buttons and dragging
        still zoom and pan the canvas, as on the timeline. -->
   <SvelteFlow
+    aria-label={agentLabel ? `${agentLabel} state flow` : "State flow"}
     bind:nodes
     bind:edges
     {nodeTypes}

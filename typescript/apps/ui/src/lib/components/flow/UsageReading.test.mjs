@@ -69,7 +69,7 @@ const shown = (props) =>
    stand in a source claim for a figure a closed render would have hidden. */
 const figures = (html) => {
   const column = html.slice(html.indexOf("usage-metrics"), html.indexOf("usage-detail") >>> 0);
-  return [...column.matchAll(/<dd[^>]*>([^<]*)</g)].map((m) => m[1].trim());
+  return [...column.matchAll(/<span class="metric-value[^"]*">([^<]*)</g)].map((m) => m[1].trim());
 };
 
 /* The tone on the headline metric, which is the first one and the affirmative one.
@@ -127,7 +127,7 @@ describe("UsageReading", () => {
     assert.notEqual(headlineTone(html), "strong");
 
     const strip = readFileSync(new URL("../primitives/MetricStrip.svelte", import.meta.url), "utf8");
-    assert.match(strip, /dd \{\s*direction: ltr;\s*unicode-bidi: isolate;/, "so a right-to-left page cannot mirror ≥ into ≤");
+    assert.match(strip, /\.metric-value \{\s*direction: ltr;\s*unicode-bidi: isolate;/, "so a right-to-left page cannot mirror ≥ into ≤");
 
     const nothing = shown({ usage: summarizeCost([ended(PRICED, null)]), viewIndex: 0 });
     assert.deepEqual(figures(nothing), ["—", "—", "—", "—", "—", "—"], "with nothing reported there is no floor to show");
@@ -197,7 +197,7 @@ describe("UsageReading", () => {
   /* Static numbers are not controls, so they carry no box: the strip is `bare`. */
   it("draws the figures without boxes and names the parts plainly", () => {
     const html = shown({ usage: REAL_SPEND });
-    const strips = [...html.matchAll(/<dl class="metric-strip([^"]*)"/g)].map((m) => m[1]);
+    const strips = [...html.matchAll(/<div class="metric-strip([^"]*)"/g)].map((m) => m[1]);
     assert.equal(strips.length, 2);
     for (const classes of strips) assert.match(classes, /\bbare\b/, "every figure strip is bare");
     assert.match(text(html), /Breakdown/);
@@ -306,13 +306,13 @@ describe("UsageReading", () => {
       props: { usage: summarizeCost(frames), usageTimeline: buildUsageTimeline(frames), viewIndex: 3 }
     }).body;
     assert.deepEqual(figures(html).slice(2), ["1,250", "250", "600", "700", "90*", "110 (3.7%)"]);
-    const labels = [...html.matchAll(/<dt[^>]*>([^<]*)</g)].map((m) => m[1].trim());
+    const labels = [...html.matchAll(/<span class="kicker metric-label[^"]*">([^<]*)</g)].map((m) => m[1].trim());
     assert.deepEqual(labels.slice(2), ["input (uncached)", "cached", "output", "thought", "tool-use", "decisions"], "in stacking order");
     const swatches = [...html.matchAll(/class="metric-swatch[^"]*" aria-hidden="true" style="background: ([^;"]+)/g)].map((m) => m[1]);
     assert.deepEqual(swatches, Object.values(TOKEN_CATEGORY_STYLES).map((style) => style.color), "a square key per part, in its bar color");
     assert.match(text(html), /\* tool-use: not reported by gpt-5\.4-mini/);
     assert.match(html, /data-tip="tool-use: not reported by gpt-5\.4-mini"/, "the figure's tip says it too");
-    assert.match(html, /<dl class="metric-strip[^"]*\bgrid\b/, "the parts are one grid, which is the legend");
+    assert.match(html, /<div class="metric-strip[^"]*\bgrid\b/, "the parts are one grid, which is the legend");
 
     const early = render(UsageReading, {
       props: { usage: summarizeCost(frames.slice(0, 1)), usageTimeline: buildUsageTimeline(frames), viewIndex: 1 }

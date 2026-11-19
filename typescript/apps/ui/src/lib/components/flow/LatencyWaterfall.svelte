@@ -976,9 +976,10 @@
     inset-block-start: 0;
     inset-inline-start: calc(var(--at) * 100%);
     z-index: 3;
-    width: 11px;
-    height: 8px;
-    margin-inline-start: -5.5px;
+    /* The ruler's full height and 24px wide: the target WCAG 2.5.8 asks for, around a 3px mark. */
+    width: 24px;
+    height: 100%;
+    margin-inline-start: -12px;
     padding: 0;
     border: 0;
     background: transparent;
@@ -989,7 +990,7 @@
     content: "";
     position: absolute;
     inset-block-start: 1px;
-    inset-inline-start: 4px;
+    inset-inline-start: calc(50% - 1.5px);
     width: 3px;
     height: 6px;
     background: var(--text-3);
@@ -999,11 +1000,14 @@
     background: var(--live);
   }
 
+  /* Shape as well as hue, as on the transport (WCAG 1.4.1): solid, dotted, wide. */
   .cue.queue::before {
-    background: var(--queue);
+    background: repeating-linear-gradient(to bottom, var(--queue) 0 2px, transparent 2px 4px);
   }
 
   .cue.error::before {
+    inset-inline-start: calc(50% - 3px);
+    width: 6px;
     background: var(--error);
   }
 
@@ -1244,13 +1248,13 @@
   }
 
   /* Hit slop, TanStack example 91's 44px handle target adapted: the TARGET grows,
-     the bar does not. A 2px bar is a 22px-wide, 24px-tall thing to point at, which
-     is the difference between a span you can read about and one you cannot catch.
+     the bar does not. A 2px bar is a 24px-square thing to point at, which is the
+     difference between a span you can read about and one you cannot catch.
      Kept inside the lane pitch so slop never steals the lane above or below. */
   .bar::before {
     content: "";
     position: absolute;
-    inset: -2px -10px;
+    inset: -2px -11px;
   }
 
   .bar-text {

@@ -176,6 +176,9 @@
   );
   let chatTargetId = $state<string | null>(null);
   let hotkeyHelpOpen = $state(false);
+  let characterKeys = $state(savedPrefs.characterKeys ?? true);
+  /* Where the Session Manager stops being a column and covers the desk; see the style block. */
+  const NARROW_SESSION_DRAWER = "(max-width: 640px)";
   const SESSION_DRAWER_DEFAULT_W = 420;
   const SESSION_DRAWER_MIN_W = 240;
   /* Open by default with no session to show: the sidebar is the console's one list of sessions
@@ -554,7 +557,7 @@
     }
 
     const action = resolveReplayAction(
-      describeReplayKeyEvent(event, { helpOpen: hotkeyHelpOpen, bleeding })
+      describeReplayKeyEvent(event, { helpOpen: hotkeyHelpOpen, bleeding, characterKeys })
     );
     if (action == null) return;
     event.preventDefault();
@@ -864,6 +867,7 @@
   class:drawer-solo={deskDrawer.groups.length === 1 && deskDrawer.groups[0].length === 1}
   style={`--drawer-h: ${drawerHeight}px; --session-drawer-w: ${sessionDrawerWidth}px`}
 >
+  <h1 class="visually-hidden">Agent console{home || !run.runInfo.agentLabel ? "" : `: ${run.runInfo.agentLabel}`}</h1>
   <!-- Two strips, and each answers one question: this one what you are looking
        at, the transport under the rail where in the run you are looking from.
        The link notice rides with the status line rather than as a third strip:
@@ -887,7 +891,7 @@
           data-tip="Sessions&#10;S"
           aria-pressed={sessionDrawerOpen}
           aria-expanded={sessionDrawerOpen}
-          aria-controls="session-manager-drawer"
+          aria-controls={sessionManagerHeld ? "session-manager-drawer" : undefined}
           data-tip-below
           data-tip-align="start"
           onclick={toggleSessionManager}
@@ -955,7 +959,7 @@
   </div>
 
   {#if sessionManagerHeld}
-    <aside class="session-drawer" id="session-manager-drawer">
+    <aside class="session-drawer" id="session-manager-drawer" aria-label="Session Manager">
       <DockedDrawer
         edge="left"
         label="Session Manager"
@@ -985,7 +989,11 @@
             onDismissNotice={() => (run.missingLinkedSession = null)}
             sessionsLoaded={run.sessionsLoaded}
             {pendingLabel}
-            onSelectSession={(sessionId) => run.selectSession(sessionId)}
+            onSelectSession={(sessionId) => {
+              run.selectSession(sessionId);
+              /* Narrow, the drawer covers the desk, so the session would open behind it. */
+              if (window.matchMedia(NARROW_SESSION_DRAWER).matches) holdSessionManager(false);
+            }}
             onRefreshSessions={() => run.refreshSessions()}
             onEndSession={(sessionId) => run.endSession(sessionId)}
             onArchiveSession={(sessionId) => run.quiesce(sessionId)}
@@ -1222,7 +1230,15 @@
   </button>
 {/snippet}
 
-<HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
+<HotkeyHelp
+  open={hotkeyHelpOpen}
+  onClose={() => (hotkeyHelpOpen = false)}
+  {characterKeys}
+  onCharacterKeys={(on) => {
+    characterKeys = on;
+    writeOperatorPrefs({ characterKeys: on });
+  }}
+/>
 
 <SearchPalette
   bind:open={paletteOpen}
@@ -1253,6 +1269,21 @@
     grid-template-rows: auto minmax(0, 1fr) auto;
     background: var(--surface-0);
     color: var(--text-1);
+  }
+
+  /* Short, as at 400% zoom (a 1280 x 1024 window is 320 x 256), the transport and the bottom
+     drawer took the height and left the rail a strip too thin to read (WCAG 1.4.10). Here the
+     page grows past the window instead: the rail keeps a screen's height and everything under
+     it scrolls up into view. One direction only; app.css lets the body scroll. */
+  @media (max-height: 500px) {
+    .app {
+      height: auto;
+      min-height: 100dvh;
+    }
+
+    .app > :global(.rail-frame) {
+      min-height: calc(100dvh - var(--head-height));
+    }
   }
 
   /* First paint is a settled picture. This one gate covers CSS transitions,
@@ -1288,6 +1319,46 @@
   .app.has-session-drawer > .drawer,
   .app.has-session-drawer > :global(.home-status) {
     grid-column: 2;
+  }
+
+  /* Narrow, a side column left the desk a sliver: 128px at 320px wide (400% zoom), with the
+     transport overflowing it and the page past the window (WCAG 1.4.10). Here the drawer
+     covers the desk at full width instead, like any narrow navigation drawer, and its own
+     toggle or picking a session puts it away. Width is the window's, so no resize handle.
+     The breakpoint is repeated as NARROW_SESSION_DRAWER in the script. */
+  @media (max-width: 640px) {
+    .app.has-session-drawer:not(.bleed) {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* Under the drawer, so hidden rather than painted over: nothing in them can take focus
+       or paint through, and they keep their size for when the drawer goes. Their rows are
+       named, because sharing the drawer's column, auto-placement would push them into rows
+       of their own below it and leave the drawer's rows none of the height. */
+    .app.has-session-drawer:not(.bleed) > :global(.rail-frame),
+    .app.has-session-drawer:not(.bleed) > :global(.step-controller),
+    .app.has-session-drawer:not(.bleed) > .drawer,
+    .app.has-session-drawer:not(.bleed) > :global(.home-status) {
+      grid-column: 1;
+      visibility: hidden;
+    }
+
+    .app.has-session-drawer:not(.bleed) > :global(.rail-frame) {
+      grid-row: 2;
+    }
+
+    .app.has-session-drawer:not(.bleed) > :global(.step-controller),
+    .app.has-session-drawer:not(.bleed) > :global(.home-status) {
+      grid-row: 3;
+    }
+
+    .app.has-session-drawer:not(.bleed) > .drawer {
+      grid-row: 4;
+    }
+
+    .session-drawer :global(.drawer-gutter) {
+      display: none;
+    }
   }
 
   /* The drawer opens under the transport and takes its height off the RAIL, which is

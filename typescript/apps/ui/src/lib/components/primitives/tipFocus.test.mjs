@@ -66,6 +66,29 @@ describe("tips shown for focus", () => {
     assert.deepEqual(Object.keys(doc.handlers), []);
   });
 
+  /* WCAG 1.4.13: a tip can be put away without moving the pointer or focus. */
+  it("dismisses a showing tip on Escape until the pointer leaves it", () => {
+    const doc = fakeDocument();
+    const chip = { ...element(), matches: () => false, contains: () => false };
+    chip.closest = (selector) => (selector === "[data-tip-dismissed]" && chip.hasAttribute("data-tip-dismissed") ? chip : null);
+    doc.querySelectorAll = (selector) => (selector.includes(":hover") ? [chip] : []);
+    quietProgrammaticTips(doc);
+
+    doc.handlers.keydown({ key: "Enter" });
+    assert.ok(!chip.hasAttribute("data-tip-dismissed"), "only Escape dismisses");
+    doc.handlers.keydown({ key: "Escape" });
+    assert.ok(chip.hasAttribute("data-tip-dismissed"));
+
+    doc.handlers.pointerout({ target: chip, relatedTarget: null });
+    assert.ok(!chip.hasAttribute("data-tip-dismissed"), "the next hover shows it again");
+
+    const css = readFileSync(new URL("../../../app.css", import.meta.url), "utf8");
+    assert.match(
+      css,
+      /\[data-tip\]\[data-tip-dismissed\]::before,\s*\[data-tip\]\[data-tip-dismissed\]::after,\s*\[data-tip\]\[data-tip-dismissed\] > \.tip-card \{\s*display: none;/
+    );
+  });
+
   it("is installed at startup and hides a quiet tip unless it is hovered", () => {
     const main = readFileSync(new URL("../../../main.ts", import.meta.url), "utf8");
     assert.match(main, /quietProgrammaticTips\(document\);/);
@@ -138,8 +161,11 @@ describe("tips shown for focus", () => {
     assert.match(caret, /border-top-color: var\(--surface-3\);/);
     const surface = css.match(/\n\[data-tip\]::after,\n\.tip-card \{([^}]*)\}/)?.[1] ?? "";
     assert.match(surface, /background: var\(--surface-3\);/, "the caret's colour is the bubble's");
-    /* The caret's 5px triangle spans 8–13px from the element, the bubble starts at 12: 1px of overlap, no seam. */
-    assert.match(caret, /bottom: calc\(100% \+ 3px\);\s*border: 5px solid transparent;/);
+    /* The caret's 5px triangle spans 8–13px from the element, the bubble starts at 12: 1px of overlap,
+       no seam. Its box starts at the element (an 8px transparent side), so the pointer can cross
+       into the bubble, which takes the pointer while shown (WCAG 1.4.13: hoverable). */
+    assert.match(caret, /bottom: 100%;\s*border: 5px solid transparent;\s*border-bottom-width: 8px;/);
+    assert.match(css, /\[data-tip\]:focus-visible > \.tip-card \{\s*display: block;\s*animation: [^;]+;\s*\/\*[^*]*\*\/\s*pointer-events: auto;/);
     assert.match(css, /\n\[data-tip\]::after,\n\[data-tip\] > \.tip-card \{\s*left: 50%;\s*bottom: calc\(100% \+ 12px\);/);
   });
 

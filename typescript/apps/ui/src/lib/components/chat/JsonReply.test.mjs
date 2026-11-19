@@ -67,6 +67,13 @@ describe("a structured reply", () => {
     assert.match(markup({ json: { a: 1 } }), /<div class="json-body[^>]*>\s*<pre class="json-code[^>]*><code[^>]*>[\s\S]*md-syntax-property/);
   });
 
+  /* WCAG 2.1.1: a finished reply still scrolls sideways, so its scroller is a tab stop too. */
+  it("lets a keyboard reach the scroller, streaming or finished", () => {
+    for (const props of [{ text: '{"records":[' }, { json: { a: 1 } }]) {
+      assert.match(markup(props), /<div class="json-body[^"]*" dir="ltr" tabindex="0"/);
+    }
+  });
+
   it("names the shared region and keeps the payload left to right on an RTL page", () => {
     const body = markup({ json: { a: 1 } });
     assert.match(body, /role="region" aria-label="JSON reply"/);

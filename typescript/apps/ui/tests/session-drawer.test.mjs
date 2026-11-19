@@ -62,7 +62,7 @@ describe("Session Manager drawer", () => {
     assert.equal(appSource.match(/<DockedDrawer\b/g)?.length, 2);
     assert.match(appSource, /<DockedDrawer\s+edge="left"/);
     assert.match(appSource, /<DockedDrawer\s+edge="bottom"/);
-    assert.match(appSource, /aria-controls="session-manager-drawer"/);
+    assert.match(appSource, /aria-controls=\{sessionManagerHeld \? "session-manager-drawer" : undefined\}/);
     /* The drawer and the list inside it are both regions; one name for both read as a
        nested duplicate to a screen reader. */
     assert.match(appSource, /<DockedDrawer\s+edge="left"\s+label="Session Manager"/);
@@ -228,7 +228,7 @@ describe("Session Manager rows", () => {
       sessionId: ""
     });
     const row = rowOf(body, "wf-a");
-    assert.match(row, /role="option"[^>]*aria-describedby="session-option-wf-a-tip"[^>]*data-tip=""[^>]*data-tip-side="right"/);
+    assert.match(row, /class="session-row[^>]*aria-describedby="session-option-wf-a-tip"[^>]*data-tip=""[^>]*data-tip-side="right"/);
     const card = row.match(/<span[^>]*id="session-option-wf-a-tip"[^>]*>[\s\S]*<\/span>\s*<\/button>/)?.[0] ?? "";
     assert.match(card, /role="tooltip"/);
     assert.match(card, /aria-hidden="true"/, "kept out of the row's name; aria-describedby still reads it");
@@ -264,12 +264,14 @@ describe("Session Manager rows", () => {
     assert.match(unknown, /class="tip-card-value[^"]*" dir="auto">Hello</, "an agent named by its type is not repeated");
   });
 
-  /* Arrowing moves aria-activedescendant, not focus, so the highlighted row draws no tip. */
+  /* Arrowing moves a drawn highlight and the spoken line, not focus, so the highlighted row
+     draws no tip. */
   it("does not tip the arrow-highlighted row", () => {
-    assert.doesNotMatch(appCss + controls, /\.highlighted[^{]*::after|aria-selected="true"\][^{]*::after/);
+    assert.doesNotMatch(appCss + controls, /\.highlighted[^{]*::after/);
+    assert.match(controls, /aria-live="polite" aria-atomic="true">\{highlightSpoken\}/);
   });
 
-  /* After a click on another session, aria-current moved but aria-selected stayed on the first row. */
+  /* After a click on another session, aria-current moved but the highlight stayed on the first row. */
   it("moves the selection to the session a click or Enter opens", () => {
     assert.match(controls, /async function openSession\(nextSessionId: string\): Promise<void> \{\s*if \(!onSelectSession\) return;\s*arrowedId = nextSessionId;/);
     assert.match(controls, /onclick=\{\(\) => void openSession\(item\.workflow_id\)\}/, "click");
@@ -416,7 +418,7 @@ describe("Session Manager rows", () => {
     const key = "temporal-agent-ui.prefs.v1";
     const sessions = [session("wf-a"), session("wf-b", { created_at: Date.now() / 1000 - 60 }), session("wf-c")];
     const headings = (body) => [...body.matchAll(/<div class="group-heading[^"]*" aria-hidden="true">([^<]*?) <span/g)].map((m) => m[1]);
-    const order = (body) => [...body.matchAll(/role="option"[^>]*aria-posinset="(\d+)"/g)].map((m) => Number(m[1]));
+    const order = (body) => [...body.matchAll(/role="listitem"[^>]*aria-posinset="(\d+)"/g)].map((m) => Number(m[1]));
     const ids = (body) => [...body.matchAll(/id="session-option-([^"]+)" class="session-row/g)].map((m) => m[1]);
     assert.deepEqual(headings(pane({ sessions, sessionId: "" })), ["Today"]);
 
@@ -436,9 +438,9 @@ describe("Session Manager rows", () => {
     const pinnedRow = rowOf(body, "wf-a");
     assert.match(pinnedRow, /<button[^>]*class="icon-button[^"]*session-pin[^"]*"[^>]*aria-label="Unpin session — Hello — Title wf-a" aria-pressed="true"/);
     assert.match(rowOf(body, "wf-b"), /class="icon-button[^"]*session-pin[^"]*"[^>]*aria-label="Pin session — Hello — Title wf-b" aria-pressed="false"/);
-    const option = pinnedRow.match(/<button[^>]*role="option"[\s\S]*?<\/button>/)?.[0] ?? "";
-    assert.ok(option, "the row is an option");
-    assert.doesNotMatch(option.slice(1), /<button/, "the pin sits beside the option, never inside it");
+    const rowButton = pinnedRow.match(/<button[^>]*class="session-row[\s\S]*?<\/button>/)?.[0] ?? "";
+    assert.ok(rowButton, "the row is a button");
+    assert.doesNotMatch(rowButton.slice(1), /<button/, "the pin sits beside the row's button, never inside it");
 
     /* Unlisted pins survive other toggles: a filter or a shorter page only hides them. */
     togglePinnedSession("wf-gone");
@@ -459,13 +461,13 @@ describe("Session Manager rows", () => {
     assert.deepEqual(headings(pane({ sessions, sessionId: "" })), ["Today"]);
   });
 
-  it("archives into a shut Archived group that persists, keeps the listbox valid, and unarchives back", () => {
+  it("archives into a shut Archived group that persists, keeps the list's count right, and unarchives back", () => {
     const { storage } = installBrowserSurface();
     const key = "temporal-agent-ui.prefs.v1";
     const sessions = [session("wf-a", { closed: true }), session("wf-b"), session("wf-gone", { execution_status: "NOT_FOUND", closed: true })];
     const headings = (body) => [...body.matchAll(/class="group-heading[^"]*"[^>]*>([^<]*?) <span/g)].map((m) => m[1]);
     const ids = (body) => [...body.matchAll(/id="session-option-([^"]+)" class="session-row/g)].map((m) => m[1]);
-    const options = (body) => [...body.matchAll(/<button[^>]*role="option"[^>]*aria-setsize="(\d+)" aria-posinset="(\d+)"[\s\S]*?<\/button>/g)];
+    const items = (body) => [...body.matchAll(/role="listitem" aria-setsize="(\d+)" aria-posinset="(\d+)"/g)];
 
     const archiveOf = (row) => row.match(/<button[^>]*class="icon-button[^"]*session-archive[^"]*"[^>]*>/)?.[0] ?? "";
     const before = pane({ sessions, sessionId: "" });
@@ -482,15 +484,13 @@ describe("Session Manager rows", () => {
     assert.deepEqual(headings(shut), ["Today", "Archived"], "out of Pinned and its day, into a group at the bottom");
     assert.deepEqual(ids(shut), ["wf-b"], "shut by default, so its rows are not drawn or arrowed to");
     assert.match(shut, /<button type="button" class="group-heading archive-toggle disclosure[^"]*" aria-expanded="false">Archived <span[^>]*>2<\/span>\s*<svg[^>]*disclosure-chevron/);
-    assert.deepEqual(options(shut).map((m) => [m[1], m[2]]), [["1", "1"]]);
+    assert.deepEqual(items(shut).map((m) => [m[1], m[2]]), [["1", "1"]]);
 
     storage.local.setItem(key, JSON.stringify({ ...JSON.parse(storage.local.getItem(key)), sessionArchiveOpen: true }));
     const open = pane({ sessions, sessionId: "" });
     assert.match(open, /aria-expanded="true">Archived <span[^>]*>2</);
     assert.deepEqual(ids(open), ["wf-b", "wf-a", "wf-gone"], "newest first, like every other group");
-    const drawn = options(open);
-    assert.deepEqual(drawn.map((m) => [m[1], m[2]]), [["3", "1"], ["3", "2"], ["3", "3"]], "positions count only drawn rows");
-    for (const [option] of drawn) assert.doesNotMatch(option.slice(1), /<button/, "nothing pressable inside an option");
+    assert.deepEqual(items(open).map((m) => [m[1], m[2]]), [["3", "1"], ["3", "2"], ["3", "3"]], "positions count only drawn rows");
     assert.match(archiveOf(rowOf(open, "wf-a")), /aria-label="Unarchive session — Hello — Title wf-a" aria-pressed="true"/);
     assert.match(rowOf(open, "wf-a"), /lucide-archive-restore/);
     assert.match(controls, /if \(archivedIds\.has\(workflowId\)\) onArchiveSession\?\.\(workflowId\);/, "archiving stops its stream");

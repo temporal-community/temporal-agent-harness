@@ -179,6 +179,12 @@ describe("the menu in PaneMinimap", () => {
     assert.match(minimap, /\.launch-menu \.kicker \{[^}]*white-space: nowrap;/);
   });
 
+  /* WCAG 1.4.3: the kicker's --text-3 is 3.5:1 on the menu's --surface-3. */
+  it("draws unchecked labels in --text-2, which reads at 4.5:1 on the menu's surface", () => {
+    assert.match(minimap.match(/\n  \.launch-menu \{([^}]*)\}/)[1], /background: var\(--surface-3\);/);
+    assert.match(minimap, /\n  \.launch-menu \.kicker \{\s*color: var\(--text-2\);/);
+  });
+
   it("caps its height to the room under the head row and scrolls the walked row into view", () => {
     const menuRule = minimap.match(/\n  \.launch-menu \{([^}]*)\}/)[1];
     assert.match(menuRule, /max-height: calc\(100dvh - var\(--head-height\)/, "a short window cut off the last rows");

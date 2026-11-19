@@ -426,6 +426,16 @@
         ? replyAnnouncement(latestProgress.phase)
         : ""
   );
+  /* Spoken once it settles. Opening a past session replays its turns, flipping the phase
+     many times a second, and every flip queued its own announcement: 23 in two seconds.
+     Short enough that a live turn's "thinking" is still heard as it starts. */
+  const REPLY_SETTLE_MS = 600;
+  let replySpoken = $state("");
+  $effect(() => {
+    const next = replyAnnounced;
+    const settle = setTimeout(() => (replySpoken = next), REPLY_SETTLE_MS);
+    return () => clearTimeout(settle);
+  });
 
   /* A turn's activity is drawn once, under the message that opened it. A message that joins the
      running turn shares its number, and drawing it there too repeated the whole turn under each. */
@@ -602,6 +612,10 @@
   const midTurn = $derived(selectedHandler?.mid_turn ?? "reject");
   const sendingBlocksInput = $derived(sending && midTurn === "reject");
   const connectingBlocksInput = $derived(connecting && activeSession == null);
+  /* For the controls around the text box. The box itself is disabled only once the session can
+     never take input again: flipping `disabled` around a moment of loading drops the OS
+     accessibility link that dictation tools such as Wispr Flow type through, and sendMessage
+     already refuses to send until the session is ready. */
   const composerDisabled = $derived(closed || connectingBlocksInput || creatingSession);
   const pickerDraft = $derived(
     pickerButtonOpen ? { name: "", rest: "" } : parsePickerDraft(draft)
@@ -1959,9 +1973,11 @@
         {#if message}
         {@const copyable = copiesWhole(message)}
         {@const reply = message.role === "assistant"}
+        <!-- Named, so a reader listing the messages can tell one from the next. -->
         <div
           class="message-row"
           role="article"
+          aria-label={`${reply ? agentLabel : "You"}, message ${row.index + 1}`}
           aria-posinset={row.index + 1}
           aria-setsize={messages.length}
           tabindex="-1"
@@ -1997,13 +2013,13 @@
                 </LongContent>
               </TraceRow>
             {:else if message.data}
-              <JsonReply id={`message-${message.id}`} json={message.json} text={message.text} onResize={remeasureMessages} />
+              <JsonReply id={`message-${message.id}`} label={`JSON reply, message ${row.index + 1}`} json={message.json} text={message.text} onResize={remeasureMessages} />
             {:else}
               <LongContent
                 id={`message-${message.id}`}
                 text={message.text}
                 streaming={message.streaming}
-                label={reply ? "Agent reply" : "User message"}
+                label={`${reply ? "Agent reply" : "User message"}, message ${row.index + 1}`}
                 onResize={remeasureMessages}
               >
                 <MarkdownMessage
@@ -2091,7 +2107,7 @@
 
               {#if expanded && activeLog}
                 <div class="activity-trace"><div class="activity-list">
-                  {#each traceSteps(activityLogs) as step (groupKey(message.id, step.id))}
+                  {#each traceSteps(activityLogs) as step, stepIndex (groupKey(message.id, step.id))}
                     {#if step.kind === "thought"}
                       {#if thought}
                         <details
@@ -2154,7 +2170,7 @@
                         {#if args}
                           <section class="activity-full" aria-label="Arguments">
                             <span class="activity-full-label">Arguments</span>
-                            <JsonReply id={`trace-${step.id}-arguments`} json={args} onResize={remeasureMessages} />
+                            <JsonReply id={`trace-${step.id}-arguments`} label={`${outputRow?.toolName ?? "Tool"} arguments, message ${row.index + 1}, step ${stepIndex + 1}`} json={args} onResize={remeasureMessages} />
                           </section>
                         {/if}
                         <section class="activity-full" aria-label="Full details">
@@ -2197,16 +2213,16 @@
       {/if}
     </div>
 
-    <p class="sr-only" role="status">{replyAnnounced}</p>
+    <p class="sr-only" role="status">{replySpoken}</p>
 
     {#if !closed && error && liveMessages.length > 0}
-      <div class="error-banner">
+      <div class="error-banner" role="alert">
         <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
       </div>
     {/if}
 
     {#if closed}
-      <div class="closed-banner">
+      <div class="closed-banner" role="status">
         <CheckCircle2 size={14} aria-hidden="true" />
         <span>Session ended</span>
         {#if onStartNewSession}
@@ -2531,7 +2547,7 @@
             placeholder={composerPlaceholder}
             aria-label={`Message ${activeTarget?.label ?? agentLabel}`}
             aria-describedby={handlerHint ? handlerHintId : undefined}
-            disabled={composerDisabled || !canSendToTarget}
+            disabled={closed || activeTarget?.closed === true}
             spellcheck={!scriptInput}
             oninput={handleComposerInput}
             onkeydown={handleComposerKeydown}
@@ -3627,7 +3643,7 @@
     gap: var(--gutter-tight);
     align-items: center;
     padding: var(--gutter-tight);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-field);
     border-radius: 0;
     background: var(--control-bg);
     color: var(--text-3);

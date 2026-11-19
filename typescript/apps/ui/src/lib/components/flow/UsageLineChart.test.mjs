@@ -334,6 +334,7 @@ describe("the call at the cursor", () => {
     assert.match(html, /class="cursor-call[^"]*" dir="ltr"/, "numeric fields keep their order in RTL");
     const source = readFileSync(new URL("./UsageLineChart.svelte", import.meta.url), "utf8");
     assert.match(source, /\.cursor-call \{[^}]*flex-wrap: wrap;/, "the readout wraps rather than clipping");
+    assert.match(source, /\n {2}\.plot \{[^}]*margin-top: 4px;/, "the plot sits clear of the legend buttons");
   });
 
   it("says when the call reported no usage", () => {

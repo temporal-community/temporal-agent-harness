@@ -16,6 +16,13 @@ const dialog = flow.slice(flow.indexOf("<dialog"), flow.indexOf("</dialog>"));
 const head = dialog.slice(dialog.indexOf("<header"), dialog.indexOf("</header>"));
 const sections = dialog.slice(dialog.indexOf("{#each sections"), dialog.indexOf("{/each}"));
 
+describe("the graph", () => {
+  /* SvelteFlow draws role="application", which a screen reader announces by its name. */
+  it("names its application region after the agent", () => {
+    assert.match(flow, /<SvelteFlow\s+aria-label=\{agentLabel \? `\$\{agentLabel\} state flow` : "State flow"\}/);
+  });
+});
+
 describe("the graph details dialog", () => {
   it("heads with the shared row: glyph, title, plain status word, quiet close", () => {
     assert.match(head, /<header class="surface-head">/);

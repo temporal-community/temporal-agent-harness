@@ -109,6 +109,11 @@ describe("the chat pane stays inside its pane", () => {
     assert.match(rule(chat, ".error-banner"), /max-height: 6lh;[\s\S]*overflow-y: auto;/);
   });
 
+  /* WCAG 1.4.11: the composer is a text field, so its edge is the 3:1 field token. */
+  it("draws the composer's edge like every other text field", () => {
+    assert.match(rule(chat, ".composer"), /border: 1px solid var\(--border-field\);/);
+  });
+
   it("lines the attention queue up with the messages' side inset", () => {
     assert.match(rule(chat, ".agent-chat"), /--chat-inset: clamp\(18px, 5vw, 72px\);/);
     assert.match(rule(chat, ".agent-chat.embedded"), /--chat-inset: var\(--pane-inset\);/, "a pane's chat is inset like every other pane");

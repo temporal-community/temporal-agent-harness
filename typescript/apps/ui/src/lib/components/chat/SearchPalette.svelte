@@ -180,7 +180,9 @@
   onkeydown={(event) => event.stopPropagation()}
 >
   <div class="palette-search">
-    <label class="field">
+    <!-- A box, not a <label>: a label with no words of its own names nothing, and the input
+         carries its name. -->
+    <div class="field">
       <Search size={14} aria-hidden="true" />
       <input
         bind:this={input}
@@ -194,7 +196,7 @@
         oninput={() => (active = 0)}
         onkeydown={onKeydown}
       />
-    </label>
+    </div>
     <button
       type="button"
       class="head-button"
@@ -214,7 +216,9 @@
   <div class="palette-results" id={`${id}-list`} role="listbox" aria-label="Results" bind:this={results}>
     {#each groups as group (group.label)}
       <div role="group" aria-label={group.label}>
-        <h3 class="kicker group-label">{group.label}</h3>
+        <!-- Drawn only, so not a heading: a listbox may hold options and groups, and the group
+             already carries this name as its label. -->
+        <div class="kicker group-label" aria-hidden="true">{group.label}</div>
         {#each group.hits as hit (hit.key)}
           {@const index = flat.indexOf(hit)}
           {@const Icon = hit.icon}
@@ -355,6 +359,11 @@
 
   .hit-meta {
     color: var(--text-4);
+  }
+
+  /* --text-4 on the selected tint is 4.2:1, under WCAG 1.4.3's 4.5:1. */
+  .hit.active .hit-meta {
+    color: var(--text-3);
   }
 
   .no-hits {

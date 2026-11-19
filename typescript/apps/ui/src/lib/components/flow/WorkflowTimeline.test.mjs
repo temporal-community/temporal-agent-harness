@@ -728,3 +728,30 @@ describe("the run-wide timeline pane", () => {
     }
   });
 });
+
+/* WCAG 2.5.8: the tick is 3px, the button it sits in is the 24px square. */
+describe("the axis cue marks", () => {
+  it("are 24px press targets centered on the tick", () => {
+    const cue = source.match(/\n {2}\.cue \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(cue, /width: 24px;\s*height: 24px;\s*margin-left: -12px;/);
+    assert.match(source, /\n {2}\.cue::before \{[^}]*left: calc\(50% - 1\.5px\);/);
+  });
+
+  /* WCAG 2.2 2.5.8: under 24px a target must sit where a 24px circle clears its neighbours;
+     at 22px the gap toggle's circle clears the row under the axis. */
+  it("draws an idle-gap toggle in a 22px box around the same glyph", () => {
+    assert.match(source, /\n {2}\.gap-toggle \{[^}]*width: 22px;\s*height: 22px;\s*padding: 4px 6px;/);
+  });
+
+  /* WCAG 2.2 2.5.8: a span can be drawn 4px wide; what a hand lands on is 24px by 28px. */
+  it("gives a span mark a 24px-wide target however short it is drawn", () => {
+    assert.match(source, /\n {2}\.mark \{[^}]*height: 20px;[^}]*min-width: 4px;/);
+    assert.match(source, /\n {2}\.mark::before \{[^}]*inset: -4px -10px;/);
+  });
+
+  /* WCAG 1.4.1: the kinds differ in shape, not only hue. */
+  it("draws a queued message dotted and an error wide, still centered", () => {
+    assert.match(source, /\n {2}\.cue\.queue::before \{\s*background: repeating-linear-gradient/);
+    assert.match(source, /\n {2}\.cue\.error::before \{\s*left: calc\(50% - 3px\);\s*width: 6px;/);
+  });
+});

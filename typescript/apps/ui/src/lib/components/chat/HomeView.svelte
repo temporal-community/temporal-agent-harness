@@ -317,7 +317,7 @@
     </ol>
   </div>
 {:else}
-  <footer class="home-status" aria-label="Status">
+  <footer class="home-status">
     <nav class="resources" aria-label="Resources">
       {#each RESOURCES as link (link.href)}
         {@const Icon = link.icon}
