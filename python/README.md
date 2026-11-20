@@ -202,6 +202,7 @@ dependencies = [
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
     #   strands-agents  the Strands Agents integration
+    #   langgraph       the LangGraph integration
     #   typesafe        typed decisions and the Jev auto mode evaluator, via the canonical
     #                   temporalio-typesafe plugin
     #   s3              S3-backed offload for large payloads
@@ -293,6 +294,7 @@ opt-in:
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai`). |
 | `strands-agents` | use the **Strands Agents** integration (`ai_sdks.strands_agents`); pulls in `strands-agents` and the MCP packages its `TemporalMCPClient` uses. |
+| `langgraph` | use the **LangGraph** integration (`ai_sdks.langgraph`, the vendored plugin with the harness's module beside it); pulls in `langgraph`, `langgraph-prebuilt` and `langchain-core`. |
 | `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentKitPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 

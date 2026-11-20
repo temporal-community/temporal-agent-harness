@@ -39,6 +39,7 @@ Paths are under `python/temporal_agent_kit/`, `typescript/packages/core/src/` (c
 | `ai_sdks/strands_agents/_kit.py` | core `ai-sdks/strands-agents/kit.ts` (`kitStreamRoute`, `asStrandsTool(s)`, `kitStrandsAgent`, in the workflow); worker `ai-sdks/strands-agents/kit.ts` (`StrandsStreamObserver`, `kitObserverFactory`, in the model activity) |
 | `ai_sdks/strands_agents/` | Both vendor `temporalio/ai-integrations` at the same commit: Python its `python/strands_agents`, TypeScript its `typescript/strands-agents`, split into core `ai-sdks/strands-agents/` (`TemporalAgent`, `TemporalModel`, the tool classes, the MCP client's workflow half, errors, polyfills) and worker `ai-sdks/strands-agents/` (`StrandsPlugin`, `ModelActivity`, the MCP connections, heartbeat). None: `TemporalSandbox` and its activities, `temporal_worker_env_ref`, the sync-call guard and bytes tagging, which upstream's TypeScript package doesn't have, so an Agent Kit Strands agent in TypeScript takes no `sandbox` |
 | `ai_sdks/pydantic_ai.py` | None: Pydantic AI is Python-only |
+| `ai_sdks/langgraph/` | None: `temporalio/ai-integrations` has no TypeScript LangGraph plugin to vendor |
 | `ai_sdks/typesafe.py` | Not ported yet |
 | `nexus_agent_adapter/` | None: Nexus is not part of the TypeScript SDK |
 

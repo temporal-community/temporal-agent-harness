@@ -44,6 +44,7 @@ py_library(
         "//python/temporal_agent_kit/ai_sdks:typesafe",
         "//python/temporal_agent_kit/ai_sdks/google_genai_plugin:__init__",
         "//python/temporal_agent_kit/ai_sdks/jev:__init__",
+        "//python/temporal_agent_kit/ai_sdks/langgraph:__init__",
         "//python/temporal_agent_kit/ai_sdks/openai_agents",
         "//python/temporal_agent_kit/ai_sdks/strands_agents:__init__",
         "//python/temporal_agent_kit/nexus_agent_adapter:__init__",

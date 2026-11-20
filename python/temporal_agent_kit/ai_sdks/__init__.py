@@ -9,6 +9,8 @@ observability. One subpackage per SDK; more are expected over time.
   * :mod:`temporal_agent_kit.ai_sdks.strands_agents` — the Strands Agents SDK (vendored
     from ``temporalio/ai-integrations``), with the harness glue in
     :mod:`temporal_agent_kit.ai_sdks.strands_agents`.
+  * :mod:`temporal_agent_kit.ai_sdks.langgraph` — LangGraph (the vendored
+    ``temporalio-langgraph`` plugin with the harness's module beside it).
   * :mod:`temporal_agent_kit.ai_sdks.pydantic_ai` — Pydantic AI (glue for the
     unmodified upstream ``pydantic_ai.durable_exec.temporal`` plugin).
   * :mod:`temporal_agent_kit.ai_sdks.typesafe` — typed decisions through

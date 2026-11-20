@@ -295,3 +295,20 @@ def test_injected_param_names_empty_when_none_injected():
     async def fn(page_url: str, limit: int = 5) -> None: ...
 
     assert _injected_param_names(fn) == ()
+
+
+class Place(BaseModel):
+    city: str
+
+
+@agent.tool_defn()
+async def visit(place: Place, user: Injected[str]) -> str:
+    """Visit a place."""
+    return f"{user} visits {place.city}"
+
+
+def test_tool_annotations_are_resolved_types_without_injected_params():
+    """This module uses `from __future__ import annotations`; an SDK building a tool schema
+    from the decorated tool needs the types themselves, not strings it would have to
+    resolve in the harness's module, and never the Injected parameter."""
+    assert visit.__annotations__ == {"place": Place, "return": str}
