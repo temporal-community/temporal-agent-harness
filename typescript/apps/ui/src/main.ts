@@ -13,6 +13,9 @@ watchScrollActivity(document);
 const target = document.getElementById("app");
 if (!target) throw new Error("Missing #app mount target");
 
+/* Dev-only: count the page's errors from the start, for the dev tools button. */
+if (import.meta.env.DEV) (await import("./devErrors.svelte")).collectDevErrors();
+
 /* Dev-only `?mock=` fixtures. Imported dynamically: a static import keeps their top-level
    fixture data in the production bundle even though this branch is dropped from it. */
 let api: AgentApi | undefined;
@@ -35,60 +38,24 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
 
 mount(App, { target, props: { api } });
 
-/* Dev-only `?mock=subagents|sessionsbreak&data=` toggles, in place of the fixture bar below. */
-const dataToggles: Record<string, Record<string, string>> = {
-  subagents: { demo: "Demo", worst: "Worst case", empty: "Empty", one: "One", many: "Many (60)" },
-  sessionsbreak: { demo: "Demo", worst: "Worst case", empty: "Empty", allarchived: "All archived", single: "Single", one: "One each", many: "200", huge: "10,000" }
-};
-const toggle = import.meta.env.DEV ? dataToggles[new URLSearchParams(location.search).get("mock") ?? ""] : undefined;
-if (toggle) {
-  const mock = new URLSearchParams(location.search).get("mock");
-  const current = new URLSearchParams(location.search).get("data") ?? "demo";
-  const bar = document.createElement("nav");
-  bar.setAttribute("aria-label", "Mock data");
-  bar.style.cssText =
-    "position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;gap:2px;padding:2px;border-radius:8px;background:#d4d4d8;font:12px system-ui";
-  for (const [name, label] of Object.entries(toggle)) {
-    const link = document.createElement("a");
-    link.textContent = label;
-    link.href = `?mock=${mock}&data=${name}`;
-    link.style.cssText = `padding:3px 10px;border-radius:6px;color:#111;text-decoration:none;white-space:nowrap;${name === current ? "background:#fff" : ""}`;
-    if (name === current) link.setAttribute("aria-current", "page");
-    bar.append(link);
-  }
-  document.body.append(bar);
-} else if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
-  const current = new URLSearchParams(location.search).get("mock");
-  const bar = document.createElement("nav");
-  bar.setAttribute("aria-label", "Mock data");
-  bar.style.cssText =
-    "position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;gap:2px;padding:2px;border-radius:8px;background:#d4d4d8;font:12px system-ui";
-  const labels: Record<string, string> = {
-    worst: "Worst case",
-    huge: "1,000 rows",
-    sessions200: "200 sessions",
-    sessions10k: "10,000 sessions",
-    sessionsworst: "Worst sessions",
-    transcript5k: "5,000 messages",
-    frames100k: "100,000 frames",
-    run100k: "100,000-frame run",
-    dense50k: "50,000 spans",
-    okf2k: "2,000 concepts",
-    okf10k: "10,000 concepts",
-    agents: "11 agents",
-    agents300: "300 agents",
-    longcontent: "Long content",
-    soak: "Soak",
-    timelineworst: "Worst timeline",
-    logsworst: "Worst logs"
-  };
-  for (const name of ["demo", "worst", "empty", "one", "huge", "markdown", "longcontent", "images", "attachments", "queue", "script", "sessions200", "sessions10k", "sessionsworst", "transcript5k", "frames100k", "run100k", "dense50k", "okf2k", "okf10k", "agents", "agents300", "soak", "timelineworst", "logsworst"]) {
-    const link = document.createElement("a");
-    link.textContent = labels[name] ?? name[0].toUpperCase() + name.slice(1);
-    link.href = `?mock=${name}`;
-    link.style.cssText = `padding:3px 10px;border-radius:6px;color:#111;text-decoration:none;${name === current ? "background:#fff" : ""}`;
-    if (name === current) link.setAttribute("aria-current", "page");
-    bar.append(link);
-  }
-  document.body.append(bar);
+/* Dev-only: the live server and the `?mock=` fixtures to switch between, in the dev tools
+   button's panel. On every dev page, so the way back to a fixture is always there. */
+if (import.meta.env.DEV) {
+  const params = new URLSearchParams(location.search);
+  const mock = params.get("mock");
+  /* Listed from the fixtures themselves, grouped as each one says, so a new fixture needs no
+     entry here. One reached by a link the catalog cannot list (a `mixed…` or `reply-…`
+     family) still shows, under Other, so the panel never names a fixture that isn't on screen. */
+  const catalog = (await import("./lib/mock/catalog")).mockCatalog();
+  const listed = catalog.find((entry) => entry.name === mock);
+  const entries = mock != null && !listed ? [...catalog, { name: mock, label: mock, group: "Other" }] : catalog;
+  /* A fixture's first variant is its default, with or without `&data=`. */
+  const variants = listed?.variants;
+  const firstVariant = variants ? Object.keys(variants)[0] : undefined;
+  const data = params.get("data") ?? "";
+  const variant = data === firstVariant ? "" : data;
+  const label = mock == null ? "Live API" : (listed?.label ?? mock);
+  const variantLabel = variants ? (variants[data] ?? variants[firstVariant!]) : undefined;
+  const badge = variantLabel ? `${label} · ${variantLabel}` : label;
+  (await import("./devTools")).mountDevTools({ catalog: entries, current: mock ?? "", variant, badge });
 }

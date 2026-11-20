@@ -1,4 +1,5 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
 
 # One target per file, depending on the files it imports.
 js_library(
@@ -53,16 +54,60 @@ js_library(
 )
 
 js_library(
+    name = "DevTools",
+    srcs = ["DevTools.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":ScenarioPicker",
+        ":devErrors.svelte",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/state:clientToolProvider",
+    ],
+)
+
+js_library(
+    name = "ScenarioPicker",
+    srcs = ["ScenarioPicker.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Select",
+    ],
+)
+
+js_library(
+    name = "devErrors.svelte",
+    srcs = ["devErrors.svelte.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "devTools",
+    srcs = ["devTools.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":DevTools",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+js_library(
     name = "main",
     srcs = ["main.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
         ":App",
         ":app",
+        ":devErrors.svelte",
+        ":devTools",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/src/lib/api:mockClient",
         "//typescript/apps/ui/src/lib/components/primitives:scrollActivity",
         "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+        "//typescript/apps/ui/src/lib/mock:catalog",
         "//typescript/apps/ui/src/lib/mock:jsonReplyScenarios",
         "//typescript/apps/ui/src/lib/mock:scaleScenarios",
         "//typescript/apps/ui/src/lib/state:agentRunStorage",
@@ -73,4 +118,17 @@ js_library(
     name = "vite-env.d",
     srcs = ["vite-env.d.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+vitest_test(
+    name = "devTools_test",
+    src = "devTools.test.mjs",
+    deps = [
+        ":DevTools",
+        ":ScenarioPicker",
+        ":devErrors.svelte",
+        ":main",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
 )

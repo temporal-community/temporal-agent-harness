@@ -106,12 +106,15 @@ export function answerEditorTool(
   };
 }
 
+/** Where an answered client tool is remembered, one key per call, so a second tab never answers it. */
+export const CLIENT_TOOL_STORAGE_PREFIX = "agent-kit-client-tool:";
+
 async function browserClaim(key: string, answer: () => Promise<void>): Promise<boolean> {
   if (typeof window === "undefined") {
     await answer();
     return true;
   }
-  const storageKey = `agent-kit-client-tool:${key}`;
+  const storageKey = `${CLIENT_TOOL_STORAGE_PREFIX}${key}`;
   const run = async () => {
     if (window.localStorage.getItem(storageKey)) return false;
     await answer();
