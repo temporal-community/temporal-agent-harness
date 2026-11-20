@@ -35,6 +35,11 @@ $defs:
         type: string
       url:
         type: string
+      credential:
+        type: string
+        description: >
+          Name of a credential the gateway worker holds, sent to this server with
+          every request. Never the secret itself.
 
   DeregisterInput:
     type: object

@@ -12,8 +12,9 @@ like so:
 Agent harness --- (Nexus) ---> Gateway --- (Standalone Activity) ---> 3rd-party MCP server
 
 This enables end-to-end durability and visibility of tool calls without requiring the
-agent harness to be a workflow, and all credential concerns will be managed by the
-gateway.
+agent harness to be a workflow, and all credential concerns are managed by the
+gateway: a registration names a credential, and the gateway worker reads the secret from
+its own environment inside the activity (see credentials.py).
 """
 
 from __future__ import annotations
@@ -25,13 +26,13 @@ from typing import Any
 
 import nexusrpc
 import nexusrpc.handler
-from mcp.client import Client as MCPClient
 from pydantic import BaseModel
 from temporalio import activity, nexus
 from temporalio.common import RetryPolicy
 
 from nexus_mcp.authoring import validate_service_name
 
+from .credentials import connect, validate_credential_name
 from .generated import (
     CallToolInput,
     CallToolOutput,
@@ -46,6 +47,7 @@ from .generated import (
 )
 from .registry import (
     REGISTRY_WORKFLOW_ID,
+    RemoteServer,
     ToolRegistryWorkflow,
     fetch_external_tools,
 )
@@ -61,6 +63,7 @@ class ExternalMCPCallInput(BaseModel):
     server_url: str
     tool_name: str
     arguments: dict[str, Any]
+    credential: str | None = None
 
 
 async def _heartbeat_every(seconds: float) -> None:
@@ -82,7 +85,7 @@ async def mcp_proxy_activity(input: ExternalMCPCallInput) -> CallToolOutput:
     )
     heartbeat_task = asyncio.create_task(_heartbeat_every(15))
     try:
-        async with MCPClient(input.server_url, mode="auto") as client:
+        async with connect(input.server_url, input.credential) as client:
             result = await client.call_tool(input.tool_name, input.arguments)
     finally:
         heartbeat_task.cancel()
@@ -103,11 +106,17 @@ async def mcp_proxy_activity(input: ExternalMCPCallInput) -> CallToolOutput:
 
 
 @activity.defn
-async def list_external_tools(servers: dict[str, str]) -> ListAgentEntriesOutput:
-    """Fetch each {alias: url}'s tool list live, grouped by alias. Unreachable servers
-    are logged and skipped."""
+async def list_external_tools(
+    servers: dict[str, str], credentials: dict[str, str] | None = None
+) -> ListAgentEntriesOutput:
+    """Fetch each {alias: url}'s tool list live, grouped by alias, with the credential
+    `credentials` names for that alias. Unreachable servers are logged and skipped."""
+    credentials = credentials or {}
     results = await asyncio.gather(
-        *(fetch_external_tools(name, url) for name, url in servers.items()),
+        *(
+            fetch_external_tools(name, url, credentials.get(name))
+            for name, url in servers.items()
+        ),
         return_exceptions=True,
     )
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -162,10 +171,19 @@ class RegistryServiceHandler:
             raise nexusrpc.HandlerError(
                 "url is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
             )
+        credential = input.credential or None
+        if credential is not None:
+            try:
+                validate_credential_name(credential)
+            except ValueError as exc:
+                raise nexusrpc.HandlerError(
+                    str(exc), type=nexusrpc.HandlerErrorType.BAD_REQUEST
+                ) from exc
 
         handle = client.client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
         await handle.signal(
-            ToolRegistryWorkflow.register_external, args=[agent_id, name, input.url]
+            ToolRegistryWorkflow.register_external,
+            args=[agent_id, name, input.url, credential],
         )
         return nexus.TemporalOperationResult.sync(None)
 
@@ -201,7 +219,7 @@ class RegistryServiceHandler:
         entries = await handle.query(ToolRegistryWorkflow.list_agent_entries, agent_id)
         return await client.start_activity(
             list_external_tools,
-            entries.remote_servers,
+            args=[entries.remote_servers, entries.credentials],
             id=f"mcp-list-tools-{ctx.request_id}",
             start_to_close_timeout=timedelta(seconds=60),
         )
@@ -234,10 +252,10 @@ class RegistryServiceHandler:
             )
 
         handle = client.client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-        url: str | None = await handle.query(
-            ToolRegistryWorkflow.find, args=[agent_id, alias]
+        server: RemoteServer | None = await handle.query(
+            ToolRegistryWorkflow.find_server, args=[agent_id, alias]
         )
-        if url is None:
+        if server is None:
             raise nexusrpc.HandlerError(
                 f"{alias!r} is not registered for agent {agent_id!r}.",
                 type=nexusrpc.HandlerErrorType.NOT_FOUND,
@@ -251,7 +269,10 @@ class RegistryServiceHandler:
         return await client.start_activity(
             mcp_proxy_activity,
             ExternalMCPCallInput(
-                server_url=url, tool_name=operation, arguments=arguments
+                server_url=server.url,
+                tool_name=operation,
+                arguments=arguments,
+                credential=server.credential,
             ),
             id=f"mcp-proxy-{ctx.request_id}",
             start_to_close_timeout=timedelta(minutes=5),

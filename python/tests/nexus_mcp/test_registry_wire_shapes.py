@@ -22,6 +22,7 @@ from nexus_mcp.durable_tools_gateway.generated import (
 )
 from nexus_mcp.durable_tools_gateway.registry import (
     AgentEntries,
+    RemoteServer,
     ToolRegistryWorkflow,
 )
 from nexus_mcp.durable_tools_gateway.registry_service_handler import (
@@ -51,27 +52,27 @@ def _mock_client(
     async def query(method, *args, **kwargs):
         if method is ToolRegistryWorkflow.list_agent_entries:
             return AgentEntries(remote_servers=remote_servers or {})
-        if method is ToolRegistryWorkflow.find:
-            return find_url
+        if method is ToolRegistryWorkflow.find_server:
+            return RemoteServer(url=find_url) if find_url else None
         raise AssertionError(f"unexpected query: {method}")
 
     handle.query = AsyncMock(side_effect=query)
     client.client.get_workflow_handle.return_value = handle
 
-    async def start_activity(activity_fn, input, **kwargs):
+    async def start_activity(activity_fn, input=None, *, args=None, **kwargs):
         if activity_fn is list_external_tools:
             with patch(
                 "nexus_mcp.durable_tools_gateway.registry_service_handler.fetch_external_tools",
                 AsyncMock(return_value=fetched_tools or []),
             ):
-                result = await activity_fn(input)
+                result = await activity_fn(*args)
         elif activity_fn is mcp_proxy_activity:
             mcp_client = MagicMock()
             mcp_client.__aenter__ = AsyncMock(return_value=mcp_client)
             mcp_client.__aexit__ = AsyncMock()
             mcp_client.call_tool = AsyncMock(return_value=call_result)
             with patch(
-                "nexus_mcp.durable_tools_gateway.registry_service_handler.MCPClient",
+                "nexus_mcp.durable_tools_gateway.credentials.MCPClient",
                 return_value=mcp_client,
             ):
                 result = await activity_fn(input)
