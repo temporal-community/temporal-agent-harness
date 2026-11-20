@@ -1766,112 +1766,123 @@ function run100k(settled = false): MockScenario {
   return { agents, sessions, frames, instantFrames: settled ? frames.length : backlog, liveIntervalMs: 20 };
 }
 
+/** How the dev tools list a fixture: its name in the menu, the group it files under, and the
+ *  variants it reads from `&data=`, the first being what it shows without one. */
+export interface ScenarioListing {
+  label: string;
+  group: string;
+  variants?: Record<string, string>;
+}
+
+const dataParam = (fallback: string) => new URLSearchParams(globalThis.location?.search).get("data") ?? fallback;
+
 /* Built on demand, and only the one asked for: frame() advances a shared offset counter, so
    module-level fixtures would be a side effect production builds could not drop, and the 100k
-   transcript is too costly to build for every other fixture. */
-export function scaleScenario(name: string): MockScenario | undefined {
-  switch (name) {
-    case "sessions200":
-      return { agents, sessions: sessionList(200), frames: [] };
-    case "sessions10k":
-      return { agents, sessions: sessionList(10_000), frames: [] };
-    case "sessionsworst":
-      return sessionsWorst();
-    case "sessionsbreak":
-      return sessionsBreak(new URLSearchParams(globalThis.location?.search).get("data") ?? "demo");
-    case "transcript5k":
-      return streamingTranscript(2500, "5,000 messages");
-    case "frames100k":
-      return streamingTranscript(12_500, "100,000 frames");
-    case "run100k":
-    case "run100ksettled":
-      return run100k(name === "run100ksettled");
-    case "dense5k":
-    case "dense50k": {
-      const frames = denseTurns(name === "dense5k" ? 1_250 : 12_500);
-      const sessions = [{ ...sessionList(1)[0]!, workflow_id: `agent-session-scale-${name}` }];
-      return { agents, sessions, frames, instantFrames: frames.length };
-    }
-    case "approvals1":
-    case "approvals3":
-    case "approvals50":
-    case "approvals250":
-      return approvalsScenario(Number(name.slice("approvals".length)));
-    case "burst10":
-      return approvalBurstScenario(10);
-    case "panes":
-    case "panesworst":
-      return panesScenario(name === "panesworst");
-    case "panes3k":
-      return panesScenario(true, 3_000);
-    case "questions":
-      return questionsScenario();
-    case "steering":
-      return steeringScenario();
-    case "actions":
-    case "actionsworst":
-      return actionsScenario(name === "actionsworst");
-    case "actionsbusy":
-      return actionsBusyScenario();
-    case "handlers":
-      return handlersScenario();
-    case "selects":
-      return selectsScenario();
-    case "choices":
-    case "choicesworst":
-      return choicesScenario(name === "choicesworst");
-    case "timelineworst":
-      return timelineWorst();
-    case "timelinecaps":
-      return timelineCaps();
-    case "timelinegap":
-      return timelineGap();
-    case "logsworst":
-      return logsWorst();
-    case "logsempty":
-    case "logsone": {
-      const frames = name === "logsone" ? [frame("message_accepted", { type: "message_accepted", ...meta(1, 0), handler: "ask", payload: { text: "x" }, disposition: "opened" })] : [];
-      const sessions = [{ ...sessionList(1)[0]!, workflow_id: `agent-session-scale-${name}`, agent_workflow_type: "QaAgent" }];
-      return { agents, sessions, frames, instantFrames: frames.length };
-    }
-    case "tokens":
-    case "tokensunknown":
-      return tokenScenario(name === "tokensunknown");
-    case "okf2k":
-      return okfScenario(2_000);
-    case "okf10k":
-      return okfScenario(10_000);
-    /* Three settled sessions sharing one history, for switching between them in a soak run. */
-    case "soak": {
-      const frames = longTranscript(300, 0);
-      const sessions = sessionList(3).map((s) => ({ ...s, agent_workflow_type: "QaAgent", execution_status: "RUNNING", closed: false }));
-      return { agents, sessions, frames, instantFrames: frames.length };
-    }
-    case "agents":
-    case "agents300":
-      return agentsScenario(name === "agents300");
-    /* Nothing to reopen, so the console loads on its welcome. `data=worst` and `worst2` lead with
-       the hostile names, all startable, `data=setup` keeps only agents that need init data, and
-       `data=fail` fails every start. */
-    case "nosession": {
-      const data = new URLSearchParams(globalThis.location?.search).get("data");
+   transcript is too costly to build for every other fixture. Each entry says how it is listed
+   beside how it is built, so a new fixture shows in the dev tools without a second list. */
+const SCALE_SCENARIOS: Record<string, ScenarioListing & { build: (name: string) => MockScenario }> = {
+  sessions200: { label: "200 sessions", group: "Sessions", build: () => ({ agents, sessions: sessionList(200), frames: [] }) },
+  sessions10k: { label: "10,000 sessions", group: "Sessions", build: () => ({ agents, sessions: sessionList(10_000), frames: [] }) },
+  sessionsworst: { label: "Worst sessions", group: "Sessions", build: () => sessionsWorst() },
+  sessionsbreak: {
+    label: "Pinned and archived",
+    group: "Sessions",
+    variants: { demo: "Demo", worst: "Worst case", empty: "Empty", allarchived: "All archived", single: "Single", one: "One each", many: "200", huge: "10,000" },
+    build: () => sessionsBreak(dataParam("demo"))
+  },
+  /* Nothing to reopen, so the console loads on its welcome. `data=worst` and `worst2` lead with
+     the hostile names, all startable, `data=setup` keeps only agents that need init data, and
+     `data=fail` fails every start. */
+  nosession: {
+    label: "No session",
+    group: "Sessions",
+    variants: { demo: "Every agent", worst: "Worst names", worst2: "Worst names, later", setup: "Needs init data", fail: "Every start fails" },
+    build: () => {
+      const data = dataParam("demo");
       const worst = data === "worst" || data === "worst2";
       const fleet = agentsScenario(worst).agents;
       const hostile = fleet
         .slice(data === "worst2" ? 14 : 11)
         .map((agent) => ({ ...agent, init_data: null, worker: { ...agent.worker!, status: "ready" as const } }));
-      const agents = worst ? hostile : data === "setup" ? fleet.filter((agent) => agent.init_data?.required) : fleet;
-      return { agents, sessions: [], frames: [], createError: data === "fail" ? "Session Manager is unreachable: connection refused." : undefined };
+      const listed = worst ? hostile : data === "setup" ? fleet.filter((agent) => agent.init_data?.required) : fleet;
+      return { agents: listed, sessions: [], frames: [], createError: data === "fail" ? "Session Manager is unreachable: connection refused." : undefined };
     }
-    case "subagents":
-      return subagentScenario(new URLSearchParams(globalThis.location?.search).get("data") ?? "demo");
-    case "codemode":
-      return codeModeScenario();
-    default: {
-      const mixed = name.match(/^mixed(\d+)x(\d+)$/);
-      if (mixed) return mixedScenario(Number(mixed[1]), Number(mixed[2]));
-      if (name.startsWith("usage-")) return usageScenario(name.slice("usage-".length));
-      return name.startsWith("reply-") ? replyScenario(name.slice("reply-".length)) : undefined;
+  },
+  transcript5k: { label: "5,000 messages", group: "Chat", build: () => streamingTranscript(2500, "5,000 messages") },
+  frames100k: { label: "100,000 frames", group: "Replay and traces", build: () => streamingTranscript(12_500, "100,000 frames") },
+  run100k: { label: "100,000-frame run", group: "Replay and traces", build: () => run100k(false) },
+  run100ksettled: { label: "100,000-frame run, settled", group: "Replay and traces", build: () => run100k(true) },
+  dense5k: { label: "5,000 spans", group: "Replay and traces", build: (name) => dense(name, 1_250) },
+  dense50k: { label: "50,000 spans", group: "Replay and traces", build: (name) => dense(name, 12_500) },
+  timelineworst: { label: "Worst timeline", group: "Replay and traces", build: () => timelineWorst() },
+  timelinecaps: { label: "Timeline caps", group: "Replay and traces", build: () => timelineCaps() },
+  timelinegap: { label: "Timeline gap", group: "Replay and traces", build: () => timelineGap() },
+  logsworst: { label: "Worst logs", group: "Replay and traces", build: () => logsWorst() },
+  logsempty: { label: "No logs", group: "Replay and traces", build: (name) => logs(name, false) },
+  logsone: { label: "One log row", group: "Replay and traces", build: (name) => logs(name, true) },
+  /* Three settled sessions sharing one history, for switching between them in a soak run. */
+  soak: {
+    label: "Soak",
+    group: "Replay and traces",
+    build: () => {
+      const frames = longTranscript(300, 0);
+      const sessions = sessionList(3).map((s) => ({ ...s, agent_workflow_type: "QaAgent", execution_status: "RUNNING", closed: false }));
+      return { agents, sessions, frames, instantFrames: frames.length };
     }
-  }
+  },
+  approvals1: { label: "1 approval", group: "Approvals and input", build: () => approvalsScenario(1) },
+  approvals3: { label: "3 approvals", group: "Approvals and input", build: () => approvalsScenario(3) },
+  approvals50: { label: "50 approvals", group: "Approvals and input", build: () => approvalsScenario(50) },
+  approvals250: { label: "250 approvals", group: "Approvals and input", build: () => approvalsScenario(250) },
+  burst10: { label: "Burst of 10 approvals", group: "Approvals and input", build: () => approvalBurstScenario(10) },
+  questions: { label: "Questions", group: "Approvals and input", build: () => questionsScenario() },
+  steering: { label: "Steering", group: "Approvals and input", build: () => steeringScenario() },
+  actions: { label: "Actions", group: "Approvals and input", build: () => actionsScenario(false) },
+  actionsworst: { label: "Worst actions", group: "Approvals and input", build: () => actionsScenario(true) },
+  actionsbusy: { label: "Busy actions", group: "Approvals and input", build: () => actionsBusyScenario() },
+  handlers: { label: "Handlers", group: "Approvals and input", build: () => handlersScenario() },
+  selects: { label: "Selects", group: "Approvals and input", build: () => selectsScenario() },
+  choices: { label: "Choices", group: "Approvals and input", build: () => choicesScenario(false) },
+  choicesworst: { label: "Worst choices", group: "Approvals and input", build: () => choicesScenario(true) },
+  panes: { label: "Panes", group: "Panes", build: () => panesScenario(false) },
+  panesworst: { label: "Worst panes", group: "Panes", build: () => panesScenario(true) },
+  panes3k: { label: "3,000 panes", group: "Panes", build: () => panesScenario(true, 3_000) },
+  tokens: { label: "Token usage", group: "Usage", build: () => tokenScenario(false) },
+  tokensunknown: { label: "Unreported token usage", group: "Usage", build: () => tokenScenario(true) },
+  okf2k: { label: "2,000 concepts", group: "Memory", build: () => okfScenario(2_000) },
+  okf10k: { label: "10,000 concepts", group: "Memory", build: () => okfScenario(10_000) },
+  agents: { label: "11 agents", group: "Agents", build: () => agentsScenario(false) },
+  agents300: { label: "300 agents", group: "Agents", build: () => agentsScenario(true) },
+  subagents: {
+    label: "Subagents",
+    group: "Agents",
+    variants: { demo: "Demo", worst: "Worst case", empty: "Empty", one: "One", many: "Many (60)" },
+    build: () => subagentScenario(dataParam("demo"))
+  },
+  codemode: { label: "Code Mode", group: "Agents", build: () => codeModeScenario() }
+};
+
+function dense(name: string, turns: number): MockScenario {
+  const frames = denseTurns(turns);
+  const sessions = [{ ...sessionList(1)[0]!, workflow_id: `agent-session-scale-${name}` }];
+  return { agents, sessions, frames, instantFrames: frames.length };
+}
+
+function logs(name: string, one: boolean): MockScenario {
+  const frames = one ? [frame("message_accepted", { type: "message_accepted", ...meta(1, 0), handler: "ask", payload: { text: "x" }, disposition: "opened" })] : [];
+  const sessions = [{ ...sessionList(1)[0]!, workflow_id: `agent-session-scale-${name}`, agent_workflow_type: "QaAgent" }];
+  return { agents, sessions, frames, instantFrames: frames.length };
+}
+
+/** Every listed scale fixture by name, in the order the dev tools show them. */
+export const SCALE_LISTINGS: [string, ScenarioListing][] = Object.entries(SCALE_SCENARIOS).map(([name, { label, group, variants }]) => [name, { label, group, variants }]);
+
+export function scaleScenario(name: string): MockScenario | undefined {
+  const listed = Object.hasOwn(SCALE_SCENARIOS, name) ? SCALE_SCENARIOS[name] : undefined;
+  if (listed) return listed.build(name);
+  /* Families named by their parameters, reached by link; too many to list. */
+  const mixed = name.match(/^mixed(\d+)x(\d+)$/);
+  if (mixed) return mixedScenario(Number(mixed[1]), Number(mixed[2]));
+  if (name.startsWith("usage-")) return usageScenario(name.slice("usage-".length));
+  return name.startsWith("reply-") ? replyScenario(name.slice("reply-".length)) : undefined;
 }

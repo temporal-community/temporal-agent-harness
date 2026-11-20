@@ -79,6 +79,9 @@ function scenario(name: string, label: string, frames: AgentSseFrame[]): MockSce
   return { agents, sessions: [session], frames, agentInterface: handlers };
 }
 
+/** The group every reply fixture files under in the dev tools; each is named by its session's label. */
+export const JSON_REPLY_GROUP = "Chat";
+
 /* Built on call: frame() advances a shared offset counter, so module-level fixtures would
    be a side effect production builds could not drop. */
 export function jsonReplyScenarios(): Record<string, MockScenario> {

@@ -1,6 +1,17 @@
 load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
 
 # One target per file, depending on the files it imports.
+js_library(
+    name = "catalog",
+    srcs = ["catalog.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":jsonReplyScenarios",
+        ":scaleScenarios",
+    ],
+)
+
 js_library(
     name = "jsonReplyScenarios",
     srcs = ["jsonReplyScenarios.ts"],
@@ -22,4 +33,14 @@ js_library(
     name = "scenarios",
     srcs = ["scenarios.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "catalog_test",
+    src = "catalog.test.mjs",
+    deps = [
+        ":catalog",
+        ":scaleScenarios",
+    ],
 )
