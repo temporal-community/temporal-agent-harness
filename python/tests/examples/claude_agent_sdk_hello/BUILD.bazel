@@ -1,0 +1,16 @@
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
+
+agent_kit_pytest_test(
+    name = "test_workflow",
+    srcs = ["test_workflow.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/claude_agent_sdk_hello:workflow",
+        "//python/temporal_agent_kit:agent_client",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/claude_agent_sdk:__init__",
+        "//python/tests:conftest",
+        "@pypi//temporalio",
+    ],
+)

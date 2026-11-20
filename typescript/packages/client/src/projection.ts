@@ -282,6 +282,9 @@ export class AgentProjection {
           this.#append(id, { type: "text_annotation", annotation });
         }
         return;
+      case "tool_input_delta":
+      case "context_compaction_delta":
+        return;
       case "tool_requested":
         return this.#tool(frame, (p) => ({ ...p, input: frame.data.tool_input }));
       case "tool_approval_requested":

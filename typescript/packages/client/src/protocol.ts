@@ -140,6 +140,8 @@ export interface AgentEvent {
     | ReplyDelta
     | ThoughtSummaryDelta
     | TextAnnotationDelta
+    | ToolInputDelta
+    | ContextCompactionDelta
     | AgentStateSnapshot
     | AgentStatePatch;
 }
@@ -357,6 +359,24 @@ export interface CallbackResolved {
    * The client-reported failure message ('error'), the timeout/close note ('timeout'), or None on 'ok'.
    */
   error: string | null;
+}
+/**
+ * An update to a context compaction block.
+ */
+export interface ContextCompactionDelta {
+  type: "context_compaction_delta";
+  /**
+   * The content block's index within the model response.
+   */
+  block_index: number;
+  /**
+   * A fragment of the compaction summary.
+   */
+  content: string | null;
+  /**
+   * Opaque compaction metadata.
+   */
+  encrypted_content: string | null;
 }
 /**
  * One inbound message passed admission — what was sent, and what it did to the turn.
@@ -803,6 +823,20 @@ export interface ToolErrorEvent {
   message: string;
 }
 /**
+ * A fragment of a tool call's input as the model generates it.
+ */
+export interface ToolInputDelta {
+  type: "tool_input_delta";
+  /**
+   * The content block's index within the model response.
+   */
+  block_index: number;
+  /**
+   * A JSON fragment. It may be incomplete on its own.
+   */
+  partial_json: string;
+}
+/**
  * An intermediate progress chunk emitted by a tool mid-execution.
  *
  * Distinct from `ToolEndEvent`'s final payload: this is for tools doing
@@ -931,6 +965,8 @@ export type AgentStreamItem =
   | ReplyDelta
   | ThoughtSummaryDelta
   | TextAnnotationDelta
+  | ToolInputDelta
+  | ContextCompactionDelta
   | AgentStateSnapshot
   | AgentStatePatch;
 

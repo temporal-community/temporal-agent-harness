@@ -1,0 +1,58 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "agent_kit_agent", "agent_kit_agent_registry")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
+
+agent_kit_agent(
+    name = "ClaudeAgentSDKHello",
+    agent = "examples.claude_agent_sdk_hello.workflow:ClaudeAgentSDKHelloWorkflow",
+    description = "Chat with Claude Code and watch the reply stream in the console.",
+    key = "claude-agent-sdk-hello",
+    label = "Claude Agent SDK Hello",
+    task_queue = "claude-agent-sdk-hello",
+    deps = [":workflow"],
+)
+
+agent_kit_agent_registry(
+    name = "agents",
+    srcs = [
+        "ClaudeAgentSDKHello.schema.json",
+        "agents.toml",
+    ],
+    agents = [":ClaudeAgentSDKHello"],
+)
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+)
+
+agent_kit_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":workflow",
+        "//python/temporal_agent_kit:plugin",
+        "//python/temporal_agent_kit/ai_sdks/claude_agent_sdk:__init__",
+        "//python/temporal_agent_kit/utils:task_queue",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_kit:agent",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/claude_agent_sdk:__init__",
+        "@pypi//claude_agent_sdk",
+        "@pypi//temporalio",
+    ],
+)

@@ -103,6 +103,12 @@
       "$ref": "#/$defs/TextAnnotationDelta"
     },
     {
+      "$ref": "#/$defs/ToolInputDelta"
+    },
+    {
+      "$ref": "#/$defs/ContextCompactionDelta"
+    },
+    {
       "$ref": "#/$defs/AgentStateSnapshot"
     },
     {
@@ -178,6 +184,7 @@
               "auto_approval_evaluation_superseded": "#/$defs/AutoApprovalEvaluationSuperseded",
               "callback_requested": "#/$defs/CallbackRequested",
               "callback_resolved": "#/$defs/CallbackResolved",
+              "context_compaction_delta": "#/$defs/ContextCompactionDelta",
               "message_accepted": "#/$defs/MessageAccepted",
               "message_handler_end": "#/$defs/MessageHandlerEnd",
               "message_handler_error": "#/$defs/MessageHandlerError",
@@ -201,6 +208,7 @@
               "tool_approval_resolved": "#/$defs/ToolApprovalResolved",
               "tool_end": "#/$defs/ToolEndEvent",
               "tool_error": "#/$defs/ToolErrorEvent",
+              "tool_input_delta": "#/$defs/ToolInputDelta",
               "tool_progress_delta": "#/$defs/ToolProgressDelta",
               "tool_requested": "#/$defs/ToolRequested",
               "tool_start": "#/$defs/ToolStartEvent",
@@ -308,6 +316,12 @@
             },
             {
               "$ref": "#/$defs/TextAnnotationDelta"
+            },
+            {
+              "$ref": "#/$defs/ToolInputDelta"
+            },
+            {
+              "$ref": "#/$defs/ContextCompactionDelta"
             },
             {
               "$ref": "#/$defs/AgentStateSnapshot"
@@ -721,6 +735,56 @@
       ],
       "title": "CloseReason",
       "type": "string"
+    },
+    "ContextCompactionDelta": {
+      "description": "An update to a context compaction block.",
+      "properties": {
+        "type": {
+          "const": "context_compaction_delta",
+          "default": "context_compaction_delta",
+          "title": "Type",
+          "type": "string"
+        },
+        "block_index": {
+          "description": "The content block's index within the model response.",
+          "title": "Block Index",
+          "type": "integer"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A fragment of the compaction summary.",
+          "title": "Content"
+        },
+        "encrypted_content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Opaque compaction metadata.",
+          "title": "Encrypted Content"
+        }
+      },
+      "required": [
+        "type",
+        "block_index",
+        "content",
+        "encrypted_content"
+      ],
+      "title": "ContextCompactionDelta",
+      "type": "object"
     },
     "JsonValue": {
       "anyOf": [
@@ -1553,6 +1617,34 @@
         "message"
       ],
       "title": "ToolErrorEvent",
+      "type": "object"
+    },
+    "ToolInputDelta": {
+      "description": "A fragment of a tool call's input as the model generates it.",
+      "properties": {
+        "type": {
+          "const": "tool_input_delta",
+          "default": "tool_input_delta",
+          "title": "Type",
+          "type": "string"
+        },
+        "block_index": {
+          "description": "The content block's index within the model response.",
+          "title": "Block Index",
+          "type": "integer"
+        },
+        "partial_json": {
+          "description": "A JSON fragment. It may be incomplete on its own.",
+          "title": "Partial Json",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "block_index",
+        "partial_json"
+      ],
+      "title": "ToolInputDelta",
       "type": "object"
     },
     "ToolProgressDelta": {

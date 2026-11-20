@@ -357,6 +357,11 @@ class AgentEventType(StrEnum):
     """A streamed citation/annotation delta, interleaved with REPLY_DELTA so each
     citation sits next to the text it supports. See :class:`TextAnnotationDelta`."""
 
+    TOOL_INPUT_DELTA = "tool_input_delta"
+    """A fragment of the JSON input the model is generating for a tool call."""
+
+    CONTEXT_COMPACTION_DELTA = "context_compaction_delta"
+    """A streamed fragment of a context compaction summary."""
 
     STATE_SNAPSHOT = "state_snapshot"
     """A whole-document snapshot of one piece of observable agent state, published
@@ -1011,6 +1016,23 @@ class TextAnnotationDelta(StreamEvent[Literal[AgentEventType.TEXT_ANNOTATION]]):
     )
 
 
+class ToolInputDelta(StreamEvent[Literal[AgentEventType.TOOL_INPUT_DELTA]]):
+    """A fragment of a tool call's input as the model generates it."""
+
+    type: Literal[AgentEventType.TOOL_INPUT_DELTA] = AgentEventType.TOOL_INPUT_DELTA
+    block_index: int = Field(description="The content block's index within the model response.")
+    partial_json: str = Field(description="A JSON fragment. It may be incomplete on its own.")
+
+
+class ContextCompactionDelta(StreamEvent[Literal[AgentEventType.CONTEXT_COMPACTION_DELTA]]):
+    """An update to a context compaction block."""
+
+    type: Literal[AgentEventType.CONTEXT_COMPACTION_DELTA] = AgentEventType.CONTEXT_COMPACTION_DELTA
+    block_index: int = Field(description="The content block's index within the model response.")
+    content: str | None = Field(default=None, description="A fragment of the compaction summary.")
+    encrypted_content: str | None = Field(default=None, description="Opaque compaction metadata.")
+
+
 class MessageHandlerEnd(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_END]]):
     """One message's handler returned — its reply. Terminal for the MESSAGE.
 
@@ -1197,6 +1219,8 @@ AgentStreamItem = Annotated[
     | ReplyDelta
     | ThoughtSummaryDelta
     | TextAnnotationDelta
+    | ToolInputDelta
+    | ContextCompactionDelta
     | AgentStateSnapshot
     | AgentStatePatch,
     Field(discriminator="type"),

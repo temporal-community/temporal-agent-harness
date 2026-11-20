@@ -45,6 +45,11 @@ Changelog = "https://github.com/temporal-community/temporal-agent-kit/releases"
 temporal-agent-kit = "temporal_agent_kit.web.cli:main"
 
 [project.optional-dependencies]
+# The Claude Agent SDK integration: temporal_agent_kit.ai_sdks.claude_agent_sdk.
+claude-agent-sdk = [
+    "claude-agent-sdk>=0.2.163,<0.2.169",
+    "temporalio>=1.36.0,<2",
+]
 # The Google Gemini SDK integration: temporal_agent_kit.ai_sdks.google_genai_plugin.
 genai = [
     "google-genai>=2.0.0",
@@ -155,6 +160,9 @@ dev = [
     "setuptools>=83.0.0",  # Bazel builds the wheel and sdist with it (bazel/python_dists.py)
     "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
     "temporalio[aioboto3]>=1.35.0",  # S3 storage driver under test (mirrors the `s3` extra)
+    # The vendored Claude Agent SDK plugin (mirrors the `claude-agent-sdk` extra).
+    "claude-agent-sdk>=0.2.163,<0.2.169",
+    "temporalio>=1.36.0,<2",
     # OpenAI Agents integration + its opentelemetry/mcp deps, so the vendored plugin and its
     # tests import under a plain `uv run pytest` (mirrors the `openai-agents` extra).
     "openai-agents>=0.22.0",
@@ -183,6 +191,7 @@ include = ["temporal_agent_kit*"]
 
 [tool.setuptools.package-data]
 "temporal_agent_kit" = ["skills/**/*.md", "skills/**/*.yaml", "skills/**/*.tmpl"]
+"temporal_agent_kit.ai_sdks.claude_agent_sdk" = ["LICENSE", "py.typed"]
 "temporal_agent_kit.ui" = [
     "dist/*",
     "dist/assets/*",

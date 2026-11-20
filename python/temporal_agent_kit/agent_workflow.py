@@ -3512,13 +3512,23 @@ class AgentWorkflowRunner:
             )
         )
 
-    def publish(self, event: AgentStreamItem) -> None:
+    def publish(self, event: AgentStreamItem, *, stream_context: TurnStreamContext | None = None) -> None:
         """Publish an event against the in-flight turn (for custom intermediate events).
 
         Most agents never need this — streaming (reply deltas, tool lifecycle) is handled
         by the runner↔SDK integration and ``run_tool``. Use it from inside a handler to
         emit a bespoke progress event. Raises if no turn is active.
+
+        Pass ``stream_context`` to publish for that turn and message instead.
         """
+        if stream_context is not None:
+            self._pub(
+                stream_context.turn_id,
+                stream_context.turn_number,
+                event,
+                message_id=stream_context.message_id,
+            )
+            return
         ctx = self.current_stream_context
         if ctx is None:
             raise RuntimeError("publish() called with no active turn")
