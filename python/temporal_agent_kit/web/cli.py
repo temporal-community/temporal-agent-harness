@@ -12,9 +12,11 @@ A normal dev setup is:
     uv add 'temporal-agent-kit[ui]'
     uv run temporal-agent-kit serve path/to/agents.toml   # prebuilt Svelte UI + JSON API
 
-``serve`` publishes the UI built into the wheel (``temporal_agent_kit/ui/dist``) over one or
-more ``agents.toml`` registries. It starts sessions as the registries' agent workflows and lists
-them from Temporal visibility, so beside Temporal it needs only the agents' workers.
+``serve`` publishes the UI built into the wheel (``temporal_agent_kit/ui/dist``) over the agents
+in its registry store, registering those of any ``agents.toml`` files it is given as it starts. It
+starts sessions as the registry's agent workflows and lists them from Temporal visibility, so
+beside Temporal it needs only the agents' workers. ``agents`` adds, lists, retires and deletes a
+running server's agents through its HTTP API.
 
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
@@ -35,7 +37,8 @@ from pathlib import Path
 from temporal_agent_kit.development import SKILL_DIRECTORIES, SKILL_TARGETS
 from temporal_agent_kit.web.client import (
     DEFAULT_TEMPORAL_ADDRESS,
-    ensure_temporal_address,
+    TemporalConnection,
+    ensure_temporal_connection,
 )
 
 TEMPORAL_CONNECTION_HELP = """\
@@ -47,8 +50,9 @@ Temporal connection:
          Overrides the ADDRESS only. Namespace, TLS, and API key still come from the
          profile below, so this composes with a temporal.toml rather than replacing it.
     2. TEMPORAL_ADDRESS (and the other TEMPORAL_* env overrides).
-    3. The profile named by TEMPORAL_PROFILE (default: "default") in the temporal.toml
-         named by TEMPORAL_CONFIG_FILE, else ~/.config/temporalio/temporal.toml.
+    3. The profile named by --temporal-profile, else TEMPORAL_PROFILE, else "default", in
+         the temporal.toml named by --temporal-config-file, else TEMPORAL_CONFIG_FILE, else
+         ~/.config/temporalio/temporal.toml.
     4. localhost:7233
          The `temporal server start-dev` default. Used ONLY when nothing above resolves
          an address, so it never overrides a configured profile.
@@ -57,7 +61,7 @@ Temporal connection:
   temporalio reads only the user-level file above. Point at a project-local one
   explicitly:
 
-      TEMPORAL_CONFIG_FILE=./temporal.toml temporal-agent-kit serve ./agents.toml
+      temporal-agent-kit serve --temporal-config-file temporal.toml ./agents.toml
 
 Task queues:
   TASK_QUEUE_PREFIX, set to the same value for `serve` and every agent worker, moves the whole
@@ -71,16 +75,53 @@ Examples:
 
   # A project-local config file, and a named profile within it (e.g. Temporal Cloud,
   # whose namespace and API key come from that profile):
-  TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud \\
-      temporal-agent-kit serve ./agents.toml
+  temporal-agent-kit serve --temporal-config-file temporal.toml --temporal-profile cloud \\
+      ./agents.toml
 """
 
 
 def _serve(args: argparse.Namespace) -> None:
     # Imported at call time so `--help` on the other subcommand doesn't pay for FastAPI.
-    from temporal_agent_kit.web.serve import run_server
+    from temporal_agent_kit.web.serve import load_registry_store_factory, run_server
 
-    run_server(*args.registry_paths, host=args.host, port=args.port)
+    try:
+        registry_store = (
+            None if args.registry_store is None else load_registry_store_factory(args.registry_store)
+        )
+    except (ImportError, ValueError) as e:
+        raise SystemExit(f"temporal-agent-kit serve: --registry-store: {e}") from None
+    run_server(
+        *(Path(path) for path in args.registry_paths),
+        registry_store=registry_store,
+        host=args.host,
+        port=args.port,
+    )
+
+
+def _agents(args: argparse.Namespace) -> None:
+    from temporal_agent_kit.web.agent_commands import (
+        AgentCommandError,
+        add_agents,
+        delete_agent,
+        format_agents,
+        list_agents,
+        retire_agent,
+    )
+
+    try:
+        if args.action == "add":
+            keys = add_agents(Path(args.registry_path), args.server)
+            print("Registered " + ", ".join(keys))
+        elif args.action == "list":
+            print(format_agents(list_agents(args.server)))
+        elif args.action == "retire":
+            retire_agent(args.key, args.server)
+            print(f"Retired {args.key}")
+        else:
+            delete_agent(args.key, args.server)
+            print(f"Deleted {args.key}")
+    except (AgentCommandError, OSError, ValueError) as e:
+        raise SystemExit(f"temporal-agent-kit agents {args.action}: {e}") from None
 
 
 def _schema(args: argparse.Namespace) -> None:
@@ -170,6 +211,20 @@ def main(argv: list[str] | None = None) -> None:
         "TEMPORAL_ADDRESS. When omitted and nothing else configures one, defaults to "
         f"{DEFAULT_TEMPORAL_ADDRESS}.",
     )
+    connection.add_argument(
+        "--temporal-config-file",
+        default=None,
+        type=Path,
+        metavar="FILE",
+        help="The temporal.toml to read connection profiles from. Overrides "
+        "TEMPORAL_CONFIG_FILE.",
+    )
+    connection.add_argument(
+        "--temporal-profile",
+        default=None,
+        metavar="NAME",
+        help="The profile in that file to connect with. Overrides TEMPORAL_PROFILE.",
+    )
 
     parser = argparse.ArgumentParser(
         prog="temporal-agent-kit",
@@ -214,24 +269,59 @@ def main(argv: list[str] | None = None) -> None:
     serve = subparsers.add_parser(
         "serve",
         parents=[connection],
-        help="Serve the packaged web UI over one or more agents.toml registries.",
-        description="Serve the prebuilt Agent Kit web UI and JSON API over one or more "
-        "agents.toml registries. It starts sessions as the registries' agent workflows and "
-        "lists them from Temporal visibility; run the agents' workers against the same "
-        "namespace.",
+        help="Serve the packaged web UI over the agents in its registry.",
+        description="Serve the prebuilt Agent Kit web UI and JSON API over the agents in its "
+        "registry store, registering the agents of any agents.toml files given as it starts. "
+        "It starts sessions as the registry's agent workflows and lists them from Temporal "
+        "visibility; run the agents' workers against the same namespace.",
         epilog=TEMPORAL_CONNECTION_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     serve.add_argument(
         "registry_paths",
-        nargs="+",
+        nargs="*",
         metavar="registry_path",
-        help="Path(s) to agents.toml registries. One serves that registry standalone; "
-        "several are merged so the UI lists all their agents.",
+        help="agents.toml files whose agents to register as the server starts, all of them or "
+        "none. Without any, the server serves the agents its registry already holds.",
+    )
+    serve.add_argument(
+        "--registry-store",
+        default=None,
+        metavar="module.path:factory",
+        help="A registry store factory to keep the registry in, instead of the registry "
+        "workflow (see temporal_agent_kit.web.registry_store).",
     )
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
     serve.set_defaults(handler=_serve)
+
+    agents = subparsers.add_parser(
+        "agents",
+        help="Add, list, retire or delete a running server's agents.",
+        description="Change a running server's agent registry through its HTTP API. `add` "
+        "registers every agent of an agents.toml file, all or none, with the schema files its "
+        "entries name; registering a key again replaces it and makes it active. `retire` stops "
+        "an agent from starting new sessions but keeps its sessions listed; `delete` removes "
+        "it, and its sessions leave the session list.",
+    )
+    agents_actions = agents.add_subparsers(dest="action", metavar="<action>", required=True)
+    agents_add = agents_actions.add_parser("add", help="Register the agents of an agents.toml.")
+    agents_add.add_argument("registry_path", metavar="agents.toml")
+    agents_actions.add_parser("list", help="List the registered agents.")
+    for action, help_text in (
+        ("retire", "Stop an agent from starting new sessions."),
+        ("delete", "Remove an agent from the registry."),
+    ):
+        agents_key = agents_actions.add_parser(action, help=help_text)
+        agents_key.add_argument("key")
+    for action_parser in agents_actions.choices.values():
+        action_parser.add_argument(
+            "--server",
+            default="http://localhost:8000",
+            metavar="URL",
+            help="The Agent Kit server (default: http://localhost:8000).",
+        )
+    agents.set_defaults(handler=_agents)
 
     schema = subparsers.add_parser(
         "schema",
@@ -281,7 +371,16 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(2)
 
     if hasattr(args, "temporal_address"):
-        ensure_temporal_address(args.temporal_address)
+        config_file: Path | None = args.temporal_config_file
+        if config_file is not None and not config_file.is_file():
+            parser.error(f"--temporal-config-file: no file {config_file}")
+        ensure_temporal_connection(
+            TemporalConnection(
+                address=args.temporal_address,
+                config_file=config_file,
+                profile=args.temporal_profile,
+            )
+        )
     handler(args)
 
 

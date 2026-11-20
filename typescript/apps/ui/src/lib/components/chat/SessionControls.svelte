@@ -6,6 +6,7 @@
   import type { Attachment } from "svelte/attachments";
   import { MediaQuery } from "svelte/reactivity";
   import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
+  import type { AgentRegistryActions } from "$lib/state/agentRegistration";
   import EndSessionDialog, { type EndTarget } from "$lib/components/chat/EndSessionDialog.svelte";
   import StartSessionDialog from "$lib/components/chat/StartSessionDialog.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
@@ -94,6 +95,7 @@
     onEnsureAgents?: () => void | Promise<void>;
     /** Re-check availability without changing the selected agent or entered data. */
     onRefreshAgents?: () => void | Promise<void>;
+    registry?: AgentRegistryActions;
     refreshingAgents?: boolean;
     /** Agent re-list failure — shown in the picker, like `sessionsError`. */
     agentsError?: string | null;
@@ -138,6 +140,7 @@
     onLoadOlderSessions,
     onEnsureAgents,
     onRefreshAgents,
+    registry,
     refreshingAgents = false,
     agentsError = null,
     onClose,
@@ -356,8 +359,12 @@
     return "Open";
   }
 
+  /* A retired agent's sessions stay listed and usable; their rows say whose they are. */
+  const retiredTypes = $derived(new Set(agents.filter((agent) => agent.retired).map((agent) => agent.workflow_type)));
+
   function sessionAgentLabel(session: Session): string {
-    return agentName(agents, session.agent_workflow_type);
+    const name = agentName(agents, session.agent_workflow_type);
+    return retiredTypes.has(session.agent_workflow_type) ? `${name} (retired)` : name;
   }
 
   const openStatus = $derived({ kind: statusKind, label: statusLabel });
@@ -691,6 +698,7 @@
       error={agentsError}
       onRefresh={onRefreshAgents}
       onStart={onNewSession ?? (() => {})}
+      {registry}
       onClose={() => (newSessionOpen = false)}
     />
   {/if}

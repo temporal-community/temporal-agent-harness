@@ -8,6 +8,8 @@ connection here, from temporalio's standard client config.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -18,20 +20,35 @@ if TYPE_CHECKING:
 DEFAULT_TEMPORAL_ADDRESS = "localhost:7233"
 
 
-def ensure_temporal_address(explicit_address: str | None) -> None:
-    """Make sure this process's Temporal client has a target host to connect to.
+@dataclass(frozen=True)
+class TemporalConnection:
+    """What a command line says about the Temporal connection; ``None`` leaves each to the
+    environment and the ``temporal.toml`` profile."""
+
+    address: str | None = None
+    # The temporal.toml to read profiles from (TEMPORAL_CONFIG_FILE).
+    config_file: Path | None = None
+    # The profile within it (TEMPORAL_PROFILE).
+    profile: str | None = None
+
+
+def ensure_temporal_connection(connection: TemporalConnection) -> None:
+    """Make this process's Temporal client connect where ``connection`` says, and somewhere.
 
     Both entrypoints resolve their connection via ``ClientConfig.load_client_connect_config()``
-    (a ``temporal.toml`` profile plus ``TEMPORAL_*`` env overrides). With neither present,
-    ``target_host`` is simply absent and the failure is a bare ``TypeError`` from
-    ``Client.connect()`` — a rotten first run for someone who just
-    added the harness to a project.
-    So: an explicit ``--temporal-address`` always wins (env overrides file, as it should), and
-    otherwise the dev-server default fills in only when the resolved config offers no host at
-    all. An existing profile is never overridden.
+    (a ``temporal.toml`` profile plus ``TEMPORAL_*`` env overrides). Each given setting is put in
+    the environment variable that names it, so it outranks the same variable set by the shell.
+    With no host resolved at all, ``target_host`` is simply absent and the failure is a bare
+    ``TypeError`` from ``Client.connect()`` — a rotten first run for someone who just added the
+    harness to a project. So without an explicit address, the dev-server default fills in only
+    when the resolved config offers no host. An existing profile is never overridden.
     """
-    if explicit_address is not None:
-        os.environ["TEMPORAL_ADDRESS"] = explicit_address
+    if connection.config_file is not None:
+        os.environ["TEMPORAL_CONFIG_FILE"] = str(connection.config_file)
+    if connection.profile is not None:
+        os.environ["TEMPORAL_PROFILE"] = connection.profile
+    if connection.address is not None:
+        os.environ["TEMPORAL_ADDRESS"] = connection.address
         return
 
     from temporalio.envconfig import ClientConfig
@@ -74,8 +91,9 @@ async def connect_client() -> "Client":
         raise SystemExit(
             f"error: cannot reach a Temporal server at {target}.\n"
             "  Start one with `temporal server start-dev`, or point this command at a\n"
-            "  different cluster with --temporal-address HOST:PORT, TEMPORAL_ADDRESS, or a\n"
-            "  temporal.toml profile (see --help for the full resolution order).\n"
+            "  different cluster with --temporal-config-file FILE and --temporal-profile NAME,\n"
+            "  --temporal-address HOST:PORT, or TEMPORAL_* variables (see --help for the full\n"
+            "  resolution order).\n"
             f"  detail: {exc}"
         ) from exc
 

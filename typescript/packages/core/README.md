@@ -447,6 +447,42 @@ The screenshot shows the console after a completed weather turn. It uses a scrip
 response for a reproducible capture; the agent, tool execution, Temporal workflows, and console
 are real. The quickstart above uses OpenAI and streams its response live.
 
+### Add agents to a running server
+
+The server keeps its registry between restarts, and takes new agents while it runs. Registering
+uses the same `temporal-agent-kit` command as the server, which reads `agents.toml` and its schema
+files without importing your agent code, so TypeScript agents need no command of their own. To
+put it on your `PATH`:
+
+```bash
+uv tool install 'temporal-agent-kit[ui]'
+uv tool update-shell   # once, if ~/.local/bin is not on your PATH yet; then open a new terminal
+```
+
+Then, from your project, with the server running:
+
+```bash
+# The agent's schema document, from the built agent.
+npm run agent-kit:schema
+
+# Register every agent in the agents.toml, all of them or none.
+temporal-agent-kit agents add agents.toml --server http://localhost:8000
+```
+
+Without installing the tool, `uvx --from 'temporal-agent-kit[ui]' temporal-agent-kit agents add
+agents.toml` does the same. The agents appear in the console at once; start their workers on the
+task queues they name. Registering a key again replaces that agent, so rerun both commands after
+changing its init data, label or description. `--server` defaults to `http://localhost:8000`.
+
+```bash
+temporal-agent-kit agents list                       # every registered agent, active or retired
+temporal-agent-kit agents retire openai-hello-ts     # starts no new sessions; its sessions stay listed
+temporal-agent-kit agents delete openai-hello-ts     # leaves the registry; its sessions leave the list
+```
+
+"Add agents" in the console's Agent Bay does the same as `agents add`, from a form or an imported
+`agents.toml`, and its New session dialog retires, restores and deletes agents.
+
 ### Temporal connection
 
 With no connection configured, both services use `localhost:7233` and namespace `default`.
@@ -459,7 +495,9 @@ export TEMPORAL_PROFILE=cloud
 ```
 
 Use a profile containing your connection details. A `temporal.toml` in the current directory is
-not picked up automatically. All services must use the same address and namespace. This
+not picked up automatically. `temporal-agent-kit serve` also takes them as flags,
+`--temporal-config-file temporal.toml --temporal-profile cloud`; the worker reads only the
+environment. All services must use the same address and namespace. This
 walkthrough uses the literal `openai-hello-ts` task queue in both worker and registry; leave
 `TASK_QUEUE_PREFIX` unset. See the worker reference if you need prefixed queues.
 

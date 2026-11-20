@@ -3,6 +3,7 @@ import type {
   CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
+  AgentRegistration,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
@@ -12,6 +13,7 @@ import type {
   FileViewRequest,
   OKFGraph,
   OKFGraphRequest,
+  RegisterAgentsResponse,
   Session,
   SessionsPage,
   SubmitMessageResponse,
@@ -139,6 +141,26 @@ async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {
 export class HttpAgentApi implements AgentApi {
   async listAgents(): Promise<AgentRegistryResponse> {
     return json<AgentRegistryResponse>(apiPath("agents"));
+  }
+
+  async registerAgents(agents: AgentRegistration[]): Promise<RegisterAgentsResponse> {
+    return json<RegisterAgentsResponse>(apiPath("agents"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agents })
+    });
+  }
+
+  async agentRegistration(key: string): Promise<AgentRegistration> {
+    return json<AgentRegistration>(apiPath(`agents/${encodeURIComponent(key)}/registration`));
+  }
+
+  async retireAgent(key: string): Promise<void> {
+    await json<{ ok: boolean }>(apiPath(`agents/${encodeURIComponent(key)}/retire`), { method: "POST" });
+  }
+
+  async deleteAgent(key: string): Promise<void> {
+    await json<{ ok: boolean }>(apiPath(`agents/${encodeURIComponent(key)}`), { method: "DELETE" });
   }
 
   async listSessions(pageToken?: string): Promise<SessionsPage> {

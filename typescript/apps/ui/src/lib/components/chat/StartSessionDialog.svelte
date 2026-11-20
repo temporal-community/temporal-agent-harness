@@ -11,12 +11,15 @@
    */
   interface Capability {
     id: string;
-    group: "availability" | "setup" | "interface";
+    group: "availability" | "setup" | "interface" | "lifecycle";
     label: string;
     has: (agent: AgentDescriptor) => boolean;
     /** Shown on the card; availability is not, since a card only speaks up when not ready. */
     tag?: (agent: AgentDescriptor) => string;
   }
+
+  /* A retired agent starts no sessions, so it is listed only when this filter asks for it. */
+  const RETIRED = "retired";
 
   export const CAPABILITIES: readonly Capability[] = [
     { id: "ready", group: "availability", label: "Ready now", has: (agent) => agent.worker?.status === "ready" },
@@ -48,7 +51,8 @@
       label: "Several handlers",
       has: (agent) => (agent.handlers?.length ?? 0) > 1,
       tag: (agent) => `${agent.handlers?.length} handlers`
-    }
+    },
+    { id: RETIRED, group: "lifecycle", label: "Retired", has: (agent) => agent.retired === true, tag: () => "Retired" }
   ];
 
   /* Searched as plain text, so a description's markdown neither matches nor hides a word. */
@@ -63,12 +67,19 @@
     });
   }
 
-  /** The filters worth offering: capabilities some agents have and some do not. */
+  /** The filters worth offering: capabilities some agents have and some do not. Retired is
+      offered whenever an agent is retired, since retired agents are listed only through it. */
   export function filterChips<T extends { caps: ReadonlySet<string> }>(entries: T[]) {
     return CAPABILITIES.map((capability) => ({
       ...capability,
       count: entries.filter((entry) => entry.caps.has(capability.id)).length
-    })).filter((chip) => chip.count > 0 && chip.count < entries.length);
+    })).filter((chip) => chip.count > 0 && (chip.id === RETIRED || chip.count < entries.length));
+  }
+
+  /** The chosen filters that still have a chip: one whose chip went away (the last retired agent
+      restored) would otherwise keep narrowing the list with no way to turn it off. */
+  export function keptFilters(active: readonly string[], chips: readonly { id: string }[]): string[] {
+    return active.filter((id) => chips.some((chip) => chip.id === id));
   }
 
   export function filterAgents<T extends { haystack: string; caps: ReadonlySet<string> }>(
@@ -79,8 +90,12 @@
     const term = query.trim().toLowerCase();
     const chosen = CAPABILITIES.filter((capability) => active.includes(capability.id));
     const groups = [...new Set(chosen.map((capability) => capability.group))].map((group) => chosen.filter((capability) => capability.group === group));
+    const showRetired = active.includes(RETIRED);
     return entries.filter(
-      (entry) => (!term || entry.haystack.includes(term)) && groups.every((group) => group.some((capability) => entry.caps.has(capability.id)))
+      (entry) =>
+        (showRetired || !entry.caps.has(RETIRED)) &&
+        (!term || entry.haystack.includes(term)) &&
+        groups.every((group) => group.some((capability) => entry.caps.has(capability.id)))
     );
   }
 
@@ -115,12 +130,14 @@
 </script>
 
 <script lang="ts">
-  import { Bot, ChevronRight, RefreshCw, Search, SearchX, X } from "@lucide/svelte";
+  import { Bot, ChevronRight, Download, Plus, RefreshCw, Search, SearchX, X } from "@lucide/svelte";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
   import { untrack } from "svelte";
   import type { Attachment } from "svelte/attachments";
   import type { JsonRecord } from "$lib/api/types";
+  import AgentManagement from "$lib/components/chat/AgentManagement.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
+  import RegisterAgentsDialog from "$lib/components/chat/RegisterAgentsDialog.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
   import { focusFirstProblem, problemSummary } from "$lib/components/chat/schemaForm";
   import Chip from "$lib/components/primitives/Chip.svelte";
@@ -129,6 +146,7 @@
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip, { type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
   import { windowedFocus } from "$lib/components/primitives/windowedFocus";
+  import { registryArchive, rowFromRegistration, type AgentRegistryActions, type RegistrationRow } from "$lib/state/agentRegistration";
   import { initDataForm, initDataPayload, type InitDataForm } from "$lib/state/initData";
   import { keptHighlight } from "$lib/state/quickSwitch";
   import { dissolveClear, inputClearDissolve } from "$lib/motion/inputClearDissolve";
@@ -142,9 +160,11 @@
     onRefresh?: () => void | Promise<void>;
     onStart: (workflowType: string, data?: JsonRecord) => void | Promise<void>;
     onClose: () => void;
+    /** Registering, retiring and deleting agents; without it the dialog only starts sessions. */
+    registry?: AgentRegistryActions;
   }
 
-  let { agents, preferredAgentType, starting = false, refreshing = false, error = null, onRefresh, onStart, onClose }: Props = $props();
+  let { agents, preferredAgentType, starting = false, refreshing = false, error = null, onRefresh, onStart, onClose, registry }: Props = $props();
 
   const uid = $props.id();
   const listId = `${uid}-agents`;
@@ -155,7 +175,12 @@
 
   let query = $state("");
   let active = $state<string[]>([]);
-  const filtered = $derived(filterAgents(entries, query, active));
+  /* A filter whose chip has gone is dropped, so it can't come back on when its chip does. */
+  $effect.pre(() => {
+    const kept = keptFilters(active, chips);
+    if (kept.length !== active.length) active = kept;
+  });
+  const filtered = $derived(filterAgents(entries, query, keptFilters(active, chips)));
   const filteredKeys = $derived(filtered.map((entry) => entry.agent.key));
 
   function toggle(id: string): void {
@@ -176,7 +201,8 @@
   let searchInput = $state<HTMLInputElement | null>(null);
   let listElement = $state<HTMLElement | null>(null);
   let submitting = $state(false);
-  const busy = $derived(starting || submitting);
+  let managing = $state(false);
+  const busy = $derived(starting || submitting || managing);
 
   /* One form per agent, kept while the dialog is open: a search that moves the selection away
      and back must not throw away what the reader typed. */
@@ -304,6 +330,64 @@
     if (!busy) dialogElement?.close();
   }
 
+  /* The add form, open over this dialog; its rows are what it starts from. */
+  let adding = $state<RegistrationRow[] | null>(null);
+  /* Delete asks twice, with the second ask on the same button. */
+  let confirmingDelete = $state<string | null>(null);
+  let manageFailure = $state<{ key: string | null; message: string } | null>(null);
+  const manageAlert = $derived(manageFailure && (manageFailure.key === null || manageFailure.key === agent?.key) ? manageFailure.message : null);
+
+  async function manage(key: string | null, action: () => Promise<void>): Promise<void> {
+    if (busy) return;
+    managing = true;
+    manageFailure = null;
+    try {
+      await action();
+    } catch (error) {
+      manageFailure = { key, message: error instanceof Error ? error.message : "That did not work. Try again." };
+    } finally {
+      managing = false;
+      confirmingDelete = null;
+    }
+  }
+
+  function retire(key: string): void {
+    if (registry) void manage(key, () => registry.retire(key));
+  }
+
+  /* Registering an agent again makes it active, as it was registered. */
+  function restore(key: string): void {
+    if (registry) void manage(key, async () => registry.register([await registry.registration(key)]));
+  }
+
+  function remove(key: string): void {
+    if (!registry) return;
+    if (confirmingDelete !== key) {
+      confirmingDelete = key;
+      return;
+    }
+    void manage(key, () => registry.remove(key));
+  }
+
+  /* The active agents as an agents.toml and schema files, zipped, which registers them again. */
+  function download(): void {
+    if (!registry) return;
+    void manage(null, async () => {
+      const active = agents.filter((option) => !option.retired);
+      const registrations = await Promise.all(active.map((option) => registry.registration(option.key)));
+      const url = URL.createObjectURL(new Blob([registryArchive(registrations) as BlobPart], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "agents.zip";
+      link.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  function edit(key: string): void {
+    if (registry) void manage(key, async () => void (adding = [rowFromRegistration(await registry.registration(key))]));
+  }
+
   function clearSearch(): void {
     dissolveClear(searchInput, () => (query = ""));
     searchInput?.focus({ preventScroll: true });
@@ -357,6 +441,22 @@
         <h2 class="head-title" id={`${uid}-title`}>New session</h2>
         <p class="head-subtitle" id={`${uid}-subtitle`}>Browse the agents you can run and start one.</p>
       </div>
+      {#if registry}
+        <Chip class="head-add" size="xs" fill="solid" tone="accent" disabled={busy} onclick={() => (adding = [])}>
+          {#snippet lead()}<Plus size={12} aria-hidden="true" />{/snippet}
+          Add agents
+        </Chip>
+        <button
+          type="button"
+          class="head-button"
+          aria-label="Download agents.toml"
+          data-tip="Download agents.toml"
+          data-tip-below
+          data-tip-align="end"
+          disabled={busy || !agents.some((option) => !option.retired)}
+          onclick={download}
+        ><Download size={13} aria-hidden="true" /></button>
+      {/if}
       {#if onRefresh}
         <button
           type="button"
@@ -426,6 +526,7 @@
       {/if}
     </div>
     {#if error}<p class="form-error toolbar-error" role="alert">{error}</p>{/if}
+    {#if manageFailure && manageFailure.key === null}<p class="form-error toolbar-error" role="alert">{manageFailure.message}</p>{/if}
 
     <div class="market">
       <div class="grid-area">
@@ -435,7 +536,7 @@
               <EmptyState
                 title={refreshing ? "Loading agents…" : "No agents are registered yet."}
                 icon={refreshing ? undefined : Bot}
-              />
+              >{#if registry && !refreshing}<Chip size="sm" fill="quiet" onclick={() => (adding = [])}>Add agents</Chip>{/if}</EmptyState>
             {:else}
               <EmptyState title="No agents match" icon={SearchX}>Try another word, or fewer filters.</EmptyState>
             {/if}
@@ -543,7 +644,8 @@
                 <p class="state-names">{#each agent.states as state, i (i)}<code dir="auto">{state}</code>{/each}</p>
               </section>
             {/if}
-            <div aria-live="polite">
+            <!-- A retired agent starts nothing, so its worker is not worth a word. -->
+            <div aria-live="polite" hidden={agent.retired}>
               <!-- A warning, not a block: a serverless worker that scales to zero is started by the
                    session's first task, so no poller now does not mean none later. -->
               {#if agent.worker?.status === "no_worker"}
@@ -552,7 +654,19 @@
                 <p class="worker-hint">Worker availability could not be checked. You can still try starting this agent.</p>
               {/if}
             </div>
-            {#if form}
+            {#if registry}
+              <AgentManagement
+                {agent}
+                {busy}
+                confirmingDelete={confirmingDelete === agent.key}
+                failure={manageAlert}
+                onEdit={() => edit(agent.key)}
+                onRetire={() => retire(agent.key)}
+                onRestore={() => restore(agent.key)}
+                onDelete={() => remove(agent.key)}
+              />
+            {/if}
+            {#if form && !agent.retired}
               <section class="setup-fields" aria-labelledby={`${uid}-setup`}>
                 <h4 id={`${uid}-setup`}>{form.title} <span>{form.required ? "Required" : "Optional"}</span></h4>
                 {#if form.description}<div class="setup-description"><MarkdownMessage text={form.description} compact /></div>{/if}
@@ -567,7 +681,7 @@
           {#if alert}<p class="form-error" role="alert">{alert}</p>{/if}
           <div class="actions">
             <Chip fill="quiet" disabled={busy} onclick={close}>Cancel</Chip>
-            {#if form && !form.required}
+            {#if form && !form.required && !agent?.retired}
               <Chip fill="quiet" disabled={busy || !agent} onclick={() => void start(false)}>Start without data</Chip>
             {/if}
             <Chip
@@ -575,13 +689,16 @@
               fill="solid"
               tone="accent"
               aria-label={selected ? `Start session with ${selected.name}` : undefined}
-              disabled={busy || !agent}
-            >{busy ? "Starting…" : "Start session"}</Chip>
+              disabled={busy || !agent || agent.retired === true}
+            >{starting || submitting ? "Starting…" : "Start session"}</Chip>
           </div>
         </footer>
       </section>
     </div>
   </form>
+  {#if registry && adding}
+    <RegisterAgentsDialog actions={registry} rows={adding} onClose={() => (adding = null)} />
+  {/if}
 </dialog>
 
 <style>

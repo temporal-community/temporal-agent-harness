@@ -12,6 +12,7 @@ import type {
 import type { AgentApi } from "$lib/api/client";
 import type {
   AgentDescriptor,
+  AgentRegistration,
   FileChunk,
   FileViewRequest,
   JsonRecord,
@@ -2030,11 +2031,10 @@ export class AgentRunController {
   /**
    * Re-list the agents, unconditionally.
    *
-   * `#loadAgents` caches forever, which is right for the registry half — the set of
-   * launchable agents does not change while the page is open — and wrong for the worker
-   * half now riding along with it. A worker can come up or go down between two opens of
-   * the picker, so a cached "Ready" is the exact claim this is meant to stop making.
-   * Hence no age gate anywhere below: every ask goes to the server.
+   * `#loadAgents` keeps the first list, which is wrong for both halves of it: agents are
+   * registered, retired and deleted while the page is open, and a worker can come up or go
+   * down between two opens of the picker, so a cached "Ready" is the exact claim this is
+   * meant to stop making. Hence no age gate anywhere below: every ask goes to the server.
    *
    * One flight at a time: a double-click on New would otherwise race two lists into
    * `agents`, and the loser could be the older answer.
@@ -2085,6 +2085,27 @@ export class AgentRunController {
     } finally {
       this.refreshingAgents = false;
     }
+  }
+
+  /** Register every agent, or none, then re-list them. Throws the server's refusal. */
+  async registerAgents(registrations: AgentRegistration[]): Promise<void> {
+    await this.#api.registerAgents(registrations);
+    await this.#loadAgentsFresh();
+  }
+
+  /** The agent as it was registered: what a download writes and a restore sends back. */
+  agentRegistration(key: string): Promise<AgentRegistration> {
+    return this.#api.agentRegistration(key);
+  }
+
+  async retireAgent(key: string): Promise<void> {
+    await this.#api.retireAgent(key);
+    await this.#loadAgentsFresh();
+  }
+
+  async deleteAgent(key: string): Promise<void> {
+    await this.#api.deleteAgent(key);
+    await this.#loadAgentsFresh();
   }
 
   #recordTitle(message: string): void {

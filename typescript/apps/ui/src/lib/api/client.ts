@@ -3,6 +3,7 @@ import type {
   CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
+  AgentRegistration,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
@@ -12,6 +13,7 @@ import type {
   FileViewRequest,
   OKFGraph,
   OKFGraphRequest,
+  RegisterAgentsResponse,
   Session,
   SessionsPage,
   SubmitMessageResponse,
@@ -23,6 +25,14 @@ import type {
 
 export interface AgentApi {
   listAgents(): Promise<AgentRegistryResponse>;
+  /** Register every agent, or none: a key registered again is replaced and made active. */
+  registerAgents(agents: AgentRegistration[]): Promise<RegisterAgentsResponse>;
+  /** The agent as it was registered, which registers it again when sent back. */
+  agentRegistration(key: string): Promise<AgentRegistration>;
+  /** Stop the agent from starting new sessions. Its sessions stay listed and usable. */
+  retireAgent(key: string): Promise<void>;
+  /** Remove the agent from the registry. Its sessions leave the session list. */
+  deleteAgent(key: string): Promise<void>;
   /** One page of sessions, newest first: the first without a token, else the one it names. */
   listSessions(pageToken?: string): Promise<SessionsPage>;
   /** One session by id, wherever it falls in the list; null when there is no such session. */

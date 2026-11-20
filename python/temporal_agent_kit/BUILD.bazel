@@ -50,6 +50,7 @@ py_library(
         "//python/temporal_agent_kit/nexus_agent_adapter:worker_lib",
         "//python/temporal_agent_kit/utils:__init__",
         "//python/temporal_agent_kit/web:cli_lib",
+        "//python/temporal_agent_kit/web:memory_registry_store",
     ],
 )
 

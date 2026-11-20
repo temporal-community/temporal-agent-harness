@@ -1,0 +1,377 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-11-20T01:08:10.657757069Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1048587",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "AgentKitRegistry"
+        },
+        "taskQueue": {
+          "name": "test-49a8aa3b-agent-kit-registry",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJyZWdpc3RyeSI6eyJzbmFwc2hvdCI6eyJhZ2VudHMiOnt9fSwidmVyc2lvbiI6MH0sInJldmlzaW9uIjoxfQ=="
+            }
+          ]
+        },
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a1f67f-2721-7b8a-afa3-0c669cf7afdd",
+        "identity": "12@claude-temporal-agent-harness",
+        "firstExecutionRunId": "01a1f67f-2721-7b8a-afa3-0c669cf7afdd",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "workflowId": "test-49a8aa3b-agent-kit-registry",
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-11-20T01:08:10.657820361Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048588",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "test-49a8aa3b-agent-kit-registry",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-11-20T01:08:10.660178444Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048592",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "12@claude-temporal-agent-harness",
+        "requestId": "40738889-f322-496c-b72a-14da77bd78e7",
+        "historySizeBytes": "409",
+        "workerVersion": {
+          "buildId": "a9fb4a3c1c19ab9eb6d02c6d52ba9617"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-11-20T01:08:10.666063486Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048596",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "12@claude-temporal-agent-harness",
+        "workerVersion": {
+          "buildId": "a9fb4a3c1c19ab9eb6d02c6d52ba9617"
+        },
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            2,
+            3,
+            4,
+            1
+          ],
+          "sdkName": "temporal-python",
+          "sdkVersion": "1.35.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-11-20T01:08:10.666218236Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
+      "taskId": "1048597",
+      "workflowExecutionUpdateAcceptedEventAttributes": {
+        "protocolInstanceId": "1d5aed64-5848-4494-9a62-43e9fedd9b36",
+        "acceptedRequestMessageId": "1d5aed64-5848-4494-9a62-43e9fedd9b36/request",
+        "acceptedRequestSequencingEventId": "2",
+        "acceptedRequest": {
+          "meta": {
+            "updateId": "1d5aed64-5848-4494-9a62-43e9fedd9b36",
+            "identity": "12@claude-temporal-agent-harness"
+          },
+          "input": {
+            "name": "write",
+            "args": {
+              "payloads": [
+                {
+                  "metadata": {
+                    "encoding": "anNvbi9wbGFpbg=="
+                  },
+                  "data": "eyJzbmFwc2hvdCI6eyJhZ2VudHMiOnsiYSI6eyJrZXkiOiJhIiwid29ya2Zsb3dfdHlwZSI6IkFBZ2VudCIsInRhc2tfcXVldWUiOiJhLXF1ZXVlIiwibGFiZWwiOiJBIiwiZGVzY3JpcHRpb24iOiJUaGUgYSBhZ2VudC4iLCJzY2hlbWFfZG9jdW1lbnQiOm51bGwsInN0YXJ0IjpudWxsLCJyZXRpcmVkIjpmYWxzZX19fSwiZXhwZWN0ZWQiOjB9"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-11-20T01:08:10.666286528Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
+      "taskId": "1048598",
+      "workflowExecutionUpdateCompletedEventAttributes": {
+        "meta": {
+          "updateId": "1d5aed64-5848-4494-9a62-43e9fedd9b36",
+          "identity": "12@claude-temporal-agent-harness"
+        },
+        "outcome": {
+          "success": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "MQ=="
+              }
+            ]
+          }
+        },
+        "acceptedEventId": "5"
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-11-20T01:08:10.667910694Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048606",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "12@claude-temporal-agent-harness-f8309c834b2040c78b3b6eb8d640f736",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "test-49a8aa3b-agent-kit-registry"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-11-20T01:08:10.668278403Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048607",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "7",
+        "identity": "12@claude-temporal-agent-harness",
+        "requestId": "ae8b3ad5-3665-41aa-88be-a552fb5f091e",
+        "historySizeBytes": "1252",
+        "workerVersion": {
+          "buildId": "a9fb4a3c1c19ab9eb6d02c6d52ba9617"
+        }
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-11-20T01:08:10.670151153Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048608",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "7",
+        "startedEventId": "8",
+        "identity": "12@claude-temporal-agent-harness",
+        "workerVersion": {
+          "buildId": "a9fb4a3c1c19ab9eb6d02c6d52ba9617"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-11-20T01:08:10.670186819Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
+      "taskId": "1048609",
+      "workflowExecutionUpdateAcceptedEventAttributes": {
+        "protocolInstanceId": "ee3a216a-be3b-4754-870d-f9929bb9d472",
+        "acceptedRequestMessageId": "ee3a216a-be3b-4754-870d-f9929bb9d472/request",
+        "acceptedRequestSequencingEventId": "7",
+        "acceptedRequest": {
+          "meta": {
+            "updateId": "ee3a216a-be3b-4754-870d-f9929bb9d472",
+            "identity": "12@claude-temporal-agent-harness"
+          },
+          "input": {
+            "name": "write",
+            "args": {
+              "payloads": [
+                {
+                  "metadata": {
+                    "encoding": "anNvbi9wbGFpbg=="
+                  },
+                  "data": "eyJzbmFwc2hvdCI6eyJhZ2VudHMiOnsiYSI6eyJrZXkiOiJhIiwid29ya2Zsb3dfdHlwZSI6IkFBZ2VudCIsInRhc2tfcXVldWUiOiJhLXF1ZXVlIiwibGFiZWwiOiJBIiwiZGVzY3JpcHRpb24iOiJUaGUgYSBhZ2VudC4iLCJzY2hlbWFfZG9jdW1lbnQiOm51bGwsInN0YXJ0IjpudWxsLCJyZXRpcmVkIjpmYWxzZX0sImIiOnsia2V5IjoiYiIsIndvcmtmbG93X3R5cGUiOiJCQWdlbnQiLCJ0YXNrX3F1ZXVlIjoiYi1xdWV1ZSIsImxhYmVsIjoiQiIsImRlc2NyaXB0aW9uIjoiVGhlIGIgYWdlbnQuIiwic2NoZW1hX2RvY3VtZW50IjpudWxsLCJzdGFydCI6bnVsbCwicmV0aXJlZCI6ZmFsc2V9fX0sImV4cGVjdGVkIjoxfQ=="
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-11-20T01:08:10.670197028Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
+      "taskId": "1048610",
+      "workflowExecutionUpdateCompletedEventAttributes": {
+        "meta": {
+          "updateId": "ee3a216a-be3b-4754-870d-f9929bb9d472",
+          "identity": "12@claude-temporal-agent-harness"
+        },
+        "outcome": {
+          "success": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "Mg=="
+              }
+            ]
+          }
+        },
+        "acceptedEventId": "10"
+      }
+    },
+    {
+      "eventId": "12",
+      "eventTime": "2026-11-20T01:08:10.672398611Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048618",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "12@claude-temporal-agent-harness-f8309c834b2040c78b3b6eb8d640f736",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "test-49a8aa3b-agent-kit-registry"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "13",
+      "eventTime": "2026-11-20T01:08:10.672617653Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048619",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "12",
+        "identity": "12@claude-temporal-agent-harness",
+        "requestId": "2f34eb7d-3f53-4226-a553-0694a77c7ac6",
+        "historySizeBytes": "2358",
+        "workerVersion": {
+          "buildId": "a9fb4a3c1c19ab9eb6d02c6d52ba9617"
+        }
+      }
+    },
+    {
+      "eventId": "14",
+      "eventTime": "2026-11-20T01:08:10.674666861Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048620",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "12",
+        "startedEventId": "13",
+        "identity": "12@claude-temporal-agent-harness",
+        "workerVersion": {
+          "buildId": "a9fb4a3c1c19ab9eb6d02c6d52ba9617"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "15",
+      "eventTime": "2026-11-20T01:08:10.674704444Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
+      "taskId": "1048621",
+      "workflowExecutionUpdateAcceptedEventAttributes": {
+        "protocolInstanceId": "5b58a5ed-88af-4e04-8d93-0339f7fdaed4",
+        "acceptedRequestMessageId": "5b58a5ed-88af-4e04-8d93-0339f7fdaed4/request",
+        "acceptedRequestSequencingEventId": "12",
+        "acceptedRequest": {
+          "meta": {
+            "updateId": "5b58a5ed-88af-4e04-8d93-0339f7fdaed4",
+            "identity": "12@claude-temporal-agent-harness"
+          },
+          "input": {
+            "name": "ensure_revision",
+            "args": {
+              "payloads": [
+                {
+                  "metadata": {
+                    "encoding": "anNvbi9wbGFpbg=="
+                  },
+                  "data": "Mg=="
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "eventId": "16",
+      "eventTime": "2026-11-20T01:08:10.674715194Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
+      "taskId": "1048622",
+      "workflowExecutionUpdateCompletedEventAttributes": {
+        "meta": {
+          "updateId": "5b58a5ed-88af-4e04-8d93-0339f7fdaed4",
+          "identity": "12@claude-temporal-agent-harness"
+        },
+        "outcome": {
+          "success": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "YmluYXJ5L251bGw="
+                }
+              }
+            ]
+          }
+        },
+        "acceptedEventId": "15"
+      }
+    },
+    {
+      "eventId": "17",
+      "eventTime": "2026-11-20T01:08:10.674847444Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW",
+      "taskId": "1048623",
+      "workflowExecutionContinuedAsNewEventAttributes": {
+        "newExecutionRunId": "2eb4e297-bf02-4a1b-903f-79faf7835dcd",
+        "workflowType": {
+          "name": "AgentKitRegistry"
+        },
+        "taskQueue": {
+          "name": "test-49a8aa3b-agent-kit-registry",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJyZWdpc3RyeSI6eyJzbmFwc2hvdCI6eyJhZ2VudHMiOnsiYSI6eyJrZXkiOiJhIiwid29ya2Zsb3dfdHlwZSI6IkFBZ2VudCIsInRhc2tfcXVldWUiOiJhLXF1ZXVlIiwibGFiZWwiOiJBIiwiZGVzY3JpcHRpb24iOiJUaGUgYSBhZ2VudC4iLCJzY2hlbWFfZG9jdW1lbnQiOm51bGwsInN0YXJ0IjpudWxsLCJyZXRpcmVkIjpmYWxzZX0sImIiOnsia2V5IjoiYiIsIndvcmtmbG93X3R5cGUiOiJCQWdlbnQiLCJ0YXNrX3F1ZXVlIjoiYi1xdWV1ZSIsImxhYmVsIjoiQiIsImRlc2NyaXB0aW9uIjoiVGhlIGIgYWdlbnQuIiwic2NoZW1hX2RvY3VtZW50IjpudWxsLCJzdGFydCI6bnVsbCwicmV0aXJlZCI6ZmFsc2V9fX0sInZlcnNpb24iOjJ9LCJyZXZpc2lvbiI6Mn0="
+            }
+          ]
+        },
+        "workflowRunTimeout": "0s",
+        "workflowTaskTimeout": "10s",
+        "workflowTaskCompletedEventId": "14",
+        "inheritBuildId": true
+      }
+    }
+  ]
+}

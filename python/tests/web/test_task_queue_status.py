@@ -9,11 +9,12 @@ from temporalio.api.enums.v1 import TaskQueueType
 from temporalio.api.taskqueue.v1 import PollerInfo
 from temporalio.api.workflowservice.v1 import DescribeTaskQueueResponse
 
-from temporal_agent_kit.web import (
-    AgentDescriptor,
-    AgentRegistry,
-    create_agent_kit_app,
+from temporal_agent_kit.web import create_agent_kit_app
+from temporal_agent_kit.web.memory_registry_store import (
+    InMemoryRegistryStore,
+    in_memory_registry_store,
 )
+from temporal_agent_kit.web.registry_store import RegisteredAgent, RegistrySnapshot
 from temporal_agent_kit.web.task_queue_status import (
     NO_WORKER,
     READY,
@@ -187,30 +188,31 @@ async def test_an_undescribed_queue_is_unknown_not_ready() -> None:
     assert workers.for_task_queue("never-asked").status == UNKNOWN
 
 
-def _agents_app(registry: AgentRegistry, temporal: _FakeTemporalClient) -> FastAPI:
+def _agents_app(registry: RegistrySnapshot, temporal: _FakeTemporalClient) -> FastAPI:
     """Build the app and hand it its dependencies directly.
 
     ``TestClient`` only runs the lifespan inside a ``with`` block, and the lifespan would
     connect to a real Temporal server — so the endpoint gets the same two pieces of state
     the lifespan would have set.
     """
-    app = create_agent_kit_app(registry=registry)
+    store = InMemoryRegistryStore(registry)
+    app = create_agent_kit_app(registry_store=in_memory_registry_store(store))
     app.state.temporal = temporal
-    app.state.registry = registry
+    app.state.registry_store = store
     return app
 
 
 def test_api_agents_reports_worker_readiness_per_agent() -> None:
-    registry = AgentRegistry(
-        agents=[
-            AgentDescriptor(
+    registry = RegistrySnapshot.of(
+        [
+            RegisteredAgent(
                 key="monty-chat",
                 workflow_type="MontyChatAgent",
                 task_queue="monty-dynamic-agent",
                 label="Monty (Conversational)",
                 description="Chats.",
             ),
-            AgentDescriptor(
+            RegisteredAgent(
                 key="react",
                 workflow_type="ReactAgent",
                 task_queue="react-agent",
@@ -244,9 +246,9 @@ def test_api_agents_is_never_cached() -> None:
     """Readiness is live: a worker can come up or go down between two opens of the picker,
     and a cached "Ready" is the exact lie this endpoint exists to stop telling."""
 
-    registry = AgentRegistry(
-        agents=[
-            AgentDescriptor(
+    registry = RegistrySnapshot.of(
+        [
+            RegisteredAgent(
                 key="react",
                 workflow_type="ReactAgent",
                 task_queue="react-agent",

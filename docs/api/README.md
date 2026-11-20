@@ -103,9 +103,11 @@ client types after changing handlers, state, or init data. Never patch generated
 
 `agents.toml` declares a key, workflow type, task queue, label, description, and optional schema
 path relative to the TOML file. Keep the schema's agent name equal to `workflow_type`. The server
-never imports your agent implementation. The server reads the registry at startup, so a
-registry change takes effect when the server restarts. The server lists only sessions of its
-registry's workflow types on their task queues.
+never imports your agent implementation. It keeps its registry in a Temporal workflow, which
+`serve agents.toml` fills when it starts and `temporal-agent-kit agents add agents.toml` (or the
+console) adds to while it runs; registering a key again replaces it. A retired agent starts no
+sessions but its sessions stay listed; a deleted one leaves the registry and its sessions leave the
+list. The server lists only sessions of its registry's workflow types on their task queues.
 
 The built-in local payload store is for processes sharing a host/filesystem. For a multi-host
 deployment, configure a shared offload store consistently across clients, workers, and server.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.converter import ExternalStorage
 from temporalio.envconfig import ClientConfig
@@ -35,7 +35,6 @@ from temporal_agent_kit.ui import packaged_ui_dist
 from temporal_agent_kit.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 from temporal_agent_kit.web.agent_starts import (
     InvalidStartData,
-    agent_starts,
     validated_start_data,
 )
 from temporal_agent_kit.web.file_view import (
@@ -45,7 +44,30 @@ from temporal_agent_kit.web.file_view import (
     okf_graph,
     view_file,
 )
-from temporal_agent_kit.web.registry import AgentDescriptor, AgentRegistry, load_agent_registry
+from temporal_agent_kit.web.registry import (
+    AgentDescriptor,
+    AgentRegistration,
+    AgentRegistry,
+    InvalidRegistration,
+    registered_agent,
+    registration_of,
+    registry_view,
+)
+from temporal_agent_kit.web.registry_changes import (
+    RegistryBusy,
+    RegistryConflict,
+    UnknownAgent,
+    change_registry,
+    deleted,
+    registered,
+    retired,
+)
+from temporal_agent_kit.web.registry_store import (
+    AgentRegistryStore,
+    RegistrySnapshot,
+    RegistryStoreFactory,
+)
+from temporal_agent_kit.web.registry_workflow import workflow_registry_store
 from temporal_agent_kit.web.sessions import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -60,7 +82,12 @@ from temporal_agent_kit.web.sessions import (
 from temporal_agent_kit.web.task_queue_status import describe_task_queue_workers
 from temporal_agent_kit.web.temporal_ui import temporal_workflows_url
 
-RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
+class RegisterAgentsRequestBody(BaseModel):
+    """Agents to register together: all of them or none."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agents: list[AgentRegistration] = Field(min_length=1)
 
 
 class CreateSessionRequestBody(BaseModel):
@@ -110,8 +137,8 @@ class CallbackResultRequestBody(BaseModel):
 
 def create_agent_kit_app(
     *,
-    registry: RegistrySource | None = None,
-    registry_path: Path | str | None = None,
+    registry_store: RegistryStoreFactory = workflow_registry_store,
+    registrations: Sequence[AgentRegistration] = (),
     static_dir: Path | str | None = None,
     index_file: str = "index.html",
     states_file: str | None = None,
@@ -120,8 +147,11 @@ def create_agent_kit_app(
     """Create the reusable harness web API.
 
     Args:
-        registry: In-memory registry or a callable that returns one at startup.
-        registry_path: TOML registry path. Mutually exclusive with ``registry``.
+        registry_store: Builds the store the server keeps its agent registry in, from its
+            Temporal client. The default keeps it in a Temporal workflow, served by a worker
+            inside this app.
+        registrations: Agents to register when the app starts, all of them or none, as
+            ``POST /api/agents`` registers them. A refused registration fails the startup.
         static_dir: Optional directory containing static UI assets. When omitted,
             the packaged Vite UI is served if it is present in the installed package.
         index_file: File in ``static_dir`` served from ``/``.
@@ -151,13 +181,21 @@ def create_agent_kit_app(
             connect_config.get("target_host"), connect_config.get("namespace")
         )
 
-        app.state.registry = _resolve_registry(registry, registry_path)
-        app.state.agent_starts = agent_starts(app.state.registry)
-        yield
+        async with registry_store(app.state.temporal) as store:
+            app.state.registry_store = store
+            if startup_agents:
+                await change_registry(store, lambda snapshot: registered(snapshot, startup_agents))
+            yield
+
+    # Checked before the app is built, so a bad registration is reported before anything starts.
+    startup_agents = [registered_agent(registration) for registration in registrations]
+    registered(RegistrySnapshot(), startup_agents)
+
+    async def current_registry() -> AgentRegistry:
+        store: AgentRegistryStore = app.state.registry_store
+        return registry_view((await store.read()).snapshot)
 
     app = FastAPI(lifespan=lifespan)
-    # Filled at startup; empty means every agent's start interface is unknown.
-    app.state.agent_starts = {}
     # Filled at startup; None means the Temporal Web UI's address is unknown.
     app.state.temporal_workflows_url = None
     # Open CORS: this is a local dev server whose API is meant to be driven by any client,
@@ -192,29 +230,61 @@ def create_agent_kit_app(
         one look and the next, and a cached "Ready" is the exact lie this endpoint exists to
         stop telling.
         """
-        agents: list[AgentDescriptor] = app.state.registry.agents
+        agents = (await current_registry()).agents
         workers = await describe_task_queue_workers(
             app.state.temporal,
             (agent.task_queue for agent in agents),
         )
-        starts = app.state.agent_starts
         content = {
             "agents": [
                 {
-                    **asdict(agent),
-                    # {"required": bool, "schema": {...}}, or null when the agent takes no
-                    # init data (or its registry entry has no schema).
-                    "init_data": (
-                        starts[agent.workflow_type].init_data
-                        if agent.workflow_type in starts
-                        else None
-                    ),
+                    **_agent_content(agent),
                     "worker": asdict(workers.for_task_queue(agent.task_queue)),
                 }
                 for agent in agents
             ]
         }
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/agents/{key}/registration")
+    async def agent_registration(key: str):
+        """``key`` as it was registered: its task queue without TASK_QUEUE_PREFIX and its schema
+        document, so sending it to ``POST /api/agents`` registers it again."""
+        store: AgentRegistryStore = app.state.registry_store
+        agent = (await store.read()).snapshot.agents.get(key)
+        if agent is None:
+            raise UnknownAgent(key)
+        return JSONResponse(
+            content=registration_of(agent).model_dump(mode="json", by_alias=True),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/agents")
+    async def register_agents(req: RegisterAgentsRequestBody):
+        """Register every agent in the body, or none of them. A registered key is replaced and
+        made active again."""
+        agents = [registered_agent(registration) for registration in req.agents]
+        snapshot = await change_registry(
+            app.state.registry_store, lambda current: registered(current, agents)
+        )
+        keys = {agent.key for agent in agents}
+        view = registry_view(snapshot)
+        return JSONResponse(
+            content={"agents": [_agent_content(a) for a in view.agents if a.key in keys]},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/agents/{key}/retire")
+    async def retire_agent(key: str):
+        """Stop offering ``key`` for new sessions. Its sessions stay listed and usable."""
+        await change_registry(app.state.registry_store, lambda current: retired(current, key))
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/agents/{key}")
+    async def delete_agent(key: str):
+        """Remove ``key`` from the registry. Its sessions leave the session list."""
+        await change_registry(app.state.registry_store, lambda current: deleted(current, key))
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/sessions")
     async def list_sessions_route(
@@ -225,7 +295,7 @@ def create_agent_kit_app(
         for the next; it is ``null`` on the last page."""
         page = await list_sessions(
             app.state.temporal,
-            app.state.registry,
+            await current_registry(),
             page_size=page_size,
             page_token=page_token,
         )
@@ -237,7 +307,7 @@ def create_agent_kit_app(
     @app.get("/api/sessions/{session_id}")
     async def get_session_route(session_id: str):
         """One session by id, for a session that is not on a page the caller has loaded."""
-        session = await get_session(app.state.temporal, app.state.registry, session_id)
+        session = await get_session(app.state.temporal, await current_registry(), session_id)
         if session is None:
             raise HTTPException(status_code=404, detail=f"No session {session_id!r}.")
         return JSONResponse(
@@ -247,22 +317,25 @@ def create_agent_kit_app(
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
-        agent = app.state.registry.by_workflow_type(req.agent_workflow_type)
+        registry = await current_registry()
+        agent = registry.by_workflow_type(req.agent_workflow_type)
         if agent is None:
-            known = [descriptor.workflow_type for descriptor in app.state.registry.agents]
+            known = [descriptor.workflow_type for descriptor in registry.agents]
             raise HTTPException(
                 status_code=422,
                 detail=f"Unknown agent type {req.agent_workflow_type!r}. Known agents: {known}",
             )
-        data = validated_start_data(
-            req.agent_workflow_type,
-            app.state.agent_starts.get(req.agent_workflow_type),
-            req.data,
-        )
+        if agent.retired:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{agent.key!r} is retired: its sessions can be used, but no new ones "
+                "start. Register it again to start new sessions.",
+            )
+        data = validated_start_data(req.agent_workflow_type, agent.start, req.data)
         session = await start_session(
             app.state.temporal,
             agent,
-            app.state.registry,
+            registry,
             data=data,
             session_id=req.session_id,
         )
@@ -405,6 +478,30 @@ def create_agent_kit_app(
             },
         )
 
+    @app.exception_handler(RegistryConflict)
+    async def registry_conflict_handler(request, exc):
+        return JSONResponse(
+            status_code=409, content={"error": "registry_conflict", "message": str(exc)}
+        )
+
+    @app.exception_handler(UnknownAgent)
+    async def unknown_agent_handler(request, exc):
+        return JSONResponse(
+            status_code=404, content={"error": "unknown_agent", "message": str(exc)}
+        )
+
+    @app.exception_handler(InvalidRegistration)
+    async def invalid_registration_handler(request, exc):
+        return JSONResponse(
+            status_code=422, content={"error": "invalid_registration", "message": str(exc)}
+        )
+
+    @app.exception_handler(RegistryBusy)
+    async def registry_busy_handler(request, exc):
+        return JSONResponse(
+            status_code=503, content={"error": "registry_busy", "message": str(exc)}
+        )
+
     @app.exception_handler(InvalidPageToken)
     async def invalid_page_token_handler(request, exc):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
@@ -462,19 +559,12 @@ def create_agent_kit_app(
     return app
 
 
-def _resolve_registry(
-    registry: RegistrySource | None,
-    registry_path: Path | str | None,
-) -> AgentRegistry:
-    if registry is not None and registry_path is not None:
-        raise ValueError("Pass either registry or registry_path, not both.")
-    if isinstance(registry, AgentRegistry):
-        return registry
-    if callable(registry):
-        return registry()
-    if registry_path is not None:
-        return load_agent_registry(registry_path)
-    raise ValueError("create_agent_kit_app requires registry or registry_path.")
+def _agent_content(agent: AgentDescriptor) -> dict[str, object]:
+    content: dict[str, object] = asdict(agent)
+    # {"required": bool, "schema": {...}}, or null when the agent takes no init data (or was
+    # registered without a schema document).
+    content["init_data"] = agent.start.init_data if agent.start is not None else None
+    return content
 
 
 async def _workflow_execution_state(

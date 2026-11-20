@@ -4,7 +4,7 @@
       "description": "One ``[[agents]]`` entry of an ``agents.toml`` registry: a launchable agent.\n\nKeys this model does not name are ignored, so an SDK may add its own (the TypeScript SDK's\n``agent`` reference).",
       "properties": {
         "key": {
-          "description": "Unique within the registries a server merges.",
+          "description": "Unique within the registry.",
           "minLength": 1,
           "title": "Key",
           "type": "string"
@@ -50,7 +50,7 @@
       "type": "object"
     }
   },
-  "description": "An ``agents.toml`` registry: the agents ``temporal-agent-kit serve`` offers.",
+  "description": "An ``agents.toml`` registry: agents to register with ``temporal-agent-kit``.",
   "properties": {
     "agents": {
       "items": {

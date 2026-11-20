@@ -1,8 +1,8 @@
 """Run the packaged harness web app as a process.
 
-``app.py`` builds the FastAPI app; this module is the thin process layer around it — resolve
-``agents.toml`` registries into an app, check Temporal is actually reachable, then hand the app
-to uvicorn. Keeping that separate is what lets the app be embedded (mounted under a path prefix,
+``app.py`` builds the FastAPI app; this module is the thin process layer around it — read the
+``agents.toml`` files to register at startup and the registry store to keep them in, check Temporal
+is actually reachable, then hand the app to uvicorn. Keeping that separate is what lets the app be embedded (mounted under a path prefix,
 wrapped by another FastAPI instance) without inheriting a uvicorn dependency or a CLI's opinions
 about hosts and ports.
 
@@ -12,33 +12,65 @@ The ``serve`` subcommand of the ``temporal-agent-kit`` console script is this mo
 from __future__ import annotations
 
 import asyncio
+import importlib
+import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from temporal_agent_kit.ui import packaged_ui_dist
 from temporal_agent_kit.web.client import verify_temporal_reachable
-from temporal_agent_kit.web.registry import load_agent_registries
+from temporal_agent_kit.web.registry import load_registrations
+from temporal_agent_kit.web.registry_store import RegistryStoreFactory
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
-def create_app(*registry_paths: str | Path) -> "FastAPI":
-    """Build the packaged harness web app serving the merged agents from ``registry_paths``.
+def create_app(
+    *registry_paths: Path, registry_store: RegistryStoreFactory | None = None
+) -> "FastAPI":
+    """Build the packaged harness web app, registering the agents of ``registry_paths`` when it
+    starts.
 
-    A single path serves just that registry's agent(s); multiple paths merge into one registry so
-    every listed agent is selectable in the UI.
+    Every file's agents are registered together, all or none, into ``registry_store`` (by default
+    the registry workflow). With no paths the app serves what the store already holds.
     """
     # Imported here rather than at module scope so that importing this module (e.g. to reach
     # ``create_app`` from a custom launcher) doesn't require FastAPI — it only arrives with the
     # ``ui`` extra.
     from temporal_agent_kit.web import create_agent_kit_app
+    from temporal_agent_kit.web.registry_workflow import workflow_registry_store
 
-    if not registry_paths:
-        raise ValueError("create_app requires at least one registry path.")
-    registry = load_agent_registries(registry_paths)
-    return create_agent_kit_app(registry=registry)
+    registrations = [
+        registration for path in registry_paths for registration in load_registrations(path)
+    ]
+    return create_agent_kit_app(
+        registrations=registrations,
+        registry_store=registry_store if registry_store is not None else workflow_registry_store,
+    )
+
+
+def load_registry_store_factory(target: str) -> RegistryStoreFactory:
+    """Import the registry store factory named by ``module.path:attribute``.
+
+    The current directory is importable, as it is for ``python -m``, so a project's own store
+    resolves when run from the project root.
+    """
+    module_name, sep, attribute = target.partition(":")
+    if not sep or not module_name or not attribute:
+        raise ValueError(f"expected module.path:attribute, got {target!r}")
+    if "" not in sys.path and os.getcwd() not in sys.path:
+        sys.path.insert(0, os.getcwd())
+    factory: object = importlib.import_module(module_name)
+    for part in attribute.split("."):
+        try:
+            factory = getattr(factory, part)
+        except AttributeError:
+            raise ValueError(f"{module_name} has no attribute {attribute!r}") from None
+    if not callable(factory):
+        raise ValueError(f"{target} is not callable, so it is not a registry store factory")
+    return cast(RegistryStoreFactory, factory)
 
 
 def warn_without_console() -> None:
@@ -58,11 +90,13 @@ def warn_without_console() -> None:
 
 
 def run_server(
-    *registry_paths: str | Path,
+    *registry_paths: Path,
+    registry_store: RegistryStoreFactory | None = None,
     host: str = "0.0.0.0",
     port: int = 8000,
 ) -> None:
-    """Serve the packaged web app over ``registry_paths`` until interrupted."""
+    """Serve the packaged web app until interrupted, registering the agents of
+    ``registry_paths`` into ``registry_store`` when it starts."""
     # FastAPI/uvicorn ship with the `ui` extra, not the base install. Fail with the fix rather
     # than a bare ModuleNotFoundError, since calling this means the caller wants to serve.
     try:
@@ -73,7 +107,7 @@ def run_server(
             "uv add 'temporal-agent-kit[ui]'"
         ) from exc
 
-    app = create_app(*registry_paths)
+    app = create_app(*registry_paths, registry_store=registry_store)
     warn_without_console()
 
     # Pre-flight the Temporal connection. The app connects inside its ASGI lifespan, where a

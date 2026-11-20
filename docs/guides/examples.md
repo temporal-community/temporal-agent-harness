@@ -73,8 +73,10 @@ just dev               # starts the server and all eight workers in one terminal
 `server`, `workers`, and `dev` also take example names (the directory under `python/examples/`, e.g.
 `monty` or `auto_mode`) to run only those: `just dev monty auto_mode` serves just their agents and
 starts just their workers, and `just workers tictactoe` adds one more worker beside a running
-stack. From an example's own directory, `just dev` does the same for that example. Switching the
-set of agents you serve takes effect when the server restarts.
+stack. From an example's own directory, `just dev` does the same for that example. The server
+registers the named examples' agents when it starts and keeps every agent it has registered, so
+agents from an earlier run stay listed; retire or delete them in the console or with
+`temporal-agent-kit agents delete <key>`.
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
 

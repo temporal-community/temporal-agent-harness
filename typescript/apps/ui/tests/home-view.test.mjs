@@ -146,6 +146,18 @@ describe("the console with no session open", () => {
     assert.match(listed, /role="alert">Request failed \(500\)<[\s\S]*?Alpha/, "agents already listed stay, under the error");
   });
 
+  /* Adding agents is the bay's own action: first in its header, and the way out of an empty bay. */
+  it("offers adding agents from the Agent Bay", () => {
+    const bay = (extra) => stripComments(render(HomeView, { props: { agents: [], sessions: [], onStart() {}, part: "bay", ...extra } }).body);
+    assert.match(bay({ onAddAgents() {} }), /No agents are registered yet\.[\s\S]*?<button[^>]*class="chip sm solid accent[^"]*"[^>]*>[\s\S]*?Add agents\s*<\/button>/);
+    assert.doesNotMatch(bay({ onAddAgents() {}, refreshingAgents: true }), /Add agents/, "not while the list is loading");
+    assert.doesNotMatch(bay(), /Add agents/);
+    const controls = app.slice(app.indexOf("{#snippet bayControls()}"), app.indexOf("<HotkeyHelp"));
+    assert.match(controls, /^[^]*?<Chip class="bay-add" size="xs" fill="solid" tone="accent" onclick=\{\(\) => \(addingAgents = true\)\}>/, "the header's first control");
+    assert.ok(controls.indexOf("bay-add") < controls.indexOf('aria-label="Search agents"'));
+    assert.match(app, /\{#if addingAgents\}\s*<RegisterAgentsDialog actions=\{registryActions\}/);
+  });
+
   it("offers no close on any pane of the fixed home desk", () => {
     const kinds = ["setup", "capabilities", "releases", "bay"];
     const desk = createPaneStack({ initial: kinds.map((kind) => [makePane({ kind })]), fixed: true });

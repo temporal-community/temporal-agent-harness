@@ -9,6 +9,16 @@ js_library(
 )
 
 js_library(
+    name = "agentRegistration",
+    srcs = ["agentRegistration.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/fflate",
+        "//typescript/apps/ui:node_modules/smol-toml",
+    ],
+)
+
+js_library(
     name = "agentRun.svelte",
     srcs = ["agentRun.svelte.ts"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
@@ -382,6 +392,15 @@ vitest_test(
         "//typescript/apps/ui/src:App",
         "//typescript/apps/ui/tests/support:controllerHarness",
         "//typescript/apps/ui/tests/support:fakeIndexedDb",
+    ],
+)
+
+vitest_test(
+    name = "agentRegistration_test",
+    src = "agentRegistration.test.mjs",
+    deps = [
+        ":agentRegistration",
+        "//typescript/apps/ui:node_modules/smol-toml",
     ],
 )
 

@@ -91,6 +91,24 @@ export interface AgentDescriptor {
   handlers?: AgentHandler[] | null;
   /** The ids of the states its schema document declares (`agent.state(...)`). Same caveat. */
   states?: string[] | null;
+  /** A retired agent starts no sessions, but its sessions are still listed. */
+  retired?: boolean;
+}
+
+/** One agent to register, as `POST /api/agents` takes it and the CLI sends it. */
+export interface AgentRegistration {
+  key: string;
+  workflow_type: AgentWorkflowType;
+  /** Without the server's TASK_QUEUE_PREFIX, which the server adds. */
+  task_queue: string;
+  label: string;
+  description: string;
+  /** The agent's schema document (`temporal-agent-kit schema`), or null for none. */
+  schema?: JsonRecord | null;
+}
+
+export interface RegisterAgentsResponse {
+  agents: AgentDescriptor[];
 }
 
 /** One handler an agent accepts messages on, from its schema document. */

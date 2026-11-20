@@ -9,7 +9,8 @@ import { readFileSync } from "node:fs";
 import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
-import StartSessionDialog, { agentEntries, columnsFor, filterAgents, filterChips, gridMove } from "./StartSessionDialog.svelte";
+import AgentManagement from "./AgentManagement.svelte";
+import StartSessionDialog, { agentEntries, columnsFor, filterAgents, filterChips, gridMove, keptFilters } from "./StartSessionDialog.svelte";
 import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
 
 const source = readFileSync(new URL("./StartSessionDialog.svelte", import.meta.url), "utf8");
@@ -213,5 +214,85 @@ describe("StartSessionDialog", () => {
     assert.match(footer, /<button[^>]*class="chip sm quiet[^"]*"[^>]*>\s*Cancel<\/button>/);
     assert.match(footer, /<button[^>]*class="chip sm solid accent[^"]*"[^>]*type="submit"/);
     assert.match(body, /<button[^>]*class="head-button"[^>]*aria-label="Close"/);
+  });
+
+  const registry = {
+    async register() {},
+    async registration(key) {
+      return { key, workflow_type: key, task_queue: "q", label: key, description: "", schema: null };
+    },
+    async retire() {},
+    async remove() {}
+  };
+
+  it("lists a retired agent only under the Retired filter, tagged so", () => {
+    const agents = fleet(3, (i) => ({ retired: i === 2 }));
+    const entries = agentEntries(agents);
+    const names = (active) => filterAgents(entries, "", active).map((entry) => entry.name);
+
+    assert.deepEqual(names([]), ["Agent 0", "Agent 1"]);
+    assert.deepEqual(names(["retired"]), ["Agent 2"]);
+    assert.deepEqual(entries[2].tags, ["Retired"]);
+    assert.match(html({ agents }), /aria-pressed="false"[^>]*>\s*Retired<span class="chip-count[^"]*">1<\/span>/);
+  });
+
+  it("lists every agent again once the last retired one is restored", () => {
+    const retiredOne = fleet(3, (i) => ({ retired: i === 2 }));
+    assert.deepEqual(keptFilters(["retired", "ready"], filterChips(agentEntries(retiredOne))), ["retired"]);
+
+    const restored = agentEntries(fleet(3));
+    const kept = keptFilters(["retired"], filterChips(restored));
+    assert.deepEqual(kept, [], "the Retired chip is gone, so its filter is too");
+    assert.equal(filterAgents(restored, "", kept).length, 3);
+  });
+
+  it("offers Retired even when every agent is retired, the only way to list them", () => {
+    const chips = filterChips(agentEntries(fleet(2, () => ({ retired: true }))));
+    assert.deepEqual(chips.map((chip) => [chip.id, chip.count]), [["retired", 2]]);
+  });
+
+  it("offers adding, downloading and managing agents only with the registry's actions", () => {
+    const without = html({ agents: fleet(2) });
+    assert.doesNotMatch(without, /Add agents/);
+    assert.doesNotMatch(without, /Manage/);
+
+    const body = html({ agents: fleet(2), registry });
+    assert.match(body, /<button[^>]*class="chip xs solid accent[^"]*head-add[^"]*"[^>]*>[\s\S]*?Add agents\s*<\/button>/);
+    assert.match(body, /<button[^>]*class="head-button"[^>]*aria-label="Download agents.toml"/);
+    const manage = body.slice(body.indexOf(">Manage<"));
+    assert.match(manage, />\s*Edit<\/button>/);
+    assert.match(manage, />\s*Retire<\/button>/);
+    assert.match(manage, />\s*Delete<\/button>/);
+    assert.match(html({ agents: [], registry }), /No agents are registered yet[\s\S]*>\s*Add agents<\/button>/);
+  });
+
+});
+
+describe("AgentManagement", () => {
+  const manage = (props) =>
+    stripComments(
+      render(AgentManagement, {
+        props: { onEdit() {}, onRetire() {}, onRestore() {}, onDelete() {}, ...props }
+      }).body
+    );
+
+  it("restores a retired agent instead of retiring it", () => {
+    const body = manage({ agent: { ...fleet(1)[0], retired: true } });
+
+    assert.match(body, />\s*Restore<\/button>/);
+    assert.doesNotMatch(body, />\s*(Retire|Edit)<\/button>/);
+    assert.match(body, /Retired: its sessions are still listed/);
+  });
+
+  it("asks a second time before deleting, saying what deleting does", () => {
+    assert.match(manage({ agent: fleet(1)[0] }), /class="chip xs quiet error[^"]*"[^>]*>\s*Delete<\/button>/);
+    assert.match(
+      manage({ agent: fleet(1)[0], confirmingDelete: true }),
+      /class="chip xs solid error[^"]*"[^>]*>\s*Delete, and drop its sessions from the list<\/button>/
+    );
+  });
+
+  it("reports a refusal", () => {
+    assert.match(manage({ agent: fleet(1)[0], failure: "No agent 'x' is registered." }), /role="alert">No agent 'x' is registered.</);
   });
 });

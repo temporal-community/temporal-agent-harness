@@ -9,8 +9,9 @@ provider test. Test approval/callback paths separately when your agent uses them
 If the console loads but cannot start a session, check the server's registry and its Temporal
 connection. If a session exists but messages stall, check the agent worker, task queue, and
 namespace. If a model fails, check the worker's provider credentials and optional integration
-dependencies. If registration changes appear stale, restart the server; it reads its registry at
-startup.
+dependencies. If registration changes appear stale, check `temporal-agent-kit agents list` and
+register the file again with `temporal-agent-kit agents add agents.toml`; the server keeps its
+registry between restarts.
 
 Keep the Temporal server, namespace, and task queues isolated for tests. Do not terminate unrelated
 sessions or reset a user's existing development server to make a test pass. Temporal workflow code

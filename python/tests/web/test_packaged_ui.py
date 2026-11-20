@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from temporalio.client import WorkflowExecutionStatus
 
 from temporal_agent_kit.ui import packaged_ui_dist
-from temporal_agent_kit.web import AgentRegistry, create_agent_kit_app
+from temporal_agent_kit.web import create_agent_kit_app
+from temporal_agent_kit.web.memory_registry_store import in_memory_registry_store
 from temporal_agent_kit.web.app import _workflow_execution_state
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,7 @@ def test_app_built_from_a_registry_path_serves_packaged_svelte_ui() -> None:
 
 
 def test_packaged_svelte_ui_works_under_path_prefix() -> None:
-    subapp = create_agent_kit_app(registry=AgentRegistry())
+    subapp = create_agent_kit_app(registry_store=in_memory_registry_store())
     parent = FastAPI()
     parent.mount("/harness", subapp)
     client = TestClient(parent)
@@ -68,7 +69,7 @@ def test_packaged_svelte_ui_works_under_path_prefix() -> None:
 
 
 def test_chat_request_rejects_client_supplied_from_offset() -> None:
-    app = create_agent_kit_app(registry=AgentRegistry())
+    app = create_agent_kit_app(registry_store=in_memory_registry_store())
     client = TestClient(app)
 
     response = client.post(
@@ -86,7 +87,7 @@ def test_chat_request_rejects_client_supplied_from_offset() -> None:
 
 
 def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
-    app = create_agent_kit_app(registry=AgentRegistry())
+    app = create_agent_kit_app(registry_store=in_memory_registry_store())
     client = TestClient(app)
 
     response = client.post(
