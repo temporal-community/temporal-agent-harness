@@ -12,6 +12,15 @@ ts_project(
 )
 
 ts_project(
+    name = "agent-keys.test",
+    testonly = True,
+    srcs = ["agent-keys.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    deps = ["//typescript/apps/chat-server/src:agent-keys"],
+)
+
+ts_project(
     name = "approval-card.test",
     testonly = True,
     srcs = ["approval-card.test.ts"],
@@ -69,6 +78,12 @@ js_test(
     name = "activity_test",
     data = [":activity.test"],
     entry_point = "activity.test.js",
+)
+
+js_test(
+    name = "agent-keys_test",
+    data = [":agent-keys.test"],
+    entry_point = "agent-keys.test.js",
 )
 
 js_test(

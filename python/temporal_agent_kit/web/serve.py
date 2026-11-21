@@ -1,10 +1,10 @@
 """Run the packaged harness web app as a process.
 
-``app.py`` builds the FastAPI app; this module is the thin process layer around it — resolve
-``agents.toml`` registries into an app, check Temporal is actually reachable, then hand the app
-to uvicorn. Keeping that separate is what lets the app be embedded (mounted under a path prefix,
-wrapped by another FastAPI instance) without inheriting a uvicorn dependency or a CLI's opinions
-about hosts and ports.
+``app.py`` builds the FastAPI app; this module is the thin process layer around it — read the
+``agents.toml`` files to register at startup and choose where the registry is kept, check Temporal
+is actually reachable, then hand the app to uvicorn. Keeping that separate is what lets the app be
+embedded (mounted under a path prefix, wrapped by another FastAPI instance) without inheriting a
+uvicorn dependency or a CLI's opinions about hosts and ports.
 
 The ``serve`` subcommand of the ``temporal-agent-kit`` console script is this module.
 """
@@ -18,27 +18,39 @@ from typing import TYPE_CHECKING
 
 from temporal_agent_kit.ui import packaged_ui_dist
 from temporal_agent_kit.web.client import verify_temporal_reachable
-from temporal_agent_kit.web.registry import load_agent_registries
+from temporal_agent_kit.web.registry import load_registrations
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
-def create_app(*registry_paths: str | Path) -> "FastAPI":
-    """Build the packaged harness web app serving the merged agents from ``registry_paths``.
+def create_app(*registry_paths: Path, registry_store_endpoint: str | None = None) -> "FastAPI":
+    """Build the packaged harness web app, registering the agents of ``registry_paths`` when it
+    starts.
 
-    A single path serves just that registry's agent(s); multiple paths merge into one registry so
-    every listed agent is selectable in the UI.
+    Every file's agents are registered together, all or none. The registry is kept in the
+    registry workflow, or with ``registry_store_endpoint`` in the registry store behind that
+    Nexus endpoint (see :mod:`temporal_agent_kit.web.nexus_registry_store`). With no paths the app
+    serves what the registry already holds.
     """
     # Imported here rather than at module scope so that importing this module (e.g. to reach
     # ``create_app`` from a custom launcher) doesn't require FastAPI — it only arrives with the
     # ``ui`` extra.
     from temporal_agent_kit.web import create_agent_kit_app
+    from temporal_agent_kit.web.nexus_registry_store import nexus_registry_store
+    from temporal_agent_kit.web.registry_workflow import workflow_registry_store
 
-    if not registry_paths:
-        raise ValueError("create_app requires at least one registry path.")
-    registry = load_agent_registries(registry_paths)
-    return create_agent_kit_app(registry=registry)
+    registrations = [
+        registration for path in registry_paths for registration in load_registrations(path)
+    ]
+    return create_agent_kit_app(
+        registrations=registrations,
+        registry_store=(
+            workflow_registry_store
+            if registry_store_endpoint is None
+            else nexus_registry_store(registry_store_endpoint)
+        ),
+    )
 
 
 def warn_without_console() -> None:
@@ -58,11 +70,13 @@ def warn_without_console() -> None:
 
 
 def run_server(
-    *registry_paths: str | Path,
+    *registry_paths: Path,
+    registry_store_endpoint: str | None = None,
     host: str = "0.0.0.0",
     port: int = 8000,
 ) -> None:
-    """Serve the packaged web app over ``registry_paths`` until interrupted."""
+    """Serve the packaged web app until interrupted, registering the agents of
+    ``registry_paths`` when it starts. See :func:`create_app`."""
     # FastAPI/uvicorn ship with the `ui` extra, not the base install. Fail with the fix rather
     # than a bare ModuleNotFoundError, since calling this means the caller wants to serve.
     try:
@@ -73,7 +87,7 @@ def run_server(
             "uv add 'temporal-agent-kit[ui]'"
         ) from exc
 
-    app = create_app(*registry_paths)
+    app = create_app(*registry_paths, registry_store_endpoint=registry_store_endpoint)
     warn_without_console()
 
     # Pre-flight the Temporal connection. The app connects inside its ASGI lifespan, where a

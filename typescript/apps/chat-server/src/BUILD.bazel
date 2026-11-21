@@ -20,6 +20,7 @@ ts_project(
     visibility = ["//typescript/apps/chat-server:__subpackages__"],
     deps = [
         ":activity",
+        ":agent-keys",
         ":command",
         ":harness",
         ":routing",
@@ -28,6 +29,14 @@ ts_project(
         ":text-form",
         "//typescript/apps/chat-server:node_modules/chat",
     ],
+)
+
+ts_project(
+    name = "agent-keys",
+    srcs = ["agent-keys.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
 )
 
 ts_project(

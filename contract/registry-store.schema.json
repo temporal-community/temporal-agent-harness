@@ -1,0 +1,222 @@
+{
+  "read": {
+    "input": {
+      "$ref": "#/$defs/RegistryRead"
+    },
+    "output": {
+      "$ref": "#/$defs/VersionedSnapshot"
+    }
+  },
+  "write": {
+    "input": {
+      "$ref": "#/$defs/RegistryWrite"
+    },
+    "output": {
+      "$ref": "#/$defs/RegistryWriteOutcome"
+    }
+  },
+  "$defs": {
+    "AgentStart": {
+      "description": "What an agent takes to start, after its config: its ``@agent.init`` init data.",
+      "properties": {
+        "init_data": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Init Data"
+        }
+      },
+      "required": [
+        "init_data"
+      ],
+      "title": "AgentStart",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Any JSON value."
+    },
+    "RegisteredAgent": {
+      "description": "One agent type in the registry, as it was registered.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "workflow_type": {
+          "title": "Workflow Type",
+          "type": "string"
+        },
+        "task_queue": {
+          "title": "Task Queue",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "schema_document": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Document"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentStart"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retired": {
+          "default": false,
+          "title": "Retired",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "workflow_type",
+        "task_queue",
+        "label",
+        "description",
+        "schema_document",
+        "start",
+        "retired"
+      ],
+      "title": "RegisteredAgent",
+      "type": "object"
+    },
+    "RegistryRead": {
+      "description": "A ``read``'s input, which carries nothing.",
+      "properties": {},
+      "title": "RegistryRead",
+      "type": "object"
+    },
+    "RegistrySnapshot": {
+      "description": "The whole registry: every agent type, by key.",
+      "properties": {
+        "agents": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RegisteredAgent"
+          },
+          "title": "Agents",
+          "type": "object"
+        }
+      },
+      "required": [
+        "agents"
+      ],
+      "title": "RegistrySnapshot",
+      "type": "object"
+    },
+    "RegistryWrite": {
+      "description": "A write: store ``snapshot`` as the next version if the stored one is still ``expected``.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/RegistrySnapshot"
+        },
+        "expected": {
+          "title": "Expected",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "snapshot",
+        "expected"
+      ],
+      "title": "RegistryWrite",
+      "type": "object"
+    },
+    "RegistryWriteOutcome": {
+      "description": "A ``write``'s output: whether the snapshot was stored, and the version now stored.",
+      "properties": {
+        "stored": {
+          "title": "Stored",
+          "type": "boolean"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stored",
+        "version"
+      ],
+      "title": "RegistryWriteOutcome",
+      "type": "object"
+    },
+    "VersionedSnapshot": {
+      "description": "A snapshot and the version a store holds it under.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/RegistrySnapshot"
+        },
+        "version": {
+          "default": 0,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "snapshot",
+        "version"
+      ],
+      "title": "VersionedSnapshot",
+      "type": "object"
+    }
+  }
+}

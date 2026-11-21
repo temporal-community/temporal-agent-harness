@@ -17,7 +17,11 @@ import os
 from temporalio.worker import Worker
 
 from temporal_agent_kit.nexus_agent_adapter.handler import AgentServiceHandler, Config
-from temporal_agent_kit.web.client import connect_client, ensure_temporal_address
+from temporal_agent_kit.web.client import (
+    TemporalConnection,
+    connect_client,
+    ensure_temporal_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ async def main() -> None:
     if not agent_workflow_name:
         raise SystemExit("AGENT_WORKFLOW_NAME is required")
 
-    ensure_temporal_address(None)
+    ensure_temporal_connection(TemporalConnection())
     client = await connect_client()
 
     config = Config(

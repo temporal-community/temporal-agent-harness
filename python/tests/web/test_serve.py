@@ -17,7 +17,7 @@ def served_apps(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     async def reachable() -> None:
         return None
 
-    monkeypatch.setattr(serve, "create_app", lambda *paths: object())
+    monkeypatch.setattr(serve, "create_app", lambda *paths, **options: object())
     monkeypatch.setattr(serve, "verify_temporal_reachable", reachable)
     monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: served.append(app))
     return served

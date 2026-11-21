@@ -31,6 +31,11 @@ from temporal_agent_kit.agent_protocol import (
     ToolApprovalPolicy,
 )
 from temporal_agent_kit.web import AgentDescriptor, AgentRegistry, create_agent_kit_app
+from temporal_agent_kit.web.memory_registry_store import (
+    InMemoryRegistryStore,
+    in_memory_registry_store,
+)
+from temporal_agent_kit.web.registry_store import RegisteredAgent, RegistrySnapshot
 from temporal_agent_kit.web.sessions import (
     Session,
     get_session,
@@ -248,10 +253,21 @@ async def test_the_query_matches_each_agent_on_its_own_queue() -> None:
 
 
 async def _http(env: WorkflowEnvironment, registry: AgentRegistry) -> httpx.AsyncClient:
-    app = create_agent_kit_app(registry=registry)
+    store = InMemoryRegistryStore(
+        RegistrySnapshot.of(
+            RegisteredAgent(
+                key=agent.key,
+                workflow_type=agent.workflow_type,
+                task_queue=agent.task_queue,
+                label=agent.label,
+                description=agent.description,
+            )
+            for agent in registry.agents
+        )
+    )
+    app = create_agent_kit_app(registry_store=in_memory_registry_store(store))
     app.state.temporal = env.client
-    app.state.registry = registry
-    app.state.agent_starts = {}
+    app.state.registry_store = store
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 

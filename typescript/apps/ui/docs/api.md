@@ -44,7 +44,7 @@ mounted together.
 
 ### `GET /api/agents`
 
-Returns the launchable agent registry.
+Returns the server's agent registry, read from its registry store on every request.
 
 ```ts
 type AgentRegistryResponse = {
@@ -54,14 +54,61 @@ type AgentRegistryResponse = {
 type AgentDescriptor = {
   key: string
   workflow_type: string
-  task_queue: string
+  task_queue: string // under the server's TASK_QUEUE_PREFIX
   label: string
   description: string
+  retired: boolean
+  init_data: { required: boolean; schema: Record<string, unknown> } | null
+  worker: AgentWorker
+}
+
+type AgentWorker = {
+  status: "ready" | "no_worker" | "unknown" // whether a worker polls task_queue
+  task_queue: string
+  poller_count: number
+  last_seen: number | null // epoch seconds
+  error: string | null // why the check failed, for "unknown"
 }
 ```
 
 There is no `default` field in the actual response. Agent defaulting is a UI
-policy decision.
+policy decision. A retired agent starts no sessions (`POST /api/sessions` answers
+409), but its sessions are still listed.
+
+### `POST /api/agents`
+
+Registers every agent in the body, or none of them. A key registered again is
+replaced and made active. 409 when the registry's rules refuse it (a workflow type
+another key has, a changed workflow type or task queue for an existing key), 422 for
+a malformed body or a schema document for another workflow, 503 when the write kept
+losing to other writers.
+
+```ts
+type RegisterAgentsRequest = {
+  agents: AgentRegistration[]
+}
+
+type AgentRegistration = {
+  key: string
+  workflow_type: string
+  task_queue: string // without TASK_QUEUE_PREFIX
+  label: string
+  description: string
+  schema?: Record<string, unknown> | null // the schema document itself
+}
+```
+
+Returns `{ agents: AgentDescriptor[] }` for the registered agents, without `worker`.
+
+### `GET /api/agents/{key}/registration`
+
+Returns the `AgentRegistration` `key` was registered with, which registers it again
+when sent back. 404 for an unknown key.
+
+### `POST /api/agents/{key}/retire` and `DELETE /api/agents/{key}`
+
+Retire or delete an agent; `{ ok: true }`, or 404 for an unknown key. Deleting takes
+its sessions out of the session list.
 
 ### `GET /api/sessions`
 

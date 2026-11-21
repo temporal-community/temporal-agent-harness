@@ -231,9 +231,15 @@ importers:
       d3-force:
         specifier: ^3.0.0
         version: 3.0.0
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       remend:
         specifier: ^1.4.0
         version: 1.4.0
+      smol-toml:
+        specifier: 1.9.1
+        version: 1.9.1
       svelte:
         specifier: ^5.57.2
         version: 5.57.2
@@ -2705,6 +2711,9 @@ packages:
   fetch-blob@3.2.0:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   finalhandler@2.1.1:
     resolution: {integrity: sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA==}
@@ -6094,6 +6103,8 @@ snapshots:
     dependencies:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
+
+  fflate@0.8.3: {}
 
   finalhandler@2.1.1(supports-color@8.1.1):
     dependencies:

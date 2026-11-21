@@ -3,6 +3,8 @@ import type {
   CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
+  AgentDescriptor,
+  AgentRegistration,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
@@ -13,6 +15,7 @@ import type {
   OKFConcept,
   OKFGraph,
   OKFGraphRequest,
+  RegisterAgentsResponse,
   Session,
   SessionsPage,
   SubmitMessageResponse,
@@ -125,14 +128,62 @@ const MOCK_SESSIONS_PAGE_SIZE = 100;
 export class MockAgentApi implements AgentApi {
   #scenario: MockScenario;
   #sessions: Session[];
+  #agents: AgentDescriptor[];
+  #registrations = new Map<string, AgentRegistration>();
 
   constructor(scenario: MockScenario = realisticQaScenario) {
     this.#scenario = scenario;
     this.#sessions = [...scenario.sessions];
+    this.#agents = [...scenario.agents];
   }
 
   async listAgents(): Promise<AgentRegistryResponse> {
-    return { agents: this.#scenario.agents };
+    return { agents: this.#agents };
+  }
+
+  /** Keeps the registry in memory, applying the server's rule that a workflow type has one key. */
+  async registerAgents(agents: AgentRegistration[]): Promise<RegisterAgentsResponse> {
+    const keys = new Set(agents.map((agent) => agent.key));
+    for (const agent of agents) {
+      const owner = this.#agents.find((item) => item.workflow_type === agent.workflow_type && !keys.has(item.key));
+      if (owner) throw new Error(`The workflow type '${agent.workflow_type}' is already registered as '${owner.key}'.`);
+    }
+    const registered: AgentDescriptor[] = agents.map((agent) => ({
+      key: agent.key,
+      workflow_type: agent.workflow_type,
+      task_queue: agent.task_queue,
+      label: agent.label,
+      description: agent.description,
+      init_data: null,
+      retired: false
+    }));
+    for (const agent of agents) this.#registrations.set(agent.key, agent);
+    this.#agents = [...this.#agents.filter((item) => !keys.has(item.key)), ...registered];
+    return { agents: registered };
+  }
+
+  async agentRegistration(key: string): Promise<AgentRegistration> {
+    const agent = this.#agents.find((item) => item.key === key);
+    if (!agent) throw new Error(`No agent '${key}' is registered.`);
+    return (
+      this.#registrations.get(key) ?? {
+        key: agent.key,
+        workflow_type: agent.workflow_type,
+        task_queue: agent.task_queue,
+        label: agent.label,
+        description: agent.description,
+        schema: null
+      }
+    );
+  }
+
+  async retireAgent(key: string): Promise<void> {
+    this.#agents = this.#agents.map((item) => (item.key === key ? { ...item, retired: true } : item));
+  }
+
+  async deleteAgent(key: string): Promise<void> {
+    this.#agents = this.#agents.filter((item) => item.key !== key);
+    this.#registrations.delete(key);
   }
 
   /** Pages as the server does, newest first; a token is the offset of the page it names. */
@@ -155,7 +206,7 @@ export class MockAgentApi implements AgentApi {
   ): Promise<CreateSessionResponse> {
     if (this.#scenario.createError) throw new Error(this.#scenario.createError);
     const number = this.#sessions.length + 1;
-    const agent = this.#scenario.agents.find((item) => item.workflow_type === request.agent_workflow_type);
+    const agent = this.#agents.find((item) => item.workflow_type === request.agent_workflow_type);
     const session: Session = {
       workflow_id: `agent-session-mock-${number}`,
       created_at: Date.now() / 1000,

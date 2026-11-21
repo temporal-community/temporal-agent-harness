@@ -19,7 +19,7 @@ import pytest
 import pytest_asyncio
 from pydantic import JsonValue
 
-from temporal_agent_kit.web import create_agent_kit_app, load_agent_registry
+from temporal_agent_kit.web import create_agent_kit_app, load_agent_registry, load_registrations
 from tests.conformance.driver import external_worker
 
 # Relative to the runfiles root, the test's working directory.
@@ -44,7 +44,7 @@ async def http(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[httpx.
             env.delenv("TEMPORAL_PROFILE", raising=False)
             env.setenv("TEMPORAL_ADDRESS", client.service_client.config.target_host)
             env.setenv("TEMPORAL_NAMESPACE", client.namespace)
-            app = create_agent_kit_app(registry=registry)
+            app = create_agent_kit_app(registrations=load_registrations(REGISTRY))
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test"

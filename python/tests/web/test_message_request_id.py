@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from temporal_agent_kit.web import AgentRegistry, create_agent_kit_app
+from temporal_agent_kit.web import create_agent_kit_app
+from temporal_agent_kit.web.memory_registry_store import in_memory_registry_store
 
 
 class _RecordingAgentClient:
@@ -40,7 +41,7 @@ class _RecordingAgentClient:
 def messages_app(monkeypatch):
     _RecordingAgentClient.calls = []
     monkeypatch.setattr("temporal_agent_kit.web.app.AgentClient", _RecordingAgentClient)
-    app = create_agent_kit_app(registry=AgentRegistry())
+    app = create_agent_kit_app(registry_store=in_memory_registry_store())
     app.state.temporal = object()
     return app
 

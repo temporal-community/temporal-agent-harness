@@ -18,7 +18,7 @@ py_library(
     srcs = ["agent_starts.py"],
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
-    deps = [":registry"],
+    deps = [":registry_store"],
 )
 
 py_library(
@@ -29,7 +29,11 @@ py_library(
     deps = [
         ":agent_starts",
         ":file_view",
+        ":nexus_registry_store",
         ":registry",
+        ":registry_changes",
+        ":registry_store",
+        ":registry_workflow",
         ":sessions",
         ":task_queue_status",
         ":temporal_ui",
@@ -50,8 +54,10 @@ agent_kit_module_binary(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
+        ":agent_commands",
         ":client",
         ":doctor",
+        ":nexus_registry_store",
         ":registry",
         ":serve",
         "//python/temporal_agent_kit:agent_schema",
@@ -90,6 +96,8 @@ py_library(
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
     deps = [
+        ":registry_changes",
+        ":registry_store",
         "//python/temporal_agent_kit:agent_schema",
         "//python/temporal_agent_kit/utils:task_queue",
         "@pypi//pydantic",
@@ -104,7 +112,9 @@ py_library(
     deps = [
         ":__init__",
         ":client",
+        ":nexus_registry_store",
         ":registry",
+        ":registry_workflow",
         "//python/temporal_agent_kit/ui:__init__",
         "@pypi//fastapi",
         "@pypi//uvicorn",
@@ -147,6 +157,74 @@ py_library(
         ":registry",
         ":task_queue_status",
         "//python/temporal_agent_kit:development",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "agent_commands",
+    srcs = ["agent_commands.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":registry",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "memory_registry_store",
+    srcs = ["memory_registry_store.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":registry_store",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "registry_changes",
+    srcs = ["registry_changes.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [":registry_store"],
+)
+
+py_library(
+    name = "registry_store",
+    srcs = ["registry_store.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "registry_workflow",
+    srcs = ["registry_workflow.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":registry_store",
+        "//python/temporal_agent_kit/utils:task_queue",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "nexus_registry_store",
+    srcs = ["nexus_registry_store.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":registry_store",
+        "//python/temporal_agent_kit:agent_schema",
+        "@pypi//nexus_rpc",
+        "@pypi//pydantic",
         "@pypi//temporalio",
     ],
 )

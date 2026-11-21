@@ -4,9 +4,11 @@ from typing import TYPE_CHECKING
 
 from temporal_agent_kit.web.registry import (
     AgentDescriptor,
+    AgentRegistration,
     AgentRegistry,
     AgentStart,
     load_agent_registry,
+    load_registrations,
 )
 from temporal_agent_kit.web.sessions import Session, SessionPage
 
@@ -28,10 +30,12 @@ def __getattr__(name: str):
 
 __all__ = [
     "AgentDescriptor",
+    "AgentRegistration",
     "AgentRegistry",
     "AgentStart",
     "Session",
     "SessionPage",
     "create_agent_kit_app",
     "load_agent_registry",
+    "load_registrations",
 ]

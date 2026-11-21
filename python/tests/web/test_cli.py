@@ -16,7 +16,8 @@ from temporal_agent_kit.web.cli import main
 from temporal_agent_kit.web.client import (
     DEFAULT_TEMPORAL_ADDRESS,
     connect_client,
-    ensure_temporal_address,
+    TemporalConnection,
+    ensure_temporal_connection,
 )
 
 
@@ -49,7 +50,7 @@ def test_configured_profile_is_not_overridden(
     _write_profile(config, "cfg-host:1234")
     monkeypatch.setenv("TEMPORAL_CONFIG_FILE", str(config))
 
-    ensure_temporal_address(None)
+    ensure_temporal_connection(TemporalConnection())
 
     from temporalio.envconfig import ClientConfig
 
@@ -63,7 +64,7 @@ def test_configured_profile_is_not_overridden(
 def test_existing_env_address_is_not_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEMPORAL_ADDRESS", "env-host:5555")
 
-    ensure_temporal_address(None)
+    ensure_temporal_connection(TemporalConnection())
 
     import os
 
@@ -78,7 +79,7 @@ def test_explicit_address_wins_over_configured_profile(
     _write_profile(config, "cfg-host:1234")
     monkeypatch.setenv("TEMPORAL_CONFIG_FILE", str(config))
 
-    ensure_temporal_address("flag-host:9999")
+    ensure_temporal_connection(TemporalConnection(address="flag-host:9999"))
 
     from temporalio.envconfig import ClientConfig
 
@@ -88,7 +89,7 @@ def test_explicit_address_wins_over_configured_profile(
 
 
 def test_dev_server_default_applies_only_when_nothing_is_configured() -> None:
-    ensure_temporal_address(None)
+    ensure_temporal_connection(TemporalConnection())
 
     import os
 
@@ -121,7 +122,7 @@ def test_connection_rules_are_discoverable_from_the_command(
     # Profile selection is the other half of file-based config, so it must be shown too —
     # worked through in an example, not just named in the precedence list.
     assert "TEMPORAL_PROFILE" in out
-    assert "TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud" in out
+    assert "--temporal-config-file temporal.toml --temporal-profile cloud" in out
     # The surprising part specifically: a cwd temporal.toml is not auto-discovered.
     assert "CURRENT DIRECTORY is NOT picked up" in out
     assert "agents.toml" in out
@@ -211,7 +212,7 @@ def test_serve_checks_temporal_before_binding_the_port(
         calls.append("verify")
 
     monkeypatch.setattr("temporal_agent_kit.web.serve.verify_temporal_reachable", fake_verify)
-    monkeypatch.setattr("temporal_agent_kit.web.serve.create_app", lambda *_: "app")
+    monkeypatch.setattr("temporal_agent_kit.web.serve.create_app", lambda *_, **__: "app")
     monkeypatch.setitem(
         __import__("sys").modules,
         "uvicorn",
@@ -221,6 +222,55 @@ def test_serve_checks_temporal_before_binding_the_port(
     main(["serve", str(registry)])
 
     assert calls == ["verify", "uvicorn"]
+
+
+def test_the_config_file_and_profile_flags_choose_the_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """They outrank TEMPORAL_CONFIG_FILE and TEMPORAL_PROFILE, as --temporal-address does."""
+    config = tmp_path / "temporal.toml"
+    config.write_text(
+        "[profile]\n"
+        "  [profile.default]\n"
+        '    address = "local-host:7233"\n'
+        '    namespace = "default"\n'
+        "  [profile.cloud]\n"
+        '    address = "cloud-host:7233"\n'
+        '    namespace = "cloud-namespace"\n'
+    )
+    monkeypatch.setenv("TEMPORAL_PROFILE", "default")
+    monkeypatch.setattr("temporal_agent_kit.web.serve.run_server", lambda *_, **__: None)
+
+    main(["serve", "--temporal-config-file", str(config), "--temporal-profile", "cloud"])
+
+    from temporalio.envconfig import ClientConfig
+
+    resolved = dict(ClientConfig.load_client_connect_config())
+    assert resolved["target_host"] == "cloud-host:7233"
+    assert resolved["namespace"] == "cloud-namespace"
+
+
+def test_serve_keeps_the_registry_in_the_store_at_registry_store_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "temporal_agent_kit.web.serve.run_server", lambda *_, **options: served.append(options)
+    )
+
+    main(["serve", "--registry-store-endpoint", "agent-kit-registry"])
+    main(["serve"])
+
+    assert [options["registry_store_endpoint"] for options in served] == ["agent-kit-registry", None]
+
+
+def test_a_config_file_that_is_not_there_is_refused(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["doctor", "--temporal-config-file", str(tmp_path / "nowhere.toml")])
+
+    assert "--temporal-config-file: no file" in capsys.readouterr().err
 
 
 def test_schema_prints_the_agent_schema_without_touching_temporal_config(
@@ -273,5 +323,5 @@ def test_schema_registry_prints_the_agents_toml_schema(capsys: pytest.CaptureFix
     ],
 )
 def test_schema_needs_exactly_one_of_an_agent_protocol_or_registry(argv: list[str]) -> None:
-    with pytest.raises(SystemExit, match="give one of an agent class, --protocol or --registry"):
+    with pytest.raises(SystemExit, match="give one of an agent class, --protocol, --registry or --registry-store"):
         main(argv)

@@ -122,11 +122,32 @@ js_library(
 )
 
 js_library(
+    name = "AgentManagement",
+    srcs = ["AgentManagement.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/components/primitives:Chip"],
+)
+
+js_library(
+    name = "RegisterAgentsDialog",
+    srcs = ["RegisterAgentsDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/state:agentRegistration",
+    ],
+)
+
+js_library(
     name = "StartSessionDialog",
     srcs = ["StartSessionDialog.svelte"],
     visibility = ["//typescript/apps/ui:__subpackages__"],
     deps = [
+        ":AgentManagement",
         ":MarkdownMessage",
+        ":RegisterAgentsDialog",
         ":SchemaForm",
         ":schemaForm",
         "//typescript/apps/ui:node_modules/@lucide/svelte",
@@ -139,6 +160,7 @@ js_library(
         "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
         "//typescript/apps/ui/src/lib/components/primitives:windowedFocus",
         "//typescript/apps/ui/src/lib/motion:inputClearDissolve",
+        "//typescript/apps/ui/src/lib/state:agentRegistration",
         "//typescript/apps/ui/src/lib/state:initData",
         "//typescript/apps/ui/src/lib/state:quickSwitch",
         "//typescript/apps/ui/src/lib/state:sessionHistory",
@@ -181,9 +203,20 @@ vitest_test(
 )
 
 vitest_test(
+    name = "RegisterAgentsDialog_test",
+    src = "RegisterAgentsDialog.test.mjs",
+    deps = [
+        ":RegisterAgentsDialog",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
     name = "StartSessionDialog_test",
     src = "StartSessionDialog.test.mjs",
     deps = [
+        ":AgentManagement",
         ":StartSessionDialog",
         "//typescript/apps/ui:node_modules/svelte",
         "//typescript/apps/ui/tests/support:controllerHarness",

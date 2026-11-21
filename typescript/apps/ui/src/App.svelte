@@ -8,6 +8,8 @@
   import UsageReading from "$lib/components/flow/UsageReading.svelte";
   import StepController from "$lib/components/flow/StepController.svelte";
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
+  import RegisterAgentsDialog from "$lib/components/chat/RegisterAgentsDialog.svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import type { AgentApi } from "$lib/api/client";
   import type { JsonRecord } from "$lib/api/types";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
@@ -17,7 +19,7 @@
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
-  import { Keyboard, PanelLeft, Search } from "@lucide/svelte";
+  import { Keyboard, PanelLeft, Plus, Search } from "@lucide/svelte";
   import { tick, untrack } from "svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel, { verdictTone } from "$lib/components/agent/ApprovalDecisionPanel.svelte";
@@ -30,6 +32,7 @@
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
   import { chatPaneTitle, PANE_KINDS, PANE_META, type PaneKind } from "$lib/panes/registry";
+  import type { AgentRegistryActions } from "$lib/state/agentRegistration";
   import { AgentRunController } from "$lib/state/agentRun.svelte";
   import { createPaneStack, dockFocusedPane, makePane, openDefaultDrawer, type Pane } from "$lib/state/paneStack.svelte";
   import {
@@ -137,6 +140,14 @@
      while boot opens one the desk waits for it instead. */
   const linkedAtLoad = readUrlSessionId() != null;
   const home = $derived(!run.session && !(booting && linkedAtLoad));
+  const registryActions: AgentRegistryActions = {
+    register: (registrations) => run.registerAgents(registrations),
+    registration: (key) => run.agentRegistration(key),
+    retire: (key) => run.retireAgent(key),
+    remove: (key) => run.deleteAgent(key)
+  };
+  /* The add-agents form, opened from the Agent Bay. */
+  let addingAgents = $state(false);
   /* What every home pane is drawn from: the server's lists, and the console's own start path. */
   const homeProps = $derived({
     agents: run.agents,
@@ -145,7 +156,9 @@
     refreshingAgents: run.refreshingAgents || (booting && run.agents.length === 0),
     agentsError: run.agentsError ?? run.connectionError,
     onStart: startSession,
-    onRefreshAgents: () => run.refreshAgents()
+    onRefreshAgents: () => run.refreshAgents(),
+    registry: registryActions,
+    onAddAgents: () => (addingAgents = true)
   });
   let motionReady = $state(false);
   let motionReadyFrame = 0;
@@ -209,19 +222,16 @@
     });
   });
 
-  /* The lists are the page while no session is open, so keep the sessions one current: a
-     session started from another tab or the CLI turns up without a refresh. */
+  /* The lists are the page while no session is open, so the sessions one is read again when the
+     reader comes back to the window: a session started from another tab or the CLI turns up then.
+     Nothing reads it on a timer; Refresh sessions is the way to ask in between. */
   $effect(() => {
     if (!home || booting) return;
     const refresh = () => {
       if (!document.hidden) void run.ensureSessionsEnriched();
     };
-    const timer = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-    };
+    return () => window.removeEventListener("focus", refresh);
   });
 
   /* Snapshot paint and stream catch-up are one load, not changes the reader
@@ -911,6 +921,7 @@
           {pendingLabel}
           onEnsureAgents={() => run.refreshAgents()}
           onRefreshAgents={() => run.refreshAgents()}
+          registry={registryActions}
           refreshingAgents={run.refreshingAgents}
           agentsError={run.agentsError}
           onNewSession={startSession}
@@ -1198,9 +1209,13 @@
   {/if}
 </main>
 
-<!-- The bay's own header controls: its search, then its row density, cycled. -->
+<!-- The bay's own header controls: adding agents, its search, then its row density, cycled. -->
 {#snippet bayControls()}
   {@const current = BAY_DENSITIES[bayDensityAt()]}
+  <Chip class="bay-add" size="xs" fill="solid" tone="accent" onclick={() => (addingAgents = true)}>
+    {#snippet lead()}<Plus size={12} aria-hidden="true" />{/snippet}
+    Add agents
+  </Chip>
   <button
     type="button"
     class="head-button"
@@ -1226,6 +1241,10 @@
 {/snippet}
 
 <HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
+
+{#if addingAgents}
+  <RegisterAgentsDialog actions={registryActions} onClose={() => (addingAgents = false)} />
+{/if}
 
 <SearchPalette
   bind:open={paletteOpen}

@@ -40,3 +40,21 @@ committed_files(
     generated = {"registry.schema.json": ":registry_schema"},
     visibility = ["//python/tests/web:__pkg__"],
 )
+
+# The operations of the AgentKitRegistryStore Nexus service a server keeps its registry in with
+# `serve --registry-store-endpoint`, which a store in any Temporal SDK implements:
+# `temporal-agent-kit schema --registry-store`. registry-store.nexusrpc.yaml names them.
+agent_kit_schema(
+    name = "registry_store_schema",
+    args = [
+        "schema",
+        "--registry-store",
+    ],
+)
+
+committed_files(
+    name = "registry_store",
+    srcs = ["registry-store.schema.json"],
+    generated = {"registry-store.schema.json": ":registry_store_schema"},
+    visibility = ["//python/tests/web:__pkg__"],
+)

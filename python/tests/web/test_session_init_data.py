@@ -34,14 +34,18 @@ from temporal_agent_kit.agent_schema import (
 )
 from temporal_agent_kit.web import (
     AgentDescriptor,
-    AgentRegistry,
     AgentStart,
     create_agent_kit_app,
     load_agent_registry,
 )
-from temporal_agent_kit.web.agent_starts import agent_starts
 from temporal_agent_kit.web import app as app_module
 from temporal_agent_kit.web import sessions
+from temporal_agent_kit.web.memory_registry_store import (
+    InMemoryRegistryStore,
+    in_memory_registry_store,
+)
+from temporal_agent_kit.web.registry import registry_view
+from temporal_agent_kit.web.registry_store import RegisteredAgent, RegistrySnapshot
 from temporal_agent_kit.web.sessions import Session
 from temporal_agent_kit.web.task_queue_status import RegistryWorkers
 
@@ -68,8 +72,8 @@ class BriefedAgent:
         return TextReply(text=message.text)
 
 
-def _descriptor(key: str, workflow_type: str, cls: type | None) -> AgentDescriptor:
-    return AgentDescriptor(
+def _registered(key: str, workflow_type: str, cls: type | None) -> RegisteredAgent:
+    return RegisteredAgent(
         key=key,
         workflow_type=workflow_type,
         task_queue=f"{key}-q",
@@ -79,20 +83,21 @@ def _descriptor(key: str, workflow_type: str, cls: type | None) -> AgentDescript
     )
 
 
-REGISTRY = AgentRegistry(
-    agents=[
-        _descriptor("briefed", "BriefedAgent", BriefedAgent),
-        _descriptor(
+SNAPSHOT = RegistrySnapshot.of(
+    [
+        _registered("briefed", "BriefedAgent", BriefedAgent),
+        _registered(
             "tictactoe",
             "TicTacToeAgent",
             load_agent_class("examples.tictactoe.workflow:TicTacToeAgentWorkflow"),
         ),
-        _descriptor(
+        _registered(
             "react", "ReactAgent", load_agent_class("examples.react_agent.workflow:ReactAgentWorkflow")
         ),
-        _descriptor("unnamed", "UnnamedAgent", None),
+        _registered("unnamed", "UnnamedAgent", None),
     ]
 )
+REGISTRY = registry_view(SNAPSHOT)
 
 
 class _StartRecorder:
@@ -115,12 +120,12 @@ class _StartRecorder:
 
 @pytest.fixture
 def app_and_starts(monkeypatch):
-    app = create_agent_kit_app(registry=REGISTRY)
+    store = InMemoryRegistryStore(SNAPSHOT)
+    app = create_agent_kit_app(registry_store=in_memory_registry_store(store))
     starts = _StartRecorder()
     monkeypatch.setattr(app_module, "start_session", starts)
     app.state.temporal = object()
-    app.state.registry = REGISTRY
-    app.state.agent_starts = agent_starts(REGISTRY)
+    app.state.registry_store = store
     return app, starts
 
 

@@ -27,7 +27,7 @@ from temporal_agent_kit import agent
 from temporal_agent_kit.code_mode.activity_fs import MAX_VIEW_BYTES
 from temporal_agent_kit.web import file_view
 from temporal_agent_kit.web.app import create_agent_kit_app
-from temporal_agent_kit.web.registry import AgentRegistry
+from temporal_agent_kit.web.memory_registry_store import in_memory_registry_store
 
 FILES = {
     "notes.md": b"# Notes\n",
@@ -92,7 +92,7 @@ def _body(task_queue: str, path: str, *, offset: int = 0, shelf: str = "main") -
 async def _post(
     env: WorkflowEnvironment, body: dict, route: str = "/api/files/view"
 ) -> httpx.Response:
-    app = create_agent_kit_app(registry=AgentRegistry(agents=[]))
+    app = create_agent_kit_app(registry_store=in_memory_registry_store())
     app.state.temporal = env.client
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"

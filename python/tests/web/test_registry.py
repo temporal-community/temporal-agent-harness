@@ -73,5 +73,5 @@ def test_invalid_registries_are_rejected_by_the_loader_and_the_schema(tmp_path: 
 def test_duplicate_keys_in_one_registry_are_rejected(tmp_path: Path) -> None:
     path = _registry(tmp_path, ENTRY + ENTRY.replace('workflow_type = "HelloAgent"', 'workflow_type = "Other"'))
 
-    with pytest.raises(ValueError, match="Duplicate agent key 'hello'"):
+    with pytest.raises(ValueError, match="The agent key 'hello' is given twice"):
         load_agent_registry(path)

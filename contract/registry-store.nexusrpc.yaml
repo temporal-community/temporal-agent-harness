@@ -1,0 +1,21 @@
+nexusrpc: "1.0.0"
+
+# The registry store a server keeps its agent registry in with
+# `temporal-agent-kit serve --registry-store-endpoint <endpoint>`: implement this service on a worker
+# in any Temporal SDK, behind that Nexus endpoint. The bodies are defined in
+# registry-store.schema.json (`temporal-agent-kit schema --registry-store`); contract/README.md
+# describes the contract.
+
+services:
+  AgentKitRegistryStore:
+    fqn: AgentKitRegistryStore
+    description: "Holds an Agent Kit server's agent registry: one JSON document under a version. The server applies the registry's rules and only asks the store to read the document and to replace it from the version it read."
+    operations:
+      read:
+        description: "Return the stored registry and its version, or an empty registry at version 0 when nothing has been written. Synchronous."
+        input: { $ref: "registry-store.schema.json#/$defs/RegistryRead" }
+        output: { $ref: "registry-store.schema.json#/$defs/VersionedSnapshot" }
+      write:
+        description: "When the stored version is `expected`, store `snapshot` as version `expected + 1` and return stored=true with that version. Otherwise store nothing and return stored=false with the version stored. The compare and the store happen together, so of two writers from one version only one stores. Synchronous."
+        input: { $ref: "registry-store.schema.json#/$defs/RegistryWrite" }
+        output: { $ref: "registry-store.schema.json#/$defs/RegistryWriteOutcome" }

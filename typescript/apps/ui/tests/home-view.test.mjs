@@ -146,6 +146,18 @@ describe("the console with no session open", () => {
     assert.match(listed, /role="alert">Request failed \(500\)<[\s\S]*?Alpha/, "agents already listed stay, under the error");
   });
 
+  /* Adding agents is the bay's own action: first in its header, and the way out of an empty bay. */
+  it("offers adding agents from the Agent Bay", () => {
+    const bay = (extra) => stripComments(render(HomeView, { props: { agents: [], sessions: [], onStart() {}, part: "bay", ...extra } }).body);
+    assert.match(bay({ onAddAgents() {} }), /No agents are registered yet\.[\s\S]*?<button[^>]*class="chip sm solid accent[^"]*"[^>]*>[\s\S]*?Add agents\s*<\/button>/);
+    assert.doesNotMatch(bay({ onAddAgents() {}, refreshingAgents: true }), /Add agents/, "not while the list is loading");
+    assert.doesNotMatch(bay(), /Add agents/);
+    const controls = app.slice(app.indexOf("{#snippet bayControls()}"), app.indexOf("<HotkeyHelp"));
+    assert.match(controls, /^[^]*?<Chip class="bay-add" size="xs" fill="solid" tone="accent" onclick=\{\(\) => \(addingAgents = true\)\}>/, "the header's first control");
+    assert.ok(controls.indexOf("bay-add") < controls.indexOf('aria-label="Search agents"'));
+    assert.match(app, /\{#if addingAgents\}\s*<RegisterAgentsDialog actions=\{registryActions\}/);
+  });
+
   it("offers no close on any pane of the fixed home desk", () => {
     const kinds = ["setup", "capabilities", "releases", "bay"];
     const desk = createPaneStack({ initial: kinds.map((kind) => [makePane({ kind })]), fixed: true });
@@ -168,10 +180,12 @@ describe("the console with no session open", () => {
     assert.match(app, /case "releases":\s*return \{ title: PANE_META\.releases\.kindLabel \};/);
   });
 
-  /* The lists are the page with no session open, so the session list keeps itself current there,
-     and a session open can always be left for them without ending it. */
-  it("refreshes the session list on the home desk and leads back to it with Home", () => {
-    assert.match(app, /if \(!home \|\| booting\) return;[\s\S]*?if \(!document\.hidden\) void run\.ensureSessionsEnriched\(\);[\s\S]*?setInterval\(refresh, 15_000\)[\s\S]*?addEventListener\("focus", refresh\)/);
+  /* The lists are the page with no session open, so the session list is read again when the reader
+     returns to the window, never on a timer, and a session open can always be left for them without
+     ending it. */
+  it("refreshes the session list on the home desk when the reader returns, and leads back to it with Home", () => {
+    assert.match(app, /if \(!home \|\| booting\) return;[\s\S]*?if \(!document\.hidden\) void run\.ensureSessionsEnriched\(\);[\s\S]*?addEventListener\("focus", refresh\)/);
+    assert.doesNotMatch(app, /setInterval\(/, "no list is read on a timer");
     assert.match(app, /<PaneMinimap[\s\S]*?onHome=\{\(\) => run\.closeSessionView\(\)\}\s*atHome=\{home\}/, "the Temporal mark leads home");
     assert.doesNotMatch(app, /aria-label="Home"/, "no separate Home button beside it");
     const minimap = readFileSync(new URL("../src/lib/panes/PaneMinimap.svelte", import.meta.url), "utf8");

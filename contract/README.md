@@ -8,16 +8,45 @@ test fails while a committed file differs from what Python writes.
 | --- | --- | --- |
 | `protocol.schema.json` | The event stream's wire types: every event an agent publishes. The TypeScript client's `protocol.ts` is generated from it. | `temporal-agent-kit schema --protocol` |
 | `registry.schema.json` | The `agents.toml` format that `serve` reads. Keys it does not name are ignored, so an SDK can add its own. | `temporal-agent-kit schema --registry` |
+| `registry-store.schema.json` | The inputs and outputs of the `AgentKitRegistryStore` Nexus service's `read` and `write` operations, which `serve --registry-store-endpoint` keeps its agent registry in. A store in any Temporal SDK implements it; see [the registry store contract](#the-registry-store-contract). | `temporal-agent-kit schema --registry-store` |
+| `registry-store.nexusrpc.yaml` | The `AgentKitRegistryStore` service itself: its name and operations, with their bodies referring to `registry-store.schema.json`. | Written by hand |
 
 After a change that alters one, rewrite it and commit the result:
 
 ```bash
 bazel run //contract:protocol_update
 bazel run //contract:registry_update
+bazel run //contract:registry_store_update
 ```
 
-`bazel test //contract/...` fails while either is out of date. A change to `protocol.schema.json`
+`bazel test //contract/...` fails while any is out of date. A change to `protocol.schema.json`
 also needs `bazel run //typescript/packages/client/src:protocol_codegen_update`.
 
 The streams an SDK's worker must publish for a fixed set of scenarios are in
 [`conformance/`](../conformance/README.md).
+
+## The registry store contract
+
+By default the server keeps its agent registry in a Temporal workflow it runs itself. With
+`temporal-agent-kit serve --registry-store-endpoint ENDPOINT` it keeps it in the
+`AgentKitRegistryStore` Nexus service (`registry-store.nexusrpc.yaml`) behind that Nexus endpoint
+instead, which holds one JSON document under a version. The server calls its two synchronous
+operations as standalone Nexus operations with its own Temporal client, so the store needs no
+credentials of its own: the endpoint's access rules decide which namespaces may call it.
+
+| Operation | Input | Output |
+| --- | --- | --- |
+| `read` | `{}` | `{"snapshot": {...}, "version": n}`; `{"snapshot": {"agents": {}}, "version": 0}` before anything is written. |
+| `write` | `{"snapshot": {...}, "expected": n}` | When the stored version is `n`: store the snapshot as version `n + 1` and return `{"stored": true, "version": n + 1}`. Otherwise store nothing and return `{"stored": false, "version": <the stored version>}`. |
+
+The compare and the store must happen together, so two servers writing at once cannot both
+succeed: a row updated `WHERE version = n`, a lightweight transaction, a lock. That is all a store
+does. The server applies the registry's rules, retries a write that was not stored against what it
+reads next, and gives the store the whole document on every write. Keep the snapshot as given; the
+server reads back what it wrote. A store must read payloads the way the server writes them: JSON,
+through the Agent Kit data converter's large-payload storage when a registry outgrows a payload.
+
+Standalone Nexus operations are experimental, and a Temporal server serves them only with the
+dynamic config value `nexusoperation.enableStandalone=true`. The reference store is
+[`python/examples/sqlite_registry_store`](../python/examples/sqlite_registry_store/README.md): the
+registry in one SQLite row.

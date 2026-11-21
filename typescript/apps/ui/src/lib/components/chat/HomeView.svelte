@@ -123,8 +123,9 @@
    * and the counts are the server's; features and setup are fixed docs content, and releases
    * are a log kept in this file. Each pane's status rides in its own head, not the status line.
    */
-  import { ArrowUpRight, Check, Copy, Package, PanelBottom, Play, ScrollText } from "@lucide/svelte";
+  import { ArrowUpRight, Check, Copy, Package, PanelBottom, Play, Plus, ScrollText } from "@lucide/svelte";
   import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
+  import type { AgentRegistryActions } from "$lib/state/agentRegistration";
   import StartSessionDialog, { agentEntries } from "$lib/components/chat/StartSessionDialog.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable, { copyText } from "$lib/components/primitives/Copyable.svelte";
@@ -145,6 +146,9 @@
     agentsError?: string | null;
     onStart: (workflowType: string, data?: JsonRecord) => void | Promise<void>;
     onRefreshAgents?: () => void | Promise<void>;
+    registry?: AgentRegistryActions;
+    /** Opens the form that registers agents with the server. */
+    onAddAgents?: () => void;
     /** The status line stands in the transport's row, so it carries the drawer's switch too. */
     drawerOpen?: boolean;
     onToggleDrawer?: () => void;
@@ -159,6 +163,8 @@
     agentsError = null,
     onStart,
     onRefreshAgents,
+    registry,
+    onAddAgents,
     drawerOpen = false,
     onToggleDrawer
   }: Props = $props();
@@ -183,7 +189,8 @@
 
   /* Each agent with its running count on the row, so a sort by Running follows the count. */
   type BayRow = ReturnType<typeof agentEntries>[number] & { live: number };
-  const bayRows = $derived(agentEntries(agents).map((entry) => ({ ...entry, live: runningByType.get(entry.agent.workflow_type) ?? 0 })));
+  const activeAgents = $derived(agents.filter((agent) => !agent.retired));
+  const bayRows = $derived(agentEntries(activeAgents).map((entry) => ({ ...entry, live: runningByType.get(entry.agent.workflow_type) ?? 0 })));
   const WORKER_LABELS: Record<string, string> = { no_worker: "No worker", unknown: "Unknown" };
   const workerLabel = (row: BayRow) => WORKER_LABELS[row.agent.worker?.status ?? ""] ?? "Ready";
   /* Status first, then the name and its task queue, then the figures, each sized to fit its
@@ -200,7 +207,7 @@
     { label: "Copy task queue", icon: Copy, run: () => void copyText(row.agent.task_queue) },
     { label: "Copy workflow type", icon: Copy, run: () => void copyText(row.agent.workflow_type) }
   ];
-  const noWorker = $derived(agentsWithoutWorker(agents));
+  const noWorker = $derived(agentsWithoutWorker(activeAgents));
   const running = $derived(sessions.filter((session) => !session.closed).length);
 
   /* What the server says about an agent's worker, for the tip on its status. */
@@ -243,10 +250,18 @@
       </EmptyState>
     {:else if bayRows.length === 0}
       <EmptyState title={refreshingAgents ? "Loading agents…" : "No agents are registered yet."} >
-        {#if !refreshingAgents}<p>Start a worker that registers an agent with this server; Setup shows how.</p>{/if}
-        {#if onRefreshAgents}
-          <Chip fill="bare" disabled={refreshingAgents} onclick={() => void onRefreshAgents?.()}>{refreshingAgents ? "Checking…" : "Recheck"}</Chip>
-        {/if}
+        {#if !refreshingAgents}<p>Add your agents to this server, with an agents.toml or by filling in each one. Setup shows how to write one and run its worker.</p>{/if}
+        <div class="row-of empty-actions">
+          {#if onAddAgents && !refreshingAgents}
+            <Chip fill="solid" tone="accent" onclick={onAddAgents}>
+              {#snippet lead()}<Plus size={13} aria-hidden="true" />{/snippet}
+              Add agents
+            </Chip>
+          {/if}
+          {#if onRefreshAgents}
+            <Chip fill="bare" disabled={refreshingAgents} onclick={() => void onRefreshAgents?.()}>{refreshingAgents ? "Checking…" : "Recheck"}</Chip>
+          {/if}
+        </div>
       </EmptyState>
     {:else}
       <DataTable
@@ -388,6 +403,7 @@
     error={agentsError}
     onRefresh={onRefreshAgents}
     {onStart}
+    {registry}
     onClose={() => (picked = null)}
   />
 {/if}
@@ -426,6 +442,10 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--gap-sm);
+  }
+
+  .empty-actions {
+    justify-content: center;
   }
 
   .error {

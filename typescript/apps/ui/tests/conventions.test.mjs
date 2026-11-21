@@ -103,7 +103,7 @@ const OWN_BOX = /(?:^|;)\s*(?:height|border(?:-width|-color)?|box-shadow|outline
 /* Fields that carry prose an agent, a model or a person wrote, so they may hold markdown. In markup
    each is drawn by MarkdownMessage (`text={…}`) or read through markdownToText, never raw. */
 const PROSE_FIELD = /\.(?:description|reason|question|preview)\b|\b(?:session|item)\.title\b|\bthought\.text\b/;
-const MARKUP_EXPRESSION = /(\b[\w-]+=)?\{([^{}]*)\}/g;
+const MARKUP_EXPRESSION = /(\b[\w:-]+=)?\{([^{}]*)\}/g;
 const markupOf = (text) => text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, "");
 
 const ruleOf = (text, selector) =>
@@ -178,7 +178,8 @@ describe("console conventions", () => {
     for (const { file, text } of sources.filter(({ file }) => file.endsWith(".svelte"))) {
       for (const [, attribute, expr] of markupOf(text).matchAll(MARKUP_EXPRESSION)) {
         if (/^[#/:@]/.test(expr.trim()) || !PROSE_FIELD.test(expr)) continue;
-        if (attribute === "text=" || expr.includes("markdownToText(")) continue;
+        /* A bound form control edits the text as written; it draws nothing. */
+        if (attribute === "text=" || attribute === "bind:value=" || expr.includes("markdownToText(")) continue;
         offenders.push(`${file}: ${attribute ?? ""}{${expr.trim()}}`);
       }
     }

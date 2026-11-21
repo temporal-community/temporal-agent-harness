@@ -232,9 +232,11 @@ uv run temporal-agent-kit serve ./agents.toml
 uv run python -m my_app.worker
 ```
 
-Open <http://localhost:8000> and create a session. `serve` accepts several registries and merges
-them (`serve one/agents.toml two/agents.toml`), so a single UI can list agents from more than one
-project.
+Open <http://localhost:8000> and create a session. `serve` registers the agents of every file it
+is given (`serve one/agents.toml two/agents.toml`), so a single UI can list agents from more than
+one project. A running server takes more without a restart:
+`uv run temporal-agent-kit agents add other/agents.toml`, or "Add agents" in the console.
+`agents list`, `agents retire <key>` and `agents delete <key>` manage what it holds.
 
 That registry is what lists the launchable agents:
 
@@ -270,14 +272,50 @@ so they land on the same namespace. With nothing configured they use `localhost:
 automatically**; point at a project-local file (or a Temporal Cloud profile) explicitly:
 
 ```bash
-TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud \
-    uv run temporal-agent-kit serve ./agents.toml
+uv run temporal-agent-kit serve --temporal-config-file temporal.toml --temporal-profile cloud \
+    ./agents.toml
 ```
 
-`uv run temporal-agent-kit --help` documents the full precedence order.
+`--temporal-config-file` and `--temporal-profile` override `TEMPORAL_CONFIG_FILE` and
+`TEMPORAL_PROFILE`; `uv run temporal-agent-kit --help` documents the full precedence order.
 
 Need the API and UI mounted inside your own FastAPI service instead? See
 [Self-hosting the web app](https://github.com/temporal-community/temporal-agent-kit/blob/main/docs/api/hosting.md#self-hosting-the-web-app).
+
+#### Add agents to a running server
+
+The server keeps its registry between restarts, and takes new agents while it runs. To manage it
+from any terminal, install the command as a uv tool, which puts `temporal-agent-kit` on your
+`PATH`:
+
+```bash
+uv tool install 'temporal-agent-kit[ui]'
+uv tool update-shell   # once, if ~/.local/bin is not on your PATH yet; then open a new terminal
+```
+
+Then, from your agent project, with the server running:
+
+```bash
+# The agent's schema document. Run inside the project: it imports your agent class.
+uv run temporal-agent-kit schema my_app.workflow:MyAgentWorkflow -o MyAgent.schema.json
+
+# Register every agent in the agents.toml, all of them or none.
+temporal-agent-kit agents add agents.toml --server http://localhost:8000
+```
+
+The agents appear in the console at once; start their workers on the task queues they name.
+Registering a key again replaces that agent, so rerun both commands after changing its init data,
+label or description. `--server` defaults to `http://localhost:8000`.
+
+```bash
+temporal-agent-kit agents list                 # every registered agent, active or retired
+temporal-agent-kit agents retire my-agent      # starts no new sessions; its sessions stay listed
+temporal-agent-kit agents delete my-agent      # leaves the registry; its sessions leave the list
+```
+
+"Add agents" in the console's Agent Bay does the same as `agents add`, from a form or an imported
+`agents.toml`, and its New session dialog retires, restores and deletes agents. `uv tool upgrade
+temporal-agent-kit` updates the command.
 
 #### Extras
 

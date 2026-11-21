@@ -24,7 +24,9 @@
     "@temporalio/agent-kit-client": "workspace:^",
     "@xyflow/svelte": "^1.6.0",
     "d3-force": "^3.0.0",
+    "fflate": "0.8.3",
     "remend": "^1.4.0",
+    "smol-toml": "1.9.1",
     "svelte": "^5.57.2"
   },
   "devDependencies": {
