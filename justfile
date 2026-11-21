@@ -56,8 +56,10 @@ buildifier:
 # ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
 
 # Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+# Standalone Nexus operations are on, for `serve --registry-store-endpoint` (see
+# python/examples/sqlite_registry_store).
 temporal:
-    temporal server start-dev
+    temporal server start-dev --dynamic-config-value nexusoperation.enableStandalone=true
 
 # Serves the console as Bazel builds it from typescript/apps/ui/, so a change there shows up on the
 # next run. An agent only runs if its worker is up — see the worker recipes below.

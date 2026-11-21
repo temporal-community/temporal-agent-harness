@@ -264,3 +264,22 @@ agent_kit_pytest_test(
         "@pypi//temporalio",
     ],
 )
+
+agent_kit_pytest_test(
+    name = "test_nexus_registry_store",
+    srcs = ["test_nexus_registry_store.py"],
+    data = ["//contract:registry_store_files"],
+    imports = ["../.."],
+    deps = [
+        "//python/examples/sqlite_registry_store:store",
+        "//python/temporal_agent_kit/web:app",
+        "//python/temporal_agent_kit/web:nexus_registry_store",
+        "//python/temporal_agent_kit/web:registry_changes",
+        "//python/temporal_agent_kit/web:registry_store",
+        "//python/temporal_agent_kit/web:serve",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

@@ -20,8 +20,9 @@ running server's agents through its HTTP API.
 
 ``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
 declared state as JSON Schema (``harness.agent_schema``), the input to client codegen. With
-``--protocol`` it prints the event stream's wire types instead, and with ``--registry`` the schema
-of an ``agents.toml`` registry. The running server exposes the HTTP contract at ``/openapi.json``.
+``--protocol`` it prints the event stream's wire types instead, with ``--registry`` the schema
+of an ``agents.toml`` registry, and with ``--registry-store`` the schema of the registry
+store's Nexus operations. The running server exposes the HTTP contract at ``/openapi.json``.
 
 ``init`` copies a bundled starter; ``skills`` locates or installs this release's agent skill.
 ``doctor`` reads configuration and service status without creating or resetting workflows.
@@ -82,17 +83,11 @@ Examples:
 
 def _serve(args: argparse.Namespace) -> None:
     # Imported at call time so `--help` on the other subcommand doesn't pay for FastAPI.
-    from temporal_agent_kit.web.serve import load_registry_store_factory, run_server
+    from temporal_agent_kit.web.serve import run_server
 
-    try:
-        registry_store = (
-            None if args.registry_store is None else load_registry_store_factory(args.registry_store)
-        )
-    except (ImportError, ValueError) as e:
-        raise SystemExit(f"temporal-agent-kit serve: --registry-store: {e}") from None
     run_server(
         *(Path(path) for path in args.registry_paths),
-        registry_store=registry_store,
+        registry_store_endpoint=args.registry_store_endpoint,
         host=args.host,
         port=args.port,
     )
@@ -131,9 +126,10 @@ def _schema(args: argparse.Namespace) -> None:
         load_agent_class,
     )
 
-    if [args.agent is not None, args.protocol, args.registry].count(True) != 1:
+    if [args.agent is not None, args.protocol, args.registry, args.registry_store].count(True) != 1:
         raise SystemExit(
-            "temporal-agent-kit schema: give one of an agent class, --protocol or --registry"
+            "temporal-agent-kit schema: give one of an agent class, --protocol, --registry or "
+            "--registry-store"
         )
     try:
         if args.protocol:
@@ -142,6 +138,10 @@ def _schema(args: argparse.Namespace) -> None:
             from temporal_agent_kit.web.registry import dump_registry_schema
 
             text = dump_registry_schema()
+        elif args.registry_store:
+            from temporal_agent_kit.web.nexus_registry_store import dump_registry_store_schema
+
+            text = dump_registry_store_schema()
         else:
             text = dump_agent_schema(load_agent_class(args.agent))
     except ValueError as e:
@@ -285,11 +285,12 @@ def main(argv: list[str] | None = None) -> None:
         "none. Without any, the server serves the agents its registry already holds.",
     )
     serve.add_argument(
-        "--registry-store",
+        "--registry-store-endpoint",
         default=None,
-        metavar="module.path:factory",
-        help="A registry store factory to keep the registry in, instead of the registry "
-        "workflow (see temporal_agent_kit.web.registry_store).",
+        metavar="NAME",
+        help="Keep the agent registry in the AgentKitRegistryStore Nexus service behind the "
+        "Nexus endpoint NAME, instead of the registry workflow. `temporal-agent-kit schema "
+        "--registry-store` prints its operations' schema.",
     )
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
@@ -348,6 +349,12 @@ def main(argv: list[str] | None = None) -> None:
         "--registry",
         action="store_true",
         help="Print the schema of an agents.toml registry instead of one agent's schema.",
+    )
+    schema.add_argument(
+        "--registry-store",
+        action="store_true",
+        help="Print the schema of the AgentKitRegistryStore Nexus service's operations instead "
+        "of one agent's schema.",
     )
     schema.add_argument(
         "-o", "--output", default=None, help="Write to this file instead of stdout."

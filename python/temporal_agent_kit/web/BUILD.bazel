@@ -29,6 +29,7 @@ py_library(
     deps = [
         ":agent_starts",
         ":file_view",
+        ":nexus_registry_store",
         ":registry",
         ":registry_changes",
         ":registry_store",
@@ -56,6 +57,7 @@ agent_kit_module_binary(
         ":agent_commands",
         ":client",
         ":doctor",
+        ":nexus_registry_store",
         ":registry",
         ":serve",
         "//python/temporal_agent_kit:agent_schema",
@@ -110,8 +112,8 @@ py_library(
     deps = [
         ":__init__",
         ":client",
+        ":nexus_registry_store",
         ":registry",
-        ":registry_store",
         ":registry_workflow",
         "//python/temporal_agent_kit/ui:__init__",
         "@pypi//fastapi",
@@ -208,6 +210,20 @@ py_library(
     deps = [
         ":registry_store",
         "//python/temporal_agent_kit/utils:task_queue",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "nexus_registry_store",
+    srcs = ["nexus_registry_store.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":registry_store",
+        "//python/temporal_agent_kit:agent_schema",
+        "@pypi//nexus_rpc",
         "@pypi//pydantic",
         "@pypi//temporalio",
     ],

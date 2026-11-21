@@ -222,19 +222,16 @@
     });
   });
 
-  /* The lists are the page while no session is open, so keep the sessions one current: a
-     session started from another tab or the CLI turns up without a refresh. */
+  /* The lists are the page while no session is open, so the sessions one is read again when the
+     reader comes back to the window: a session started from another tab or the CLI turns up then.
+     Nothing reads it on a timer; Refresh sessions is the way to ask in between. */
   $effect(() => {
     if (!home || booting) return;
     const refresh = () => {
       if (!document.hidden) void run.ensureSessionsEnriched();
     };
-    const timer = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-    };
+    return () => window.removeEventListener("focus", refresh);
   });
 
   /* Snapshot paint and stream catch-up are one load, not changes the reader

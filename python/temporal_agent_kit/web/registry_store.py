@@ -67,6 +67,13 @@ class VersionedSnapshot(BaseModel):
     version: int = 0
 
 
+class RegistryWrite(BaseModel):
+    """A write: store ``snapshot`` as the next version if the stored one is still ``expected``."""
+
+    snapshot: RegistrySnapshot
+    expected: int
+
+
 class StaleRegistry(Exception):
     """The stored version is no longer the one a write expected."""
 

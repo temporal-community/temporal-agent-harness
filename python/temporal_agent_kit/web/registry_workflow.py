@@ -38,6 +38,7 @@ from temporal_agent_kit.utils.task_queue import task_queue_name
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_kit.web.registry_store import (
         RegistrySnapshot,
+        RegistryWrite,
         StaleRegistry,
         VersionedSnapshot,
     )
@@ -58,11 +59,6 @@ class RegistryRun(BaseModel):
     registry: VersionedSnapshot
     # The REGISTRY_WORKFLOW_REVISION of the server that started this run.
     revision: int
-
-
-class RegistryWrite(BaseModel):
-    snapshot: RegistrySnapshot
-    expected: int
 
 
 @workflow.defn(name="AgentKitRegistry")

@@ -1,0 +1,26 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "agent_kit_module_binary")
+
+py_library(
+    name = "store",
+    srcs = ["store.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_kit/web:nexus_registry_store",
+        "//python/temporal_agent_kit/web:registry_store",
+        "@pypi//nexus_rpc",
+    ],
+)
+
+agent_kit_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":store",
+        "//python/temporal_agent_kit/web:client",
+        "@pypi//temporalio",
+    ],
+)

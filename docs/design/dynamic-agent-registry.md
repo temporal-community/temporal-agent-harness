@@ -118,26 +118,46 @@ rules in every backend, in its own transaction model.
 
 ### Choosing a store
 
-A store is built by a factory that the server calls with its Temporal client, and is an async
-context manager, so it can start what it needs and stop it with the server:
+The registry workflow store is built in and is the default: `serve` with no store options keeps
+the registry there. **Any other store is a Nexus service**, `AgentKitRegistryStore`, which the
+server reaches through a Nexus endpoint:
 
-```python
-RegistryStoreFactory = Callable[[Client], AbstractAsyncContextManager[AgentRegistryStore]]
+```
+temporal-agent-kit serve --registry-store-endpoint agent-kit-registry agents.toml
 ```
 
-The registry workflow store uses the client to run its worker; a database store would ignore it
-and open a connection pool. The server's lifespan enters the store after connecting to Temporal
-and exits it on shutdown.
+| Operation | Input | Output |
+| --- | --- | --- |
+| `read` | `{}` | `{"snapshot": {...}, "version": n}`; version 0 and an empty registry before anything is written. |
+| `write` | `{"snapshot": {...}, "expected": n}` | `{"stored": true, "version": n + 1}` when the stored version was `n`; otherwise `{"stored": false, "version": <stored>}`, storing nothing. |
 
-- `create_agent_kit_app(registry_store=...)` takes a factory. It defaults to the registry
-  workflow store.
-- `temporal-agent-kit serve --registry-store module.path:factory` imports a factory the way
-  `temporal-agent-kit schema module.path:Class` imports an agent class.
+The service is `contract/registry-store.nexusrpc.yaml`, its bodies' JSON Schema is
+`contract/registry-store.schema.json` (`temporal-agent-kit schema --registry-store`), and
+`contract/README.md` describes the contract. A store is two synchronous operations over one row,
+on a worker in any Temporal SDK, with whatever database the deployment uses; the server never
+imports a deployer's code, and no database driver becomes a dependency of the package.
+`python/examples/sqlite_registry_store` is a reference store over SQLite.
 
-The package ships two stores: the registry workflow store, the default, and an in-memory store
-(a dict and a lock) for tests and for embedders' tests. A database store is the deployer's own
-module, so no database driver becomes a dependency of the package. The server exists once, in
-Python, for agents written with either SDK, so the interface is Python only.
+**Why Nexus.** The server calls the store's operations as standalone Nexus operations with the
+Temporal client it already has. Who may call the store is the endpoint's access rules, so the
+store needs no credentials of its own, and the store can live in another namespace. An HTTP
+service would have needed its own authentication.
+
+**What it costs.** Every registry read is a Nexus operation execution, which the namespace
+records. The server reads the registry for each agent list, session list, session lookup and
+session start; the console no longer refreshes the session list on a timer, only when asked and
+when the reader returns to the window, and the chat-server keeps agent keys rather than listing
+agents on every message. Standalone Nexus operations are experimental, and a server serves them
+only with the dynamic config value `nexusoperation.enableStandalone=true` (`just temporal` sets
+it). Entering the store reads the registry once, so an endpoint that cannot be reached stops
+`serve` as it starts; a failed operation is a `502` from the server's registry routes.
+
+In the server, every store is an object with two methods, `read()` and
+`write(snapshot, expected)`, built by a factory the server calls with its Temporal client and
+enters for its lifespan
+(`RegistryStoreFactory = Callable[[Client], AbstractAsyncContextManager[AgentRegistryStore]]`).
+`create_agent_kit_app(registry_store=...)` takes the factory, for an embedder and for the tests'
+in-memory store; `serve` chooses between the two built-in ones and loads no factory by name.
 
 ### The registry workflow store
 
@@ -367,7 +387,9 @@ the home view's agent list leaves them out, and the session list marks a retired
 - `web/registry.py` keeps the `agents.toml` models and file loading, which `serve`, `doctor` and
   `agents add` use, and gains `AgentRegistration` and the conversion from a file entry to one.
   `TASK_QUEUE_PREFIX` moves from load time to read time.
-- `serve` gains `--registry-store`, and its registry paths become optional.
+- `serve` gains `--registry-store-endpoint`, and its registry paths become optional.
+- `contract/registry-store.nexusrpc.yaml` and `contract/registry-store.schema.json` publish the
+  registry store's Nexus service.
 - `AgentRegistryFile`'s schema (`temporal-agent-kit schema --registry`) is unchanged.
 - The console gains the add form and its import, the zip download, the retire/delete controls,
   and a `retired` flag on agents and sessions.

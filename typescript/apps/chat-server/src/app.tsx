@@ -20,6 +20,7 @@ import type {
   Thread,
 } from 'chat';
 
+import { AgentKeys } from './agent-keys.ts';
 import { HarnessClient, type AcceptedFunction } from './harness.ts';
 import {
   decodeModalValues,
@@ -251,6 +252,7 @@ export interface ChatServerOptions {
 
 export function createChatServer(opts: ChatServerOptions): Chat {
   const { harness } = opts;
+  const agentKeys = new AgentKeys(() => harness.listAgents());
   const log = opts.logger ?? new ConsoleLogger('info', 'chat-server');
 
   /**
@@ -621,15 +623,10 @@ export function createChatServer(opts: ChatServerOptions): Chat {
    * on every inbound event with no check and no stored mapping.
    */
   async function ensureSession(sessionId: string, agentKey: string): Promise<void> {
-    const agents = await harness.listAgents();
-    const agent = agents.find((a) => a.key === agentKey);
-    if (!agent) {
-      throw new Error(
-        `No agent with key "${agentKey}". The Agent Kit server offers: ${agents.map((a) => a.key).join(', ') || '(none)'}`,
-      );
-    }
-    log.debug('ensureSession', { sessionId, workflowType: agent.workflow_type });
-    await harness.ensureSession(sessionId, agent.workflow_type);
+    await agentKeys.withWorkflowType(agentKey, (workflowType) => {
+      log.debug('ensureSession', { sessionId, workflowType });
+      return harness.ensureSession(sessionId, workflowType);
+    });
   }
 
   async function openHandlerModal(

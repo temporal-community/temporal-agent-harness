@@ -180,10 +180,12 @@ describe("the console with no session open", () => {
     assert.match(app, /case "releases":\s*return \{ title: PANE_META\.releases\.kindLabel \};/);
   });
 
-  /* The lists are the page with no session open, so the session list keeps itself current there,
-     and a session open can always be left for them without ending it. */
-  it("refreshes the session list on the home desk and leads back to it with Home", () => {
-    assert.match(app, /if \(!home \|\| booting\) return;[\s\S]*?if \(!document\.hidden\) void run\.ensureSessionsEnriched\(\);[\s\S]*?setInterval\(refresh, 15_000\)[\s\S]*?addEventListener\("focus", refresh\)/);
+  /* The lists are the page with no session open, so the session list is read again when the reader
+     returns to the window, never on a timer, and a session open can always be left for them without
+     ending it. */
+  it("refreshes the session list on the home desk when the reader returns, and leads back to it with Home", () => {
+    assert.match(app, /if \(!home \|\| booting\) return;[\s\S]*?if \(!document\.hidden\) void run\.ensureSessionsEnriched\(\);[\s\S]*?addEventListener\("focus", refresh\)/);
+    assert.doesNotMatch(app, /setInterval\(/, "no list is read on a timer");
     assert.match(app, /<PaneMinimap[\s\S]*?onHome=\{\(\) => run\.closeSessionView\(\)\}\s*atHome=\{home\}/, "the Temporal mark leads home");
     assert.doesNotMatch(app, /aria-label="Home"/, "no separate Home button beside it");
     const minimap = readFileSync(new URL("../src/lib/panes/PaneMinimap.svelte", import.meta.url), "utf8");

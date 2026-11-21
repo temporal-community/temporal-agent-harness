@@ -23,12 +23,15 @@ Agents can also be registered, retired and deleted while the app runs, through
 `POST /api/agents`, `POST /api/agents/{key}/retire` and `DELETE /api/agents/{key}`, which the
 console and `temporal-agent-kit agents` use.
 
-To keep the registry in a database instead, pass `registry_store`: a factory that takes the app's
-Temporal client and returns an async context manager yielding an
-`temporal_agent_kit.web.registry_store.AgentRegistryStore`. A store implements two methods over
-one versioned document, `read()` and a `write(snapshot, expected)` that stores the snapshot only if
-the stored version is still `expected`; the registry's rules run in the app. `serve` takes the
-same factory as `--registry-store module.path:factory`.
+To keep the registry in your own store instead, implement the `AgentKitRegistryStore` Nexus
+service (`contract/registry-store.nexusrpc.yaml`, described in
+[contract/README.md](../../contract/README.md#the-registry-store-contract)) on a worker in any
+Temporal SDK: a `read` that returns the stored document and its version, and a `write` that stores
+a new one only if the version has not moved. The registry's rules run in the app, which calls the
+store with its own Temporal client. Point `serve` at the store's Nexus endpoint with
+`--registry-store-endpoint NAME`, or pass `registry_store=nexus_registry_store(name)` (from
+`temporal_agent_kit.web.nexus_registry_store`) to `create_agent_kit_app`.
+`python/examples/sqlite_registry_store` is a reference store.
 
 Then serve the app with Uvicorn:
 

@@ -250,6 +250,20 @@ def test_the_config_file_and_profile_flags_choose_the_connection(
     assert resolved["namespace"] == "cloud-namespace"
 
 
+def test_serve_keeps_the_registry_in_the_store_at_registry_store_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "temporal_agent_kit.web.serve.run_server", lambda *_, **options: served.append(options)
+    )
+
+    main(["serve", "--registry-store-endpoint", "agent-kit-registry"])
+    main(["serve"])
+
+    assert [options["registry_store_endpoint"] for options in served] == ["agent-kit-registry", None]
+
+
 def test_a_config_file_that_is_not_there_is_refused(
     tmp_path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -309,5 +323,5 @@ def test_schema_registry_prints_the_agents_toml_schema(capsys: pytest.CaptureFix
     ],
 )
 def test_schema_needs_exactly_one_of_an_agent_protocol_or_registry(argv: list[str]) -> None:
-    with pytest.raises(SystemExit, match="give one of an agent class, --protocol or --registry"):
+    with pytest.raises(SystemExit, match="give one of an agent class, --protocol, --registry or --registry-store"):
         main(argv)

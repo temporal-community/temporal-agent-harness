@@ -44,6 +44,7 @@ from temporal_agent_kit.web.file_view import (
     okf_graph,
     view_file,
 )
+from temporal_agent_kit.web.nexus_registry_store import RegistryStoreError
 from temporal_agent_kit.web.registry import (
     AgentDescriptor,
     AgentRegistration,
@@ -494,6 +495,13 @@ def create_agent_kit_app(
     async def invalid_registration_handler(request, exc):
         return JSONResponse(
             status_code=422, content={"error": "invalid_registration", "message": str(exc)}
+        )
+
+    @app.exception_handler(RegistryStoreError)
+    async def registry_store_error_handler(request, exc):
+        # 502: the registry lives behind a Nexus endpoint, whose operation failed.
+        return JSONResponse(
+            status_code=502, content={"error": "registry_store_error", "message": str(exc)}
         )
 
     @app.exception_handler(RegistryBusy)
