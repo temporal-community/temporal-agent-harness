@@ -23,6 +23,7 @@ manifest:
     cffi: cffi
     cfnlint: cfn_lint
     charset_normalizer: charset_normalizer
+    claude_agent_sdk: claude_agent_sdk
     click: click
     colorama: colorama
     cpuinfo: py_cpuinfo2

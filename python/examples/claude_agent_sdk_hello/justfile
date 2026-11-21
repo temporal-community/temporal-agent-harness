@@ -1,0 +1,16 @@
+root := justfile_directory() / ".." / ".." / ".."
+
+default:
+    @just --list
+
+temporal:
+    just --justfile "{{root}}/justfile" temporal
+
+worker:
+    just --justfile "{{root}}/justfile" workers claude_agent_sdk_hello
+
+server:
+    just --justfile "{{root}}/justfile" server claude_agent_sdk_hello
+
+dev:
+    just --justfile "{{root}}/justfile" dev claude_agent_sdk_hello

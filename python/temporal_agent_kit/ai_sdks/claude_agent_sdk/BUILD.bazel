@@ -1,0 +1,116 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    data = [
+        # keep
+        "LICENSE",
+        "py.typed",
+    ],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_options",
+        ":_plugin",
+        ":_subprocess",
+        ":_transport",
+        ":_types",
+    ],
+)
+
+py_library(
+    name = "_activities",
+    srcs = ["_activities.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_constants",
+        ":_heartbeat_decorator",
+        ":_types",
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "@pypi//claude_agent_sdk",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_constants",
+    srcs = ["_constants.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "_heartbeat_decorator",
+    srcs = ["_heartbeat_decorator.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//temporalio"],
+)
+
+py_library(
+    name = "_plugin",
+    srcs = ["_plugin.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_activities",
+        ":_subprocess",
+        ":_types",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_subprocess",
+    srcs = ["_subprocess.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_types",
+        "@pypi//claude_agent_sdk",
+    ],
+)
+
+py_library(
+    name = "_transport",
+    srcs = ["_transport.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":_constants",
+        ":_options",
+        ":_types",
+        "@pypi//claude_agent_sdk",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_types",
+    srcs = ["_types.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_kit:stream_context",
+        "@pypi//claude_agent_sdk",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_options",
+    srcs = ["_options.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "@pypi//claude_agent_sdk",
+    ],
+)

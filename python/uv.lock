@@ -5,7 +5,7 @@ resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' or (python_full_version == '3.12.*' and sys_platform != 'emscripten')",
+    "(python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
 ]
 
 [[package]]
@@ -554,6 +554,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/1d/29d32e0fb40864b1f878c7f5a0b343ae676c6e2b271a2d55cc3a152391da/charset_normalizer-3.4.7-cp314-cp314t-win_amd64.whl", hash = "sha256:03853ed82eeebbce3c2abfdbc98c96dc205f32a79627688ac9a27370ea61a49c", size = 174168, upload-time = "2026-04-02T09:27:49.795Z" },
     { url = "https://files.pythonhosted.org/packages/de/32/d92444ad05c7a6e41fb2036749777c163baf7a0301a040cb672d6b2b1ae9/charset_normalizer-3.4.7-cp314-cp314t-win_arm64.whl", hash = "sha256:c35abb8bfff0185efac5878da64c45dafd2b37fb0383add1be155a763c1f083d", size = 153018, upload-time = "2026-04-02T09:27:51.116Z" },
     { url = "https://files.pythonhosted.org/packages/db/8f/61959034484a4a7c527811f4721e75d02d653a35afb0b6054474d8185d4c/charset_normalizer-3.4.7-py3-none-any.whl", hash = "sha256:3dce51d0f5e7951f8bb4900c257dad282f49190fdbebecd4ba99bcc41fef404d", size = 61958, upload-time = "2026-04-02T09:28:37.794Z" },
+]
+
+[[package]]
+name = "claude-agent-sdk"
+version = "0.2.168"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "jsonschema" },
+    { name = "mcp" },
+    { name = "sniffio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9a/ee/31e159daf956f0c5503eac67d02743da692c0999fef046cdde3cc52702b9/claude_agent_sdk-0.2.168.tar.gz", hash = "sha256:80388054a09c137d76fc29caa6e46bc90d2ae2ef09fac5ee1c38fc36d2762fda", size = 371591, upload-time = "2026-10-15T20:20:43.683Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/31/9a205fc0b7ae1b66d5964774bb534ab378047c9bf87578f443bd1fb2205e/claude_agent_sdk-0.2.168-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2ef1e7fc442c5abdc1e698027bf1b5faa8ea2130134a14364e2ae3c53bf31fdd", size = 104355641, upload-time = "2026-10-15T20:20:48.105Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/ba/12bbe92d5e9145c7aaa94aa349a0859b77a9b58ccc40ae9e69cf7f078e5b/claude_agent_sdk-0.2.168-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:653fc7bbe56630e6ddd9601a7cfe50586667e74102da3fb90571456c63655a62", size = 109438860, upload-time = "2026-10-15T20:20:52.274Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/5a/26e587846f14f67f3353f96811b86931263a9c7e264d17a691d9577e4da5/claude_agent_sdk-0.2.168-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:77ae66b10edfd07b6ea3dec2af106ad47a9d616f8eb52d4f9b385e1b00bb2a27", size = 114030032, upload-time = "2026-10-15T20:20:56.813Z" },
+    { url = "https://files.pythonhosted.org/packages/00/03/09d347dcddbbab4becd41fef3a811967eddf24135b2d62dac9e321c81537/claude_agent_sdk-0.2.168-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:be197be92549909ec62a2cee04c27f4b0a38c80f723735538a3efc352507f81d", size = 114443626, upload-time = "2026-10-15T20:21:01.794Z" },
+    { url = "https://files.pythonhosted.org/packages/48/93/520a18ab853b688afcc31d504344e541a7dc68bc2b515ea8a5fef1c868a1/claude_agent_sdk-0.2.168-py3-none-win_amd64.whl", hash = "sha256:ed1814b0dd1c113bdaf3e51e6a67aa5b96b8f5c5839a43aeb6ae1e6ed23a5b35", size = 117292475, upload-time = "2026-10-15T20:21:07.053Z" },
 ]
 
 [[package]]
@@ -1887,14 +1906,14 @@ wheels = [
 
 [[package]]
 name = "nexus-rpc"
-version = "1.4.0"
+version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/35/d5/cd1ffb202b76ebc1b33c1332a3416e55a39929006982adc2b1eb069aaa9b/nexus_rpc-1.4.0.tar.gz", hash = "sha256:3b8b373d4865671789cc43623e3dc0bcbf192562e40e13727e17f1c149050fba", size = 82367, upload-time = "2026-02-25T22:01:34.053Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/e5/25be948c92492cfc8ac24a524ad8828fe0cb9f71f46a974d7a37f0794a26/nexus_rpc-1.5.0.tar.gz", hash = "sha256:be2d6934414677bc9dd8e571fb5106c22b8769edc19562c3f49d9988edd24e1c", size = 97404, upload-time = "2026-10-28T17:12:21.82Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/52/6327a5f4fda01207205038a106a99848a41c83e933cd23ea2cab3d2ebc6c/nexus_rpc-1.4.0-py3-none-any.whl", hash = "sha256:14c953d3519113f8ccec533a9efdb6b10c28afef75d11cdd6d422640c40b3a49", size = 29645, upload-time = "2026-02-25T22:01:33.122Z" },
+    { url = "https://files.pythonhosted.org/packages/33/e2/00541e7997f3dfb294f7be3dafea3307ea09b9d3fd332054fe4d30627efc/nexus_rpc-1.5.0-py3-none-any.whl", hash = "sha256:5d6e856972be812573948df02da2257344c407a8eaa99977b5d38be54448305a", size = 30406, upload-time = "2026-10-28T17:12:20.245Z" },
 ]
 
 [[package]]
@@ -3268,6 +3287,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+claude-agent-sdk = [
+    { name = "claude-agent-sdk" },
+    { name = "temporalio" },
+]
 code-mode = [
     { name = "pydantic-monty" },
 ]
@@ -3309,6 +3332,7 @@ ui = [
 [package.dev-dependencies]
 dev = [
     { name = "botocore" },
+    { name = "claude-agent-sdk" },
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
@@ -3351,6 +3375,7 @@ examples = [
 [package.metadata]
 requires-dist = [
     { name = "botocore", marker = "extra == 'strands-agents'", specifier = ">=1.40.61,<2" },
+    { name = "claude-agent-sdk", marker = "extra == 'claude-agent-sdk'", specifier = ">=0.2.163,<0.2.169" },
     { name = "fastapi", extras = ["standard"], marker = "extra == 'ui'", specifier = ">=0.136.3" },
     { name = "google-auth", marker = "extra == 'genai'", specifier = ">=2.53.0" },
     { name = "google-genai", marker = "extra == 'genai'", specifier = ">=2.0.0" },
@@ -3367,17 +3392,19 @@ requires-dist = [
     { name = "strands-agents", marker = "extra == 'strands-agents'", specifier = ">=1.64.0" },
     { name = "temporal-nexus-mcp", marker = "extra == 'nexus-mcp'", editable = "../nexus/mcp" },
     { name = "temporalio", specifier = ">=1.35.0" },
+    { name = "temporalio", marker = "extra == 'claude-agent-sdk'", specifier = ">=1.36.0,<2" },
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.35.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.35.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.35.0" },
     { name = "temporalio-mcp", marker = "extra == 'strands-agents'", specifier = ">=0.2.0,<0.3" },
     { name = "temporalio-typesafe", marker = "extra == 'typesafe'", specifier = ">=0.0.1,<0.1" },
 ]
-provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "strands-agents", "ui", "code-mode", "nexus-mcp", "typesafe"]
+provides-extras = ["claude-agent-sdk", "genai", "s3", "openai-agents", "pydantic-ai", "strands-agents", "ui", "code-mode", "nexus-mcp", "typesafe"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "botocore", specifier = ">=1.40.61,<2" },
+    { name = "claude-agent-sdk", specifier = ">=0.2.163,<0.2.169" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
@@ -3396,6 +3423,7 @@ dev = [
     { name = "setuptools", specifier = ">=83.0.0" },
     { name = "strands-agents", specifier = ">=1.64.0" },
     { name = "temporal-nexus-mcp", editable = "../nexus/mcp" },
+    { name = "temporalio", specifier = ">=1.36.0,<2" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.35.0" },
     { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.35.0" },
     { name = "temporalio-mcp", specifier = ">=0.2.0,<0.3" },
@@ -3454,7 +3482,7 @@ dev = [
 
 [[package]]
 name = "temporalio"
-version = "1.35.0"
+version = "1.36.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "nexus-rpc" },
@@ -3462,15 +3490,15 @@ dependencies = [
     { name = "types-protobuf" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/38/03641a02eb18e2b16f58c1c136deafdffeb30828dcd83ebd8ac41eb39fd7/temporalio-1.35.0.tar.gz", hash = "sha256:c7a14f29909f8d847f78de49305af89c0ec5aea39272cd4050124386ac3ca295", size = 2879693, upload-time = "2026-10-28T20:13:38.726Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3c/7b/d425d26b4e6a525e7b87eadba201f0f72eedee91d65712e9cb772a51a586/temporalio-1.36.1.tar.gz", hash = "sha256:1342db50b6609718d5b222bb4f3070f7b8f17265ba027f3106d7b6a1ccf8af42", size = 2923760, upload-time = "2026-11-14T02:21:01.023Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/d9/8bda464beda3adb897d8d9f0e5fa26b28f2bf63c831c6800cbd73f7728cb/temporalio-1.35.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ac3ab920cc05e24a1d420688a49aabed7b2be8f25dd275200dfa839be30980fd", size = 13989719, upload-time = "2026-10-28T20:13:16.897Z" },
-    { url = "https://files.pythonhosted.org/packages/26/c1/94861d72cbe5e1778fcd4685db63231af01d40ad99f0375b4df6d4e60d06/temporalio-1.35.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:51bae017d484450084daa19afafad12fa0af1a00af351ba304104d7b97b44f9a", size = 13552491, upload-time = "2026-10-28T20:13:19.725Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/ed/a776afec1033f749ec8f4c0c5264167aedc56a108a5adebfa4084af8aa82/temporalio-1.35.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b93845a2200d23b8edc9a8b0bf78b58bdb5e78721602b3f64072867e07e28504", size = 13927445, upload-time = "2026-10-28T20:13:21.984Z" },
-    { url = "https://files.pythonhosted.org/packages/ca/0b/bf0ed1f1b623e1ffd5c21c9e65a331a5c1c4f77f3829dc99ceae99b69f39/temporalio-1.35.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:45b5438f41ab154eda4eea40069df2fa8779cb8f5c27f266b917a700bfba8bb8", size = 14386743, upload-time = "2026-10-28T20:13:28.201Z" },
-    { url = "https://files.pythonhosted.org/packages/76/d6/373d5ffe28263fc56ea0013bdd45715b4ff84f97d1052519b7c0d9ecd437/temporalio-1.35.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:8a5ce8b1e9c9e2df5fb9f17a345c0ef0a132c787cef8cf5a6593b5d707648253", size = 13988280, upload-time = "2026-10-28T20:13:31.667Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/41/47ad6f26002f84d8293d99098c414f75e9e8ff7955d034b7121bd211649b/temporalio-1.35.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:96310ae91b098c9fe2194f0892cef25381e8f870e48d5c069230312bbd1c6262", size = 14494297, upload-time = "2026-10-28T20:13:33.988Z" },
-    { url = "https://files.pythonhosted.org/packages/db/33/30942b2d568df2c50089e381ee63b2d141f2ebfb7b4787bac3540f5cf617/temporalio-1.35.0-cp310-abi3-win_amd64.whl", hash = "sha256:6f434c0d3b6d049f4473f9f5d3e80b5e80c986440fd0490f2ee70cc631cbcddd", size = 15317073, upload-time = "2026-10-28T20:13:36.195Z" },
+    { url = "https://files.pythonhosted.org/packages/55/79/5dfa2c09a0dffb856491eb4d6f28bdde4b0ff4229d9001d7bcc179f9c9d4/temporalio-1.36.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:55c0144c77182fa26a5172eab066a0661632f7ac2d8054d7d7fa9dd4ede93cc2", size = 14155700, upload-time = "2026-11-14T02:20:42.053Z" },
+    { url = "https://files.pythonhosted.org/packages/84/bc/d526ba83d13b09b53d70dae19d7417dcbb36ad951e79427c949b5c3cd166/temporalio-1.36.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:175a89e59ed9e7cc5795609d937c80111513ca9d70b0ed9da4ed7792163c863a", size = 13720267, upload-time = "2026-11-14T02:20:45.68Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/27/931e15f50e2965091d72732a960f1f5865dfcf2894cd5f693abf9bf38a3c/temporalio-1.36.1-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:72b3c4f700e48f3953192bb2d66700f74c1ff1ecf131e82c710761ae09fb4c0f", size = 14106450, upload-time = "2026-11-14T02:20:48.074Z" },
+    { url = "https://files.pythonhosted.org/packages/12/62/c9d8a9a6c10ddfdbfb4d18e9dabf9bb812d237f7df13bc1a5a5b1a266f47/temporalio-1.36.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5ce0ddfaf35316271eee632e1579890be6f3c0f1de7fddfd1f3086f3f83d6b78", size = 14529397, upload-time = "2026-11-14T02:20:50.604Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/50/b0572f6ac5863999f93500d12bbed476542df2fee4d39115dc5a9ba8805a/temporalio-1.36.1-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:cfa4f316cc23a7757e03650087cf471fffa4ca27ab40bba6c09d98fe4ab3d5e6", size = 14169959, upload-time = "2026-11-14T02:20:53.019Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/3e/241ae6f12139b94945b673e503b79f669305418f47216adb78e3a4b78b08/temporalio-1.36.1-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b22d93523b65f17e39970a341ad17de2100fdb5a8cd23c7499ffbd342ffb412a", size = 14633381, upload-time = "2026-11-14T02:20:55.636Z" },
+    { url = "https://files.pythonhosted.org/packages/83/0c/51e526f3926a29a442e703009c203fd301b30a41aeb963cd8be7617ac011/temporalio-1.36.1-cp311-abi3-win_amd64.whl", hash = "sha256:42675a52865cdd71c3a7a42f7415157af7574458788df419b723167be282e51d", size = 15509357, upload-time = "2026-11-14T02:20:58.109Z" },
 ]
 
 [package.optional-dependencies]

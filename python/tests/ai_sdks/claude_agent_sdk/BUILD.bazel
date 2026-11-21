@@ -1,0 +1,19 @@
+load("//bazel:pytest.bzl", "agent_kit_pytest_test")
+
+agent_kit_pytest_test(
+    name = "test_agent_kit_streaming",
+    srcs = ["test_agent_kit_streaming.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/temporal_agent_kit:agent_workflow",
+        "//python/temporal_agent_kit:stream_context",
+        "//python/temporal_agent_kit/agent_protocol:__init__",
+        "//python/temporal_agent_kit/ai_sdks/claude_agent_sdk:__init__",
+        "//python/temporal_agent_kit/ai_sdks/claude_agent_sdk:_activities",
+        "//python/temporal_agent_kit/ai_sdks/claude_agent_sdk:_types",
+        "//python/tests:conftest",
+        "@pypi//claude_agent_sdk",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
