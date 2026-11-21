@@ -63,8 +63,11 @@ class TemporalAgentKitOptions(ClaudeAgentOptions):
     async def _on_model_start(
         self, _input: HookInput, _tool_use_id: str | None, _context: HookContext
     ) -> HookJSONOutput:
-        self.runner.publish(
-            ModelInteractionStarted(model=self.model or "Claude"),
-            stream_context=self._stream_context,
-        )
+        if self._stream_context is not None:
+            self.runner._pub(
+                self._stream_context.turn_id,
+                self._stream_context.turn_number,
+                ModelInteractionStarted(model=self.model or "Claude"),
+                message_id=self._stream_context.message_id,
+            )
         return {}

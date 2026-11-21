@@ -148,9 +148,10 @@ async def test_model_start_hooks_publish_to_runner() -> None:
             None,
             {"signal": None},
         ) == {}
-    assert [(call.args[0], call.kwargs) for call in runner.publish.call_args_list] == [
-        (ModelInteractionStarted(model="test-model"), {"stream_context": context}),
-        (ModelInteractionStarted(model="test-model"), {"stream_context": context}),
+    runner.publish.assert_not_called()
+    assert [(call.args, call.kwargs) for call in runner._pub.call_args_list] == [
+        (("turn", 2, ModelInteractionStarted(model="test-model")), {"message_id": "second"}),
+        (("turn", 2, ModelInteractionStarted(model="test-model")), {"message_id": "second"}),
     ]
 
 
